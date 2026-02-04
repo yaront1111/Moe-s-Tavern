@@ -1,91 +1,193 @@
-# Moe's Tavern 🍺
-
-**AI Workforce Command Center** - A JetBrains IDE plugin + daemon system for managing AI task execution with human oversight.
-
-## Overview
-
-Moe provides a task board interface where humans can oversee and approve AI agent work. AI agents claim tasks, submit implementation plans for approval, and execute work step-by-step with full visibility.
-
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  JetBrains IDE  │────▶│   Moe Daemon    │◀────│   AI Agents     │
-│    (Plugin)     │ WS  │  (Task Board)   │ MCP │  (Claude, etc)  │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │
-                               ▼
-                          .moe/ folder
-                       (source of truth)
+ __  __            _        _____
+|  \/  | ___   ___( )___   |_   _|_ ___   _____ _ __ _ __
+| |\/| |/ _ \ / _ \// __|    | |/ _` \ \ / / _ \ '__| '_ \
+| |  | | (_) |  __/ \__ \    | | (_| |\ V /  __/ |  | | | |
+|_|  |_|\___/ \___| |___/    |_|\__,_| \_/ \___|_|  |_| |_|
 ```
+
+<p align="center">
+  <strong>AI Workforce Command Center</strong><br>
+  Human oversight for AI coding agents
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/yaront1111/Moe-s-Tavern/releases"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version"></a>
+  <a href="https://github.com/yaront1111/Moe-s-Tavern/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Mac%20%7C%20Linux-lightgrey.svg" alt="Platform">
+</p>
+
+---
+
+## Why Moe?
+
+AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
+
+- **Visibility** - See what AI agents are doing in a Kanban board
+- **Control** - Approve or reject AI plans before code gets written
+- **Traceability** - Full audit log of every action
+- **Flexibility** - Works with Claude, GPT, and any MCP-compatible agent
+
+> *"Let AI do the coding, but keep humans in the loop."*
+
+---
 
 ## Features
 
-- 📋 **Kanban Board** - Visual task management with drag-and-drop
-- 🤖 **MCP Protocol** - Standard interface for AI agents
-- 👁️ **Human Oversight** - Approve/reject AI plans before execution
-- 📊 **Activity Logging** - Full audit trail of all actions
-- 🔄 **Real-time Sync** - WebSocket-based live updates
+| Feature | Description |
+|---------|-------------|
+| **Kanban Board** | Visual task management in your IDE |
+| **Plan Approval** | Review AI implementation plans before execution |
+| **Multi-Agent** | Run architect, worker, and reviewer agents |
+| **MCP Protocol** | Standard interface for AI agent integration |
+| **Real-time Sync** | Live updates via WebSocket |
+| **Activity Log** | Complete audit trail with log rotation |
+| **Rails System** | Define constraints AI must follow |
+
+---
 
 ## Quick Start
 
 ### Prerequisites
-- Node.js 18+
-- JDK 17+ (for plugin development)
-- IntelliJ IDEA or other JetBrains IDE
+
+- **Node.js 18+** - [Download](https://nodejs.org/)
+- **JetBrains IDE** (optional) - For visual Kanban board
 
 ### Installation
 
-```bash
-# Clone the repo
+**Windows:**
+```powershell
 git clone https://github.com/yaront1111/Moe-s-Tavern.git
 cd Moe-s-Tavern
-
-# Build daemon
-cd packages/moe-daemon && npm install && npm run build
-
-# Build proxy
-cd ../moe-proxy && npm install && npm run build
-
-# Start daemon
-node packages/moe-daemon/dist/index.js start --project /path/to/your/project
+.\scripts\install-all.ps1
 ```
 
-### JetBrains Plugin
+**Mac / Linux:**
+```bash
+git clone https://github.com/yaront1111/Moe-s-Tavern.git
+cd Moe-s-Tavern
+chmod +x scripts/*.sh
+./scripts/install-mac.sh
+```
+
+### Run Your First Agent
 
 ```bash
-cd moe-jetbrains
-./gradlew runIde  # Launch sandbox IDE with plugin
+# Windows
+.\scripts\moe-agent.ps1 -Role architect -Project "C:\your\project"
+
+# Mac / Linux
+./scripts/moe-agent.sh --role architect --project /your/project
 ```
 
-## Documentation
+The agent will:
+1. Connect to the daemon
+2. Claim a task from the board
+3. Submit a plan for your approval
+4. Execute the plan step-by-step
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [MCP Server API](docs/MCP_SERVER.md)
-- [Schema Reference](docs/SCHEMA.md)
-- [Development Guide](docs/DEVELOPMENT.md)
+---
+
+## Architecture
+
+```mermaid
+graph LR
+    subgraph IDE
+        Plugin[JetBrains Plugin]
+    end
+
+    subgraph Backend
+        Daemon[Moe Daemon]
+        Files[.moe/ files]
+    end
+
+    subgraph Agents
+        Claude[Claude Code]
+        GPT[GPT Agent]
+        Other[Other MCP Agents]
+    end
+
+    Plugin <-->|WebSocket| Daemon
+    Daemon <-->|Read/Write| Files
+    Claude <-->|MCP| Daemon
+    GPT <-->|MCP| Daemon
+    Other <-->|MCP| Daemon
+```
+
+**Key Principle:** The `.moe/` folder is the source of truth. The daemon is the sole writer. All clients (plugin, agents) communicate through the daemon.
+
+---
 
 ## Project Structure
 
 ```
+moe/
 ├── packages/
-│   ├── moe-daemon/     # Node.js daemon (WebSocket server)
-│   └── moe-proxy/      # MCP stdio proxy for AI agents
-├── moe-jetbrains/      # JetBrains IDE plugin (Kotlin)
-├── docs/               # Documentation
-└── scripts/            # Installation & utility scripts
+│   ├── moe-daemon/      # Node.js daemon (TypeScript)
+│   └── moe-proxy/       # MCP stdio proxy for agents
+├── moe-jetbrains/       # JetBrains IDE plugin (Kotlin)
+├── docs/                # Documentation
+│   ├── ARCHITECTURE.md  # System design
+│   ├── MCP_SERVER.md    # MCP tool reference
+│   ├── SCHEMA.md        # Data schema
+│   └── DEVELOPMENT.md   # Dev guide
+└── scripts/             # Cross-platform install scripts
 ```
-
-## Agent Roles
-
-| Role | Responsibility | Claims Tasks In |
-|------|---------------|-----------------|
-| **Architect** | Creates implementation plans | PLANNING |
-| **Worker** | Implements approved plans | WORKING |
-| **Reviewer** | QA and testing | REVIEW |
-
-## License
-
-MIT - See [LICENSE](LICENSE) for details.
 
 ---
 
-*"Welcome to Moe's Tavern - where AI agents come to get their work done!"*
+## Agent Roles
+
+| Role | Purpose | Claims Tasks In |
+|------|---------|-----------------|
+| **Architect** | Creates implementation plans | PLANNING status |
+| **Worker** | Executes approved plans | WORKING status |
+| **Reviewer** | QA and code review | REVIEW status |
+
+---
+
+## Approval Modes
+
+Configure in `.moe/project.json`:
+
+| Mode | Behavior |
+|------|----------|
+| **CONTROL** | Manual approval required (default) |
+| **SPEED** | Auto-approve after delay (configurable) |
+| **TURBO** | Instant auto-approve |
+
+---
+
+## Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [MCP Server API](docs/MCP_SERVER.md)
+- [Data Schema](docs/SCHEMA.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+
+---
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing`)
+5. Open a Pull Request
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <em>"Welcome to Moe's Tavern - where AI agents come to get their work done!"</em>
+</p>
