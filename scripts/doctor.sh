@@ -49,9 +49,25 @@ check_node_version() {
 }
 
 check_java() {
-    if command -v java &> /dev/null; then
+    local java_cmd="java"
+    local java_home_hint=""
+
+    # Check for Homebrew Java installations (prefer 21, then 17)
+    for v in 21 17 20 19 18; do
+        if [ -d "/opt/homebrew/opt/openjdk@$v" ]; then
+            java_cmd="/opt/homebrew/opt/openjdk@$v/bin/java"
+            java_home_hint="/opt/homebrew/opt/openjdk@$v"
+            break
+        elif [ -d "/usr/local/opt/openjdk@$v" ]; then
+            java_cmd="/usr/local/opt/openjdk@$v/bin/java"
+            java_home_hint="/usr/local/opt/openjdk@$v"
+            break
+        fi
+    done
+
+    if command -v "$java_cmd" &> /dev/null; then
         # Get Java version - handles both "1.8.0" and "17.0.1" formats
-        local version_output=$(java -version 2>&1 | head -n1)
+        local version_output=$("$java_cmd" -version 2>&1 | head -n1)
         local version=$(echo "$version_output" | sed -n 's/.*version "\([^"]*\)".*/\1/p')
         local major
 
@@ -62,17 +78,28 @@ check_java() {
             major=$(echo "$version" | cut -d. -f1)
         fi
 
-        if [ "$major" -ge 17 ] 2>/dev/null; then
-            echo -e "${GREEN}[OK]${NC} Java version $version (>= 17 required for plugin)"
+        if [ "$major" -ge 24 ] 2>/dev/null; then
+            echo -e "${RED}[ERROR]${NC} Java $major ($version) is too new for Gradle"
+            echo -e "    ${YELLOW}Install:${NC} brew install openjdk@21"
+            if [ -n "$java_home_hint" ]; then
+                echo -e "    ${GREEN}Found:${NC} Compatible Java at $java_home_hint"
+                echo -e "    ${YELLOW}Use:${NC} export JAVA_HOME=$java_home_hint"
+            fi
+            return 1
+        elif [ "$major" -ge 17 ] 2>/dev/null; then
+            echo -e "${GREEN}[OK]${NC} Java version $version (17-23 supported)"
+            if [ -n "$java_home_hint" ]; then
+                echo -e "    ${GREEN}Homebrew:${NC} $java_home_hint"
+            fi
             return 0
         else
-            echo -e "${YELLOW}[WARN]${NC} Java version $version found (17+ recommended for plugin)"
-            echo -e "    ${YELLOW}Upgrade:${NC} brew install openjdk@17"
+            echo -e "${YELLOW}[WARN]${NC} Java version $version found (17-23 recommended for plugin)"
+            echo -e "    ${YELLOW}Upgrade:${NC} brew install openjdk@21"
             return 2  # Warning, not error
         fi
     else
         echo -e "${YELLOW}[INFO]${NC} Java not found (optional, needed for JetBrains plugin)"
-        echo -e "    ${YELLOW}Install:${NC} brew install openjdk@17"
+        echo -e "    ${YELLOW}Install:${NC} brew install openjdk@21"
         return 2  # Not an error, Java is optional
     fi
 }

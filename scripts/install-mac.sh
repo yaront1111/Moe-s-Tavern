@@ -113,18 +113,56 @@ if [ "$BUILD_PLUGIN" = true ]; then
 
     cd "$ROOT_DIR/moe-jetbrains"
 
-    # Check for Java
-    if ! command -v java &> /dev/null; then
-        echo -e "${RED}[ERROR]${NC} Java not found. Install JDK 17+: brew install openjdk@17"
+    # Check for Java and find a compatible version (17-23, not 24+)
+    JAVA_CMD=""
+
+    # Check for Homebrew Java installations first
+    for v in 21 17 20 19 18; do
+        if [ -d "/opt/homebrew/opt/openjdk@$v" ]; then
+            export JAVA_HOME="/opt/homebrew/opt/openjdk@$v"
+            JAVA_CMD="$JAVA_HOME/bin/java"
+            echo -e "${GREEN}[OK]${NC} Using Homebrew OpenJDK $v"
+            break
+        elif [ -d "/usr/local/opt/openjdk@$v" ]; then
+            export JAVA_HOME="/usr/local/opt/openjdk@$v"
+            JAVA_CMD="$JAVA_HOME/bin/java"
+            echo -e "${GREEN}[OK]${NC} Using Homebrew OpenJDK $v (Intel)"
+            break
+        fi
+    done
+
+    # Fall back to system Java
+    if [ -z "$JAVA_CMD" ]; then
+        if ! command -v java &> /dev/null; then
+            echo -e "${RED}[ERROR]${NC} Java not found. Install JDK 17-21: brew install openjdk@21"
+            exit 1
+        fi
+        JAVA_CMD="java"
+    fi
+
+    # Check Java version (must be 17-23, Gradle doesn't support 24+ yet)
+    JAVA_VERSION=$($JAVA_CMD -version 2>&1 | head -n1 | sed -n 's/.*version "\([^"]*\)".*/\1/p')
+    JAVA_MAJOR=$(echo "$JAVA_VERSION" | cut -d'.' -f1)
+
+    # Handle old format (1.8.x)
+    if [ "$JAVA_MAJOR" = "1" ]; then
+        JAVA_MAJOR=$(echo "$JAVA_VERSION" | cut -d'.' -f2)
+    fi
+
+    if [ "$JAVA_MAJOR" -lt 17 ] 2>/dev/null; then
+        echo -e "${RED}[ERROR]${NC} Java 17+ required. Found version $JAVA_VERSION"
+        echo -e "    ${YELLOW}Install:${NC} brew install openjdk@21"
         exit 1
     fi
 
-    # Check Java version
-    JAVA_VERSION=$(java -version 2>&1 | head -n1 | cut -d'"' -f2 | cut -d'.' -f1)
-    if [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
-        echo -e "${RED}[ERROR]${NC} Java 17+ required. Found version $JAVA_VERSION"
+    if [ "$JAVA_MAJOR" -ge 24 ] 2>/dev/null; then
+        echo -e "${RED}[ERROR]${NC} Java $JAVA_MAJOR is too new - Gradle doesn't support it yet"
+        echo -e "    ${YELLOW}Install Java 21:${NC} brew install openjdk@21"
+        echo -e "    ${YELLOW}Then run:${NC} export JAVA_HOME=/opt/homebrew/opt/openjdk@21"
         exit 1
     fi
+
+    echo -e "${GREEN}[OK]${NC} Java version $JAVA_VERSION"
 
     # Ensure gradle wrapper exists
     if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
