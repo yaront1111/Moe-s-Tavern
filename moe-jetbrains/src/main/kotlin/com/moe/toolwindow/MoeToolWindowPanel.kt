@@ -43,6 +43,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private val epicFilter = ComboBox<EpicFilterItem>()
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
+    private val workerPanel = WorkerPanel()
 
     init {
         val header = JPanel(BorderLayout())
@@ -96,12 +97,34 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         right.add(agentsButton)
 
+        val settingsButton = JBLabel("\u2699").apply {
+            isOpaque = true
+            background = BoardStyles.columnHeaderBackground
+            foreground = BoardStyles.textPrimary
+            border = com.intellij.util.ui.JBUI.Borders.empty(4, 8)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = "Project Settings"
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    val currentState = service.getState()
+                    val currentSettings = currentState?.project?.settings
+                    MoeSettingsDialog(project, service, currentSettings).show()
+                }
+            })
+        }
+        right.add(settingsButton)
+
         right.add(statusLabel)
 
         header.add(title, BorderLayout.WEST)
         header.add(right, BorderLayout.EAST)
 
-        add(header, BorderLayout.NORTH)
+        val topPanel = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(header, BorderLayout.NORTH)
+            add(workerPanel, BorderLayout.SOUTH)
+        }
+        add(topPanel, BorderLayout.NORTH)
         background = BoardStyles.boardBackground
         contentPanel.background = BoardStyles.boardBackground
 
@@ -173,6 +196,10 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         SwingUtilities.invokeLater {
             // Update epic filter dropdown
             updateEpicFilter(state.epics)
+
+            // Update worker panel
+            val taskMap = state.tasks.associateBy { it.id }
+            workerPanel.updateWorkers(state.workers, taskMap)
 
             // Filter tasks by selected epic
             val allTasks = state.tasks.sortedBy { it.order }

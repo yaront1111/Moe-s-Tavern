@@ -9,6 +9,7 @@ import com.moe.model.MoeState
 import com.moe.model.Project
 import com.moe.model.RailProposal
 import com.moe.model.Task
+import com.moe.model.Worker
 
 object MoeJson {
     private fun JsonObject.getStringOrNull(key: String): String? {
@@ -54,11 +55,16 @@ object MoeJson {
             ?.takeIf { it.isJsonArray }
             ?.asJsonArray
             ?: JsonArray()
+        val workersArray = payload.get("workers")
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+            ?: JsonArray()
         val epics = parseEpics(epicsArray)
         val tasks = parseTasks(tasksArray)
         val proposals = parseProposals(proposalsArray)
+        val workers = parseWorkers(workersArray)
 
-        return MoeState(project, epics, tasks, proposals)
+        return MoeState(project, epics, tasks, proposals, workers)
     }
 
     private fun parseEpics(array: JsonArray): List<Epic> {
@@ -66,10 +72,17 @@ object MoeJson {
             val obj = element.asJsonObject
             val id = obj.getStringOrNull("id") ?: return@mapNotNull null
             val title = obj.getStringOrNull("title") ?: return@mapNotNull null
+            val rails = obj.get("epicRails")
+                ?.takeIf { it.isJsonArray }
+                ?.asJsonArray
+                ?.map { it.asString }
+                ?: emptyList()
             Epic(
                 id = id,
                 title = title,
                 description = obj.getStringOrDefault("description", ""),
+                architectureNotes = obj.getStringOrDefault("architectureNotes", ""),
+                epicRails = rails,
                 status = obj.getStringOrDefault("status", "PLANNED"),
                 order = obj.getDoubleOrDefault("order", 0.0)
             )
@@ -148,10 +161,17 @@ object MoeJson {
     }
 
     fun parseEpic(obj: JsonObject): Epic {
+        val rails = obj.get("epicRails")
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+            ?.map { it.asString }
+            ?: emptyList()
         return Epic(
             id = obj.getStringOrDefault("id", "unknown"),
             title = obj.getStringOrDefault("title", "Untitled epic"),
             description = obj.getStringOrDefault("description", ""),
+            architectureNotes = obj.getStringOrDefault("architectureNotes", ""),
+            epicRails = rails,
             status = obj.getStringOrDefault("status", "PLANNED"),
             order = obj.getDoubleOrDefault("order", 0.0)
         )
@@ -176,6 +196,24 @@ object MoeJson {
             reason = obj.getStringOrDefault("reason", ""),
             status = obj.getStringOrDefault("status", "PENDING"),
             createdAt = obj.getStringOrDefault("createdAt", "")
+        )
+    }
+
+    private fun parseWorkers(array: JsonArray): List<Worker> {
+        return array.mapNotNull { element ->
+            if (!element.isJsonObject) return@mapNotNull null
+            parseWorker(element.asJsonObject)
+        }
+    }
+
+    fun parseWorker(obj: JsonObject): Worker {
+        return Worker(
+            id = obj.getStringOrDefault("id", "unknown"),
+            type = obj.getStringOrDefault("type", "CLAUDE"),
+            epicId = obj.getStringOrDefault("epicId", ""),
+            currentTaskId = obj.getStringOrNull("currentTaskId"),
+            status = obj.getStringOrDefault("status", "IDLE"),
+            lastError = obj.getStringOrNull("lastError")
         )
     }
 

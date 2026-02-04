@@ -4,6 +4,7 @@
 
 import type { StateManager } from '../state/StateManager.js';
 import { getTools } from '../tools/index.js';
+import { logger } from '../util/logger.js';
 
 export type JsonRpcId = string | number | null;
 
@@ -86,7 +87,7 @@ export class McpAdapter {
           // Preserve stack trace for tool errors
           const message = toolError instanceof Error ? toolError.message : 'Tool execution failed';
           const stack = toolError instanceof Error ? toolError.stack : undefined;
-          console.error(`Tool ${params.name} failed:`, toolError);
+          logger.error({ toolName: params.name, error: toolError }, 'Tool failed');
           return this.errorResponse(id, -32000, message, { tool: params.name, stack });
         }
       }

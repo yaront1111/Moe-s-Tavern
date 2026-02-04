@@ -16,44 +16,64 @@
   "implementationPlan": [
     {
       "stepId": "step-1",
-      "description": "Create MoeStatusBarWidget.kt implementing StatusBarWidget with text display",
-      "status": "PENDING",
-      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"]
+      "description": "Create MoeStatusBarWidget.kt - status bar widgets must implement StatusBarWidget interface with text display for task counts",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+      ],
+      "startedAt": "2026-02-04T18:33:03.721Z",
+      "completedAt": "2026-02-04T18:34:07.969Z"
     },
     {
       "stepId": "step-2",
       "description": "Create MoeStatusBarWidgetFactory.kt implementing StatusBarWidgetFactory",
-      "status": "PENDING",
-      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidgetFactory.kt"]
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidgetFactory.kt"
+      ],
+      "startedAt": "2026-02-04T18:34:12.841Z",
+      "completedAt": "2026-02-04T18:37:32.471Z"
     },
     {
       "stepId": "step-3",
-      "description": "Register widget factory in plugin.xml under statusBarWidgetFactory extension point",
-      "status": "PENDING",
-      "affectedFiles": ["moe-jetbrains/src/main/resources/META-INF/plugin.xml"]
+      "description": "Register StatusBarWidgetFactory in plugin.xml under statusBarWidgetFactory extension point. Also register NotificationGroup in plugin.xml for future notifications.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "startedAt": "2026-02-04T18:37:37.717Z",
+      "completedAt": "2026-02-04T18:37:50.659Z"
     },
     {
       "stepId": "step-4",
-      "description": "Subscribe to MoeProjectService state changes and update widget text with task counts",
-      "status": "PENDING",
-      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"]
+      "description": "Use project-level message bus for state subscriptions - subscribe to MoeProjectService state changes and update widget text with task counts",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+      ],
+      "startedAt": "2026-02-04T18:37:57.406Z",
+      "completedAt": "2026-02-04T18:38:03.785Z"
     },
     {
       "stepId": "step-5",
       "description": "Implement click handler using ToolWindowManager to activate Moe tool window",
-      "status": "PENDING",
-      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"]
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+      ],
+      "startedAt": "2026-02-04T18:38:05.124Z",
+      "completedAt": "2026-02-04T18:38:10.354Z"
     }
   ],
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "REVIEW",
+  "assignedWorkerId": "worker",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "QA FAIL: Missing icon requirement. DoD specifies 'Different icon for connected/disconnected' but implementation only uses TextPresentation (text-only widget). Need to: 1) Create SVG icons for connected/disconnected states in resources/icons/, 2) Change widget to implement IconTextPresentation or use StatusBarWidget.IconPresentation, 3) Add getIcon() method that returns different icon based on connection state. Currently shows 'Moe: disconnected' as text only - no visual icon indicator.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "order": 2,
   "createdAt": "2026-02-03T12:30:00.000Z",
-  "updatedAt": "2026-02-03T12:30:00.000Z"
+  "updatedAt": "2026-02-04T20:48:43.557Z"
 }

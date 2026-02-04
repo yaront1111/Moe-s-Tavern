@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  moe-daemon:
+    build:
+      context: ./packages/moe-daemon
+      dockerfile: Dockerfile
+    container_name: moe-daemon
+    ports:
+      - "3141:3141"
+    volumes:
+      # Mount your project directory
+      - ./:/project:rw
+    environment:
+      - MOE_PROJECT_PATH=/project
+      - LOG_MAX_SIZE_MB=10
+      - LOG_RETENTION_COUNT=5
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3141/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+# Example for running with a different project:
+# docker-compose run -v /path/to/your/project:/project moe-daemon

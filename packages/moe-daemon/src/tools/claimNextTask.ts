@@ -39,7 +39,22 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         return { hasNext: false };
       }
 
+      // Enforce single worker per epic constraint
       if (params.workerId && task.assignedWorkerId !== params.workerId) {
+        const tasksInEpic = Array.from(state.tasks.values())
+          .filter((t) => t.epicId === task.epicId && t.assignedWorkerId && t.assignedWorkerId !== params.workerId);
+
+        const activeWorkerOnEpic = tasksInEpic.find(
+          (t) => t.status === 'WORKING' || t.status === 'PLANNING' || t.status === 'AWAITING_APPROVAL'
+        );
+
+        if (activeWorkerOnEpic) {
+          throw new Error(
+            `Epic already has an active worker: ${activeWorkerOnEpic.assignedWorkerId}. ` +
+            `Only one worker can work on an epic at a time.`
+          );
+        }
+
         await state.updateTask(task.id, { assignedWorkerId: params.workerId });
       }
 

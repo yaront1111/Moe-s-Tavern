@@ -14,8 +14,12 @@ import type {
   Task,
   Worker
 } from '../types/schema.js';
+import { CURRENT_SCHEMA_VERSION, type Project, type ProjectSettings } from '../types/schema.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
+import { logger, createContextLogger } from '../util/logger.js';
+import { runMigrations } from '../migrations/index.js';
+import { LogRotator } from '../util/LogRotator.js';
 
 /**
  * Simple async mutex to serialize state operations.
@@ -62,9 +66,11 @@ export type StateChangeEvent =
   | { type: 'TASK_DELETED'; payload: Task }
   | { type: 'EPIC_UPDATED'; payload: Epic }
   | { type: 'EPIC_CREATED'; payload: Epic }
+  | { type: 'EPIC_DELETED'; payload: Epic }
   | { type: 'WORKER_UPDATED'; payload: Worker }
   | { type: 'PROPOSAL_CREATED'; payload: RailProposal }
-  | { type: 'PROPOSAL_UPDATED'; payload: RailProposal };
+  | { type: 'PROPOSAL_UPDATED'; payload: RailProposal }
+  | { type: 'SETTINGS_UPDATED'; payload: Project };
 
 export interface StateManagerOptions {
   projectPath: string;
@@ -83,6 +89,7 @@ export class StateManager {
   private emitter?: (event: StateChangeEvent) => void;
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
+  private logRotator?: LogRotator;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -105,7 +112,7 @@ export class StateManager {
       try {
         this.emitter(event);
       } catch (error) {
-        console.error('Error in state emitter:', error);
+        logger.error({ error }, 'Error in state emitter');
       }
     }
   }
@@ -117,8 +124,20 @@ export class StateManager {
       }
 
       const projectFile = path.join(this.moePath, 'project.json');
-      const rawProject = this.readJson<Partial<Project>>(projectFile);
-      const normalized = this.normalizeProject(rawProject);
+      let rawProject = this.readJson<Record<string, unknown>>(projectFile);
+
+      // Run migrations if needed
+      const { data: migratedData, result: migrationResult } = runMigrations(rawProject);
+      if (migrationResult.migrationsApplied.length > 0) {
+        rawProject = migratedData;
+        logger.info({
+          from: migrationResult.fromVersion,
+          to: migrationResult.toVersion,
+          migrations: migrationResult.migrationsApplied
+        }, 'Schema migrations applied');
+      }
+
+      const normalized = this.normalizeProject(rawProject as Partial<Project>);
       this.project = normalized;
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
         fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
@@ -128,6 +147,10 @@ export class StateManager {
       this.tasks = this.loadEntities<Task>(path.join(this.moePath, 'tasks'));
       this.workers = this.loadEntities<Worker>(path.join(this.moePath, 'workers'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
+
+      // Initialize log rotator
+      const activityLogPath = path.join(this.moePath, 'activity.log');
+      this.logRotator = new LogRotator(activityLogPath);
     });
   }
 
@@ -142,6 +165,15 @@ export class StateManager {
       tasks: sortByOrder(Array.from(this.tasks.values())),
       workers: Array.from(this.workers.values()),
       proposals: Array.from(this.proposals.values())
+    };
+  }
+
+  getStats(): { tasks: number; epics: number; workers: number; proposals: number } {
+    return {
+      tasks: this.tasks.size,
+      epics: this.epics.size,
+      workers: this.workers.size,
+      proposals: this.proposals.size
     };
   }
 
@@ -165,7 +197,7 @@ export class StateManager {
       return defaultVal;
     }
     if (value.length > maxLength) {
-      console.warn(`${fieldName} truncated from ${value.length} to ${maxLength} chars`);
+      logger.warn({ fieldName, originalLength: value.length, maxLength }, 'Field truncated');
       return value.substring(0, maxLength);
     }
     return value;
@@ -322,6 +354,57 @@ export class StateManager {
     return updated;
   }
 
+  async updateSettings(settings: Partial<ProjectSettings>): Promise<Project> {
+    if (!this.project) {
+      throw new Error('Project not loaded');
+    }
+
+    const updatedSettings: ProjectSettings = {
+      ...this.project.settings,
+      ...settings
+    };
+
+    const updatedProject: Project = {
+      ...this.project,
+      settings: updatedSettings,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.project = updatedProject;
+    await fs.promises.writeFile(
+      path.join(this.moePath, 'project.json'),
+      JSON.stringify(updatedProject, null, 2)
+    );
+    this.emit({ type: 'SETTINGS_UPDATED', payload: updatedProject });
+    return updatedProject;
+  }
+
+  async deleteEpic(epicId: string): Promise<Epic> {
+    const epic = this.epics.get(epicId);
+    if (!epic) {
+      throw new Error(`Epic not found: ${epicId}`);
+    }
+
+    // Delete all tasks in this epic
+    const tasksToDelete = Array.from(this.tasks.values()).filter((t) => t.epicId === epicId);
+    for (const task of tasksToDelete) {
+      await this.deleteTask(task.id);
+    }
+
+    // Remove epic from memory
+    this.epics.delete(epicId);
+
+    // Delete epic file
+    const filePath = path.join(this.moePath, 'epics', `${epicId}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title });
+    this.emit({ type: 'EPIC_DELETED', payload: epic });
+    return epic;
+  }
+
   async approveTask(taskId: string): Promise<Task> {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -397,6 +480,9 @@ export class StateManager {
       throw new Error(`Proposal not found: ${proposalId}`);
     }
 
+    // Apply the rail change
+    await this.applyRailChange(proposal);
+
     const updated: RailProposal = {
       ...proposal,
       status: 'APPROVED',
@@ -408,6 +494,71 @@ export class StateManager {
     await this.writeEntity('proposals', proposalId, updated);
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
     return updated;
+  }
+
+  private async applyRailChange(proposal: RailProposal): Promise<void> {
+    const { proposalType, targetScope, currentValue, proposedValue, taskId } = proposal;
+
+    if (targetScope === 'GLOBAL') {
+      if (!this.project) throw new Error('Project not loaded');
+      const rails = [...(this.project.globalRails.customRules || [])];
+
+      if (proposalType === 'ADD_RAIL') {
+        rails.push(proposedValue);
+      } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails[idx] = proposedValue;
+      } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails.splice(idx, 1);
+      }
+
+      this.project = {
+        ...this.project,
+        globalRails: { ...this.project.globalRails, customRules: rails },
+        updatedAt: new Date().toISOString()
+      };
+      await fs.promises.writeFile(
+        path.join(this.moePath, 'project.json'),
+        JSON.stringify(this.project, null, 2)
+      );
+    } else if (targetScope === 'EPIC') {
+      const task = this.tasks.get(taskId);
+      if (!task) throw new Error(`Task not found: ${taskId}`);
+      const epic = this.epics.get(task.epicId);
+      if (!epic) throw new Error(`Epic not found: ${task.epicId}`);
+
+      const rails = [...(epic.epicRails || [])];
+
+      if (proposalType === 'ADD_RAIL') {
+        rails.push(proposedValue);
+      } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails[idx] = proposedValue;
+      } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails.splice(idx, 1);
+      }
+
+      await this.updateEpic(epic.id, { epicRails: rails });
+    } else if (targetScope === 'TASK') {
+      const task = this.tasks.get(taskId);
+      if (!task) throw new Error(`Task not found: ${taskId}`);
+
+      const rails = [...(task.taskRails || [])];
+
+      if (proposalType === 'ADD_RAIL') {
+        rails.push(proposedValue);
+      } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails[idx] = proposedValue;
+      } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
+        const idx = rails.indexOf(currentValue);
+        if (idx !== -1) rails.splice(idx, 1);
+      }
+
+      await this.updateTask(taskId, { taskRails: rails });
+    }
   }
 
   async rejectProposal(proposalId: string): Promise<RailProposal> {
@@ -488,9 +639,13 @@ export class StateManager {
     // We don't await here intentionally - activity logging shouldn't block operations
     void this.activityMutex.runExclusive(async () => {
       try {
+        // Rotate log if needed before appending
+        if (this.logRotator) {
+          await this.logRotator.rotateIfNeeded();
+        }
         fs.appendFileSync(logPath, line, { flag: 'a' });
       } catch (error) {
-        console.error('Failed to append activity log:', error);
+        logger.error({ error }, 'Failed to append activity log');
       }
     });
   }
@@ -526,7 +681,7 @@ export class StateManager {
       try {
         fs.appendFileSync(logPath, line, { flag: 'a' });
       } catch (error) {
-        console.error('Failed to append activity log:', error);
+        logger.error({ error }, 'Failed to append activity log');
       }
     });
   }
@@ -562,7 +717,7 @@ export class StateManager {
       // Return in reverse chronological order, limited
       return events.reverse().slice(0, limit);
     } catch (error) {
-      console.error('Failed to read activity log:', error);
+      logger.error({ error }, 'Failed to read activity log');
       return [];
     }
   }
@@ -612,13 +767,13 @@ export class StateManager {
     }
     // Only allow safe template characters
     if (pattern.length > 256) {
-      console.warn(`Pattern too long, using default: ${pattern.substring(0, 50)}...`);
+      logger.warn({ pattern: pattern.substring(0, 50) }, 'Pattern too long, using default');
       return defaultVal;
     }
     // Remove potentially dangerous characters (shell injection prevention)
     const sanitized = pattern.replace(/[`$(){}[\]|;&<>]/g, '');
     if (sanitized !== pattern) {
-      console.warn(`Pattern sanitized: ${pattern} -> ${sanitized}`);
+      logger.warn({ original: pattern, sanitized }, 'Pattern sanitized');
     }
     return sanitized || defaultVal;
   }
@@ -634,6 +789,7 @@ export class StateManager {
 
     return {
       id: project.id || generateId('proj'),
+      schemaVersion: project.schemaVersion || CURRENT_SCHEMA_VERSION,
       name: project.name || path.basename(this.projectPath),
       rootPath: project.rootPath || this.projectPath,
       globalRails: {

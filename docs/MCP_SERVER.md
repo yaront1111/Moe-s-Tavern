@@ -47,6 +47,7 @@ This registry is updated when you open a Moe project in the JetBrains plugin.
 | `MOE_PROJECT_PATH` | daemon + proxy | Project root (daemon defaults to cwd; proxy uses this to locate `.moe/daemon.json`) |
 | `MOE_TASK_ID` | daemon | Optional default task for `moe.get_context` |
 | `MOE_WORKER_ID` | daemon | Optional fallback worker for `moe.get_context` |
+| `LOG_LEVEL` | daemon | Logging level: `debug`, `info` (default), `warn`, `error`, `fatal` |
 
 ---
 

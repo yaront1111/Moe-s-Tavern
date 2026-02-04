@@ -15,6 +15,9 @@ import { listTasksTool } from './listTasks.js';
 import { getNextTaskTool } from './getNextTask.js';
 import { createTaskTool } from './createTask.js';
 import { createEpicTool } from './createEpic.js';
+import { updateEpicTool } from './updateEpic.js';
+import { deleteEpicTool } from './deleteEpic.js';
+import { searchTasksTool } from './searchTasks.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
 import { deleteTaskTool } from './deleteTask.js';
@@ -42,6 +45,9 @@ export function getTools(state: StateManager): ToolDefinition[] {
     getNextTaskTool(state),
     createTaskTool(state),
     createEpicTool(state),
+    updateEpicTool(state),
+    deleteEpicTool(state),
+    searchTasksTool(state),
     setTaskStatusTool(state),
     claimNextTaskTool(state),
     deleteTaskTool(state)

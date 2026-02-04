@@ -28,6 +28,7 @@ object MoeProjectInitializer {
         val now = Instant.now().toString()
         val projectJson = JsonObject().apply {
             addProperty("id", "proj-${shortId()}")
+            addProperty("schemaVersion", 2)
             addProperty("name", projectName ?: root.name)
             addProperty("rootPath", root.absolutePath)
 
