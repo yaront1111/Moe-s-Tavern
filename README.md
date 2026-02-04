@@ -48,6 +48,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Rails System** | Define constraints AI must follow |
 
 ---
+<img width="1488" height="833" alt="Screenshot 2026-02-05 011749" src="https://github.com/user-attachments/assets/cc68f17b-137f-42f3-b90c-eba0b68ba032" />
 
 ## Quick Start
 
