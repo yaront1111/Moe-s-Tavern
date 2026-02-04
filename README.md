@@ -89,6 +89,72 @@ The agent will:
 
 ---
 
+## JetBrains Plugin Installation
+
+The plugin provides a visual Kanban board inside your IDE (IntelliJ IDEA, PyCharm, WebStorm, etc.)
+
+### Prerequisites
+
+- **JDK 17+** - [Download](https://adoptium.net/)
+- **JetBrains IDE** - Any 2024.1+ version
+
+### Build the Plugin
+
+**Mac / Linux:**
+```bash
+cd moe-jetbrains
+./gradlew buildPlugin
+```
+
+**Windows:**
+```powershell
+cd moe-jetbrains
+.\gradlew.bat buildPlugin
+```
+
+The plugin zip will be created at `moe-jetbrains/build/distributions/moe-jetbrains-*.zip`
+
+### Install in Your IDE
+
+**Option 1: Install from Disk (Recommended)**
+
+1. Open your JetBrains IDE
+2. Go to **Settings/Preferences** → **Plugins**
+3. Click the **⚙️ gear icon** → **Install Plugin from Disk...**
+4. Select the zip file from `moe-jetbrains/build/distributions/`
+5. Restart the IDE
+
+**Option 2: Development Mode**
+
+Run the plugin in a sandbox IDE for testing:
+```bash
+cd moe-jetbrains
+./gradlew runIde    # Mac/Linux
+.\gradlew.bat runIde  # Windows
+```
+
+### Plugin Location (Manual Install)
+
+If you prefer to extract manually:
+
+| OS | Plugin Directory |
+|----|------------------|
+| **Windows** | `%APPDATA%\JetBrains\<IDE><version>\plugins\` |
+| **Mac** | `~/Library/Application Support/JetBrains/<IDE><version>/plugins/` |
+| **Linux** | `~/.config/JetBrains/<IDE><version>/plugins/` |
+
+Extract the zip contents to a `moe-jetbrains` folder in the plugins directory, then restart your IDE.
+
+### Using the Plugin
+
+1. Open a project in your JetBrains IDE
+2. The Moe tool window appears in the right sidebar
+3. Click **Connect** to start the daemon and connect
+4. Create epics and tasks using the toolbar buttons
+5. AI agents will claim tasks and submit plans for your approval
+
+---
+
 ## Architecture
 
 ```mermaid
