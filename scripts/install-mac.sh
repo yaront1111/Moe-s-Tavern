@@ -17,6 +17,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 GLOBAL_INSTALL=false
 INSTALL_LAUNCHD=false
 SKIP_MCP=false
+BUILD_PLUGIN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -32,6 +33,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_MCP=true
             shift
             ;;
+        --with-plugin)
+            BUILD_PLUGIN=true
+            shift
+            ;;
         --help|-h)
             echo "Moe Installation Script"
             echo ""
@@ -39,6 +44,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --global, -g     Install daemon and proxy globally via npm"
+            echo "  --with-plugin    Build JetBrains plugin (requires JDK 17+)"
             echo "  --with-launchd   Install launchd plist for auto-start (Mac only)"
             echo "  --skip-mcp       Skip MCP configuration setup"
             echo "  --help, -h       Show this help"
@@ -64,8 +70,18 @@ if ! "$SCRIPT_DIR/doctor.sh"; then
 fi
 echo ""
 
+# Fix script permissions
+echo -e "${YELLOW}Step 2: Fixing script permissions...${NC}"
+chmod +x "$SCRIPT_DIR"/*.sh 2>/dev/null || true
+if [ -d "$ROOT_DIR/moe-jetbrains" ]; then
+    chmod +x "$ROOT_DIR/moe-jetbrains/gradlew" 2>/dev/null || true
+    chmod +x "$ROOT_DIR/moe-jetbrains/scripts"/*.sh 2>/dev/null || true
+fi
+echo -e "${GREEN}[OK]${NC} Script permissions fixed"
+echo ""
+
 # Build daemon
-echo -e "${YELLOW}Step 2: Building moe-daemon...${NC}"
+echo -e "${YELLOW}Step 3: Building moe-daemon...${NC}"
 cd "$ROOT_DIR/packages/moe-daemon"
 npm install
 npm run build
@@ -73,7 +89,7 @@ echo -e "${GREEN}[OK]${NC} moe-daemon built"
 echo ""
 
 # Build proxy
-echo -e "${YELLOW}Step 3: Building moe-proxy...${NC}"
+echo -e "${YELLOW}Step 4: Building moe-proxy...${NC}"
 cd "$ROOT_DIR/packages/moe-proxy"
 npm install
 npm run build
@@ -82,7 +98,7 @@ echo ""
 
 # Global install (optional)
 if [ "$GLOBAL_INSTALL" = true ]; then
-    echo -e "${YELLOW}Step 4: Installing globally...${NC}"
+    echo -e "${YELLOW}Step 5: Installing globally...${NC}"
     cd "$ROOT_DIR/packages/moe-daemon"
     npm link
     cd "$ROOT_DIR/packages/moe-proxy"
@@ -91,9 +107,80 @@ if [ "$GLOBAL_INSTALL" = true ]; then
     echo ""
 fi
 
+# Build JetBrains plugin (optional)
+if [ "$BUILD_PLUGIN" = true ]; then
+    echo -e "${YELLOW}Step 6: Building JetBrains plugin...${NC}"
+
+    cd "$ROOT_DIR/moe-jetbrains"
+
+    # Check for Java
+    if ! command -v java &> /dev/null; then
+        echo -e "${RED}[ERROR]${NC} Java not found. Install JDK 17+: brew install openjdk@17"
+        exit 1
+    fi
+
+    # Check Java version
+    JAVA_VERSION=$(java -version 2>&1 | head -n1 | cut -d'"' -f2 | cut -d'.' -f1)
+    if [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
+        echo -e "${RED}[ERROR]${NC} Java 17+ required. Found version $JAVA_VERSION"
+        exit 1
+    fi
+
+    # Ensure gradle wrapper exists
+    if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+        echo -e "${YELLOW}[INFO]${NC} Gradle wrapper missing, downloading..."
+
+        # Try to use system gradle to generate wrapper
+        if command -v gradle &> /dev/null; then
+            gradle wrapper --gradle-version 8.5
+        else
+            # Download gradle wrapper jar directly
+            mkdir -p gradle/wrapper
+            WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+            if command -v curl &> /dev/null; then
+                curl -sL "$WRAPPER_URL" -o gradle/wrapper/gradle-wrapper.jar
+            elif command -v wget &> /dev/null; then
+                wget -q "$WRAPPER_URL" -O gradle/wrapper/gradle-wrapper.jar
+            else
+                echo -e "${RED}[ERROR]${NC} Cannot download gradle wrapper. Install gradle: brew install gradle"
+                exit 1
+            fi
+
+            # Create wrapper properties if missing
+            if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+                cat > gradle/wrapper/gradle-wrapper.properties << 'PROPEOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+PROPEOF
+            fi
+        fi
+        echo -e "${GREEN}[OK]${NC} Gradle wrapper setup complete"
+    fi
+
+    # Build plugin
+    ./gradlew buildPlugin
+
+    PLUGIN_ZIP=$(ls -t build/distributions/*.zip 2>/dev/null | head -n1)
+    if [ -n "$PLUGIN_ZIP" ]; then
+        echo -e "${GREEN}[OK]${NC} Plugin built: $PLUGIN_ZIP"
+        echo ""
+        echo -e "${YELLOW}To install the plugin:${NC}"
+        echo "  1. Open your JetBrains IDE"
+        echo "  2. Settings → Plugins → ⚙️ → Install Plugin from Disk"
+        echo "  3. Select: $PLUGIN_ZIP"
+    else
+        echo -e "${RED}[ERROR]${NC} Plugin build failed"
+        exit 1
+    fi
+    echo ""
+fi
+
 # Setup MCP configuration
 if [ "$SKIP_MCP" = false ]; then
-    echo -e "${YELLOW}Step 5: Setting up MCP configuration...${NC}"
+    echo -e "${YELLOW}Step 7: Setting up MCP configuration...${NC}"
 
     MCP_CONFIG_DIR="$HOME/.config/claude"
     MCP_CONFIG_FILE="$MCP_CONFIG_DIR/mcp_servers.json"
@@ -126,7 +213,7 @@ fi
 
 # Setup launchd (Mac only, optional)
 if [ "$INSTALL_LAUNCHD" = true ] && [ "$(uname -s)" = "Darwin" ]; then
-    echo -e "${YELLOW}Step 6: Setting up launchd auto-start...${NC}"
+    echo -e "${YELLOW}Step 8: Setting up launchd auto-start...${NC}"
 
     LAUNCHD_DIR="$HOME/Library/LaunchAgents"
     PLIST_FILE="$LAUNCHD_DIR/com.moe.daemon.plist"
@@ -160,7 +247,7 @@ EOF
 fi
 
 # Create ~/.moe directory
-echo -e "${YELLOW}Step 7: Creating Moe config directory...${NC}"
+echo -e "${YELLOW}Step 9: Creating Moe config directory...${NC}"
 mkdir -p "$HOME/.moe"
 if [ ! -f "$HOME/.moe/projects.json" ]; then
     echo "[]" > "$HOME/.moe/projects.json"
