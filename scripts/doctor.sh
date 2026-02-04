@@ -48,6 +48,35 @@ check_node_version() {
     return 1
 }
 
+check_java() {
+    if command -v java &> /dev/null; then
+        # Get Java version - handles both "1.8.0" and "17.0.1" formats
+        local version_output=$(java -version 2>&1 | head -n1)
+        local version=$(echo "$version_output" | sed -n 's/.*version "\([^"]*\)".*/\1/p')
+        local major
+
+        # Handle version formats: "1.8.0_xxx" (Java 8) vs "17.0.x" (Java 17+)
+        if [[ "$version" == 1.* ]]; then
+            major=$(echo "$version" | cut -d. -f2)
+        else
+            major=$(echo "$version" | cut -d. -f1)
+        fi
+
+        if [ "$major" -ge 17 ] 2>/dev/null; then
+            echo -e "${GREEN}[OK]${NC} Java version $version (>= 17 required for plugin)"
+            return 0
+        else
+            echo -e "${YELLOW}[WARN]${NC} Java version $version found (17+ recommended for plugin)"
+            echo -e "    ${YELLOW}Upgrade:${NC} brew install openjdk@17"
+            return 2  # Warning, not error
+        fi
+    else
+        echo -e "${YELLOW}[INFO]${NC} Java not found (optional, needed for JetBrains plugin)"
+        echo -e "    ${YELLOW}Install:${NC} brew install openjdk@17"
+        return 2  # Not an error, Java is optional
+    fi
+}
+
 ERRORS=0
 
 echo "Checking prerequisites..."
@@ -71,6 +100,13 @@ fi
 if ! check_command "git" "" "brew install git"; then
     ERRORS=$((ERRORS + 1))
 fi
+
+echo ""
+echo "Optional (for JetBrains plugin):"
+echo ""
+
+# Java (optional but needed for plugin)
+check_java
 
 echo ""
 
