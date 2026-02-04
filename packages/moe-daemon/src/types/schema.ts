@@ -43,6 +43,7 @@ export interface ProjectSettings {
 
 export interface Project {
   id: string;
+  schemaVersion: number;
   name: string;
   rootPath: string;
   globalRails: GlobalRails;
@@ -50,6 +51,8 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
 }
+
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface Epic {
   id: string;
@@ -133,6 +136,7 @@ export type ActivityEventType =
   | 'GLOBAL_RAILS_UPDATED'
   | 'EPIC_CREATED'
   | 'EPIC_UPDATED'
+  | 'EPIC_DELETED'
   | 'EPIC_STARTED'
   | 'EPIC_COMPLETED'
   | 'TASK_CREATED'
@@ -141,6 +145,7 @@ export type ActivityEventType =
   | 'TASK_STARTED'
   | 'PLAN_SUBMITTED'
   | 'PLAN_APPROVED'
+  | 'PLAN_AUTO_APPROVED'
   | 'PLAN_REJECTED'
   | 'STEP_STARTED'
   | 'STEP_COMPLETED'

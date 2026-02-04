@@ -3,9 +3,10 @@
 // =============================================================================
 
 import { WebSocketServer as WSS, WebSocket } from 'ws';
-import type { IncomingMessage } from 'http';
+import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
 import type { McpAdapter } from './McpAdapter.js';
+import { logger } from '../util/logger.js';
 
 export type PluginMessage =
   | { type: 'PING' }
@@ -16,12 +17,14 @@ export type PluginMessage =
   | { type: 'DELETE_TASK'; payload: { taskId: string } }
   | { type: 'CREATE_EPIC'; payload: Record<string, unknown> }
   | { type: 'UPDATE_EPIC'; payload: { epicId: string; updates: Record<string, unknown> } }
+  | { type: 'DELETE_EPIC'; payload: { epicId: string } }
   | { type: 'REORDER_TASK'; payload: { taskId: string; beforeId: string | null; afterId: string | null } }
   | { type: 'APPROVE_TASK'; payload: { taskId: string } }
   | { type: 'REJECT_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'APPROVE_PROPOSAL'; payload: { proposalId: string } }
-  | { type: 'REJECT_PROPOSAL'; payload: { proposalId: string } };
+  | { type: 'REJECT_PROPOSAL'; payload: { proposalId: string } }
+  | { type: 'UPDATE_SETTINGS'; payload: Record<string, unknown> };
 
 export class MoeWebSocketServer {
   private wss: WSS;
@@ -30,11 +33,11 @@ export class MoeWebSocketServer {
   private isClosed = false;
 
   constructor(
-    private readonly port: number,
+    httpServer: HttpServer,
     private readonly state: StateManager,
     private readonly mcpAdapter: McpAdapter
   ) {
-    this.wss = new WSS({ port: this.port });
+    this.wss = new WSS({ server: httpServer });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
   }
 
@@ -177,6 +180,20 @@ export class MoeWebSocketServer {
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
+        case 'DELETE_EPIC': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { epicId } = message.payload;
+          if (!epicId || typeof epicId !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
+            return;
+          }
+          const epic = await this.state.deleteEpic(epicId);
+          this.safeSend(ws, JSON.stringify({ type: 'EPIC_DELETED', payload: epic }));
+          return;
+        }
         case 'REORDER_TASK': {
           if (!message.payload || typeof message.payload !== 'object') {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
@@ -236,6 +253,15 @@ export class MoeWebSocketServer {
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
+        case 'UPDATE_SETTINGS': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const project = await this.state.updateSettings(message.payload as Record<string, unknown>);
+          this.safeSend(ws, JSON.stringify({ type: 'SETTINGS_UPDATED', payload: project }));
+          return;
+        }
         default:
           this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Unknown message type: ${(message as { type?: string }).type}` }));
       }
@@ -254,7 +280,7 @@ export class MoeWebSocketServer {
           }
         })
       };
-      console.error(`WebSocket handler error [${message.type}]:`, error);
+      logger.error({ messageType: message.type, error }, 'WebSocket handler error');
       this.safeSend(ws, JSON.stringify(context));
     }
   }

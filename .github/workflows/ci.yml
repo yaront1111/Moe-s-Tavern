@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-typescript:
+    name: Lint TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: |
+            packages/moe-daemon/package-lock.json
+            packages/moe-proxy/package-lock.json
+
+      - name: Install daemon dependencies
+        run: npm ci
+        working-directory: packages/moe-daemon
+
+      - name: Lint daemon
+        run: npm run lint
+        working-directory: packages/moe-daemon
+
+      - name: Install proxy dependencies
+        run: npm ci
+        working-directory: packages/moe-proxy
+
+      - name: Lint proxy
+        run: npm run lint
+        working-directory: packages/moe-proxy
+
+  build-typescript:
+    name: Build TypeScript
+    runs-on: ubuntu-latest
+    needs: lint-typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: |
+            packages/moe-daemon/package-lock.json
+            packages/moe-proxy/package-lock.json
+
+      - name: Install and build daemon
+        run: |
+          npm ci
+          npm run build
+        working-directory: packages/moe-daemon
+
+      - name: Install and build proxy
+        run: |
+          npm ci
+          npm run build
+        working-directory: packages/moe-proxy
+
+      - name: Upload daemon build
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-dist
+          path: packages/moe-daemon/dist/
+
+      - name: Upload proxy build
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-dist
+          path: packages/moe-proxy/dist/
+
+  test-typescript:
+    name: Test TypeScript
+    runs-on: ubuntu-latest
+    needs: build-typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: |
+            packages/moe-daemon/package-lock.json
+            packages/moe-proxy/package-lock.json
+
+      - name: Install daemon dependencies
+        run: npm ci
+        working-directory: packages/moe-daemon
+
+      - name: Test daemon
+        run: npm test
+        working-directory: packages/moe-daemon
+
+      - name: Install proxy dependencies
+        run: npm ci
+        working-directory: packages/moe-proxy
+
+      - name: Test proxy
+        run: npm test
+        working-directory: packages/moe-proxy
+
+  build-plugin:
+    name: Build JetBrains Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build plugin
+        run: ./gradlew buildPlugin
+        working-directory: moe-jetbrains
+
+      - name: Run plugin tests
+        run: ./gradlew test
+        working-directory: moe-jetbrains
+
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: jetbrains-plugin
+          path: moe-jetbrains/build/distributions/*.zip
+
+  # Cross-platform build verification
+  build-all-platforms:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Build daemon
+        run: |
+          npm ci
+          npm run build
+        working-directory: packages/moe-daemon
+
+      - name: Build proxy
+        run: |
+          npm ci
+          npm run build
+        working-directory: packages/moe-proxy

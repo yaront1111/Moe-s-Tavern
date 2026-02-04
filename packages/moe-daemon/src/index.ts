@@ -7,11 +7,15 @@
 import fs from 'fs';
 import path from 'path';
 import net from 'net';
+import http from 'http';
 import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
+import { logger } from './util/logger.js';
 import type { DaemonInfo } from './types/schema.js';
+
+const VERSION = '0.1.0';
 
 const DEFAULT_PORT = 9876;
 const PORT_RANGE = 50;
@@ -87,7 +91,7 @@ function removeDaemonInfo(projectPath: string): void {
 async function startDaemon(projectPath: string, preferredPort?: number): Promise<void> {
   const existing = readDaemonInfo(projectPath);
   if (existing && isProcessAlive(existing.pid)) {
-    console.log(`Moe daemon already running on port ${existing.port} (pid ${existing.pid}).`);
+    logger.info({ port: existing.port, pid: existing.pid }, 'Moe daemon already running');
     return;
   }
 
@@ -95,8 +99,32 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   const state = new StateManager({ projectPath });
   await state.load();
 
+  const startTime = Date.now();
+
+  // Create HTTP server for health endpoint
+  const httpServer = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      const stats = state.getStats();
+      const response = {
+        status: 'healthy',
+        version: VERSION,
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        projectPath,
+        stats
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(response, null, 2));
+    } else {
+      // Return 426 Upgrade Required for non-health requests
+      res.writeHead(426, { 'Content-Type': 'text/plain' });
+      res.end('Upgrade Required');
+    }
+  });
+
   const mcpAdapter = new McpAdapter(state);
-  const wsServer = new MoeWebSocketServer(port, state, mcpAdapter);
+  const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
+
+  httpServer.listen(port);
 
   state.setEmitter((event) => {
     wsServer.broadcast(event);
@@ -107,7 +135,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
       await state.load();
       wsServer.broadcast({ type: 'STATE_SNAPSHOT', payload: state.getSnapshot() });
     } catch (error) {
-      console.error('Failed to reload state from file watcher:', error);
+      logger.error({ error }, 'Failed to reload state from file watcher');
     }
   });
   watcher.start();
@@ -126,29 +154,35 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
 
   const shutdown = async () => {
     if (isShuttingDown) {
-      console.log('Shutdown already in progress...');
+      logger.debug('Shutdown already in progress...');
       return;
     }
     isShuttingDown = true;
 
-    console.log('Shutting down daemon...');
+    logger.info('Shutting down daemon...');
 
     // Set a hard timeout in case cleanup hangs
     const forceExitTimeout = setTimeout(() => {
-      console.error('Shutdown timed out, forcing exit');
+      logger.error('Shutdown timed out, forcing exit');
       process.exit(1);
     }, 10000);
 
     try {
       await watcher.stop();
     } catch (error) {
-      console.error('Error stopping file watcher:', error);
+      logger.error({ error }, 'Error stopping file watcher');
     }
 
     try {
       await wsServer.close();
     } catch (error) {
-      console.error('Error closing WebSocket server:', error);
+      logger.error({ error }, 'Error closing WebSocket server');
+    }
+
+    try {
+      httpServer.close();
+    } catch (error) {
+      logger.error({ error }, 'Error closing HTTP server');
     }
 
     // Clear emitter to prevent any more broadcasts
@@ -157,7 +191,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     try {
       removeDaemonInfo(projectPath);
     } catch (error) {
-      console.error('Error removing daemon info:', error);
+      logger.error({ error }, 'Error removing daemon info');
     }
 
     clearTimeout(forceExitTimeout);
@@ -169,32 +203,32 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
 
   // Handle uncaught errors gracefully
   process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception:', error);
+    logger.fatal({ error }, 'Uncaught exception');
     shutdown();
   });
 
   process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection:', reason);
+    logger.error({ reason }, 'Unhandled rejection');
     // Don't shutdown on unhandled rejections, just log
   });
 
-  console.log(`Moe daemon running for ${projectPath}`);
-  console.log(`WebSocket: ws://localhost:${port}/ws`);
-  console.log(`MCP bridge: ws://localhost:${port}/mcp`);
+  logger.info({ projectPath, port }, 'Moe daemon running');
+  logger.info({ endpoint: `ws://localhost:${port}/ws` }, 'WebSocket');
+  logger.info({ endpoint: `ws://localhost:${port}/mcp` }, 'MCP bridge');
 }
 
 function stopDaemon(projectPath: string): void {
   const info = readDaemonInfo(projectPath);
   if (!info) {
-    console.log('No daemon info found.');
+    logger.info('No daemon info found');
     return;
   }
 
   if (isProcessAlive(info.pid)) {
     process.kill(info.pid, 'SIGTERM');
-    console.log(`Sent SIGTERM to daemon (pid ${info.pid}).`);
+    logger.info({ pid: info.pid }, 'Sent SIGTERM to daemon');
   } else {
-    console.log('Daemon not running. Cleaning up daemon.json.');
+    logger.info('Daemon not running. Cleaning up daemon.json');
     removeDaemonInfo(projectPath);
   }
 }
@@ -202,15 +236,17 @@ function stopDaemon(projectPath: string): void {
 function statusDaemon(projectPath: string): void {
   const info = readDaemonInfo(projectPath);
   if (!info) {
-    console.log('Daemon not running.');
+    logger.info('Daemon not running');
     return;
   }
 
   const alive = isProcessAlive(info.pid);
-  console.log(`Daemon: ${alive ? 'running' : 'stopped'}`);
-  console.log(`Port: ${info.port}`);
-  console.log(`PID: ${info.pid}`);
-  console.log(`Project: ${info.projectPath}`);
+  logger.info({
+    status: alive ? 'running' : 'stopped',
+    port: info.port,
+    pid: info.pid,
+    projectPath: info.projectPath
+  }, 'Daemon status');
 }
 
 async function main() {
@@ -227,11 +263,11 @@ async function main() {
       statusDaemon(projectPath);
       break;
     default:
-      console.log('Usage: moe-daemon [start|stop|status] [--project <path>] [--port <port>]');
+      logger.info('Usage: moe-daemon [start|stop|status] [--project <path>] [--port <port>]');
   }
 }
 
 main().catch((err) => {
-  console.error(err);
+  logger.fatal({ error: err }, 'Fatal error');
   process.exit(1);
 });

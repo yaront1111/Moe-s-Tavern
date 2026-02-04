@@ -10,6 +10,7 @@ import com.moe.model.MoeState
 import com.moe.model.Project
 import com.moe.model.RailProposal
 import com.moe.model.Task
+import com.moe.model.Worker
 import com.moe.util.MoeJson
 import com.moe.util.MoeProjectInitializer
 import com.intellij.openapi.Disposable
@@ -166,10 +167,22 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 val payload = json.getAsJsonObject("payload")
                 val task = MoeJson.parseTask(payload)
                 val current = state ?: return
+                val oldTask = current.tasks.find { it.id == task.id }
                 val tasks = current.tasks.filter { it.id != task.id } + task
                 val newState = current.copy(tasks = tasks)
                 state = newState
                 publishState(newState)
+
+                // Send notifications for status changes
+                if (oldTask?.status != task.status) {
+                    val notificationService = MoeNotificationService.getInstance(project)
+                    when (task.status) {
+                        "AWAITING_APPROVAL" -> notificationService.notifyAwaitingApproval(task)
+                        "BLOCKED" -> notificationService.notifyTaskBlocked(task)
+                        "REVIEW" -> notificationService.notifyTaskInReview(task)
+                        "DONE" -> notificationService.notifyTaskCompleted(task)
+                    }
+                }
             }
             "TASK_DELETED" -> {
                 val payload = json.getAsJsonObject("payload")
@@ -186,6 +199,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 val current = state ?: return
                 val epics = current.epics.filter { it.id != epic.id } + epic
                 val newState = current.copy(epics = epics)
+                state = newState
+                publishState(newState)
+            }
+            "EPIC_DELETED" -> {
+                val payload = json.getAsJsonObject("payload")
+                val epic = MoeJson.parseEpic(payload)
+                val current = state ?: return
+                val epics = current.epics.filter { it.id != epic.id }
+                val tasks = current.tasks.filter { it.epicId != epic.id }
+                val newState = current.copy(epics = epics, tasks = tasks)
                 state = newState
                 publishState(newState)
             }
@@ -208,6 +231,15 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 val current = state ?: return
                 val proposals = current.proposals.filter { it.id != proposal.id } + proposal
                 val newState = current.copy(proposals = proposals)
+                state = newState
+                publishState(newState)
+            }
+            "WORKER_UPDATED", "WORKER_CREATED" -> {
+                val payload = json.getAsJsonObject("payload")
+                val worker = MoeJson.parseWorker(payload)
+                val current = state ?: return
+                val workers = current.workers.filter { it.id != worker.id } + worker
+                val newState = current.copy(workers = workers)
                 state = newState
                 publishState(newState)
             }
@@ -246,6 +278,22 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("DELETE_TASK", payload)
     }
 
+    fun deleteEpic(epicId: String) {
+        val payload = JsonObject().apply { addProperty("epicId", epicId) }
+        sendMessage("DELETE_EPIC", payload)
+    }
+
+    fun updateSettings(settings: com.moe.model.ProjectSettings) {
+        val payload = JsonObject().apply {
+            addProperty("approvalMode", settings.approvalMode)
+            addProperty("speedModeDelayMs", settings.speedModeDelayMs)
+            addProperty("autoCreateBranch", settings.autoCreateBranch)
+            addProperty("branchPattern", settings.branchPattern)
+            addProperty("commitPattern", settings.commitPattern)
+        }
+        sendMessage("UPDATE_SETTINGS", payload)
+    }
+
     fun updateEpicStatus(epicId: String, status: String, order: Double) {
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
@@ -257,12 +305,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("UPDATE_EPIC", payload)
     }
 
-    fun updateEpicDetails(epicId: String, title: String, description: String, status: String) {
+    fun updateEpicDetails(epicId: String, title: String, description: String, architectureNotes: String, epicRails: List<String>, status: String) {
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
             add("updates", JsonObject().apply {
                 addProperty("title", title)
                 addProperty("description", description)
+                addProperty("architectureNotes", architectureNotes)
+                val railsArray = JsonArray()
+                epicRails.forEach { railsArray.add(it) }
+                add("epicRails", railsArray)
                 addProperty("status", status)
             })
         }

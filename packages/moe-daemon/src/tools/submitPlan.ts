@@ -89,12 +89,38 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         status: 'AWAITING_APPROVAL'
       }, 'PLAN_SUBMITTED');
 
+      const approvalMode = project.settings.approvalMode;
+      let finalStatus = 'AWAITING_APPROVAL';
+      let message = 'Plan submitted. Awaiting human approval.';
+
+      if (approvalMode === 'TURBO') {
+        // Instant auto-approval
+        await state.updateTask(task.id, { status: 'WORKING' }, 'PLAN_AUTO_APPROVED');
+        finalStatus = 'WORKING';
+        message = 'Plan auto-approved (TURBO mode). Ready to work.';
+      } else if (approvalMode === 'SPEED') {
+        // Delayed auto-approval
+        const delayMs = project.settings.speedModeDelayMs || 2000;
+        setTimeout(async () => {
+          try {
+            const currentTask = state.getTask(task.id);
+            // Only auto-approve if still in AWAITING_APPROVAL (not manually rejected/approved)
+            if (currentTask && currentTask.status === 'AWAITING_APPROVAL') {
+              await state.updateTask(task.id, { status: 'WORKING' }, 'PLAN_AUTO_APPROVED');
+            }
+          } catch {
+            // Ignore errors during delayed approval
+          }
+        }, delayMs);
+        message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
+      }
+
       return {
         success: true,
         taskId: task.id,
-        status: 'AWAITING_APPROVAL',
+        status: finalStatus,
         stepCount: implementationPlan.length,
-        message: 'Plan submitted. Awaiting human approval.'
+        message
       };
     }
   };

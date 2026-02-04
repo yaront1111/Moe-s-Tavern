@@ -4,18 +4,30 @@ data class MoeState(
     val project: Project,
     val epics: List<Epic>,
     val tasks: List<Task>,
-    val proposals: List<RailProposal> = emptyList()
+    val proposals: List<RailProposal> = emptyList(),
+    val workers: List<Worker> = emptyList()
 )
 
 data class Project(
     val id: String,
-    val name: String
+    val name: String,
+    val settings: ProjectSettings? = null
+)
+
+data class ProjectSettings(
+    val approvalMode: String = "CONTROL",
+    val speedModeDelayMs: Int = 2000,
+    val autoCreateBranch: Boolean = true,
+    val branchPattern: String = "moe/{epicId}/{taskId}",
+    val commitPattern: String = "feat({epicId}): {taskTitle}"
 )
 
 data class Epic(
     val id: String,
     val title: String,
     val description: String,
+    val architectureNotes: String,
+    val epicRails: List<String>,
     val status: String,
     val order: Double
 )
@@ -70,4 +82,13 @@ data class RailProposal(
     val reason: String,
     val status: String,
     val createdAt: String
+)
+
+data class Worker(
+    val id: String,
+    val type: String,
+    val epicId: String,
+    val currentTaskId: String?,
+    val status: String,
+    val lastError: String?
 )

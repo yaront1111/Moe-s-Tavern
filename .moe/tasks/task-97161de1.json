@@ -10,16 +10,57 @@
     "Returns 503 if unhealthy"
   ],
   "taskRails": [],
-  "implementationPlan": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Modify index.ts to create HTTP server and pass to WebSocketServer. All state changes through StateManager. Log all auto-approval actions to activity.log. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-02-04T19:02:54.561Z",
+      "completedAt": "2026-02-04T19:03:24.258Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update WebSocketServer constructor to accept HTTP server instead of creating its own. Add health check handler for GET /health requests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-04T19:03:29.528Z",
+      "completedAt": "2026-02-04T19:03:48.725Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add getStats method to StateManager to return counts for tasks, epics, workers",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-04T19:03:53.956Z",
+      "completedAt": "2026-02-04T19:04:07.541Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add version constant to package and export for health endpoint. Track startTime for uptime calculation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-02-04T19:04:08.944Z",
+      "completedAt": "2026-02-04T19:04:21.922Z"
+    }
+  ],
   "status": "BACKLOG",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "QA FAIL: Missing unhealthy status. DoD requires 'Returns 503 if unhealthy' but /health endpoint always returns 200 with status:'healthy'. Need to add health checks (e.g., state loaded, no fatal errors) and return 503 with status:'unhealthy' when checks fail.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "order": 9,
   "createdAt": "2026-02-04T14:21:02.881Z",
-  "updatedAt": "2026-02-04T14:21:02.881Z"
+  "updatedAt": "2026-02-04T19:04:29.328Z"
 }
