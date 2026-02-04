@@ -1,0 +1,59 @@
+{
+  "id": "task-reconnect",
+  "epicId": "epic-notifications",
+  "title": "Auto-reconnect on daemon disconnect",
+  "description": "Automatically retry WebSocket connection if daemon disconnects.",
+  "definitionOfDone": [
+    "On disconnect, retry every 5 seconds up to 10 times",
+    "Show \"Reconnecting...\" in status bar during retry",
+    "Stop retry if user manually disconnects",
+    "Resume retry if daemon comes back online"
+  ],
+  "taskRails": [
+    "Use ScheduledExecutorService for retry timer",
+    "Track manual disconnect vs unexpected disconnect"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add reconnectAttempts counter and isReconnecting state to MoeProjectService.kt",
+      "status": "PENDING",
+      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create ScheduledExecutorService for retry scheduling in MoeProjectService.kt",
+      "status": "PENDING",
+      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"]
+    },
+    {
+      "stepId": "step-3",
+      "description": "In WebSocket onClose handler, start reconnect loop if not manual disconnect and attempts < 10",
+      "status": "PENDING",
+      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add isManualDisconnect flag, set true when user clicks disconnect, false on connect",
+      "status": "PENDING",
+      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Emit connection state changes so status bar can show \"Reconnecting...\" text",
+      "status": "PENDING",
+      "affectedFiles": ["moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"]
+    }
+  ],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 3,
+  "createdAt": "2026-02-03T12:30:00.000Z",
+  "updatedAt": "2026-02-03T12:30:00.000Z"
+}

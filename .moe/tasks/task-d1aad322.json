@@ -1,0 +1,76 @@
+{
+  "id": "task-d1aad322",
+  "epicId": "epic-plugin-dialogs",
+  "title": "Fix activity log viewer (marked DONE but not implemented)",
+  "description": "The task-activity-log was marked DONE but ActivityLogPanel.kt doesn't exist.\n\n**Required:**\n- Create ActivityLogPanel.kt with JBTable\n- Add as tab in MoeToolWindowPanel\n- Add GET_ACTIVITY_LOG WebSocket message handler in daemon\n- Parse activity.log and return structured data\n- Add filtering by event type\n- Auto-refresh on new events",
+  "definitionOfDone": [
+    "ActivityLogPanel.kt exists and shows events",
+    "Tab appears in tool window",
+    "Events filterable by type",
+    "Auto-updates when new events arrive"
+  ],
+  "taskRails": [
+    "Reuse existing JBTable patterns from board"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add GET_ACTIVITY_LOG message handler in WebSocketServer.ts: read activity.log, parse JSON lines, return array of ActivityEvent",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create ActivityLogPanel.kt with JBTable showing columns: Timestamp, Event Type, Task/Epic, Details",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ActivityLogPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add ActivityEvent data class to Models.kt matching daemon's ActivityEvent schema",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add ComboBox filter for event type (TASK_CREATED, TASK_UPDATED, PLAN_APPROVED, etc.) in toolbar",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ActivityLogPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add JBTabbedPane to MoeToolWindowPanel with 'Board' and 'Activity' tabs, wire up panel switching",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add getActivityLog() method to MoeProjectService.kt, handle ACTIVITY_LOG_SNAPSHOT response",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 8,
+  "createdAt": "2026-02-04T14:21:02.881Z",
+  "updatedAt": "2026-02-04T14:29:36.888Z"
+}

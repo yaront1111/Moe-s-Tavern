@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ ! -f "$DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
+  if [ -f "$DIR/scripts/ensure-wrapper.sh" ]; then
+    "$DIR/scripts/ensure-wrapper.sh" "$DIR" || true
+  fi
+fi
+
+if [ -f "$DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
+  CP="$DIR/gradle/wrapper/gradle-wrapper.jar"
+  if [ -f "$DIR/gradle/wrapper/gradle-wrapper-shared.jar" ]; then
+    CP="$CP:$DIR/gradle/wrapper/gradle-wrapper-shared.jar"
+  fi
+  if [ -f "$DIR/gradle/wrapper/gradle-cli.jar" ]; then
+    CP="$CP:$DIR/gradle/wrapper/gradle-cli.jar"
+  fi
+  exec java -Dorg.gradle.appname=gradlew -classpath "$CP" org.gradle.wrapper.GradleWrapperMain "$@"
+fi
+
+echo "Gradle wrapper missing. Falling back to system gradle."
+exec gradle "$@"

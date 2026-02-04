@@ -1,0 +1,62 @@
+{
+  "id": "task-ff39767c",
+  "epicId": "epic-2a59fe30",
+  "title": "New EPIC capbilities",
+  "description": "we need that in new task on the epic dropdown we will have a way to create new epic",
+  "definitionOfDone": [
+    "- we can create new epic from task card .",
+    "- the feature was tested"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add CREATE_EPIC to daemon WebSocket protocol. Update WebSocketServer.ts: Add CREATE_EPIC to PluginMessage type union. Add case handler that calls this.state.createEpic() and sends EPIC_CREATED response.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add createEpic method to MoeProjectService. Add createEpic(title: String, description: String) method that sends CREATE_EPIC message with payload via WebSocket, following existing pattern from createTask method.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create CreateEpicDialog for inline epic creation. Create new dialog with title and description fields following EpicDetailDialog pattern. Returns created epic data on OK. Keep it simple - just title and description inputs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/CreateEpicDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Modify CreateTaskDialog to support Create New Epic option. Add a sentinel Create New Epic... item to ComboBox. When selected, show CreateEpicDialog. On epic creation success, refresh combo and select the new epic. Handle async epic creation via state listener.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/CreateTaskDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Testing verification. Build the daemon and plugin. Test epic creation from task dialog end-to-end. Verify new epic appears in state and UI after creation.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 3,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 1,
+  "createdAt": "2026-02-03T13:43:00.811Z",
+  "updatedAt": "2026-02-04T14:22:09.564Z"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "task-worker-validation",
+  "epicId": "epic-daemon",
+  "title": "Enforce single worker per epic constraint",
+  "description": "Validate that only one worker can be assigned to an epic.",
+  "definitionOfDone": [
+    "Daemon rejects worker registration if epic already has worker",
+    "Error message explains the constraint",
+    "Existing workers can be replaced if explicitly requested"
+  ],
+  "taskRails": [
+    "Check workers list in StateManager",
+    "Return structured error response"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In worker registration handler, query existing workers for the target epicId",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/state/StateManager.ts"]
+    },
+    {
+      "stepId": "step-2",
+      "description": "If active worker exists for epic, return error: 'Epic already has an assigned worker'",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/server/McpAdapter.ts"]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add optional replaceExisting: boolean flag to worker registration that removes old worker first",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/server/McpAdapter.ts"]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update MCP_SERVER.md documentation to describe the constraint and replaceExisting flag",
+      "status": "PENDING",
+      "affectedFiles": ["docs/MCP_SERVER.md"]
+    }
+  ],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 2,
+  "createdAt": "2026-02-03T12:30:00.000Z",
+  "updatedAt": "2026-02-03T12:30:00.000Z"
+}

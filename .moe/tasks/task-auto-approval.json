@@ -1,0 +1,53 @@
+{
+  "id": "task-auto-approval",
+  "epicId": "epic-daemon",
+  "title": "Add auto-approval for SPEED and TURBO modes",
+  "description": "Automatically approve plans based on approvalMode setting.",
+  "definitionOfDone": [
+    "SPEED mode: auto-approve after speedModeDelayMs",
+    "TURBO mode: instant auto-approve",
+    "CONTROL mode: no change (manual approval)",
+    "Activity log records auto-approval"
+  ],
+  "taskRails": [
+    "Use setTimeout for SPEED mode delay",
+    "Check approvalMode from project.settings"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In submitPlan tool handler, check project.settings.approvalMode after setting task to AWAITING_APPROVAL",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/tools/submitPlan.ts"]
+    },
+    {
+      "stepId": "step-2",
+      "description": "For TURBO mode: immediately call state transition to WORKING within submitPlan",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/tools/submitPlan.ts"]
+    },
+    {
+      "stepId": "step-3",
+      "description": "For SPEED mode: set setTimeout with speedModeDelayMs, then transition to WORKING",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/tools/submitPlan.ts"]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add logEvent call for AUTO_APPROVED with mode in payload to activity.log",
+      "status": "PENDING",
+      "affectedFiles": ["packages/moe-daemon/src/state/StateManager.ts"]
+    }
+  ],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 1,
+  "createdAt": "2026-02-03T12:30:00.000Z",
+  "updatedAt": "2026-02-03T12:30:00.000Z"
+}
