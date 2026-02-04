@@ -1,0 +1,67 @@
+{
+  "id": "task-9693c816",
+  "epicId": "epic-850ddbe0",
+  "title": "moe-proxy exits before receiving daemon response",
+  "description": "**Bug Summary:**\nThe moe-proxy immediately exits when stdin closes, without waiting for pending daemon responses. This causes response data to be lost.\n\n**Discovered by:** QA agent during task status updates\n\n**Reproduction:**\n```bash\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",...}' | node packages/moe-proxy/dist/index.js\n```\n\n**Observed behavior:**\n```\n[moe-proxy] Connected to daemon\n[moe-proxy] stdin closed, shutting down\n```\nNo response is shown, even though the daemon processed the request.\n\n**Expected behavior:**\nProxy should wait for the daemon response before exiting, or at minimum wait a short timeout period.\n\n**Root cause:**\nIn `packages/moe-proxy/src/index.ts` lines 167-171:\n```typescript\nprocess.stdin.on('end', () => {\n  writeLog('stdin closed, shutting down');\n  if (reconnectTimer) clearTimeout(reconnectTimer);\n  process.exit(0);  // Exits immediately!\n});\n```\n\n**Impact:**\n- Task updates still work (daemon receives message before proxy dies)\n- But confirmation responses are lost\n- Makes CLI usage unreliable for scripts that need response data",
+  "definitionOfDone": [
+    "Proxy waits for pending responses before exit",
+    "Add pendingRequests counter incremented on send, decremented on receive",
+    "On stdin close, wait up to 2s for pending responses",
+    "Response is printed to stdout before exit",
+    "Add unit test for stdin-close-with-pending-response scenario"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add pendingRequests counter variable at module level in packages/moe-proxy/src/index.ts, initialized to 0",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Increment pendingRequests when sending a message to daemon (in the stdin data handler around line 160), decrement when receiving response from daemon WebSocket",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create gracefulShutdown() function that: 1) Sets a 'shuttingDown' flag, 2) If pendingRequests > 0, waits up to 2s with setInterval checking counter, 3) Then calls process.exit(0)",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Replace process.exit(0) in stdin 'end' handler (line 170) with call to gracefulShutdown()",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add unit test in proxy tests: send message, close stdin, verify response is received before exit",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.test.ts"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": "worker",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 1,
+  "createdAt": "2026-02-04T14:24:38.458Z",
+  "updatedAt": "2026-02-04T14:32:35.953Z"
+}

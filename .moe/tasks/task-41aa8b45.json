@@ -1,0 +1,77 @@
+{
+  "id": "task-41aa8b45",
+  "epicId": "epic-daemon",
+  "title": "Add structured logging to daemon",
+  "description": "Replace console.log with proper logging framework.\n\n**Requirements:**\n- Log levels: DEBUG, INFO, WARN, ERROR\n- JSON structured output option\n- Log rotation support\n- Configurable via environment variable (LOG_LEVEL)\n- Include context (requestId, taskId, workerId)\n\n**Options:** pino, winston, or simple custom logger",
+  "definitionOfDone": [
+    "Logging framework integrated",
+    "All console.log replaced",
+    "LOG_LEVEL env var works",
+    "Logs include context/correlation IDs"
+  ],
+  "taskRails": [
+    "Use pino for performance"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Install pino logger: npm install pino pino-pretty. Add to package.json dependencies.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create src/util/logger.ts: configure pino with LOG_LEVEL env var (default: info), pretty print in dev",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/logger.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Replace all console.log/error/warn in index.ts with logger.info/error/warn",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Replace console.* in StateManager.ts with logger, add context (taskId, epicId) to log entries",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Replace console.* in WebSocketServer.ts and McpAdapter.ts with logger",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Document LOG_LEVEL in MCP_SERVER.md environment variables section",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 8,
+  "createdAt": "2026-02-04T14:21:02.880Z",
+  "updatedAt": "2026-02-04T14:25:59.031Z"
+}

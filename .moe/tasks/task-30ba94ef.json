@@ -1,0 +1,76 @@
+{
+  "id": "task-30ba94ef",
+  "epicId": "epic-plugin-dialogs",
+  "title": "Add worker status panel",
+  "description": "Show connected workers and their status in the plugin UI.\n\n**Display:**\n- Worker ID and role\n- Current status (IDLE, WORKING, BLOCKED)\n- Current task (if any)\n- Last activity timestamp\n\n**Location:** Collapsible panel above or beside board",
+  "definitionOfDone": [
+    "WorkerPanel.kt created",
+    "Shows all registered workers",
+    "Updates in real-time via WebSocket",
+    "Shows worker's current task"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Ensure Worker data class exists in Models.kt with fields: id, role, status, currentTaskId, lastActivityAt. Parse workers from STATE_SNAPSHOT in MoeJson.kt",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add workers list to MoeState data class and populate from STATE_SNAPSHOT payload in MoeProjectService.kt",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create WorkerPanel.kt as JBPanel with JBTable showing columns: Worker ID, Role, Status, Current Task, Last Active",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add collapsible 'Workers' section to MoeToolWindowPanel.kt above the board using CollapsiblePanel or JBPanel with toggle",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Handle WORKER_UPDATED WebSocket message in MoeProjectService to update worker list in real-time",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Style worker rows: green for IDLE, yellow for WORKING, red for BLOCKED. Show task title if currentTaskId is set.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 9,
+  "createdAt": "2026-02-04T14:21:02.882Z",
+  "updatedAt": "2026-02-04T14:28:24.034Z"
+}

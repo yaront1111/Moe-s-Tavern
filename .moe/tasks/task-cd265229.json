@@ -1,0 +1,68 @@
+{
+  "id": "task-cd265229",
+  "epicId": "epic-daemon",
+  "title": "Add moe.delete_task MCP tool",
+  "description": "Add MCP tool for programmatic task deletion.\n\n**Current state:** DELETE_TASK works via WebSocket from plugin, but AI agents cannot delete tasks via MCP.\n\n**Implementation:**\n- Add deleteTask.ts tool in packages/moe-daemon/src/tools/\n- Register in tools/index.ts\n- Call StateManager.deleteTask()\n- Document in MCP_SERVER.md",
+  "definitionOfDone": [
+    "moe.delete_task tool implemented",
+    "Returns deleted task data",
+    "Documented in MCP_SERVER.md",
+    "Test added"
+  ],
+  "taskRails": [
+    "Validate taskId exists before deletion"
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create deleteTask.ts in packages/moe-daemon/src/tools/ with MCP tool definition (name, description, inputSchema requiring taskId)",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/deleteTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement handler that validates taskId exists, calls StateManager.deleteTask(), returns deleted task data",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/deleteTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Register tool in tools/index.ts by importing and adding to tools array",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add moe.delete_task documentation to docs/MCP_SERVER.md with parameters and return schema",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add unit test in tools.test.ts for delete task scenarios (success, not found, error handling)",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 4,
+  "createdAt": "2026-02-04T14:21:02.874Z",
+  "updatedAt": "2026-02-04T14:30:44.688Z"
+}

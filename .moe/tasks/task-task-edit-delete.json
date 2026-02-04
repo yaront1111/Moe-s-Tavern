@@ -1,0 +1,55 @@
+{
+  "id": "task-task-edit-delete",
+  "epicId": "epic-plugin-dialogs",
+  "title": "Task detail edit + delete support",
+  "description": "Allow editing task fields and deleting tasks from the TaskDetailDialog, with daemon support.",
+  "definitionOfDone": [
+    "TaskDetailDialog lets you edit title/description/DoD",
+    "Delete button removes task with confirmation",
+    "Daemon handles DELETE_TASK and notifies plugin"
+  ],
+  "taskRails": [
+    "Use DialogWrapper actions for Save/Delete",
+    "All deletions go through MoeProjectService"
+  ],
+  "implementationPlan": [
+    {
+      "description": "Make task fields editable and save via UPDATE_TASK",
+      "status": "DONE",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "stepId": "step-1"
+    },
+    {
+      "description": "Add Delete action in TaskDetailDialog",
+      "status": "DONE",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "stepId": "step-2"
+    },
+    {
+      "description": "Add DELETE_TASK handling in daemon and plugin",
+      "status": "DONE",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "stepId": "step-3"
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 6,
+  "createdAt": "2026-02-03T15:39:37.2954838+02:00",
+  "updatedAt": "2026-02-04T14:29:33.055Z"
+}
