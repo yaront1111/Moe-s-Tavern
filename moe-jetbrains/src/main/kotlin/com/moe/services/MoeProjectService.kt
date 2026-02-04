@@ -701,6 +701,14 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             connect()
         }, reconnectDelayMs, TimeUnit.MILLISECONDS)
     }
+
+    fun getState(): MoeState? = state
+
+    companion object {
+        fun getInstance(project: IdeaProject): MoeProjectService {
+            return project.getService(MoeProjectService::class.java)
+        }
+    }
 }
 
 interface MoeStateListener {

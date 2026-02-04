@@ -1,7 +1,10 @@
 package com.moe.services
 
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
@@ -92,8 +95,8 @@ class MoeNotificationService(private val project: Project) {
     private class ViewTaskAction(
         private val project: Project,
         private val task: Task
-    ) : com.intellij.notification.NotificationAction("View Task") {
-        override fun actionPerformed(e: com.intellij.notification.AnActionEvent, notification: com.intellij.notification.Notification) {
+    ) : NotificationAction("View Task") {
+        override fun actionPerformed(e: AnActionEvent, notification: Notification) {
             val service = MoeProjectService.getInstance(project)
             TaskDetailDialog(project, task, service).show()
             notification.expire()
