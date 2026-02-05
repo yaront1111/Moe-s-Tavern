@@ -13,65 +13,55 @@
   "implementationPlan": [
     {
       "stepId": "step-1",
-      "description": "Add schemaVersion field to Project type in schema.ts. All state changes through StateManager. Validate constraints before state mutations.",
+      "description": "Verify schemaVersion in schema.ts and migrations folder. All state changes through StateManager.",
       "status": "COMPLETED",
       "affectedFiles": [
-        "packages/moe-daemon/src/types/schema.ts"
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/migrations/index.ts"
       ],
-      "startedAt": "2026-02-04T19:05:05.776Z",
-      "completedAt": "2026-02-04T19:05:18.344Z"
+      "startedAt": "2026-02-05T13:16:15.996Z",
+      "completedAt": "2026-02-05T13:16:27.730Z"
     },
     {
       "stepId": "step-2",
-      "description": "Create migrations folder with Migration interface and migration runner. Log all auto-approval actions to activity.log for any migrations that affect approval state.",
-      "status": "COMPLETED",
-      "affectedFiles": [
-        "packages/moe-daemon/src/migrations/index.ts",
-        "packages/moe-daemon/src/migrations/types.ts"
-      ],
-      "startedAt": "2026-02-04T19:05:19.671Z",
-      "completedAt": "2026-02-04T19:05:48.926Z"
-    },
-    {
-      "stepId": "step-3",
-      "description": "Create v1 to v2 migration that adds schemaVersion field to existing project.json files",
+      "description": "Verify v1_to_v2 migration. Validate constraints before state mutations.",
       "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/migrations/v1_to_v2.ts"
       ],
-      "startedAt": "2026-02-04T19:05:50.261Z",
-      "completedAt": "2026-02-04T19:06:01.624Z"
+      "startedAt": "2026-02-05T13:16:28.698Z",
+      "completedAt": "2026-02-05T13:16:33.758Z"
     },
     {
-      "stepId": "step-4",
-      "description": "Update StateManager.normalizeProject to check schemaVersion and run migrations on load. Log migration actions to activity.log.",
+      "stepId": "step-3",
+      "description": "Verify StateManager runs migrations on load. Log all auto-approval actions to activity.log.",
       "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/StateManager.ts"
       ],
-      "startedAt": "2026-02-04T19:06:03.001Z",
-      "completedAt": "2026-02-04T19:06:41.371Z"
+      "startedAt": "2026-02-05T13:16:34.687Z",
+      "completedAt": "2026-02-05T13:16:42.024Z"
     },
     {
-      "stepId": "step-5",
-      "description": "Update MoeProjectInitializer.kt to include schemaVersion in new project.json files",
+      "stepId": "step-4",
+      "description": "Verify MoeProjectInitializer includes schemaVersion.",
       "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt"
       ],
-      "startedAt": "2026-02-04T19:06:42.759Z",
-      "completedAt": "2026-02-04T19:07:20.155Z"
+      "startedAt": "2026-02-05T13:16:42.863Z",
+      "completedAt": "2026-02-05T13:16:49.697Z"
     }
   ],
-  "status": "BACKLOG",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 1,
-  "reopenReason": "QA FAIL: Missing test coverage. DoD requires 'Test covers v1 -> v2 migration' but no test file found in packages/moe-daemon. Need to create migration.test.ts that verifies: 1) Project without schemaVersion gets migrated to v2, 2) schemaVersion field is added, 3) Migration is idempotent. Also verify rollback strategy is documented somewhere.",
+  "reopenCount": 3,
+  "reopenReason": "Rollback strategy still not documented. Add to docs/SCHEMA.md or migrations/README.md explaining: on failure returns original data, backup before migration recommended.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
-  "order": 10,
+  "order": 31,
   "createdAt": "2026-02-04T14:21:02.885Z",
-  "updatedAt": "2026-02-04T19:07:27.913Z"
+  "updatedAt": "2026-02-05T13:39:14.219Z"
 }

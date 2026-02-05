@@ -18,6 +18,11 @@ import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
 import { proposeRailTool } from './proposeRail.js';
 import { deleteTaskTool } from './deleteTask.js';
+import { updateEpicTool } from './updateEpic.js';
+import { deleteEpicTool } from './deleteEpic.js';
+import { searchTasksTool } from './searchTasks.js';
+import { qaApproveTool } from './qaApprove.js';
+import { qaRejectTool } from './qaReject.js';
 import type { Task, Epic, Worker, Project, RailProposal } from '../types/schema.js';
 
 describe('MCP Tools', () => {
@@ -716,6 +721,260 @@ describe('MCP Tools', () => {
     it('throws for non-existent task', async () => {
       const tool = deleteTaskTool(state);
       await expect(tool.handler({ taskId: 'nonexistent' }, state)).rejects.toThrow('Task not found: nonexistent');
+    });
+  });
+
+  describe('moe.update_epic', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic({ id: 'epic-1', title: 'Original Title' });
+      await state.load();
+    });
+
+    it('updates epic title', async () => {
+      const tool = updateEpicTool(state);
+      const result = await tool.handler({
+        epicId: 'epic-1',
+        title: 'Updated Title',
+      }, state) as { success: boolean; epic: Epic };
+
+      expect(result.success).toBe(true);
+      expect(result.epic.title).toBe('Updated Title');
+    });
+
+    it('updates multiple fields', async () => {
+      const tool = updateEpicTool(state);
+      const result = await tool.handler({
+        epicId: 'epic-1',
+        description: 'New desc',
+        epicRails: ['Rule 1', 'Rule 2'],
+        status: 'COMPLETED',
+      }, state) as { success: boolean; epic: Epic };
+
+      expect(result.success).toBe(true);
+      expect(result.epic.description).toBe('New desc');
+      expect(result.epic.epicRails).toEqual(['Rule 1', 'Rule 2']);
+      expect(result.epic.status).toBe('COMPLETED');
+    });
+
+    it('throws for missing epicId', async () => {
+      const tool = updateEpicTool(state);
+      await expect(tool.handler({}, state)).rejects.toThrow('epicId is required');
+    });
+  });
+
+  describe('moe.delete_epic', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic({ id: 'epic-1' });
+      await state.load();
+    });
+
+    it('deletes epic without tasks', async () => {
+      const tool = deleteEpicTool(state);
+      const result = await tool.handler({ epicId: 'epic-1' }, state) as {
+        success: boolean;
+        deletedEpic: Epic;
+        deletedTaskCount: number;
+      };
+
+      expect(result.success).toBe(true);
+      expect(result.deletedEpic.id).toBe('epic-1');
+      expect(result.deletedTaskCount).toBe(0);
+    });
+
+    it('throws when epic has tasks and cascadeDelete is false', async () => {
+      createTask({ epicId: 'epic-1' });
+      await state.load();
+
+      const tool = deleteEpicTool(state);
+      await expect(
+        tool.handler({ epicId: 'epic-1', cascadeDelete: false }, state)
+      ).rejects.toThrow('has 1 task(s)');
+    });
+
+    it('deletes epic and tasks when cascadeDelete is true', async () => {
+      createTask({ epicId: 'epic-1' });
+      await state.load();
+
+      const tool = deleteEpicTool(state);
+      const result = await tool.handler({
+        epicId: 'epic-1',
+        cascadeDelete: true,
+      }, state) as { success: boolean; deletedTaskCount: number };
+
+      expect(result.success).toBe(true);
+      expect(result.deletedTaskCount).toBe(1);
+    });
+
+    it('throws for missing epicId', async () => {
+      const tool = deleteEpicTool(state);
+      await expect(tool.handler({}, state)).rejects.toThrow('epicId is required');
+    });
+  });
+
+  describe('moe.search_tasks', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', title: 'Fix login bug', description: 'Auth error', status: 'BACKLOG' });
+      createTask({ id: 'task-2', title: 'Add feature', description: 'New login feature', status: 'WORKING' });
+      createTask({ id: 'task-3', title: 'Update docs', description: 'Documentation update', status: 'DONE' });
+      await state.load();
+    });
+
+    it('searches by query in title', async () => {
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({ query: 'login' }, state) as {
+        tasks: Task[];
+        totalMatches: number;
+      };
+
+      expect(result.totalMatches).toBe(2);
+      expect(result.tasks.map(t => t.id)).toContain('task-1');
+      expect(result.tasks.map(t => t.id)).toContain('task-2');
+    });
+
+    it('filters by status', async () => {
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({
+        filters: { status: 'WORKING' },
+      }, state) as { tasks: Task[] };
+
+      expect(result.tasks.length).toBe(1);
+      expect(result.tasks[0].id).toBe('task-2');
+    });
+
+    it('combines query and filters', async () => {
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({
+        query: 'login',
+        filters: { status: 'BACKLOG' },
+      }, state) as { tasks: Task[] };
+
+      expect(result.tasks.length).toBe(1);
+      expect(result.tasks[0].id).toBe('task-1');
+    });
+
+    it('respects limit', async () => {
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({ limit: 1 }, state) as { tasks: Task[] };
+      expect(result.tasks.length).toBe(1);
+    });
+
+    it('returns empty array when no matches', async () => {
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({ query: 'nonexistent' }, state) as { tasks: Task[] };
+      expect(result.tasks.length).toBe(0);
+    });
+  });
+
+  describe('moe.qa_approve', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', status: 'REVIEW' });
+      await state.load();
+    });
+
+    it('approves task in REVIEW and moves to DONE', async () => {
+      const tool = qaApproveTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        summary: 'All DoD items verified',
+      }, state) as { success: boolean; status: string };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('DONE');
+
+      const task = state.getTask('task-1');
+      expect(task?.status).toBe('DONE');
+    });
+
+    it('throws for missing taskId', async () => {
+      const tool = qaApproveTool(state);
+      await expect(tool.handler({}, state)).rejects.toThrow('taskId is required');
+    });
+
+    it('throws for non-REVIEW status', async () => {
+      await state.updateTask('task-1', { status: 'WORKING' });
+      const tool = qaApproveTool(state);
+      await expect(
+        tool.handler({ taskId: 'task-1' }, state)
+      ).rejects.toThrow('Task must be in REVIEW status');
+    });
+
+    it('throws for non-existent task', async () => {
+      const tool = qaApproveTool(state);
+      await expect(
+        tool.handler({ taskId: 'nonexistent' }, state)
+      ).rejects.toThrow('Task not found');
+    });
+  });
+
+  describe('moe.qa_reject', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', status: 'REVIEW', reopenCount: 0 });
+      await state.load();
+    });
+
+    it('rejects task and moves back to WORKING', async () => {
+      const tool = qaRejectTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        reason: 'Tests are failing',
+      }, state) as { success: boolean; status: string; reopenCount: number };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('WORKING');
+      expect(result.reopenCount).toBe(1);
+
+      const task = state.getTask('task-1');
+      expect(task?.status).toBe('WORKING');
+      expect(task?.reopenReason).toBe('Tests are failing');
+    });
+
+    it('increments reopenCount on multiple rejections', async () => {
+      await state.updateTask('task-1', { reopenCount: 2 });
+
+      const tool = qaRejectTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        reason: 'Still failing',
+      }, state) as { reopenCount: number };
+
+      expect(result.reopenCount).toBe(3);
+    });
+
+    it('throws for missing taskId', async () => {
+      const tool = qaRejectTool(state);
+      await expect(
+        tool.handler({ reason: 'test' }, state)
+      ).rejects.toThrow('taskId is required');
+    });
+
+    it('throws for missing reason', async () => {
+      const tool = qaRejectTool(state);
+      await expect(
+        tool.handler({ taskId: 'task-1' }, state)
+      ).rejects.toThrow('reason is required');
+    });
+
+    it('throws for empty reason', async () => {
+      const tool = qaRejectTool(state);
+      await expect(
+        tool.handler({ taskId: 'task-1', reason: '  ' }, state)
+      ).rejects.toThrow('reason is required');
+    });
+
+    it('throws for non-REVIEW status', async () => {
+      await state.updateTask('task-1', { status: 'DONE' });
+      const tool = qaRejectTool(state);
+      await expect(
+        tool.handler({ taskId: 'task-1', reason: 'test' }, state)
+      ).rejects.toThrow('Task must be in REVIEW status');
     });
   });
 });

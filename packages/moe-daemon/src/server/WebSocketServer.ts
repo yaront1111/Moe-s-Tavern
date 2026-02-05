@@ -39,6 +39,9 @@ export class MoeWebSocketServer {
   ) {
     this.wss = new WSS({ server: httpServer });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
+    this.wss.on('error', (error) => {
+      logger.error({ error }, 'WebSocket server error');
+    });
   }
 
   /**
@@ -71,6 +74,10 @@ export class MoeWebSocketServer {
       this.mcpClients.add(ws);
       ws.on('message', (data: WebSocket.RawData) => this.handleMcpMessage(ws, data.toString()));
       ws.on('close', () => this.mcpClients.delete(ws));
+      ws.on('error', (error) => {
+        logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
+        this.mcpClients.delete(ws);
+      });
       return;
     }
 
@@ -78,6 +85,10 @@ export class MoeWebSocketServer {
     this.sendStateSnapshot(ws);
     ws.on('message', (data: WebSocket.RawData) => this.handlePluginMessage(ws, data.toString()));
     ws.on('close', () => this.pluginClients.delete(ws));
+    ws.on('error', (error) => {
+      logger.error({ error, endpoint: 'plugin' }, 'Plugin client WebSocket error');
+      this.pluginClients.delete(ws);
+    });
   }
 
   broadcast(event: StateChangeEvent): void {
@@ -222,7 +233,12 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.rejectTask(message.payload.taskId, message.payload.reason);
+          const reason = message.payload.reason;
+          if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
+            return;
+          }
+          const task = await this.state.rejectTask(message.payload.taskId, reason);
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -231,7 +247,12 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.reopenTask(message.payload.taskId, message.payload.reason);
+          const reopenReason = message.payload.reason;
+          if (!reopenReason || typeof reopenReason !== 'string' || reopenReason.trim().length === 0) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
+            return;
+          }
+          const task = await this.state.reopenTask(message.payload.taskId, reopenReason);
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }

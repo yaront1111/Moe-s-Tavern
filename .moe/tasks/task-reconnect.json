@@ -16,46 +16,47 @@
   "implementationPlan": [
     {
       "stepId": "step-1",
-      "description": "Add reconnectAttempts counter and isReconnecting state to MoeProjectService.kt",
-      "status": "PENDING",
+      "description": "Add reconnectAttempts counter and isReconnecting state to MoeProjectService.kt. Use ScheduledExecutorService for retry timer.",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "startedAt": "2026-02-05T12:59:58.291Z",
+      "completedAt": "2026-02-05T13:00:45.061Z"
     },
     {
       "stepId": "step-2",
-      "description": "Create ScheduledExecutorService for retry scheduling in MoeProjectService.kt",
-      "status": "PENDING",
+      "description": "Create ScheduledExecutorService for 5-second retry scheduling. Track manual disconnect vs unexpected disconnect.",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "startedAt": "2026-02-05T13:00:50.447Z",
+      "completedAt": "2026-02-05T13:00:50.609Z"
     },
     {
       "stepId": "step-3",
-      "description": "In WebSocket onClose handler, start reconnect loop if not manual disconnect and attempts < 10",
-      "status": "PENDING",
+      "description": "Implement reconnect loop in WebSocket onClose handler (retry if not manual and attempts < 10). Status bar widgets must implement StatusBarWidget.",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "startedAt": "2026-02-05T13:00:57.335Z",
+      "completedAt": "2026-02-05T13:00:57.497Z"
     },
     {
       "stepId": "step-4",
-      "description": "Add isManualDisconnect flag, set true when user clicks disconnect, false on connect",
-      "status": "PENDING",
+      "description": "Emit connection state changes for status bar. Use project-level message bus for state subscriptions. Register NotificationGroup in plugin.xml.",
+      "status": "COMPLETED",
       "affectedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
-    },
-    {
-      "stepId": "step-5",
-      "description": "Emit connection state changes so status bar can show \"Reconnecting...\" text",
-      "status": "PENDING",
-      "affectedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+      ],
+      "startedAt": "2026-02-05T13:01:03.440Z",
+      "completedAt": "2026-02-05T13:01:03.608Z"
     }
   ],
-  "status": "BACKLOG",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -63,7 +64,7 @@
   "reopenReason": "QA FAIL: Not implemented. All 5 implementation steps are PENDING. Need to add reconnection logic to MoeProjectService with: ScheduledExecutorService for retry, reconnectAttempts counter, isManualDisconnect flag, and status bar integration showing 'Reconnecting...'.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
-  "order": 3,
+  "order": 18,
   "createdAt": "2026-02-03T12:30:00.000Z",
-  "updatedAt": "2026-02-04T20:29:09.973Z"
+  "updatedAt": "2026-02-05T13:06:03.605Z"
 }

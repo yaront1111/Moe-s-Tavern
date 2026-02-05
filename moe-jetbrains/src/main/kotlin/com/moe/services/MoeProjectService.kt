@@ -42,13 +42,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     @Volatile private var lastDaemonStartAttemptAt = 0L
     @Volatile private var connecting = false
     @Volatile private var disposed = false
+    @Volatile private var isManualDisconnect = false
+    @Volatile private var reconnectAttempts = 0
+    @Volatile private var spawnedDaemonProcess: Process? = null
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Moe-Refresh").apply { isDaemon = true }
     }
     private var refreshFuture: ScheduledFuture<*>? = null
     private var reconnectFuture: ScheduledFuture<*>? = null
     private val refreshIntervalMs = 3000L
-    private val reconnectDelayMs = 2000L
+    private val reconnectDelayMs = 5000L
+    private val maxReconnectAttempts = 10
     private val daemonStartCooldownMs = 10_000L
 
     fun connect() {
@@ -104,6 +108,8 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
         if (attempt >= maxAttempts) {
             connecting = false
+            // Kill the daemon we spawned since we couldn't connect to it
+            killSpawnedDaemon()
             publishStatus(false, "Daemon failed to start. Check logs.")
             scheduleReconnect()
             return
@@ -125,6 +131,8 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             override fun onOpen(handshakedata: ServerHandshake?) {
                 connecting = false
                 connected = true
+                reconnectAttempts = 0
+                isManualDisconnect = false
                 publishStatus(true, "Connected")
                 sendMessage("GET_STATE", JsonObject())
                 startAutoRefresh()
@@ -158,10 +166,21 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
         }
 
-        wsClient?.connect()
+        try {
+            wsClient?.connect()
+        } catch (ex: Exception) {
+            log.warn("WebSocket connect() failed", ex)
+            connecting = false
+            connected = false
+            wsClient = null
+            publishStatus(false, ex.message ?: "Failed to connect")
+            scheduleReconnect()
+        }
     }
 
     fun disconnect() {
+        isManualDisconnect = true
+        reconnectAttempts = 0
         stopAutoRefresh()
         reconnectFuture?.cancel(false)
         reconnectFuture = null
@@ -512,8 +531,9 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 val current = env["PATH"] ?: ""
                 env["PATH"] = "${nodeDir.absolutePath}${File.pathSeparator}$current"
             }
-            pb.start()
-            log.info("Started Moe daemon for $basePath using ${direct?.joinToString(" ") ?: "shell command"}")
+            val process = pb.start()
+            spawnedDaemonProcess = process
+            log.info("Started Moe daemon for $basePath using ${direct?.joinToString(" ") ?: "shell command"} (pid tracking enabled)")
             return true
         } catch (ex: Exception) {
             log.warn("Failed to start Moe daemon", ex)
@@ -666,7 +686,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     private fun isPortOpen(port: Int): Boolean {
         val socket = Socket()
         return try {
-            socket.connect(InetSocketAddress("127.0.0.1", port), 200)
+            socket.connect(InetSocketAddress("127.0.0.1", port), PORT_CHECK_TIMEOUT_MS)
             true
         } catch (_: Exception) {
             false
@@ -711,8 +731,32 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             scheduler.shutdownNow()
         }
 
+        // Kill any spawned daemon process we started
+        killSpawnedDaemon()
+
         // Clear state
         state = null
+    }
+
+    /**
+     * Kill the daemon process we spawned if it's still running.
+     * This is called on dispose or if startup fails.
+     */
+    private fun killSpawnedDaemon() {
+        val process = spawnedDaemonProcess ?: return
+        spawnedDaemonProcess = null
+        try {
+            if (process.isAlive) {
+                log.info("Killing spawned daemon process")
+                process.destroy()
+                // Give it a moment to terminate gracefully
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    process.destroyForcibly()
+                }
+            }
+        } catch (ex: Exception) {
+            log.warn("Error killing spawned daemon: ${ex.message}")
+        }
     }
 
     private fun startAutoRefresh() {
@@ -734,10 +778,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
     private fun scheduleReconnect() {
         if (disposed || connected || connecting) return
+        if (isManualDisconnect) return
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            publishStatus(false, "Reconnect failed after $maxReconnectAttempts attempts")
+            return
+        }
         val existing = reconnectFuture
         if (existing != null && !existing.isDone) return
+        reconnectAttempts++
+        publishStatus(false, "Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})")
         reconnectFuture = scheduler.schedule({
-            if (disposed || connected || connecting) return@schedule
+            if (disposed || connected || connecting || isManualDisconnect) return@schedule
             connect()
         }, reconnectDelayMs, TimeUnit.MILLISECONDS)
     }
@@ -745,6 +796,9 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     fun getState(): MoeState? = state
 
     companion object {
+        // Configurable timeout for port check (can be overridden via system property)
+        private val PORT_CHECK_TIMEOUT_MS: Int = System.getProperty("moe.portCheckTimeoutMs")?.toIntOrNull() ?: 200
+
         fun getInstance(project: IdeaProject): MoeProjectService {
             return project.getService(MoeProjectService::class.java)
         }

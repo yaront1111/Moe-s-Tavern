@@ -3,6 +3,7 @@ package com.moe.toolwindow
 import com.moe.model.Task
 import com.moe.model.Worker
 import com.moe.toolwindow.board.BoardStyles
+import com.moe.util.MoeBundle
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -24,7 +25,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
         removeAll()
 
         if (workers.isEmpty()) {
-            add(JBLabel("No active workers").apply {
+            add(JBLabel(MoeBundle.message("moe.message.noActiveWorkers")).apply {
                 foreground = JBColor.GRAY
             })
         } else {
@@ -67,7 +68,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
         card.add(header, BorderLayout.NORTH)
 
         val currentTask = worker.currentTaskId?.let { tasks[it] }
-        val taskTitle = currentTask?.title ?: worker.lastError ?: "Idle"
+        val taskTitle = currentTask?.title ?: worker.lastError ?: MoeBundle.message("moe.message.idle")
         val taskLabel = JBLabel(truncate(taskTitle, 28)).apply {
             foreground = if (worker.status == "BLOCKED") {
                 JBColor(Color(220, 53, 69), Color(255, 80, 80))

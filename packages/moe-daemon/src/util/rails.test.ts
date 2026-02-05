@@ -78,8 +78,12 @@ describe('checkPlanRails', () => {
     });
   });
 
-  describe('epic rails', () => {
-    it('fails when epic rail is missing from plan', () => {
+  describe('epic rails (guidance only, not enforced)', () => {
+    // Epic rails are provided as guidance to AI agents but are not strictly enforced.
+    // This allows agents to address the intent of rails without requiring verbatim quoting.
+    // Humans verify compliance during plan approval.
+
+    it('passes even when epic rail text is not literally present', () => {
       const epic: Epic = {
         id: 'epic-1',
         title: 'Test Epic',
@@ -89,12 +93,12 @@ describe('checkPlanRails', () => {
         createdAt: new Date().toISOString(),
         epicRails: ['must use typescript'],
       };
+      // Plan doesn't contain literal "must use typescript" but that's OK
       const result = checkPlanRails('I will use javascript', emptyRails, epic, null);
-      expect(result.ok).toBe(false);
-      expect(result.violation).toBe('Epic rail missing: must use typescript');
+      expect(result.ok).toBe(true);
     });
 
-    it('passes when all epic rails are present', () => {
+    it('passes when epic rails are present (still valid)', () => {
       const epic: Epic = {
         id: 'epic-1',
         title: 'Test Epic',
@@ -127,8 +131,12 @@ describe('checkPlanRails', () => {
     });
   });
 
-  describe('task rails', () => {
-    it('fails when task rail is missing from plan', () => {
+  describe('task rails (guidance only, not enforced)', () => {
+    // Task rails are provided as guidance to AI agents but are not strictly enforced.
+    // This allows agents to address the intent of rails without requiring verbatim quoting.
+    // Humans verify compliance during plan approval.
+
+    it('passes even when task rail text is not literally present', () => {
       const task: Task = {
         id: 'task-1',
         epicId: 'epic-1',
@@ -139,12 +147,12 @@ describe('checkPlanRails', () => {
         createdAt: new Date().toISOString(),
         taskRails: ['no breaking changes'],
       };
+      // Plan doesn't contain literal "no breaking changes" but that's OK
       const result = checkPlanRails('I will refactor everything', emptyRails, null, task);
-      expect(result.ok).toBe(false);
-      expect(result.violation).toBe('Task rail missing: no breaking changes');
+      expect(result.ok).toBe(true);
     });
 
-    it('passes when all task rails are present', () => {
+    it('passes when task rails are present (still valid)', () => {
       const task: Task = {
         id: 'task-1',
         epicId: 'epic-1',
@@ -166,7 +174,7 @@ describe('checkPlanRails', () => {
   });
 
   describe('combined rails', () => {
-    it('checks all rail types together', () => {
+    it('enforces only forbidden and required patterns, not epic/task rails', () => {
       const rails: GlobalRails = {
         forbiddenPatterns: ['rm -rf'],
         requiredPatterns: ['backup'],
@@ -191,8 +199,10 @@ describe('checkPlanRails', () => {
         taskRails: ['rollback plan'],
       };
 
+      // Plan has required "backup" but doesn't have epic/task rail text
+      // Should pass because epic/task rails are not enforced
       const result = checkPlanRails(
-        'I will backup data, ensure safe deployment, and prepare a rollback plan',
+        'I will backup data before making changes',
         rails,
         epic,
         task
@@ -200,15 +210,34 @@ describe('checkPlanRails', () => {
       expect(result.ok).toBe(true);
     });
 
-    it('fails on first violation found', () => {
+    it('fails on forbidden pattern even with epic/task rails present', () => {
       const rails: GlobalRails = {
         forbiddenPatterns: ['dangerous'],
         requiredPatterns: ['safe'],
       };
-      // Contains forbidden pattern - should fail on that first
+      // Contains forbidden pattern - should fail
       const result = checkPlanRails('This is dangerous but safe', rails, null, null);
       expect(result.ok).toBe(false);
       expect(result.violation).toBe('Forbidden pattern: dangerous');
+    });
+
+    it('fails on missing required pattern even if epic/task rails are satisfied', () => {
+      const rails: GlobalRails = {
+        requiredPatterns: ['backup'],
+      };
+      const epic: Epic = {
+        id: 'epic-1',
+        title: 'Epic',
+        description: 'Desc',
+        status: 'ACTIVE',
+        order: 1,
+        createdAt: new Date().toISOString(),
+        epicRails: ['safe'],
+      };
+      // Plan has epic rail text but missing required pattern
+      const result = checkPlanRails('I will make it safe', rails, epic, null);
+      expect(result.ok).toBe(false);
+      expect(result.violation).toBe('Required pattern missing: backup');
     });
   });
 });

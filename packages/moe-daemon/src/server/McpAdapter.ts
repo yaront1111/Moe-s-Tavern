@@ -6,6 +6,57 @@ import type { StateManager } from '../state/StateManager.js';
 import { getTools } from '../tools/index.js';
 import { logger } from '../util/logger.js';
 
+// Rate limiter configuration (configurable via environment variables)
+const RATE_LIMIT_ENABLED = process.env.MOE_RATE_LIMIT_ENABLED !== 'false';
+const RATE_LIMIT_MAX_REQUESTS = parseInt(process.env.MOE_RATE_LIMIT_MAX_REQUESTS || '100', 10);
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.MOE_RATE_LIMIT_WINDOW_MS || '1000', 10);
+
+/**
+ * Simple sliding window rate limiter.
+ * Tracks request timestamps and rejects requests exceeding the limit.
+ */
+class RateLimiter {
+  private readonly timestamps: number[] = [];
+  private readonly maxRequests: number;
+  private readonly windowMs: number;
+
+  constructor(maxRequests: number, windowMs: number) {
+    this.maxRequests = maxRequests;
+    this.windowMs = windowMs;
+  }
+
+  /**
+   * Check if request is allowed under rate limit.
+   * @returns true if allowed, false if rate limited
+   */
+  checkLimit(): boolean {
+    const now = Date.now();
+    const windowStart = now - this.windowMs;
+
+    // Remove timestamps outside the window
+    while (this.timestamps.length > 0 && this.timestamps[0] < windowStart) {
+      this.timestamps.shift();
+    }
+
+    if (this.timestamps.length >= this.maxRequests) {
+      return false;
+    }
+
+    this.timestamps.push(now);
+    return true;
+  }
+
+  /**
+   * Get current usage stats for monitoring.
+   */
+  getStats(): { current: number; max: number; windowMs: number } {
+    const now = Date.now();
+    const windowStart = now - this.windowMs;
+    const current = this.timestamps.filter(t => t >= windowStart).length;
+    return { current, max: this.maxRequests, windowMs: this.windowMs };
+  }
+}
+
 export type JsonRpcId = string | number | null;
 
 export interface JsonRpcRequest {
@@ -24,14 +75,48 @@ export interface JsonRpcResponse {
 
 export class McpAdapter {
   private readonly tools = new Map<string, ReturnType<typeof getTools>[number]>();
+  private readonly rateLimiter: RateLimiter | null;
 
   constructor(private readonly state: StateManager) {
     for (const tool of getTools(state)) {
       this.tools.set(tool.name, tool);
     }
+
+    // Initialize rate limiter if enabled
+    if (RATE_LIMIT_ENABLED) {
+      this.rateLimiter = new RateLimiter(RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
+      logger.info(
+        { maxRequests: RATE_LIMIT_MAX_REQUESTS, windowMs: RATE_LIMIT_WINDOW_MS },
+        'Rate limiter enabled'
+      );
+    } else {
+      this.rateLimiter = null;
+      logger.info('Rate limiter disabled');
+    }
   }
 
   async handle(request: JsonRpcRequest | JsonRpcRequest[]): Promise<JsonRpcResponse | JsonRpcResponse[]> {
+    // Check rate limit for tool calls
+    if (this.rateLimiter && !this.rateLimiter.checkLimit()) {
+      const stats = this.rateLimiter.getStats();
+      logger.warn({ stats }, 'Rate limit exceeded');
+
+      // For arrays, return rate limit error for all requests
+      if (Array.isArray(request)) {
+        return request.map(req => this.errorResponse(
+          req.id ?? null,
+          -32000,
+          `Rate limit exceeded: ${stats.max} requests per ${stats.windowMs}ms`
+        ));
+      }
+
+      return this.errorResponse(
+        request.id ?? null,
+        -32000,
+        `Rate limit exceeded: ${stats.max} requests per ${stats.windowMs}ms`
+      );
+    }
+
     if (Array.isArray(request)) {
       const responses = await Promise.all(request.map((req) => this.handleSingle(req)));
       return responses;
@@ -84,23 +169,22 @@ export class McpAdapter {
             }
           };
         } catch (toolError) {
-          // Preserve stack trace for tool errors
           const message = toolError instanceof Error ? toolError.message : 'Tool execution failed';
-          const stack = toolError instanceof Error ? toolError.stack : undefined;
+          // Log full error with stack for debugging, but don't expose stack to clients
           logger.error({ toolName: params.name, error: toolError }, 'Tool failed');
-          return this.errorResponse(id, -32000, message, { tool: params.name, stack });
+          // Only include tool name in error data, not stack trace (security)
+          return this.errorResponse(id, -32000, message, { tool: params.name });
         }
       }
 
       return this.errorResponse(id, -32601, `Method not found: ${request.method}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      const stack = error instanceof Error ? error.stack : undefined;
+      // Log full error for debugging but don't expose stack to clients
+      logger.error({ error }, 'Request handler error');
+      // Only include structured details if available, not stack trace
       const details = (error as { details?: unknown }).details;
-      const data: Record<string, unknown> = { stack };
-      if (details && typeof details === 'object') {
-        Object.assign(data, details);
-      }
+      const data = details && typeof details === 'object' ? details : undefined;
       return this.errorResponse(id, -32000, message, data);
     }
   }

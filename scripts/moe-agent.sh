@@ -13,6 +13,53 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Secure temp directory creation (for any operations needing temp storage)
+# Uses mktemp with restricted permissions to prevent access on shared systems
+SECURE_TEMP_DIR=""
+create_secure_temp() {
+    if [ -z "$SECURE_TEMP_DIR" ]; then
+        SECURE_TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'moe-agent')
+        chmod 700 "$SECURE_TEMP_DIR"
+    fi
+    echo "$SECURE_TEMP_DIR"
+}
+
+cleanup_temp() {
+    if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
+        rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
+    fi
+}
+trap cleanup_temp EXIT
+
+# Path normalization for cross-platform support
+# Converts Windows paths (backslashes) to Unix paths (forward slashes)
+normalize_path() {
+    local path="$1"
+    # Convert backslashes to forward slashes
+    path="${path//\\//}"
+    # Handle Windows drive letters (C: -> /c or /mnt/c in WSL)
+    if [[ "$path" =~ ^([A-Za-z]):/ ]]; then
+        local drive="${BASH_REMATCH[1],,}" # lowercase
+        local rest="${path:3}"
+        if [ -d "/mnt/$drive" ]; then
+            # WSL style path
+            path="/mnt/$drive/$rest"
+        else
+            # Git Bash / MSYS style path
+            path="/$drive/$rest"
+        fi
+    fi
+    echo "$path"
+}
+
+# Detect if running in WSL
+is_wsl() {
+    if grep -qEi "(microsoft|wsl)" /proc/version 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 # Defaults
 ROLE="worker"
 PROJECT=""
@@ -96,6 +143,13 @@ if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
     exit 1
 fi
 
+# Check for python3 (used for JSON parsing)
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}Error: python3 is required but not installed${NC}"
+    echo "Install Python 3: brew install python3"
+    exit 1
+fi
+
 # Load project registry
 load_registry() {
     local registry_file="$HOME/.moe/projects.json"
@@ -155,10 +209,16 @@ sys.exit(1)
     fi
 fi
 
+# Normalize path for cross-platform support (Windows paths -> Unix paths)
+PROJECT=$(normalize_path "$PROJECT")
+
 # Resolve to absolute path
 PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd || echo "$PROJECT")
 if [ ! -d "$PROJECT" ]; then
     echo -e "${RED}Project path not found: $PROJECT${NC}"
+    if is_wsl; then
+        echo -e "${YELLOW}Note: Running in WSL. Windows paths should be like /mnt/c/Users/...${NC}"
+    fi
     exit 1
 fi
 
@@ -177,15 +237,104 @@ if [ -z "$WORKER_ID" ]; then
 fi
 export MOE_WORKER_ID="$WORKER_ID"
 
+# Ensure MCP config for Claude Code
+ensure_mcp_config() {
+    local config_dir="$HOME/.config/claude"
+    local config_file="$config_dir/mcp_servers.json"
+
+    # Find moe-proxy command
+    if command -v moe-proxy &> /dev/null; then
+        PROXY_CMD="moe-proxy"
+    else
+        PROXY_SCRIPT="$ROOT_DIR/packages/moe-proxy/dist/index.js"
+        if [ -f "$PROXY_SCRIPT" ]; then
+            PROXY_CMD="node $PROXY_SCRIPT"
+        else
+            echo -e "${YELLOW}[WARN]${NC} moe-proxy not found, MCP config not updated"
+            return
+        fi
+    fi
+
+    mkdir -p "$config_dir"
+
+    # Create or update config
+    if [ ! -f "$config_file" ]; then
+        # Create new config
+        cat > "$config_file" << EOF
+{
+  "moe": {
+    "command": "$PROXY_CMD",
+    "env": {
+      "MOE_PROJECT_PATH": "$PROJECT"
+    }
+  }
+}
+EOF
+        echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
+    else
+        # Update existing config using python3
+        python3 << EOF
+import json
+import sys
+
+config_file = "$config_file"
+project_path = "$PROJECT"
+proxy_cmd = "$PROXY_CMD"
+
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+except:
+    config = {}
+
+config['moe'] = {
+    'command': proxy_cmd,
+    'env': {
+        'MOE_PROJECT_PATH': project_path
+    }
+}
+
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+
+print(f"[OK] Updated MCP config: {config_file}")
+EOF
+    fi
+}
+
+ensure_mcp_config
+
 # Start daemon if needed
 if [ "$NO_START_DAEMON" = false ]; then
     DAEMON_INFO="$MOE_DIR/daemon.json"
     RUNNING=false
 
     if [ -f "$DAEMON_INFO" ]; then
-        PID=$(python3 -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>/dev/null || echo "")
-        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-            RUNNING=true
+        # Try to read PID from daemon.json
+        PID_OUTPUT=$(python3 -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>&1)
+        PID_EXIT_CODE=$?
+
+        if [ $PID_EXIT_CODE -ne 0 ]; then
+            echo -e "${YELLOW}[WARN]${NC} Failed to parse daemon.json: $PID_OUTPUT"
+            echo -e "${YELLOW}[WARN]${NC} Will attempt to start a new daemon"
+            PID=""
+        else
+            PID="$PID_OUTPUT"
+        fi
+
+        if [ -n "$PID" ]; then
+            # Validate PID is numeric
+            if ! [[ "$PID" =~ ^[0-9]+$ ]]; then
+                echo -e "${YELLOW}[WARN]${NC} Invalid PID in daemon.json: '$PID' (not numeric)"
+                PID=""
+            elif ! kill -0 "$PID" 2>/dev/null; then
+                echo -e "${YELLOW}[INFO]${NC} Stale daemon.json detected (PID $PID is not running)"
+                echo -e "${YELLOW}[INFO]${NC} Cleaning up stale daemon.json..."
+                rm -f "$DAEMON_INFO"
+                PID=""
+            else
+                RUNNING=true
+            fi
         fi
     fi
 
@@ -206,8 +355,37 @@ if [ "$NO_START_DAEMON" = false ]; then
 
         # Start daemon in background
         $DAEMON_CMD start --project "$PROJECT" &
-        sleep 1
-        echo -e "${GREEN}[OK]${NC} Daemon started"
+        DAEMON_PID=$!
+
+        # Wait for daemon to be ready (poll for up to 10 seconds)
+        MAX_WAIT=10
+        WAITED=0
+        while [ $WAITED -lt $MAX_WAIT ]; do
+            sleep 1
+            WAITED=$((WAITED + 1))
+
+            # Check if daemon.json exists and process is running
+            if [ -f "$DAEMON_INFO" ]; then
+                NEW_PID=$(python3 -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>/dev/null || echo "")
+                if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
+                    echo -e "${GREEN}[OK]${NC} Daemon started (waited ${WAITED}s)"
+                    break
+                fi
+            fi
+
+            # Check if daemon process died
+            if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+                echo -e "${RED}[ERROR]${NC} Daemon process exited unexpectedly"
+                exit 1
+            fi
+
+            echo -e "${YELLOW}Waiting for daemon... (${WAITED}/${MAX_WAIT}s)${NC}"
+        done
+
+        if [ $WAITED -ge $MAX_WAIT ]; then
+            echo -e "${RED}[ERROR]${NC} Daemon failed to start within ${MAX_WAIT}s"
+            exit 1
+        fi
     else
         echo -e "${GREEN}[OK]${NC} Daemon already running"
     fi
@@ -238,8 +416,25 @@ echo ""
 # Build claim command
 CLAIM_JSON="{\"statuses\":$STATUSES,\"workerId\":\"$WORKER_ID\"}"
 
+# Load role documentation
+ROLE_DOC=""
+ROLE_DOC_PATH="$MOE_DIR/roles/$ROLE.md"
+if [ ! -f "$ROLE_DOC_PATH" ]; then
+    # Fall back to docs/roles/
+    ROLE_DOC_PATH="$ROOT_DIR/docs/roles/$ROLE.md"
+fi
+
+if [ -f "$ROLE_DOC_PATH" ]; then
+    ROLE_DOC=$(cat "$ROLE_DOC_PATH")
+    echo -e "${GREEN}[OK]${NC} Loaded role doc from: $ROLE_DOC_PATH"
+else
+    echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
+fi
+
 if [ "$AUTO_CLAIM" = true ]; then
-    SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role."
+    SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role.
+
+$ROLE_DOC"
     PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
 
     echo "Starting Claude with auto-claim..."

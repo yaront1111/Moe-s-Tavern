@@ -172,7 +172,7 @@ chore: bump dependencies
 git push origin your-branch-name
 ```
 
-Then create a Pull Request on GitHub with:
+Then create a Pull Request on GitHub. The [PR template](.github/PULL_REQUEST_TEMPLATE.md) will guide you, but ensure:
 - Clear title describing the change
 - Description of what and why
 - Link to related issues (if any)

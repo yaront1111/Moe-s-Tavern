@@ -27,6 +27,10 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) throw new Error('TASK_NOT_FOUND');
 
+      if (!task.implementationPlan || task.implementationPlan.length === 0) {
+        throw new Error('TASK_HAS_NO_PLAN');
+      }
+
       const stepExists = task.implementationPlan.some((s) => s.stepId === params.stepId);
       if (!stepExists) throw new Error('STEP_NOT_FOUND');
 

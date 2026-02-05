@@ -1,6 +1,7 @@
 package com.moe.toolwindow
 
 import com.moe.services.MoeProjectService
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
@@ -25,7 +26,7 @@ class CreateEpicDialog(
     private val epicRailsField = JBTextArea()
 
     init {
-        title = "Create Epic"
+        title = MoeBundle.message("moe.dialog.createEpic")
         init()
     }
 
@@ -33,11 +34,11 @@ class CreateEpicDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
 
-        panel.add(JBLabel("Title"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
         panel.add(titleField)
 
-        panel.add(JBLabel("Description"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.description")))
         descriptionField.lineWrap = true
         descriptionField.wrapStyleWord = true
         descriptionField.minimumSize = Dimension(360, 100)
@@ -45,7 +46,7 @@ class CreateEpicDialog(
         descriptionScroll.preferredSize = Dimension(520, 100)
         panel.add(descriptionScroll)
 
-        panel.add(JBLabel("Architecture Notes"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.architectureNotes")))
         architectureNotesField.lineWrap = true
         architectureNotesField.wrapStyleWord = true
         architectureNotesField.minimumSize = Dimension(360, 80)
@@ -53,7 +54,7 @@ class CreateEpicDialog(
         notesScroll.preferredSize = Dimension(520, 80)
         panel.add(notesScroll)
 
-        panel.add(JBLabel("Epic Rails (one per line)"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.epicRails")))
         epicRailsField.lineWrap = true
         epicRailsField.wrapStyleWord = true
         epicRailsField.minimumSize = Dimension(360, 80)
@@ -65,7 +66,7 @@ class CreateEpicDialog(
     }
 
     override fun createActions(): Array<Action> {
-        val createAction = object : DialogWrapperAction("Create") {
+        val createAction = object : DialogWrapperAction(MoeBundle.message("moe.button.create")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val epicTitle = titleField.text.trim()
                 if (epicTitle.isEmpty()) {

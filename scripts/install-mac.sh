@@ -13,6 +13,23 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Cleanup function for trap
+TEMP_FILES_TO_CLEANUP=()
+cleanup() {
+    local exit_code=$?
+    for f in "${TEMP_FILES_TO_CLEANUP[@]}"; do
+        if [ -e "$f" ]; then
+            rm -rf "$f" 2>/dev/null || true
+        fi
+    done
+    # Clean up partial gradle wrapper download if incomplete
+    if [ -f "$ROOT_DIR/moe-jetbrains/gradle/wrapper/gradle-wrapper.jar.tmp" ]; then
+        rm -f "$ROOT_DIR/moe-jetbrains/gradle/wrapper/gradle-wrapper.jar.tmp" 2>/dev/null || true
+    fi
+    exit $exit_code
+}
+trap cleanup EXIT INT TERM
+
 # Parse arguments
 GLOBAL_INSTALL=false
 INSTALL_LAUNCHD=false
@@ -72,10 +89,13 @@ echo ""
 
 # Fix script permissions
 echo -e "${YELLOW}Step 2: Fixing script permissions...${NC}"
-chmod +x "$SCRIPT_DIR"/*.sh 2>/dev/null || true
+# Use find to safely handle paths with special characters
+find "$SCRIPT_DIR" -maxdepth 1 -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
 if [ -d "$ROOT_DIR/moe-jetbrains" ]; then
     chmod +x "$ROOT_DIR/moe-jetbrains/gradlew" 2>/dev/null || true
-    chmod +x "$ROOT_DIR/moe-jetbrains/scripts"/*.sh 2>/dev/null || true
+    if [ -d "$ROOT_DIR/moe-jetbrains/scripts" ]; then
+        find "$ROOT_DIR/moe-jetbrains/scripts" -maxdepth 1 -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+    fi
 fi
 echo -e "${GREEN}[OK]${NC} Script permissions fixed"
 echo ""
@@ -83,16 +103,28 @@ echo ""
 # Build daemon
 echo -e "${YELLOW}Step 3: Building moe-daemon...${NC}"
 cd "$ROOT_DIR/packages/moe-daemon"
-npm install
-npm run build
+if ! npm install; then
+    echo -e "${RED}[ERROR]${NC} npm install failed for moe-daemon"
+    exit 1
+fi
+if ! npm run build; then
+    echo -e "${RED}[ERROR]${NC} npm run build failed for moe-daemon"
+    exit 1
+fi
 echo -e "${GREEN}[OK]${NC} moe-daemon built"
 echo ""
 
 # Build proxy
 echo -e "${YELLOW}Step 4: Building moe-proxy...${NC}"
 cd "$ROOT_DIR/packages/moe-proxy"
-npm install
-npm run build
+if ! npm install; then
+    echo -e "${RED}[ERROR]${NC} npm install failed for moe-proxy"
+    exit 1
+fi
+if ! npm run build; then
+    echo -e "${RED}[ERROR]${NC} npm run build failed for moe-proxy"
+    exit 1
+fi
 echo -e "${GREEN}[OK]${NC} moe-proxy built"
 echo ""
 
@@ -175,14 +207,39 @@ if [ "$BUILD_PLUGIN" = true ]; then
             # Download gradle wrapper jar directly
             mkdir -p gradle/wrapper
             WRAPPER_URL="https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+            WRAPPER_JAR="gradle/wrapper/gradle-wrapper.jar"
+            WRAPPER_JAR_TMP="${WRAPPER_JAR}.tmp"
+            # Track temp file for cleanup on failure
+            TEMP_FILES_TO_CLEANUP+=("$WRAPPER_JAR_TMP")
+
             if command -v curl &> /dev/null; then
-                curl -sL "$WRAPPER_URL" -o gradle/wrapper/gradle-wrapper.jar
+                curl -sL "$WRAPPER_URL" -o "$WRAPPER_JAR_TMP"
             elif command -v wget &> /dev/null; then
-                wget -q "$WRAPPER_URL" -O gradle/wrapper/gradle-wrapper.jar
+                wget -q "$WRAPPER_URL" -O "$WRAPPER_JAR_TMP"
             else
                 echo -e "${RED}[ERROR]${NC} Cannot download gradle wrapper. Install gradle: brew install gradle"
                 exit 1
             fi
+
+            # Verify the download succeeded and file is not empty
+            if [ ! -s "$WRAPPER_JAR_TMP" ]; then
+                echo -e "${RED}[ERROR]${NC} Failed to download gradle wrapper (empty or missing)"
+                rm -f "$WRAPPER_JAR_TMP"
+                exit 1
+            fi
+
+            # Basic sanity check: gradle-wrapper.jar should be a valid JAR (ZIP format)
+            if command -v file &> /dev/null; then
+                FILE_TYPE=$(file -b "$WRAPPER_JAR_TMP")
+                if [[ ! "$FILE_TYPE" =~ "Java archive" && ! "$FILE_TYPE" =~ "Zip archive" ]]; then
+                    echo -e "${RED}[ERROR]${NC} Downloaded file is not a valid JAR: $FILE_TYPE"
+                    rm -f "$WRAPPER_JAR_TMP"
+                    exit 1
+                fi
+            fi
+
+            # Move temp file to final location (atomic on same filesystem)
+            mv "$WRAPPER_JAR_TMP" "$WRAPPER_JAR"
 
             # Create wrapper properties if missing
             if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then

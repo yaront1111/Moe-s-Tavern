@@ -2,6 +2,7 @@ package com.moe.toolwindow
 
 import com.moe.model.Epic
 import com.moe.services.MoeProjectService
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -30,7 +31,7 @@ class EpicDetailDialog(
     private val statusField = JComboBox(arrayOf("PLANNED", "ACTIVE", "COMPLETED"))
 
     init {
-        title = "Epic: ${epic.title}"
+        title = MoeBundle.message("moe.dialog.epicDetail", epic.title)
         statusField.selectedItem = epic.status
         init()
     }
@@ -39,32 +40,32 @@ class EpicDetailDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
 
-        panel.add(JBLabel("Title"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
         panel.add(titleField)
 
-        panel.add(JBLabel("Description"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.description")))
         descriptionField.lineWrap = true
         descriptionField.wrapStyleWord = true
         val descriptionScroll = JScrollPane(descriptionField)
         descriptionScroll.preferredSize = Dimension(520, 100)
         panel.add(descriptionScroll)
 
-        panel.add(JBLabel("Architecture Notes"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.architectureNotes")))
         architectureNotesField.lineWrap = true
         architectureNotesField.wrapStyleWord = true
         val notesScroll = JScrollPane(architectureNotesField)
         notesScroll.preferredSize = Dimension(520, 80)
         panel.add(notesScroll)
 
-        panel.add(JBLabel("Epic Rails (one per line)"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.epicRails")))
         epicRailsField.lineWrap = true
         epicRailsField.wrapStyleWord = true
         val railsScroll = JScrollPane(epicRailsField)
         railsScroll.preferredSize = Dimension(520, 80)
         panel.add(railsScroll)
 
-        panel.add(JBLabel("Status"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.status")))
         panel.add(statusField)
 
         return panel
@@ -72,7 +73,7 @@ class EpicDetailDialog(
 
     override fun createActions(): Array<Action> {
         val actions = mutableListOf<Action>()
-        actions.add(object : DialogWrapperAction("Save") {
+        actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.save")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val newTitle = titleField.text.trim().ifEmpty { epic.title }
                 val newDesc = descriptionField.text.trim()
@@ -87,12 +88,12 @@ class EpicDetailDialog(
                 close(OK_EXIT_CODE)
             }
         })
-        actions.add(object : DialogWrapperAction("Delete") {
+        actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.delete")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val result = Messages.showYesNoDialog(
                     project,
-                    "Delete epic \"${epic.title}\"? All tasks in this epic will also be deleted. This cannot be undone.",
-                    "Delete Epic",
+                    MoeBundle.message("moe.message.deleteEpic", epic.title),
+                    MoeBundle.message("moe.message.deleteEpicTitle"),
                     Messages.getWarningIcon()
                 )
                 if (result == Messages.YES) {

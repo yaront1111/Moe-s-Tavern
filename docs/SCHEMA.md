@@ -564,6 +564,63 @@ type ActivityEventType =
 
 ---
 
+## Schema Versioning and Migrations
+
+The daemon supports schema versioning to safely evolve the `.moe/` file structure over time.
+
+### Schema Version Field
+
+**File:** `.moe/project.json`
+
+```typescript
+interface Project {
+  // ... other fields
+  schemaVersion: number;  // Current: 2
+}
+```
+
+### Migration System
+
+Migrations are defined in `packages/moe-daemon/src/migrations/` and run automatically when the daemon loads a project with an older schema version.
+
+**Migration file structure:**
+```typescript
+// migrations/v1_to_v2.ts
+export function migrate(data: Record<string, unknown>): Record<string, unknown> {
+  // Transform data from v1 to v2 format
+  return { ...data, newField: 'default' };
+}
+```
+
+### Rollback Strategy
+
+**On migration failure:**
+- The migration system returns the original data unchanged
+- The daemon logs an error but continues with the unmigrated data
+- No data is lost or corrupted
+
+**Recommended backup procedure:**
+1. Before upgrading the daemon, backup the `.moe/` folder:
+   ```bash
+   cp -r .moe .moe.backup
+   ```
+2. Upgrade the daemon
+3. Start the daemon - migrations run automatically
+4. If issues occur, restore the backup:
+   ```bash
+   rm -rf .moe && mv .moe.backup .moe
+   ```
+
+**Migration logging:**
+- All migrations are logged to stderr with `from` and `to` versions
+- Check logs for: `Schema migrations applied`
+
+**Testing migrations:**
+- Each migration has corresponding tests in `migrations/*.test.ts`
+- Tests verify both forward migration and data integrity
+
+---
+
 ## ID Generation
 
 All IDs use a prefix + short UUID format:

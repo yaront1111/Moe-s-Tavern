@@ -65,17 +65,29 @@ jobs:
         run: npm ci
         working-directory: packages/moe-daemon
 
-      - name: Test daemon
-        run: npm test
+      - name: Test daemon with coverage
+        run: npm run test:coverage
         working-directory: packages/moe-daemon
+
+      - name: Upload daemon coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-coverage
+          path: packages/moe-daemon/coverage/
 
       - name: Install proxy dependencies
         run: npm ci
         working-directory: packages/moe-proxy
 
-      - name: Test proxy
-        run: npm test
+      - name: Test proxy with coverage
+        run: npm run test:coverage
         working-directory: packages/moe-proxy
+
+      - name: Upload proxy coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-coverage
+          path: packages/moe-proxy/coverage/
 
   build-plugin:
     name: Build JetBrains Plugin

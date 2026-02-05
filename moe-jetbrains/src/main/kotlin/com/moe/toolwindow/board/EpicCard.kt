@@ -105,14 +105,25 @@ class EpicCard(
     }
 
     private fun installDragHandlers(component: Component, adapter: MouseAdapter) {
-        component.addMouseListener(adapter)
-        component.addMouseMotionListener(adapter)
-        if (component is javax.swing.JComponent) {
-            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-        }
-        if (component is Container) {
-            component.components.forEach { child ->
-                installDragHandlers(child, adapter)
+        // Use iterative approach with depth limit to prevent stack overflow on deep nesting
+        val maxDepth = 20
+        val stack = ArrayDeque<Pair<Component, Int>>()
+        stack.addLast(component to 0)
+
+        while (stack.isNotEmpty()) {
+            val (current, depth) = stack.removeLast()
+            if (depth > maxDepth) continue
+
+            current.addMouseListener(adapter)
+            current.addMouseMotionListener(adapter)
+            if (current is javax.swing.JComponent) {
+                current.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            }
+
+            if (current is Container) {
+                current.components.forEach { child ->
+                    stack.addLast(child to depth + 1)
+                }
             }
         }
     }

@@ -11,7 +11,10 @@ param(
 
     [switch]$ListProjects,
     [switch]$NoStartDaemon,
-    [switch]$AutoClaim = $true
+    [switch]$AutoClaim = $true,
+
+    # Delay in seconds before starting (useful when launching multiple agents)
+    [int]$Delay = 0
 )
 
 function Load-Registry {
@@ -75,7 +78,8 @@ if (-not (Test-Path $proxyScript)) {
     exit 1
 }
 
-$mcpConfig = @{
+# Write MCP config to a temp file (more reliable than inline JSON on Windows)
+$mcpConfigObj = @{
     mcpServers = @{
         moe = @{
             command = "node"
@@ -85,7 +89,10 @@ $mcpConfig = @{
             }
         }
     }
-} | ConvertTo-Json -Depth 4 -Compress
+}
+# Use unique temp file to prevent collision when multiple agents run
+$mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$PID.json"
+$mcpConfigObj | ConvertTo-Json -Depth 4 | Set-Content -Path $mcpConfigFile -Encoding UTF8
 
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
@@ -108,7 +115,33 @@ if (-not $NoStartDaemon) {
         }
         Write-Host "Starting Moe daemon for $projectPath..."
         Start-Process -FilePath "node" -ArgumentList "`"$daemonScript`" start --project `"$projectPath`"" -WindowStyle Hidden
-        Start-Sleep -Seconds 1
+
+        # Wait for daemon to be ready (poll for up to 10 seconds)
+        $maxWait = 10
+        $waited = 0
+        while ($waited -lt $maxWait) {
+            Start-Sleep -Seconds 1
+            $waited++
+
+            if (Test-Path $daemonInfoPath) {
+                try {
+                    $newInfo = Get-Content -Raw -Path $daemonInfoPath | ConvertFrom-Json
+                    $proc = Get-Process -Id $newInfo.pid -ErrorAction SilentlyContinue
+                    if ($proc) {
+                        Write-Host "Daemon started (waited ${waited}s)"
+                        break
+                    }
+                } catch {
+                    # Continue waiting
+                }
+            }
+            Write-Host "Waiting for daemon... (${waited}/${maxWait}s)"
+        }
+
+        if ($waited -ge $maxWait) {
+            Write-Error "Daemon failed to start within ${maxWait}s"
+            exit 1
+        }
     }
 }
 
@@ -136,6 +169,15 @@ if (Test-Path $roleDocPath) {
     Write-Host "Loaded role guide from $roleDocPath"
 }
 
+Write-Host "MCP config written to: $mcpConfigFile"
+
+if ($Delay -gt 0) {
+    Write-Host "Waiting $Delay seconds before starting..."
+    Start-Sleep -Seconds $Delay
+}
+
+Write-Host "Launching Claude CLI..."
+
 if ($AutoClaim) {
     $systemAppend = @"
 Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role.
@@ -143,12 +185,14 @@ Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your 
 $roleDoc
 "@
     $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
-    & $Command @CommandArgs --mcp-config $mcpConfig --append-system-prompt $systemAppend $prompt
+    Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$prompt`""
+    & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $prompt
 } else {
     $systemAppend = @"
 Role: $Role. Always use Moe MCP tools.
 
 $roleDoc
 "@
-    & $Command @CommandArgs --mcp-config $mcpConfig --append-system-prompt $systemAppend
+    Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
+    & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
 }

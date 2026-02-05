@@ -10,16 +10,55 @@ import type {
   Epic,
   MoeStateSnapshot,
   Project,
+  ProjectSettings,
   RailProposal,
   Task,
   Worker
 } from '../types/schema.js';
-import { CURRENT_SCHEMA_VERSION, type Project, type ProjectSettings } from '../types/schema.js';
+import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { logger, createContextLogger } from '../util/logger.js';
 import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
+import {
+  sanitizeString,
+  sanitizeNumber,
+  sanitizePattern,
+  sanitizeStringArray,
+  sanitizeBoolean,
+  sanitizeEnum,
+  sanitizeUrl,
+  validateEntityId
+} from '../util/sanitize.js';
+
+// Configurable timeout for state load operations (default 30 seconds)
+const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
+
+/**
+ * Wraps a promise with a timeout.
+ * @param promise The promise to wrap
+ * @param timeoutMs Timeout in milliseconds
+ * @param operation Description of the operation for error messages
+ * @returns The promise result or throws on timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutId!);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId!);
+    throw error;
+  }
+}
 
 /**
  * Simple async mutex to serialize state operations.
@@ -90,6 +129,8 @@ export class StateManager {
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
   private logRotator?: LogRotator;
+  private pendingActivityWrites = 0;
+  private activityFlushResolvers: Array<() => void> = [];
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -107,6 +148,37 @@ export class StateManager {
     this.emitter = undefined;
   }
 
+  /**
+   * Check if the state manager has loaded project data.
+   * Used for health checks.
+   */
+  isLoaded(): boolean {
+    return this.project !== null;
+  }
+
+  /**
+   * Wait for all pending activity log writes to complete.
+   * Call this during shutdown to ensure no events are lost.
+   */
+  async flushActivityLog(): Promise<void> {
+    if (this.pendingActivityWrites === 0) {
+      return;
+    }
+    return new Promise((resolve) => {
+      this.activityFlushResolvers.push(resolve);
+    });
+  }
+
+  private notifyActivityFlushed(): void {
+    if (this.pendingActivityWrites === 0) {
+      const resolvers = this.activityFlushResolvers;
+      this.activityFlushResolvers = [];
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+  }
+
   private emit(event: StateChangeEvent) {
     if (this.emitter) {
       try {
@@ -118,10 +190,14 @@ export class StateManager {
   }
 
   async load(): Promise<void> {
-    return this.mutex.runExclusive(async () => {
+    // Wrap the entire load operation with a timeout to prevent hangs on corrupted files
+    const loadOperation = this.mutex.runExclusive(async () => {
       if (!fs.existsSync(this.moePath)) {
         throw new Error(`.moe folder not found at ${this.moePath}`);
       }
+
+      // Verify write permissions before proceeding
+      this.verifyWritePermissions();
 
       const projectFile = path.join(this.moePath, 'project.json');
       let rawProject = this.readJson<Record<string, unknown>>(projectFile);
@@ -152,6 +228,8 @@ export class StateManager {
       const activityLogPath = path.join(this.moePath, 'activity.log');
       this.logRotator = new LogRotator(activityLogPath);
     });
+
+    return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
   }
 
   getSnapshot(): MoeStateSnapshot {
@@ -190,17 +268,18 @@ export class StateManager {
   }
 
   /**
-   * Validates and truncates a string field to max length.
+   * Get all workers that are currently assigned to tasks in a specific epic.
    */
-  private validateStringField(value: string | undefined, fieldName: string, maxLength: number, defaultVal: string): string {
-    if (!value || typeof value !== 'string') {
-      return defaultVal;
+  getWorkersByEpic(epicId: string): Worker[] {
+    const workerIds = new Set<string>();
+    for (const task of this.tasks.values()) {
+      if (task.epicId === epicId && task.assignedWorkerId) {
+        workerIds.add(task.assignedWorkerId);
+      }
     }
-    if (value.length > maxLength) {
-      logger.warn({ fieldName, originalLength: value.length, maxLength }, 'Field truncated');
-      return value.substring(0, maxLength);
-    }
-    return value;
+    return Array.from(workerIds)
+      .map((id) => this.workers.get(id))
+      .filter((w): w is Worker => w !== undefined);
   }
 
   async createTask(input: Partial<Task>): Promise<Task> {
@@ -217,23 +296,14 @@ export class StateManager {
       throw new Error(`Epic not found: ${input.epicId}`);
     }
 
-    // Validate and sanitize inputs
-    const title = this.validateStringField(input.title, 'title', 500, 'Untitled task');
-    const description = this.validateStringField(input.description, 'description', 10000, '');
+    // Validate and sanitize inputs using centralized sanitization
+    const title = sanitizeString(input.title, 'title', 500, 'Untitled task');
+    const description = sanitizeString(input.description, 'description', 10000, '');
 
-    // Validate definitionOfDone is a non-empty array of strings
-    let definitionOfDone = input.definitionOfDone;
-    if (!Array.isArray(definitionOfDone) || definitionOfDone.length === 0) {
+    // Validate definitionOfDone using centralized sanitization
+    let definitionOfDone = sanitizeStringArray(input.definitionOfDone, 50, 1000);
+    if (definitionOfDone.length === 0) {
       definitionOfDone = ['Task completed as described'];
-    } else {
-      // Filter to only strings and limit count
-      definitionOfDone = definitionOfDone
-        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-        .slice(0, 50)
-        .map((item) => item.substring(0, 1000));
-      if (definitionOfDone.length === 0) {
-        definitionOfDone = ['Task completed as described'];
-      }
     }
 
     const now = new Date().toISOString();
@@ -270,15 +340,23 @@ export class StateManager {
       throw new Error('Project not loaded');
     }
 
+    // Sanitize epic inputs
+    const title = sanitizeString(input.title, 'epicTitle', 500, 'Untitled epic');
+    const description = sanitizeString(input.description, 'epicDescription', 10000, '');
+    const architectureNotes = sanitizeString(input.architectureNotes, 'architectureNotes', 50000, '');
+    const epicRails = sanitizeStringArray(input.epicRails, 100, 1000);
+    const validStatuses = ['PLANNED', 'ACTIVE', 'COMPLETED'] as const;
+    const status = sanitizeEnum(input.status, validStatuses, 'PLANNED');
+
     const now = new Date().toISOString();
     const epic: Epic = {
       id: generateId('epic'),
       projectId: this.project.id,
-      title: input.title || 'Untitled epic',
-      description: input.description || '',
-      architectureNotes: input.architectureNotes || '',
-      epicRails: input.epicRails || [],
-      status: input.status || 'PLANNED',
+      title,
+      description,
+      architectureNotes,
+      epicRails,
+      status,
       order: input.order ?? this.nextEpicOrder(),
       createdAt: now,
       updatedAt: now
@@ -296,9 +374,15 @@ export class StateManager {
       throw new Error(`Task not found: ${taskId}`);
     }
 
+    // Clear assignedWorkerId on any status change so the appropriate role can claim it
+    const statusChanged = updates.status !== undefined && updates.status !== task.status;
+    const finalUpdates = statusChanged && updates.assignedWorkerId === undefined
+      ? { ...updates, assignedWorkerId: null }
+      : updates;
+
     const updated: Task = {
       ...task,
-      ...updates,
+      ...finalUpdates,
       updatedAt: new Date().toISOString()
     };
 
@@ -637,6 +721,8 @@ export class StateManager {
 
     // Fire-and-forget but serialized through mutex
     // We don't await here intentionally - activity logging shouldn't block operations
+    // Track pending writes so we can flush on shutdown
+    this.pendingActivityWrites++;
     void this.activityMutex.runExclusive(async () => {
       try {
         // Rotate log if needed before appending
@@ -646,6 +732,9 @@ export class StateManager {
         fs.appendFileSync(logPath, line, { flag: 'a' });
       } catch (error) {
         logger.error({ error }, 'Failed to append activity log');
+      } finally {
+        this.pendingActivityWrites--;
+        this.notifyActivityFlushed();
       }
     });
   }
@@ -687,8 +776,54 @@ export class StateManager {
   }
 
   /**
+   * Validates that an object is a valid ActivityEvent.
+   * Returns null if valid, or an error message if invalid.
+   */
+  private validateActivityEvent(obj: unknown): string | null {
+    if (!obj || typeof obj !== 'object') {
+      return 'Not an object';
+    }
+    const event = obj as Record<string, unknown>;
+
+    // Check required string fields
+    if (typeof event.id !== 'string' || !event.id) {
+      return 'Missing or invalid id';
+    }
+    if (typeof event.timestamp !== 'string' || !event.timestamp) {
+      return 'Missing or invalid timestamp';
+    }
+    if (typeof event.projectId !== 'string' || !event.projectId) {
+      return 'Missing or invalid projectId';
+    }
+
+    // Check event type is valid
+    if (typeof event.event !== 'string' || !ACTIVITY_EVENT_TYPES.includes(event.event as ActivityEventType)) {
+      return `Invalid event type: ${event.event}`;
+    }
+
+    // Check payload is an object
+    if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+      return 'Missing or invalid payload';
+    }
+
+    // Optional fields - validate type if present
+    if (event.epicId !== undefined && typeof event.epicId !== 'string') {
+      return 'Invalid epicId type';
+    }
+    if (event.taskId !== undefined && typeof event.taskId !== 'string') {
+      return 'Invalid taskId type';
+    }
+    if (event.workerId !== undefined && typeof event.workerId !== 'string') {
+      return 'Invalid workerId type';
+    }
+
+    return null;
+  }
+
+  /**
    * Read activity log entries.
    * Returns events in reverse chronological order (newest first).
+   * Invalid entries are skipped with a warning log.
    */
   getActivityLog(limit = 100): ActivityEvent[] {
     const logPath = path.join(this.moePath, 'activity.log');
@@ -700,18 +835,30 @@ export class StateManager {
       const content = fs.readFileSync(logPath, 'utf-8');
       const lines = content.trim().split('\n').filter((line) => line.trim());
       const events: ActivityEvent[] = [];
+      let skippedCount = 0;
 
       for (const line of lines) {
         try {
           // Try to parse as JSON (new format)
           if (line.startsWith('{')) {
-            const event = JSON.parse(line) as ActivityEvent;
-            events.push(event);
+            const parsed = JSON.parse(line);
+            const validationError = this.validateActivityEvent(parsed);
+            if (validationError) {
+              skippedCount++;
+              logger.warn({ error: validationError, linePreview: line.substring(0, 100) }, 'Skipping invalid activity log entry');
+              continue;
+            }
+            events.push(parsed as ActivityEvent);
           }
           // Skip old format lines for now
-        } catch {
-          // Skip invalid lines
+        } catch (parseError) {
+          skippedCount++;
+          logger.warn({ linePreview: line.substring(0, 50) }, 'Skipping malformed activity log entry');
         }
+      }
+
+      if (skippedCount > 0) {
+        logger.info({ skippedCount, totalLines: lines.length }, 'Activity log parsing completed with skipped entries');
       }
 
       // Return in reverse chronological order, limited
@@ -749,90 +896,57 @@ export class StateManager {
   }
 
   /**
-   * Validates and clamps a numeric setting to valid bounds.
+   * Verify that we have write permissions to the .moe directory.
+   * Called during load() to fail fast if permissions are insufficient.
    */
-  private clampNumber(value: number | undefined, defaultVal: number, min: number, max: number): number {
-    if (value === undefined || typeof value !== 'number' || isNaN(value)) {
-      return defaultVal;
+  private verifyWritePermissions(): void {
+    try {
+      fs.accessSync(this.moePath, fs.constants.W_OK);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(
+        `Cannot write to .moe directory at ${this.moePath}. ` +
+        `Please ensure the daemon process has write permissions. ` +
+        `Details: ${errMsg}`
+      );
     }
-    return Math.max(min, Math.min(max, value));
-  }
-
-  /**
-   * Validates that a pattern string is safe (no shell injection).
-   */
-  private sanitizePattern(pattern: string | undefined, defaultVal: string): string {
-    if (!pattern || typeof pattern !== 'string') {
-      return defaultVal;
-    }
-    // Only allow safe template characters
-    if (pattern.length > 256) {
-      logger.warn({ pattern: pattern.substring(0, 50) }, 'Pattern too long, using default');
-      return defaultVal;
-    }
-    // Remove potentially dangerous characters (shell injection prevention)
-    const sanitized = pattern.replace(/[`$(){}[\]|;&<>]/g, '');
-    if (sanitized !== pattern) {
-      logger.warn({ original: pattern, sanitized }, 'Pattern sanitized');
-    }
-    return sanitized || defaultVal;
   }
 
   private normalizeProject(project: Partial<Project>): Project {
     const now = new Date().toISOString();
 
-    // Validate approvalMode
+    // Validate approvalMode using centralized sanitization
     const validApprovalModes = ['CONTROL', 'SPEED', 'TURBO'] as const;
-    const approvalMode = validApprovalModes.includes(project.settings?.approvalMode as typeof validApprovalModes[number])
-      ? project.settings!.approvalMode!
-      : 'CONTROL';
+    const approvalMode = sanitizeEnum(project.settings?.approvalMode, validApprovalModes, 'CONTROL');
 
     return {
       id: project.id || generateId('proj'),
       schemaVersion: project.schemaVersion || CURRENT_SCHEMA_VERSION,
-      name: project.name || path.basename(this.projectPath),
+      name: sanitizeString(project.name, 'projectName', 256, path.basename(this.projectPath)),
       rootPath: project.rootPath || this.projectPath,
       globalRails: {
-        techStack: Array.isArray(project.globalRails?.techStack) ? project.globalRails.techStack : [],
-        forbiddenPatterns: Array.isArray(project.globalRails?.forbiddenPatterns) ? project.globalRails.forbiddenPatterns : [],
-        requiredPatterns: Array.isArray(project.globalRails?.requiredPatterns) ? project.globalRails.requiredPatterns : [],
-        formatting: typeof project.globalRails?.formatting === 'string' ? project.globalRails.formatting : '',
-        testing: typeof project.globalRails?.testing === 'string' ? project.globalRails.testing : '',
-        customRules: Array.isArray(project.globalRails?.customRules) ? project.globalRails.customRules : []
+        techStack: sanitizeStringArray(project.globalRails?.techStack, 50, 256),
+        forbiddenPatterns: sanitizeStringArray(project.globalRails?.forbiddenPatterns, 100, 1000),
+        requiredPatterns: sanitizeStringArray(project.globalRails?.requiredPatterns, 100, 1000),
+        formatting: sanitizeString(project.globalRails?.formatting, 'formatting', 10000, ''),
+        testing: sanitizeString(project.globalRails?.testing, 'testing', 10000, ''),
+        customRules: sanitizeStringArray(project.globalRails?.customRules, 100, 1000)
       },
       settings: {
         approvalMode,
-        speedModeDelayMs: this.clampNumber(project.settings?.speedModeDelayMs, 2000, 0, 60000),
-        autoCreateBranch: project.settings?.autoCreateBranch ?? true,
-        branchPattern: this.sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
-        commitPattern: this.sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}')
+        speedModeDelayMs: sanitizeNumber(project.settings?.speedModeDelayMs, 2000, 0, 60000),
+        autoCreateBranch: sanitizeBoolean(project.settings?.autoCreateBranch, true),
+        branchPattern: sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
+        commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}')
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now
     };
   }
 
-  /**
-   * Validates that an entity ID is safe (no path traversal).
-   * IDs should only contain alphanumeric characters, hyphens, and underscores.
-   */
-  private validateEntityId(id: string): void {
-    if (!id || typeof id !== 'string') {
-      throw new Error('Entity ID is required');
-    }
-    // Only allow safe characters: alphanumeric, hyphen, underscore
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
-      throw new Error(`Invalid entity ID: ${id}. IDs must contain only alphanumeric characters, hyphens, and underscores.`);
-    }
-    // Prevent overly long IDs
-    if (id.length > 128) {
-      throw new Error(`Entity ID too long: ${id.length} chars (max 128)`);
-    }
-  }
-
   private async writeEntity(kind: string, id: string, entity: unknown): Promise<void> {
-    // Validate ID to prevent path traversal attacks
-    this.validateEntityId(id);
+    // Validate ID to prevent path traversal attacks using centralized validation
+    validateEntityId(id);
 
     const dir = path.join(this.moePath, kind);
     if (!fs.existsSync(dir)) {

@@ -1,0 +1,111 @@
+{
+  "name": "moe-vscode",
+  "displayName": "Moe - AI Workforce Command Center",
+  "description": "Visual task board for AI agent orchestration with human oversight",
+  "version": "0.1.0",
+  "publisher": "yaront1111",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yaront1111/Moe-s-Tavern"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "task",
+    "kanban",
+    "mcp",
+    "claude",
+    "gpt"
+  ],
+  "activationEvents": [
+    "workspaceContains:.moe"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "moe",
+          "title": "Moe",
+          "icon": "resources/moe-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "moe": [
+        {
+          "type": "webview",
+          "id": "moe.board",
+          "name": "Task Board"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "moe.connect",
+        "title": "Moe: Connect to Daemon"
+      },
+      {
+        "command": "moe.disconnect",
+        "title": "Moe: Disconnect from Daemon"
+      },
+      {
+        "command": "moe.refresh",
+        "title": "Moe: Refresh Board"
+      },
+      {
+        "command": "moe.openTaskDetail",
+        "title": "Moe: Open Task Detail"
+      }
+    ],
+    "configuration": {
+      "title": "Moe",
+      "properties": {
+        "moe.daemon.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Moe daemon host address"
+        },
+        "moe.daemon.port": {
+          "type": "number",
+          "default": 0,
+          "description": "Moe daemon port (0 = auto-detect from .moe/daemon.json)"
+        },
+        "moe.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically connect to daemon when workspace contains .moe folder"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "@types/ws": "^8.5.10",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

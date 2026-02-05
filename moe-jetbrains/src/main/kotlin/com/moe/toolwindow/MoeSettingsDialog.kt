@@ -2,6 +2,7 @@ package com.moe.toolwindow
 
 import com.moe.model.ProjectSettings
 import com.moe.services.MoeProjectService
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -25,12 +26,12 @@ class MoeSettingsDialog(
 
     private val approvalModeCombo = ComboBox(arrayOf("CONTROL", "SPEED", "TURBO"))
     private val speedModeDelaySpinner = JSpinner(SpinnerNumberModel(2000, 500, 30000, 500))
-    private val autoCreateBranchCheckbox = JBCheckBox("Auto-create git branches for tasks")
+    private val autoCreateBranchCheckbox = JBCheckBox(MoeBundle.message("moe.settings.autoCreateBranch"))
     private val branchPatternField = JBTextField()
     private val commitPatternField = JBTextField()
 
     init {
-        title = "Moe Project Settings"
+        title = MoeBundle.message("moe.dialog.settings")
 
         // Initialize with current settings
         currentSettings?.let { settings ->
@@ -49,33 +50,33 @@ class MoeSettingsDialog(
         panel.border = JBUI.Borders.empty(8)
 
         // Approval Mode
-        panel.add(JBLabel("Approval Mode"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.approvalMode")))
         panel.add(approvalModeCombo)
-        panel.add(JBLabel("<html><small>CONTROL: Manual approval required<br>SPEED: Auto-approve after delay<br>TURBO: Instant auto-approve</small></html>"))
+        panel.add(JBLabel(MoeBundle.message("moe.settings.approvalModeHint")))
 
         panel.add(createSeparator())
 
         // Speed Mode Delay
-        panel.add(JBLabel("Speed Mode Delay (ms)"))
+        panel.add(JBLabel(MoeBundle.message("moe.settings.speedModeDelayLabel")))
         speedModeDelaySpinner.preferredSize = Dimension(100, speedModeDelaySpinner.preferredSize.height)
         panel.add(speedModeDelaySpinner)
-        panel.add(JBLabel("<html><small>Time to wait before auto-approval in SPEED mode</small></html>"))
+        panel.add(JBLabel(MoeBundle.message("moe.settings.speedModeDelayHint")))
 
         panel.add(createSeparator())
 
         // Git Settings
-        panel.add(JBLabel("Git Settings"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.gitSettings")))
         panel.add(autoCreateBranchCheckbox)
 
-        panel.add(JBLabel("Branch Pattern"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.branchPattern")))
         branchPatternField.preferredSize = Dimension(300, branchPatternField.preferredSize.height)
         panel.add(branchPatternField)
-        panel.add(JBLabel("<html><small>Variables: {epicId}, {taskId}</small></html>"))
+        panel.add(JBLabel(MoeBundle.message("moe.settings.branchPatternHint")))
 
-        panel.add(JBLabel("Commit Pattern"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.commitPattern")))
         commitPatternField.preferredSize = Dimension(300, commitPatternField.preferredSize.height)
         panel.add(commitPatternField)
-        panel.add(JBLabel("<html><small>Variables: {epicId}, {taskTitle}</small></html>"))
+        panel.add(JBLabel(MoeBundle.message("moe.settings.commitPatternHint")))
 
         return panel
     }
@@ -87,7 +88,7 @@ class MoeSettingsDialog(
     }
 
     override fun createActions(): Array<Action> {
-        val saveAction = object : DialogWrapperAction("Save") {
+        val saveAction = object : DialogWrapperAction(MoeBundle.message("moe.button.save")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val settings = ProjectSettings(
                     approvalMode = approvalModeCombo.selectedItem as String,

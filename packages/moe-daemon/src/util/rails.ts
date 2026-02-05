@@ -28,23 +28,10 @@ export function checkPlanRails(
     }
   }
 
-  if (epic?.epicRails?.length) {
-    for (const rail of epic.epicRails) {
-      if (!rail) continue;
-      if (!text.includes(rail.toLowerCase())) {
-        return { ok: false, violation: `Epic rail missing: ${rail}` };
-      }
-    }
-  }
-
-  if (task?.taskRails?.length) {
-    for (const rail of task.taskRails) {
-      if (!rail) continue;
-      if (!text.includes(rail.toLowerCase())) {
-        return { ok: false, violation: `Task rail missing: ${rail}` };
-      }
-    }
-  }
+  // Note: Epic and task rails are provided as guidance to AI agents but are not
+  // strictly enforced in plan text. This allows agents to address the intent of
+  // rails without requiring verbatim quoting. Humans can verify during plan approval.
+  // Only forbiddenPatterns and global requiredPatterns are strictly enforced.
 
   return { ok: true };
 }

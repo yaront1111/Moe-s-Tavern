@@ -54,19 +54,17 @@ jobs:
       # Publish to npm (when NPM_TOKEN is configured)
       - name: Publish daemon to npm
         if: env.NPM_TOKEN != ''
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         working-directory: packages/moe-daemon
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true
 
       - name: Publish proxy to npm
         if: env.NPM_TOKEN != ''
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         working-directory: packages/moe-proxy
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true
 
       # Create GitHub Release
       - name: Create Release

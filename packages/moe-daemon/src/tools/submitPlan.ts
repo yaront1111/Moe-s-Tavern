@@ -108,8 +108,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             if (currentTask && currentTask.status === 'AWAITING_APPROVAL') {
               await state.updateTask(task.id, { status: 'WORKING' }, 'PLAN_AUTO_APPROVED');
             }
-          } catch {
-            // Ignore errors during delayed approval
+          } catch (error) {
+            // Log error via activity log so task doesn't get stuck silently
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            state.appendActivity('TASK_BLOCKED' as import('../types/schema.js').ActivityEventType, {
+              error: errorMessage,
+              reason: 'SPEED mode auto-approval failed'
+            }, state.getTask(task.id) ?? undefined);
           }
         }, delayMs);
         message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;

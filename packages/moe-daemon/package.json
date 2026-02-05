@@ -1,9 +1,47 @@
 {
   "name": "moe-daemon",
   "version": "0.1.0",
-  "description": "Moe daemon: MCP + WebSocket + .moe state manager",
+  "description": "Moe daemon: MCP + WebSocket + .moe state manager for AI task orchestration",
   "license": "MIT",
+  "author": "yaront1111",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yaront1111/Moe-s-Tavern.git",
+    "directory": "packages/moe-daemon"
+  },
+  "bugs": {
+    "url": "https://github.com/yaront1111/Moe-s-Tavern/issues"
+  },
+  "homepage": "https://github.com/yaront1111/Moe-s-Tavern#readme",
+  "keywords": [
+    "moe",
+    "ai",
+    "agent",
+    "task",
+    "orchestration",
+    "mcp",
+    "claude",
+    "gpt",
+    "daemon",
+    "websocket"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "moe-daemon": "./dist/index.js"
   },
@@ -12,7 +50,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "chokidar": "^3.5.3",

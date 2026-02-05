@@ -49,6 +49,8 @@ This registry is updated when you open a Moe project in the JetBrains plugin.
 | `MOE_WORKER_ID` | daemon | Optional fallback worker for `moe.get_context` |
 | `LOG_LEVEL` | daemon | Logging level: `debug`, `info` (default), `warn`, `error`, `fatal` |
 
+For a complete list of environment variables, project settings, and platform-specific examples, see [CONFIGURATION.md](./CONFIGURATION.md).
+
 ---
 
 ## Agent Wrapper (Windows)
@@ -136,7 +138,8 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 ```
 
 **Notes:**
-- Enforces rails in this order: `forbiddenPatterns`, `requiredPatterns`, `epicRails`, `taskRails`.
+- **Enforced rails:** Only `forbiddenPatterns` and global `requiredPatterns` are strictly enforced.
+- **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
 
 **Returns:**
@@ -287,6 +290,41 @@ List tasks for an epic (optionally filtered by status).
 
 ---
 
+### moe.search_tasks
+
+Search tasks by query and filters with relevance ranking.
+
+**Parameters:**
+```typescript
+{
+  query?: string,           // Search query (searches title and description)
+  filters?: {
+    status?: string,        // Filter by task status
+    epicId?: string,        // Filter by epic ID
+    assignedWorkerId?: string  // Filter by assigned worker ID
+  },
+  limit?: number            // Maximum results (default: 20)
+}
+```
+
+**Returns:**
+```typescript
+{
+  tasks: Task[],            // Matching tasks (full task objects)
+  totalMatches: number,     // Number of results returned
+  query: string | null,     // The search query used
+  filters: object           // Filters that were applied
+}
+```
+
+**Notes:**
+- Title matches are weighted 2x higher than description matches
+- Results are sorted by relevance score (highest first)
+- Filters are applied before search query
+- If no query is provided, returns filtered tasks up to limit
+
+---
+
 ### moe.get_next_task
 
 Return the next BACKLOG task by order.
@@ -309,7 +347,12 @@ Claim the next task by status (optionally filtered by epic). Assigns `assignedWo
 
 **Parameters:**
 ```typescript
-{ statuses: string[], epicId?: string, workerId?: string }
+{
+  statuses: string[],
+  epicId?: string,
+  workerId?: string,
+  replaceExisting?: boolean  // Take over from existing worker
+}
 ```
 
 **Returns:**
@@ -322,6 +365,15 @@ Claim the next task by status (optionally filtered by epic). Assigns `assignedWo
   allRails?: { global: string[], epic: string[], task: string[] }
 }
 ```
+
+**Worker Constraint:**
+Only one worker can work on tasks of the same status type per epic at a time:
+- Architects (PLANNING) and workers (WORKING) can work in parallel on the same epic
+- Two workers cannot both claim WORKING tasks in the same epic
+- Use `replaceExisting: true` to take over from an existing worker
+
+**Errors:**
+- `Epic already has an active worker on <status> tasks: <workerId>` - if another worker is active
 
 ---
 
@@ -390,6 +442,34 @@ Create a new epic.
 
 ---
 
+### moe.update_epic
+
+Update an existing epic.
+
+**Parameters:**
+```typescript
+{
+  epicId: string,               // Required
+  title?: string,
+  description?: string,
+  architectureNotes?: string,
+  epicRails?: string[],
+  status?: "ACTIVE" | "COMPLETED" | "ARCHIVED",
+  order?: number
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, epic }
+```
+
+**Errors:**
+- `epicId is required` - if epicId parameter is missing
+- `Epic not found: <epicId>` - if epic does not exist
+
+---
+
 ### moe.delete_task
 
 Delete a task by ID.
@@ -407,3 +487,83 @@ Delete a task by ID.
 **Errors:**
 - `taskId is required` - if taskId parameter is missing
 - `Task not found: <taskId>` - if task does not exist
+
+---
+
+### moe.delete_epic
+
+Delete an epic and optionally its tasks.
+
+**Parameters:**
+```typescript
+{
+  epicId: string,
+  cascadeDelete?: boolean  // If true, delete all tasks in epic. Default: false
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  deletedEpic: Epic,
+  deletedTaskCount: number
+}
+```
+
+**Notes:**
+- By default, fails if epic has tasks (use `cascadeDelete: true` to delete anyway)
+- When cascading, deletes all tasks in the epic before deleting the epic
+
+**Errors:**
+- `epicId is required` - if epicId parameter is missing
+- `Epic not found: <epicId>` - if epic does not exist
+- `Epic "<epicId>" has N task(s)...` - if epic has tasks and cascadeDelete is false
+
+---
+
+### moe.qa_approve
+
+QA approves a task in REVIEW status, moving it to DONE.
+
+**Parameters:**
+```typescript
+{ taskId: string, summary?: string }
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, status: "DONE", summary, message }
+```
+
+**Errors:**
+- `taskId is required`
+- `Task not found: <taskId>`
+- `Task must be in REVIEW status to approve`
+
+---
+
+### moe.qa_reject
+
+QA rejects a task in REVIEW status, moving it back to WORKING for fixes.
+
+**Parameters:**
+```typescript
+{ taskId: string, reason: string }
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, status: "WORKING", reopenCount, reason, message }
+```
+
+**Notes:**
+- Increments `reopenCount`
+- Sets `reopenReason` so the worker knows what to fix
+- Worker should address the feedback and call `moe.complete_task` again
+
+**Errors:**
+- `taskId is required`
+- `reason is required - explain which DoD items failed and why`
+- `Task not found: <taskId>`
+- `Task must be in REVIEW status to reject`

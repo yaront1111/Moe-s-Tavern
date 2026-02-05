@@ -19,6 +19,7 @@ class MoeStatusBarWidget(private val project: Project) : StatusBarWidget, Status
 
     private var statusBar: StatusBar? = null
     private var connected = false
+    private var connectionStateKnown = false
     private var awaitingCount = 0
     private var workingCount = 0
 
@@ -26,11 +27,17 @@ class MoeStatusBarWidget(private val project: Project) : StatusBarWidget, Status
         override fun onState(state: MoeState) {
             awaitingCount = state.tasks.count { it.status == "AWAITING_APPROVAL" }
             workingCount = state.tasks.count { it.status == "WORKING" }
+            // Receiving state means we're connected
+            if (!connectionStateKnown) {
+                connectionStateKnown = true
+                connected = true
+            }
             updateWidget()
         }
 
         override fun onStatus(connected: Boolean, message: String) {
             this@MoeStatusBarWidget.connected = connected
+            connectionStateKnown = true
             updateWidget()
         }
 
@@ -55,20 +62,20 @@ class MoeStatusBarWidget(private val project: Project) : StatusBarWidget, Status
     }
 
     override fun getText(): String {
-        return if (connected) {
-            "Moe: $awaitingCount awaiting | $workingCount working"
-        } else {
-            "Moe: disconnected"
+        return when {
+            !connectionStateKnown -> "◐ Moe: connecting..."
+            connected -> "● Moe: $awaitingCount awaiting | $workingCount working"
+            else -> "○ Moe: disconnected"
         }
     }
 
     override fun getAlignment(): Float = 0f
 
     override fun getTooltipText(): String {
-        return if (connected) {
-            "Moe: $awaitingCount tasks awaiting approval, $workingCount tasks in progress. Click to open board."
-        } else {
-            "Moe: Not connected to daemon. Click to open board."
+        return when {
+            !connectionStateKnown -> "Moe: Connecting to daemon... Click to open board."
+            connected -> "Moe: $awaitingCount tasks awaiting approval, $workingCount tasks in progress. Click to open board."
+            else -> "Moe: Not connected to daemon. Click to open board."
         }
     }
 

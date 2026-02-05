@@ -1,6 +1,9 @@
 package com.moe.toolwindow.board
 
 import com.moe.model.Task
+import com.moe.util.MoeBundle
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
@@ -89,7 +92,7 @@ class TaskCard(
         val dragAdapter = object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (SwingUtilities.isLeftMouseButton(e) && e.clickCount == 1) {
-                    onOpen(task)
+                    safeCallback("open task") { onOpen(task) }
                 } else if (SwingUtilities.isRightMouseButton(e)) {
                     showContextMenu(e)
                 }
@@ -97,7 +100,9 @@ class TaskCard(
 
             override fun mouseDragged(e: MouseEvent) {
                 if (SwingUtilities.isLeftMouseButton(e)) {
-                    transferHandler.exportAsDrag(this@TaskCard, e, TransferHandler.MOVE)
+                    safeCallback("drag task") {
+                        transferHandler.exportAsDrag(this@TaskCard, e, TransferHandler.MOVE)
+                    }
                 }
             }
         }
@@ -119,14 +124,14 @@ class TaskCard(
     private fun showContextMenu(e: MouseEvent) {
         val menu = JPopupMenu()
 
-        val openItem = JMenuItem("Open")
-        openItem.addActionListener { onOpen(task) }
+        val openItem = JMenuItem(MoeBundle.message("moe.menu.open"))
+        openItem.addActionListener { safeCallback("open task") { onOpen(task) } }
         menu.add(openItem)
 
         menu.addSeparator()
 
-        val deleteItem = JMenuItem("Delete")
-        deleteItem.addActionListener { onDelete(task) }
+        val deleteItem = JMenuItem(MoeBundle.message("moe.menu.delete"))
+        deleteItem.addActionListener { safeCallback("delete task") { onDelete(task) } }
         menu.add(deleteItem)
 
         menu.show(e.component, e.x, e.y)
@@ -155,15 +160,50 @@ class TaskCard(
         return status.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
-    private fun installDragHandlers(component: Component, adapter: MouseAdapter) {
-        component.addMouseListener(adapter)
-        component.addMouseMotionListener(adapter)
-        if (component is javax.swing.JComponent) {
-            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+    /**
+     * Wraps a callback in error handling to prevent UI crashes.
+     * Shows a notification balloon if an error occurs.
+     */
+    private fun safeCallback(operation: String, callback: () -> Unit) {
+        try {
+            callback()
+        } catch (e: Exception) {
+            showErrorNotification("Failed to $operation: ${e.message ?: "Unknown error"}")
         }
-        if (component is Container) {
-            component.components.forEach { child ->
-                installDragHandlers(child, adapter)
+    }
+
+    private fun showErrorNotification(message: String) {
+        try {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup("Moe Notifications")
+                .createNotification(message, NotificationType.ERROR)
+                .notify(null)
+        } catch (e: Exception) {
+            // Fallback: log to stderr if notification fails
+            System.err.println("Moe TaskCard error: $message")
+        }
+    }
+
+    private fun installDragHandlers(component: Component, adapter: MouseAdapter) {
+        // Use iterative approach with depth limit to prevent stack overflow on deep nesting
+        val maxDepth = 20
+        val stack = ArrayDeque<Pair<Component, Int>>()
+        stack.addLast(component to 0)
+
+        while (stack.isNotEmpty()) {
+            val (current, depth) = stack.removeLast()
+            if (depth > maxDepth) continue
+
+            current.addMouseListener(adapter)
+            current.addMouseMotionListener(adapter)
+            if (current is javax.swing.JComponent) {
+                current.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            }
+
+            if (current is Container) {
+                current.components.forEach { child ->
+                    stack.addLast(child to depth + 1)
+                }
             }
         }
     }
