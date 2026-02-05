@@ -27,6 +27,21 @@ function Load-Registry {
     }
 }
 
+function Get-MoeInstallPath {
+    $configPath = Join-Path $env:USERPROFILE ".moe\\config.json"
+    if (-not (Test-Path $configPath)) { return $null }
+    try {
+        $config = Get-Content -Raw -Path $configPath | ConvertFrom-Json
+        $installPath = $config.installPath
+        if (-not $installPath) { return $null }
+        $canary = Join-Path $installPath "packages\\moe-daemon\\dist\\index.js"
+        if (-not (Test-Path $canary)) { return $null }
+        return $installPath
+    } catch {
+        return $null
+    }
+}
+
 if ($ListProjects) {
     $projects = Load-Registry
     if (-not $projects -or $projects.Count -eq 0) {
@@ -71,8 +86,19 @@ if (-not $WorkerId) {
 $env:MOE_WORKER_ID = $WorkerId
 
 # Build MCP config for moe-proxy
-$root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
+$proxyScript = $env:MOE_PROXY_PATH
+if ($proxyScript) { $proxyScript = $proxyScript.Trim('"') }
+if (-not $proxyScript) {
+    $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+    $proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
+}
+if (-not (Test-Path $proxyScript)) {
+    # Fall back to global install config
+    $globalInstall = Get-MoeInstallPath
+    if ($globalInstall) {
+        $proxyScript = Join-Path $globalInstall "packages\\moe-proxy\\dist\\index.js"
+    }
+}
 if (-not (Test-Path $proxyScript)) {
     Write-Error "Moe proxy script not found: $proxyScript. Run: cd packages/moe-proxy && npm run build"
     exit 1
@@ -108,7 +134,19 @@ if (-not $NoStartDaemon) {
     }
 
     if (-not $running) {
-        $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
+        $daemonScript = $env:MOE_DAEMON_PATH
+        if ($daemonScript) { $daemonScript = $daemonScript.Trim('"') }
+        if (-not $daemonScript) {
+            $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+            $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
+        }
+        if (-not (Test-Path $daemonScript)) {
+            # Fall back to global install config
+            $globalInstall = Get-MoeInstallPath
+            if ($globalInstall) {
+                $daemonScript = Join-Path $globalInstall "packages\\moe-daemon\\dist\\index.js"
+            }
+        }
         if (-not (Test-Path $daemonScript)) {
             Write-Error "Moe daemon script not found: $daemonScript"
             exit 1

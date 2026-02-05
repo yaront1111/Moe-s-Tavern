@@ -26,7 +26,9 @@
     "gpt"
   ],
   "activationEvents": [
-    "workspaceContains:.moe"
+    "workspaceContains:.moe",
+    "onCommand:moe.connect",
+    "onView:moe.board"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -79,6 +81,11 @@
           "default": 0,
           "description": "Moe daemon port (0 = auto-detect from .moe/daemon.json)"
         },
+        "moe.daemon.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the Moe daemon when needed"
+        },
         "moe.autoConnect": {
           "type": "boolean",
           "default": true,
@@ -88,12 +95,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
-    "publish": "vsce publish"
+    "publish": "vsce publish",
+    "bundle": "node ./scripts/bundle-assets.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

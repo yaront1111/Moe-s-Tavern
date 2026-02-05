@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
+import { missingRequired } from '../util/errors.js';
 
 export function createTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -36,10 +37,10 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
       };
 
       if (!params.epicId) {
-        throw new Error('epicId is required');
+        throw missingRequired('epicId');
       }
       if (!params.title) {
-        throw new Error('title is required');
+        throw missingRequired('title');
       }
 
       const task = await state.createTask({

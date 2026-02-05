@@ -1,7 +1,9 @@
 package com.moe.util
 
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
+import com.intellij.openapi.diagnostic.Logger
 import java.io.File
 import java.time.Instant
 
@@ -12,6 +14,7 @@ data class MoeProjectInfo(
 )
 
 object MoeProjectRegistry {
+    private val log = Logger.getInstance(MoeProjectRegistry::class.java)
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
     private fun registryFile(): File {
@@ -58,6 +61,30 @@ object MoeProjectRegistry {
             normalizedA.equals(normalizedB, ignoreCase = true)
         } else {
             normalizedA == normalizedB
+        }
+    }
+
+    /**
+     * Reads ~/.moe/config.json and returns the installPath if it exists and
+     * the canary file (packages/moe-daemon/dist/index.js) is present.
+     */
+    fun readGlobalInstallPath(): String? {
+        return try {
+            val home = System.getProperty("user.home")
+            val configFile = File(home, ".moe${File.separator}config.json")
+            if (!configFile.exists()) return null
+            val json = gson.fromJson(configFile.readText(), JsonObject::class.java)
+            val installPath = json?.get("installPath")?.asString ?: return null
+            val canary = File(installPath, "packages${File.separator}moe-daemon${File.separator}dist${File.separator}index.js")
+            if (!canary.exists()) {
+                log.debug("Global config installPath canary missing: ${canary.absolutePath}")
+                return null
+            }
+            log.debug("Resolved global installPath: $installPath")
+            installPath
+        } catch (ex: Exception) {
+            log.debug("Failed to read global config: ${ex.message}")
+            null
         }
     }
 }

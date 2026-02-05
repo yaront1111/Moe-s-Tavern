@@ -13,9 +13,11 @@ import com.moe.model.Task
 import com.moe.model.Worker
 import com.moe.util.MoeJson
 import com.moe.util.MoeProjectInitializer
+import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project as IdeaProject
 import com.intellij.openapi.diagnostic.Logger
 import org.java_websocket.client.WebSocketClient
@@ -305,7 +307,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         }
     }
 
+    private fun ensureConnected(): Boolean {
+        if (!connected || wsClient == null) {
+            log.warn("Operation attempted without active connection")
+            publishStatus(false, "Not connected to daemon")
+            return false
+        }
+        return true
+    }
+
     fun updateTaskStatus(taskId: String, status: String, order: Double) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
             add("updates", JsonObject().apply {
@@ -317,6 +329,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun updateTaskDetails(taskId: String, title: String, description: String, definitionOfDone: List<String>? = null) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
             add("updates", JsonObject().apply {
@@ -333,16 +346,19 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun deleteTask(taskId: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("taskId", taskId) }
         sendMessage("DELETE_TASK", payload)
     }
 
     fun deleteEpic(epicId: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("epicId", epicId) }
         sendMessage("DELETE_EPIC", payload)
     }
 
     fun updateSettings(settings: com.moe.model.ProjectSettings) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("approvalMode", settings.approvalMode)
             addProperty("speedModeDelayMs", settings.speedModeDelayMs)
@@ -354,6 +370,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun updateEpicStatus(epicId: String, status: String, order: Double) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
             add("updates", JsonObject().apply {
@@ -365,6 +382,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun updateEpicDetails(epicId: String, title: String, description: String, architectureNotes: String, epicRails: List<String>, status: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
             add("updates", JsonObject().apply {
@@ -381,11 +399,13 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun approveTask(taskId: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("taskId", taskId) }
         sendMessage("APPROVE_TASK", payload)
     }
 
     fun rejectTask(taskId: String, reason: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
             addProperty("reason", reason)
@@ -394,6 +414,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun reopenTask(taskId: String, reason: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
             addProperty("reason", reason)
@@ -402,6 +423,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun createTask(epicId: String, title: String, description: String, definitionOfDone: List<String>) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
             addProperty("title", title)
@@ -414,6 +436,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun createEpic(title: String, description: String, architectureNotes: String = "", epicRails: List<String> = emptyList()) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("title", title)
             addProperty("description", description)
@@ -468,16 +491,19 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun requestActivityLog(limit: Int = 100) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("limit", limit) }
         sendMessage("GET_ACTIVITY_LOG", payload)
     }
 
     fun approveProposal(proposalId: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("proposalId", proposalId) }
         sendMessage("APPROVE_PROPOSAL", payload)
     }
 
     fun rejectProposal(proposalId: String) {
+        if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("proposalId", proposalId) }
         sendMessage("REJECT_PROPOSAL", payload)
     }
@@ -595,6 +621,43 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         val startDir = File(basePath)
         return findInParents(startDir, "packages/moe-daemon/dist/index.js")
             ?: findInParents(startDir, "moe-daemon/dist/index.js")
+            ?: resolveBundledDaemonScript()
+            ?: resolveGlobalConfigDaemonScript()
+    }
+
+    private fun resolveGlobalConfigDaemonScript(): File? {
+        val installPath = com.moe.util.MoeProjectRegistry.readGlobalInstallPath() ?: return null
+        val candidate = File(installPath, "packages${File.separator}moe-daemon${File.separator}dist${File.separator}index.js")
+        return if (candidate.exists()) {
+            log.debug("Using daemon from global config: ${candidate.absolutePath}")
+            candidate
+        } else null
+    }
+
+    private fun resolveBundledDaemonScript(): File? {
+        return try {
+            val plugin = PluginManagerCore.getPlugin(PluginId.getId("com.moe.jetbrains"))
+            val pluginRoot = plugin?.pluginPath?.toFile()
+            val fromPlugin = pluginRoot?.let { File(it, "daemon/index.js") }
+            if (fromPlugin != null && fromPlugin.exists()) {
+                log.debug("Using bundled daemon from plugin path: ${fromPlugin.absolutePath}")
+                return fromPlugin
+            }
+
+            val codeSource = MoeProjectService::class.java.protectionDomain?.codeSource?.location?.toURI()
+            val jarFile = codeSource?.let { File(it) }
+            val inferredRoot = jarFile?.parentFile?.parentFile
+            val fromJar = inferredRoot?.let { File(it, "daemon/index.js") }
+            if (fromJar != null && fromJar.exists()) {
+                log.debug("Using bundled daemon from jar path: ${fromJar.absolutePath}")
+                return fromJar
+            }
+
+            null
+        } catch (ex: Exception) {
+            log.debug("Failed to resolve bundled daemon script: ${ex.message}")
+            null
+        }
     }
 
     private fun findInParents(start: File, relative: String, maxDepth: Int = 5): File? {

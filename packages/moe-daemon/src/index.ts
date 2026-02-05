@@ -14,6 +14,7 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { logger } from './util/logger.js';
+import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
 const VERSION = '0.1.0';
@@ -173,6 +174,43 @@ function removeDaemonInfo(projectPath: string): void {
   }
 }
 
+function writeGlobalConfig(): void {
+  try {
+    // Derive installPath: __dirname is packages/moe-daemon/dist, go up 3 levels
+    const installPath = path.resolve(__dirname, '..', '..', '..');
+    const canary = path.join(installPath, 'packages', 'moe-daemon', 'dist', 'index.js');
+    if (!fs.existsSync(canary)) {
+      // Not running from source tree (e.g. npm global install) — skip
+      return;
+    }
+    const moeHome = path.join(os.homedir(), '.moe');
+    if (!fs.existsSync(moeHome)) {
+      fs.mkdirSync(moeHome, { recursive: true });
+    }
+    const configPath = path.join(moeHome, 'config.json');
+    let existing: Record<string, unknown> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        existing = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      } catch {
+        // overwrite corrupt config
+      }
+    }
+    const config = {
+      ...existing,
+      installPath,
+      version: VERSION,
+      updatedAt: new Date().toISOString()
+    };
+    const tempPath = `${configPath}.tmp.${process.pid}`;
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2));
+    fs.renameSync(tempPath, configPath);
+    logger.debug({ installPath }, 'Wrote global config to ~/.moe/config.json');
+  } catch (error) {
+    logger.debug({ error }, 'Failed to write global config (non-fatal)');
+  }
+}
+
 async function startDaemon(projectPath: string, preferredPort?: number): Promise<void> {
   const existing = readDaemonInfo(projectPath);
   if (existing && isProcessAlive(existing.pid)) {
@@ -286,6 +324,9 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
 
   // Write daemon.json only after port is confirmed listening
   writeDaemonInfo(projectPath, info);
+
+  // Write global install config so other projects can find this installation
+  writeGlobalConfig();
 
   // Release lock now that daemon.json is written
   releaseLock(projectPath);
@@ -407,12 +448,31 @@ function statusDaemon(projectPath: string): void {
   }, 'Daemon status');
 }
 
-function initProject(projectPath: string, projectName?: string): void {
+type InitResult = {
+  alreadyInitialized: boolean;
+  projectPath: string;
+  projectId?: string;
+  name?: string;
+};
+
+function initProject(projectPath: string, projectName?: string): InitResult {
   const moePath = path.join(projectPath, '.moe');
 
   if (fs.existsSync(moePath)) {
-    logger.info({ projectPath }, 'Project already initialized (.moe folder exists)');
-    return;
+    let projectId: string | undefined;
+    let name: string | undefined;
+    const projectFile = path.join(moePath, 'project.json');
+    if (fs.existsSync(projectFile)) {
+      try {
+        const project = JSON.parse(fs.readFileSync(projectFile, 'utf-8'));
+        projectId = project?.id;
+        name = project?.name;
+      } catch {
+        // Ignore invalid project.json
+      }
+    }
+    logger.info({ projectPath, projectId, name }, 'Project already initialized (.moe folder exists)');
+    return { alreadyInitialized: true, projectPath, projectId, name };
   }
 
   // Create directory structure
@@ -458,7 +518,11 @@ function initProject(projectPath: string, projectName?: string): void {
   // Create empty activity.log
   fs.writeFileSync(path.join(moePath, 'activity.log'), '');
 
+  // Write global install config so other projects can find this installation
+  writeGlobalConfig();
+
   logger.info({ projectPath, projectId, name }, 'Project initialized');
+  return { alreadyInitialized: false, projectPath, projectId, name };
 }
 
 async function main() {
@@ -476,9 +540,11 @@ async function main() {
       break;
     case 'init':
       initProject(projectPath, name);
+      await startDaemon(projectPath, port);
       break;
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init] [--project <path>] [--port <port>] [--name <name>]');
+      logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }
 

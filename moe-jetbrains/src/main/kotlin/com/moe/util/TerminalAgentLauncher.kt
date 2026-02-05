@@ -2,6 +2,7 @@ package com.moe.util
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.SystemInfo
 import java.io.File
 import java.lang.reflect.Method
 
@@ -25,17 +26,35 @@ object TerminalAgentLauncher {
     // Cache for send command methods per widget class
     private val sendCommandMethodCache = mutableMapOf<Class<*>, Method?>()
     private val executeCommandMethodCache = mutableMapOf<Class<*>, Method?>()
+
+    private enum class ScriptSource {
+        PROJECT,
+        BUNDLED,
+        GLOBAL_CONFIG
+    }
+
+    private enum class ScriptKind {
+        POWERSHELL,
+        BASH
+    }
+
+    private data class ResolvedScript(
+        val file: File,
+        val source: ScriptSource,
+        val kind: ScriptKind
+    )
+
     fun startAgents(project: Project) {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
             return
         }
 
-        val script = File(basePath, "scripts/moe-agent.ps1")
-        if (!script.exists()) {
+        val script = resolveAgentScript(basePath)
+        if (script == null) {
             Messages.showErrorDialog(
                 project,
-                "Agent script not found: ${script.absolutePath}",
+                "Agent script not found. Install Moe and start the daemon once to register the install path.",
                 "Moe"
             )
             return
@@ -50,10 +69,19 @@ object TerminalAgentLauncher {
             return
         }
 
+        val envOverrides = resolveAgentEnvOverrides(script.source)
+        if (script.source != ScriptSource.PROJECT && envOverrides.isEmpty()) {
+            Messages.showErrorDialog(
+                project,
+                "Agent dependencies not found. Ensure Moe is installed and daemon/proxy are built.",
+                "Moe"
+            )
+            return
+        }
         val commands = listOf(
-            "Moe Planner" to buildCommand(basePath, "architect"),
-            "Moe Coder" to buildCommand(basePath, "worker"),
-            "Moe QA" to buildCommand(basePath, "qa")
+            "Moe Planner" to buildCommand(basePath, "architect", script, envOverrides),
+            "Moe Coder" to buildCommand(basePath, "worker", script, envOverrides),
+            "Moe QA" to buildCommand(basePath, "qa", script, envOverrides)
         )
 
         for ((tabName, command) in commands) {
@@ -72,9 +100,62 @@ object TerminalAgentLauncher {
         }
     }
 
-    private fun buildCommand(basePath: String, role: String): String {
-        val escapedPath = basePath.replace("\"", "\\\"")
-        return ".\\scripts\\moe-agent.ps1 -Role $role -Project \"$escapedPath\""
+    private fun buildCommand(
+        basePath: String,
+        role: String,
+        script: ResolvedScript,
+        envOverrides: Map<String, String>
+    ): String {
+        return when (script.kind) {
+            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides)
+        }
+    }
+
+    private fun buildPowerShellCommand(
+        basePath: String,
+        role: String,
+        script: File,
+        envOverrides: Map<String, String>
+    ): String {
+        val projectArg = psQuote(basePath)
+        val scriptArg = psQuote(script.absolutePath)
+        val envSet = if (envOverrides.isNotEmpty()) {
+            envOverrides.entries.joinToString("; ") { (key, value) ->
+                "\$env:$key=${psQuote(value)}"
+            } + "; "
+        } else {
+            ""
+        }
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg"
+        val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
+        return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
+    }
+
+    private fun buildBashCommand(
+        basePath: String,
+        role: String,
+        script: File,
+        envOverrides: Map<String, String>
+    ): String {
+        val projectArg = shQuote(basePath)
+        val scriptArg = shQuote(script.absolutePath)
+        val envPrefix = if (envOverrides.isNotEmpty()) {
+            envOverrides.entries.joinToString(" ") { (key, value) ->
+                "$key=${shQuote(value)}"
+            } + " "
+        } else {
+            ""
+        }
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg"
+    }
+
+    private fun psQuote(value: String): String {
+        return "'" + value.replace("'", "''") + "'"
+    }
+
+    private fun shQuote(value: String): String {
+        return "'" + value.replace("'", "'\"'\"'") + "'"
     }
 
     private fun resolveTerminalManager(project: Project): Any? {
@@ -127,5 +208,96 @@ object TerminalAgentLauncher {
             }
         }
         exec?.invoke(widget, command)
+    }
+
+    private fun resolveAgentScript(basePath: String): ResolvedScript? {
+        val preferred = if (SystemInfo.isWindows) {
+            listOf(
+                "scripts/moe-agent.ps1" to ScriptKind.POWERSHELL,
+                "scripts/moe-agent.sh" to ScriptKind.BASH
+            )
+        } else {
+            listOf(
+                "scripts/moe-agent.sh" to ScriptKind.BASH,
+                "scripts/moe-agent.ps1" to ScriptKind.POWERSHELL
+            )
+        }
+
+        for ((relative, kind) in preferred) {
+            val projectScript = File(basePath, relative)
+            if (projectScript.exists()) {
+                return ResolvedScript(projectScript, ScriptSource.PROJECT, kind)
+            }
+        }
+
+        for ((relative, kind) in preferred) {
+            val bundledScript = resolveBundledPath(relative)
+            if (bundledScript != null) {
+                return ResolvedScript(bundledScript, ScriptSource.BUNDLED, kind)
+            }
+        }
+
+        // Try global install config (~/.moe/config.json)
+        val installPath = MoeProjectRegistry.readGlobalInstallPath()
+        if (installPath != null) {
+            for ((relative, kind) in preferred) {
+                val candidate = File(installPath, relative)
+                if (candidate.exists()) {
+                    return ResolvedScript(candidate, ScriptSource.GLOBAL_CONFIG, kind)
+                }
+            }
+        }
+
+        return null
+    }
+
+    private fun resolveAgentEnvOverrides(source: ScriptSource): Map<String, String> {
+        if (source == ScriptSource.BUNDLED) {
+            val daemon = resolveBundledPath("daemon/index.js") ?: return emptyMap()
+            val proxy = resolveBundledPath("proxy/index.js") ?: return emptyMap()
+            return mapOf(
+                "MOE_DAEMON_PATH" to daemon.absolutePath,
+                "MOE_PROXY_PATH" to proxy.absolutePath
+            )
+        }
+        if (source == ScriptSource.GLOBAL_CONFIG) {
+            val installPath = MoeProjectRegistry.readGlobalInstallPath() ?: return emptyMap()
+            val daemon = File(installPath, "packages${File.separator}moe-daemon${File.separator}dist${File.separator}index.js")
+            val proxy = File(installPath, "packages${File.separator}moe-proxy${File.separator}dist${File.separator}index.js")
+            if (!daemon.exists() || !proxy.exists()) return emptyMap()
+            return mapOf(
+                "MOE_DAEMON_PATH" to daemon.absolutePath,
+                "MOE_PROXY_PATH" to proxy.absolutePath
+            )
+        }
+        return emptyMap()
+    }
+
+    private fun resolveBundledPath(relative: String): File? {
+        val root = resolveBundledRoot() ?: return null
+        val candidate = File(root, relative)
+        return if (candidate.exists()) candidate else null
+    }
+
+    private fun resolveBundledRoot(): File? {
+        return try {
+            val plugin = runCatching {
+                Class.forName("com.intellij.ide.plugins.PluginManagerCore")
+            }.getOrNull()
+            if (plugin != null) {
+                val pluginInstance = com.intellij.ide.plugins.PluginManagerCore.getPlugin(
+                    com.intellij.openapi.extensions.PluginId.getId("com.moe.jetbrains")
+                )
+                val pluginRoot = pluginInstance?.pluginPath?.toFile()
+                if (pluginRoot != null && pluginRoot.exists()) return pluginRoot
+            }
+
+            val codeSource = TerminalAgentLauncher::class.java.protectionDomain?.codeSource?.location?.toURI()
+            val jarFile = codeSource?.let { File(it) }
+            val inferredRoot = jarFile?.parentFile?.parentFile
+            if (inferredRoot != null && inferredRoot.exists()) inferredRoot else null
+        } catch (_: Exception) {
+            null
+        }
     }
 }

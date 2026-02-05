@@ -310,7 +310,9 @@ export class MoeWebSocketServer {
     try {
       const request = JSON.parse(raw);
       const response = await this.mcpAdapter.handle(request);
-      this.safeSend(ws, JSON.stringify(response));
+      if (response !== null) {
+        this.safeSend(ws, JSON.stringify(response));
+      }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Invalid MCP message';
       this.safeSend(

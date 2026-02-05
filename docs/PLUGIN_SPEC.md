@@ -17,7 +17,7 @@ This document describes what is implemented now and what is planned next.
   - Approve/Reject when status is AWAITING_APPROVAL
   - Reopen when status is REVIEW or DONE
 - Auto-initialize `.moe/` if missing
-- Auto-start daemon when a project opens (if available)
+- Auto-start daemon when a project opens (bundled daemon or installed command)
 
 ---
 
@@ -61,6 +61,7 @@ moe-jetbrains/
 
 ## Settings / Environment
 
+- The plugin prefers a bundled daemon (`daemon/index.js`) if present.
 - `MOE_DAEMON_COMMAND` can override how the plugin starts the daemon.
 - On Windows, the plugin also checks for installer shims under `Program Files\Moe\moe-daemon`.
 

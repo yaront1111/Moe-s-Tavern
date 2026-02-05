@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { notFound } from '../util/errors.js';
 
 export function completeTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -18,7 +19,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       const params = args as { taskId: string; prLink?: string; summary?: string };
       const task = state.getTask(params.taskId);
-      if (!task) throw new Error('TASK_NOT_FOUND');
+      if (!task) throw notFound('Task', params.taskId);
 
       const updated = await state.updateTask(
         task.id,

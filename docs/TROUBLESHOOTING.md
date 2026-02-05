@@ -110,6 +110,7 @@ node -e "require('./.moe/project.json')"
 ```bash
 node packages/moe-daemon/dist/index.js start --project /your/project
 ```
+`moe-daemon init --project /your/project` also starts the daemon.
 
 #### Wrong port
 

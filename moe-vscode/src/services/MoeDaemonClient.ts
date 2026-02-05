@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as net from 'net';
+import { spawn } from 'child_process';
 import WebSocket from 'ws';
 
 // Type definitions for Moe daemon communication.
@@ -55,10 +57,12 @@ function log(message: string): void {
 }
 
 export class MoeDaemonClient implements vscode.Disposable {
+    private readonly extensionPath: string;
     private ws: WebSocket | undefined;
     private _connectionState: ConnectionState = 'disconnected';
     private reconnectTimeout: NodeJS.Timeout | undefined;
     private pingInterval: NodeJS.Timeout | undefined;
+    private startInProgress = false;
 
     private readonly _onStateChanged = new vscode.EventEmitter<StateSnapshot>();
     public readonly onStateChanged = this._onStateChanged.event;
@@ -70,6 +74,10 @@ export class MoeDaemonClient implements vscode.Disposable {
     public readonly onTaskUpdated = this._onTaskUpdated.event;
 
     private state: StateSnapshot | undefined;
+
+    constructor(extensionPath: string) {
+        this.extensionPath = extensionPath;
+    }
 
     get connectionState(): ConnectionState {
         return this._connectionState;
@@ -84,6 +92,7 @@ export class MoeDaemonClient implements vscode.Disposable {
             return;
         }
 
+        await this.ensureDaemonRunning();
         const daemonInfo = await this.getDaemonInfo();
         if (!daemonInfo) {
             throw new Error('Daemon not running. Start daemon first.');
@@ -187,6 +196,156 @@ export class MoeDaemonClient implements vscode.Disposable {
         } catch {
             return undefined;
         }
+    }
+
+    private getWorkspacePath(): string | undefined {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            return undefined;
+        }
+        return workspaceFolders[0].uri.fsPath;
+    }
+
+    private resolveBundledDaemonPath(): string | undefined {
+        const candidate = path.join(this.extensionPath, 'bundled', 'daemon', 'index.js');
+        return fs.existsSync(candidate) ? candidate : undefined;
+    }
+
+    private resolveGlobalConfigDaemonPath(): string | undefined {
+        try {
+            const homedir = process.env.HOME || process.env.USERPROFILE || '';
+            const configPath = path.join(homedir, '.moe', 'config.json');
+            if (!fs.existsSync(configPath)) { return undefined; }
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            const installPath = config?.installPath;
+            if (!installPath) { return undefined; }
+            const candidate = path.join(installPath, 'packages', 'moe-daemon', 'dist', 'index.js');
+            if (!fs.existsSync(candidate)) { return undefined; }
+            log(`Resolved daemon from global config: ${candidate}`);
+            return candidate;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async ensureDaemonRunning(): Promise<void> {
+        const config = vscode.workspace.getConfiguration('moe');
+        const autoStart = config.get<boolean>('daemon.autoStart', true);
+        if (!autoStart) {
+            return;
+        }
+        const configPort = config.get<number>('daemon.port', 0);
+        if (configPort > 0) {
+            return;
+        }
+
+        const projectPath = this.getWorkspacePath();
+        if (!projectPath) {
+            return;
+        }
+
+        const moeDir = path.join(projectPath, '.moe');
+        const daemonInfoPath = path.join(moeDir, 'daemon.json');
+
+        if (!fs.existsSync(moeDir)) {
+            await this.startDaemon('init', projectPath);
+            return;
+        }
+
+        if (!fs.existsSync(daemonInfoPath)) {
+            await this.startDaemon('start', projectPath);
+            return;
+        }
+
+        try {
+            const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+            const daemonInfo = JSON.parse(content);
+            const host = config.get<string>('daemon.host', '127.0.0.1');
+            const port = Number(daemonInfo.port);
+            if (!Number.isNaN(port)) {
+                const open = await this.isPortOpen(host, port);
+                if (!open) {
+                    await this.startDaemon('start', projectPath);
+                }
+            }
+        } catch {
+            await this.startDaemon('start', projectPath);
+        }
+    }
+
+    private async startDaemon(command: 'init' | 'start', projectPath: string): Promise<void> {
+        if (this.startInProgress) {
+            return;
+        }
+        const daemonPath = this.resolveBundledDaemonPath() || this.resolveGlobalConfigDaemonPath();
+        if (!daemonPath) {
+            log('Daemon not found (bundled or global config). Cannot auto-start.');
+            return;
+        }
+
+        this.startInProgress = true;
+        try {
+            const node = process.env.MOE_NODE_COMMAND || 'node';
+            const args = [daemonPath, command, '--project', projectPath];
+            if (command === 'init') {
+                args.push('--name', path.basename(projectPath));
+            }
+            const proc = spawn(node, args, {
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: true
+            });
+            proc.unref();
+            log(`Started Moe daemon (${command}) for ${projectPath}`);
+            await this.waitForDaemonInfo(projectPath, 10000);
+        } catch (err) {
+            log(`Failed to start daemon: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            this.startInProgress = false;
+        }
+    }
+
+    private async waitForDaemonInfo(projectPath: string, timeoutMs: number): Promise<void> {
+        const config = vscode.workspace.getConfiguration('moe');
+        const host = config.get<string>('daemon.host', '127.0.0.1');
+        const daemonInfoPath = path.join(projectPath, '.moe', 'daemon.json');
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            if (fs.existsSync(daemonInfoPath)) {
+                try {
+                    const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+                    const daemonInfo = JSON.parse(content);
+                    const port = Number(daemonInfo.port);
+                    if (!Number.isNaN(port)) {
+                        const open = await this.isPortOpen(host, port);
+                        if (open) return;
+                    }
+                } catch {
+                    // keep waiting
+                }
+            }
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+    }
+
+    private async isPortOpen(host: string, port: number): Promise<boolean> {
+        return new Promise((resolve) => {
+            const socket = new net.Socket();
+            socket.setTimeout(200);
+            socket.once('connect', () => {
+                socket.destroy();
+                resolve(true);
+            });
+            socket.once('error', () => {
+                socket.destroy();
+                resolve(false);
+            });
+            socket.once('timeout', () => {
+                socket.destroy();
+                resolve(false);
+            });
+            socket.connect(port, host);
+        });
     }
 
     private handleMessage(data: string): void {

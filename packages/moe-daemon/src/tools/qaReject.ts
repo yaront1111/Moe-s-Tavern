@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
 
 export function qaRejectTool(_state: StateManager): ToolDefinition {
   return {
@@ -21,28 +22,26 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as { taskId?: string; reason?: string };
 
       if (!params.taskId) {
-        throw new Error('taskId is required');
+        throw missingRequired('taskId');
       }
 
       if (!params.reason || params.reason.trim().length === 0) {
-        throw new Error('reason is required - explain which DoD items failed and why');
+        throw missingRequired('reason');
       }
 
       // Validate reason length to prevent excessive data storage
       const MAX_REASON_LENGTH = 2000;
       if (params.reason.length > MAX_REASON_LENGTH) {
-        throw new Error(`reason too long (${params.reason.length} chars). Maximum ${MAX_REASON_LENGTH} characters allowed.`);
+        throw invalidInput('reason', `too long (${params.reason.length} chars). Maximum ${MAX_REASON_LENGTH} characters allowed.`);
       }
 
       const task = state.getTask(params.taskId);
       if (!task) {
-        throw new Error(`Task not found: ${params.taskId}`);
+        throw notFound('Task', params.taskId);
       }
 
       if (task.status !== 'REVIEW') {
-        throw new Error(
-          `Task must be in REVIEW status to reject. Current status: ${task.status}`
-        );
+        throw invalidState('Task', task.status, 'REVIEW');
       }
 
       const updated = await state.updateTask(

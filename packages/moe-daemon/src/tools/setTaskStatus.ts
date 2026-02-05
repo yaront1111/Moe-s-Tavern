@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
+import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 
 /**
  * Valid task statuses for validation.
@@ -53,30 +54,28 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       const params = (args || {}) as { taskId?: string; status?: string; reason?: string };
       if (!params.taskId) {
-        throw new Error('taskId is required');
+        throw missingRequired('taskId');
       }
       if (!params.status) {
-        throw new Error('status is required');
+        throw missingRequired('status');
       }
 
       // Validate status is a known value
       if (!VALID_STATUSES.includes(params.status as TaskStatus)) {
-        throw new Error(
-          `Invalid status: ${params.status}. Valid statuses are: ${VALID_STATUSES.join(', ')}`
-        );
+        throw invalidInput('status', `${params.status} is not valid. Valid statuses are: ${VALID_STATUSES.join(', ')}`);
       }
 
       const task = state.getTask(params.taskId);
       if (!task) {
-        throw new Error(`Task not found: ${params.taskId}`);
+        throw notFound('Task', params.taskId);
       }
 
       // Validate status transition
       const newStatus = params.status as TaskStatus;
       if (!isValidTransition(task.status, newStatus)) {
-        throw new Error(
-          `Invalid status transition: ${task.status} -> ${newStatus}. ` +
-          `Allowed transitions from ${task.status}: ${VALID_TRANSITIONS[task.status].join(', ')}`
+        throw notAllowed(
+          'status transition',
+          `${task.status} -> ${newStatus}. Allowed transitions from ${task.status}: ${VALID_TRANSITIONS[task.status].join(', ')}`
         );
       }
 

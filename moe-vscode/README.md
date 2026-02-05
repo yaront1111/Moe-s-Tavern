@@ -12,15 +12,17 @@ Visual task board for AI agent orchestration with human oversight.
 
 ## Requirements
 
-- [Moe daemon](https://github.com/yaront1111/Moe-s-Tavern) running on your project
-- Project with `.moe/` folder initialized
+- Node.js 18+
+- Project with `.moe/` folder initialized (or run `Moe: Connect to Daemon` to auto-init)
 
 ## Getting Started
 
 1. Install the extension from VS Code Marketplace
 2. Open a project with `.moe/` folder
-3. The extension auto-connects to the daemon
+3. The extension auto-starts and connects to the daemon (if enabled)
 4. View the task board in the Moe sidebar
+
+Tip: If the project is not initialized yet, run `Moe: Connect to Daemon` to auto-create `.moe/`.
 
 ## Extension Settings
 
@@ -28,6 +30,7 @@ Visual task board for AI agent orchestration with human oversight.
 |---------|---------|-------------|
 | `moe.daemon.host` | `127.0.0.1` | Daemon host address |
 | `moe.daemon.port` | `0` | Daemon port (0 = auto-detect) |
+| `moe.daemon.autoStart` | `true` | Auto-start the daemon when needed |
 | `moe.autoConnect` | `true` | Auto-connect when workspace has .moe |
 
 ## Commands

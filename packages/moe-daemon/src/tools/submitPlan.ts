@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { checkPlanRails } from '../util/rails.js';
+import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 
 export function submitPlanTool(_state: StateManager): ToolDefinition {
   return {
@@ -33,38 +34,38 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       };
 
       const task = state.getTask(params.taskId);
-      if (!task) throw new Error('TASK_NOT_FOUND');
+      if (!task) throw notFound('Task', params.taskId);
 
       if (task.status !== 'PLANNING') {
-        throw new Error('INVALID_STATUS');
+        throw invalidState('Task', task.status, 'PLANNING');
       }
 
       if (!params.steps || params.steps.length === 0) {
-        throw new Error('EMPTY_PLAN');
+        throw invalidInput('steps', 'plan cannot be empty');
       }
 
       // Validate step count bounds
       if (params.steps.length > 100) {
-        throw new Error('TOO_MANY_STEPS: Maximum 100 steps allowed');
+        throw invalidInput('steps', 'maximum 100 steps allowed');
       }
 
       // Validate each step has a non-empty description
       for (let i = 0; i < params.steps.length; i++) {
         const step = params.steps[i];
         if (!step.description || typeof step.description !== 'string' || step.description.trim().length === 0) {
-          throw new Error(`INVALID_STEP: Step ${i + 1} has empty description`);
+          throw invalidInput('steps', `Step ${i + 1} has empty description`);
         }
         if (step.description.length > 2000) {
-          throw new Error(`INVALID_STEP: Step ${i + 1} description too long (max 2000 chars)`);
+          throw invalidInput('steps', `Step ${i + 1} description too long (max 2000 chars)`);
         }
         if (step.affectedFiles && step.affectedFiles.length > 50) {
-          throw new Error(`INVALID_STEP: Step ${i + 1} has too many affected files (max 50)`);
+          throw invalidInput('steps', `Step ${i + 1} has too many affected files (max 50)`);
         }
       }
 
       const epic = state.getEpic(task.epicId);
       const project = state.project;
-      if (!project) throw new Error('PROJECT_NOT_FOUND');
+      if (!project) throw notFound('Project', 'current');
 
       const planText = params.steps
         .map((step) => `${step.description} ${(step.affectedFiles || []).join(' ')}`)
@@ -72,9 +73,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
       const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
       if (!railsCheck.ok) {
-        const err = new Error('RAIL_VIOLATION');
-        (err as Error & { details?: unknown }).details = railsCheck.violation;
-        throw err;
+        throw new MoeError(MoeErrorCode.CONSTRAINT_VIOLATION, 'Rail violation', { violation: railsCheck.violation });
       }
 
       const implementationPlan = params.steps.map((step, idx) => ({

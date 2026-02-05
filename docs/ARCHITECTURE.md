@@ -77,7 +77,7 @@ moe-jetbrains/
 Key behaviors:
 - Connects to daemon WebSocket at `/ws` (port from `.moe/daemon.json`).
 - Auto-initializes `.moe` on first connect if missing.
-- Auto-starts daemon using `MOE_DAEMON_COMMAND` when available.
+- Auto-starts daemon using bundled daemon (if present) or `MOE_DAEMON_COMMAND`/installer shims.
 - UI is Swing-based; no JCEF/webview.
 
 ### 2) Moe Daemon (Node.js/TypeScript)

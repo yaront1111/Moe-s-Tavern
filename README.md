@@ -97,7 +97,8 @@ moe-daemon init
 moe-daemon init --project /path/to/project --name "My Project"
 ```
 
-This creates the `.moe/` folder structure with project settings.
+This creates the `.moe/` folder structure with project settings and starts the daemon.
+Stop it with `Ctrl+C` or `moe-daemon stop --project /path/to/project` if you only want initialization.
 
 ### Run Your First Agent
 
@@ -130,12 +131,20 @@ The plugin provides a visual Kanban board inside your IDE (IntelliJ IDEA, PyChar
 
 **Mac / Linux:**
 ```bash
+cd packages/moe-daemon
+npm install
+npm run build
+
 cd moe-jetbrains
 ./gradlew buildPlugin
 ```
 
 **Windows:**
 ```powershell
+cd packages\moe-daemon
+npm install
+npm run build
+
 cd moe-jetbrains
 .\gradlew.bat buildPlugin
 ```
@@ -177,7 +186,7 @@ Extract the zip contents to a `moe-jetbrains` folder in the plugins directory, t
 
 1. Open a project in your JetBrains IDE
 2. The Moe tool window appears in the right sidebar
-3. Click **Connect** to start the daemon and connect
+3. The plugin auto-starts the daemon (bundled with the plugin) and connects
 4. Create epics and tasks using the toolbar buttons
 5. AI agents will claim tasks and submit plans for your approval
 

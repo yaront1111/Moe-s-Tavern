@@ -58,6 +58,11 @@ moe-daemon init
 moe-daemon init --project /path/to/project --name "My Project"
 ```
 
+`init` starts the daemon and keeps running. Stop it with `Ctrl+C` or:
+```bash
+moe-daemon stop --project /path/to/project
+```
+
 ---
 
 ## Run an Agent
@@ -93,6 +98,7 @@ Use this checklist to verify your installation works correctly.
 ### Daemon
 
 - [ ] `moe-daemon init --project ~/test-project` creates `.moe/` folder
+- [ ] `moe-daemon init --project ~/test-project` starts the daemon
 - [ ] `.moe/project.json` exists with correct structure
 - [ ] `moe-daemon start --project ~/test-project` starts without errors
 - [ ] `curl http://localhost:3141/health` returns healthy status

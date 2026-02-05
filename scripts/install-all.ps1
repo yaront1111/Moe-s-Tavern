@@ -115,6 +115,19 @@ if ($shouldInstallPlugin) {
     Write-Host "Restart PyCharm to load the plugin."
 }
 
+# Write global install config (~/.moe/config.json)
+$moeHome = Join-Path $env:USERPROFILE ".moe"
+if (-not (Test-Path $moeHome)) {
+    New-Item -ItemType Directory -Path $moeHome | Out-Null
+}
+$globalConfig = @{
+    installPath = $root
+    version = "0.1.0"
+    updatedAt = (Get-Date -Format "o")
+}
+$globalConfig | ConvertTo-Json | Set-Content -Path (Join-Path $moeHome "config.json") -Encoding UTF8
+Write-Host "Wrote global config to $moeHome\config.json"
+
 Write-Host "Done."
 Write-Host "Next steps:"
 Write-Host "1) Start daemon: node packages/moe-daemon/dist/index.js start --project <path>"

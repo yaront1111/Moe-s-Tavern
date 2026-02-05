@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { EpicStatus } from '../types/schema.js';
+import { missingRequired } from '../util/errors.js';
 
 export function updateEpicTool(_state: StateManager): ToolDefinition {
   return {
@@ -32,7 +33,7 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
       };
 
       if (!params.epicId) {
-        throw new Error('epicId is required');
+        throw missingRequired('epicId');
       }
 
       const updates: Partial<{
