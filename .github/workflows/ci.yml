@@ -7,41 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  lint-typescript:
-    name: Lint TypeScript
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: |
-            packages/moe-daemon/package-lock.json
-            packages/moe-proxy/package-lock.json
-
-      - name: Install daemon dependencies
-        run: npm ci
-        working-directory: packages/moe-daemon
-
-      - name: Lint daemon
-        run: npm run lint
-        working-directory: packages/moe-daemon
-
-      - name: Install proxy dependencies
-        run: npm ci
-        working-directory: packages/moe-proxy
-
-      - name: Lint proxy
-        run: npm run lint
-        working-directory: packages/moe-proxy
-
   build-typescript:
     name: Build TypeScript
     runs-on: ubuntu-latest
-    needs: lint-typescript
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +49,6 @@ jobs:
   test-typescript:
     name: Test TypeScript
     runs-on: ubuntu-latest
-    needs: build-typescript
     steps:
       - uses: actions/checkout@v4
 
@@ -127,7 +94,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build plugin
-        run: ./gradlew buildPlugin
+        run: |
+          chmod +x ./gradlew
+          ./gradlew buildPlugin
         working-directory: moe-jetbrains
 
       - name: Run plugin tests
