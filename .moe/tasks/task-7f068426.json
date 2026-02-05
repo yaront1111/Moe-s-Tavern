@@ -1,0 +1,76 @@
+{
+  "id": "task-7f068426",
+  "epicId": "epic-daemon",
+  "title": "Add task priority field and priority-based claiming",
+  "description": "Add a priority field to tasks so agents pick higher-priority tasks first when claiming via moe.claim_next_task. Currently tasks are claimed by order field only. Priority should be a simple numeric or enum system (e.g., CRITICAL/HIGH/MEDIUM/LOW or numeric 1-4) that overrides order when agents claim tasks.",
+  "definitionOfDone": [
+    "Task schema includes a priority field",
+    "createTask and updateTask accept priority",
+    "claimNextTask sorts by priority first, then by order",
+    "Plugin UI shows task priority",
+    "Plugin UI allows setting priority on task creation and edit"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add TaskPriority type and priority field to daemon schema and StateManager. In schema.ts, add: `export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';` and add `priority: TaskPriority;` to the Task interface (after `order`). Use numeric weight mapping: CRITICAL=0, HIGH=1, MEDIUM=2, LOW=3 (lower=higher priority). In StateManager.createTask() (line 318), default to `priority: input.priority || 'MEDIUM'`. In normalizeTask(), add fallback: `priority: raw.priority || 'MEDIUM'` so existing tasks get MEDIUM by default. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T22:39:53.225Z",
+      "completedAt": "2026-02-05T22:43:46.009Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update MCP tools to support priority. In createTask.ts, add `priority` to inputSchema with `enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']` and pass it through to StateManager. In claimNextTask.ts line 69, change sort from `a.order - b.order` to: `const PRIORITY_WEIGHT = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }; sort by PRIORITY_WEIGHT[a.priority] - PRIORITY_WEIGHT[b.priority] first, then a.order - b.order as tiebreaker`. In listTasks.ts, searchTasks.ts, and getContext.ts, include `priority` in the task response objects. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/listTasks.ts",
+        "packages/moe-daemon/src/tools/searchTasks.ts",
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "startedAt": "2026-02-05T22:43:48.688Z",
+      "completedAt": "2026-02-05T22:45:17.870Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update plugin Task model and service. In Models.kt, add `val priority: String = \"MEDIUM\"` to the Task data class. In MoeProjectService.kt, include `priority` in CREATE_TASK and UPDATE_TASK message payloads when provided.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-05T22:45:20.718Z",
+      "completedAt": "2026-02-05T22:46:13.939Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update plugin UI to show and set priority. In TaskCard.kt, add a small colored priority chip next to the title (CRITICAL=red, HIGH=orange, MEDIUM=blue, LOW=gray; skip chip for MEDIUM to reduce visual noise). In CreateTaskDialog.kt, add a priority ComboBox dropdown (CRITICAL/HIGH/MEDIUM/LOW, default MEDIUM) between the epic selector and title field. In TaskDetailDialog.kt, show current priority and allow changing it via dropdown. Add bundle strings to MoeBundle.properties: moe.label.priority, moe.priority.critical, moe.priority.high, moe.priority.medium, moe.priority.low.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/CreateTaskDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-05T22:46:17.078Z",
+      "completedAt": "2026-02-05T22:47:38.704Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 18,
+  "createdAt": "2026-02-05T22:37:05.561Z",
+  "updatedAt": "2026-02-05T23:23:55.746Z"
+}

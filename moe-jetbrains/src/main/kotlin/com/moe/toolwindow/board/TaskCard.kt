@@ -4,6 +4,7 @@ import com.moe.model.Task
 import com.moe.util.MoeBundle
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
@@ -59,6 +60,24 @@ class TaskCard(
 
         if (!epicTitle.isNullOrBlank()) {
             meta.add(chip(epicTitle))
+        }
+
+        // Priority chip (skip MEDIUM to reduce noise)
+        if (task.priority != "MEDIUM") {
+            val priorityColor = when (task.priority) {
+                "CRITICAL" -> JBColor(java.awt.Color(220, 53, 69), java.awt.Color(255, 80, 80))
+                "HIGH" -> JBColor(java.awt.Color(255, 152, 0), java.awt.Color(255, 183, 77))
+                "LOW" -> JBColor(java.awt.Color(158, 158, 158), java.awt.Color(120, 120, 120))
+                else -> BoardStyles.textSecondary
+            }
+            val priorityLabel = task.priority.lowercase().replaceFirstChar { it.uppercase() }
+            meta.add(JBLabel(priorityLabel).apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont()
+                foreground = java.awt.Color.WHITE
+                background = priorityColor
+            })
         }
 
         if (task.status != columnStatus) {

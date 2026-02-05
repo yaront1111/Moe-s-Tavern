@@ -14,6 +14,7 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { logger } from './util/logger.js';
+import { writeInitFiles } from './util/initFiles.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
@@ -504,7 +505,8 @@ function initProject(projectPath: string, projectName?: string): InitResult {
       speedModeDelayMs: 2000,
       autoCreateBranch: true,
       branchPattern: 'moe/{epicId}/{taskId}',
-      commitPattern: 'feat({epicId}): {taskTitle}'
+      commitPattern: 'feat({epicId}): {taskTitle}',
+      agentCommand: 'claude'
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -517,6 +519,9 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 
   // Create empty activity.log
   fs.writeFileSync(path.join(moePath, 'activity.log'), '');
+
+  // Write role docs and .gitignore
+  writeInitFiles(moePath);
 
   // Write global install config so other projects can find this installation
   writeGlobalConfig();

@@ -13,6 +13,7 @@ import type {
   ProjectSettings,
   RailProposal,
   Task,
+  TaskPriority,
   Worker
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
@@ -221,6 +222,12 @@ export class StateManager {
 
       this.epics = this.loadEntities<Epic>(path.join(this.moePath, 'epics'));
       this.tasks = this.loadEntities<Task>(path.join(this.moePath, 'tasks'));
+      // Backfill priority for existing tasks that predate the priority field
+      for (const [id, task] of this.tasks) {
+        if (!task.priority) {
+          this.tasks.set(id, { ...task, priority: 'MEDIUM' as TaskPriority });
+        }
+      }
       this.workers = this.loadEntities<Worker>(path.join(this.moePath, 'workers'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
 
@@ -323,6 +330,7 @@ export class StateManager {
       reopenReason: input.reopenReason || null,
       createdBy: input.createdBy === 'WORKER' ? 'WORKER' : 'HUMAN',
       parentTaskId: input.parentTaskId || null,
+      priority: (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(input.priority as string) ? input.priority : 'MEDIUM') as TaskPriority,
       order: input.order ?? this.nextTaskOrder(input.epicId),
       createdAt: now,
       updatedAt: now
@@ -492,6 +500,9 @@ export class StateManager {
   async approveTask(taskId: string): Promise<Task> {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (task.status !== 'AWAITING_APPROVAL') {
+      throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
+    }
     const updated = await this.updateTask(taskId, { status: 'WORKING' }, 'PLAN_APPROVED');
     return updated;
   }
@@ -499,6 +510,9 @@ export class StateManager {
   async rejectTask(taskId: string, reason: string): Promise<Task> {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (task.status !== 'AWAITING_APPROVAL') {
+      throw new Error(`Cannot reject task in ${task.status} status, must be AWAITING_APPROVAL`);
+    }
     const updated = await this.updateTask(
       taskId,
       { status: 'PLANNING', reopenReason: reason },
@@ -510,6 +524,9 @@ export class StateManager {
   async reopenTask(taskId: string, reason: string): Promise<Task> {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (task.status !== 'DONE' && task.status !== 'REVIEW') {
+      throw new Error(`Cannot reopen task in ${task.status} status, must be DONE or REVIEW`);
+    }
     const updated = await this.updateTask(
       taskId,
       {
@@ -937,7 +954,8 @@ export class StateManager {
         speedModeDelayMs: sanitizeNumber(project.settings?.speedModeDelayMs, 2000, 0, 60000),
         autoCreateBranch: sanitizeBoolean(project.settings?.autoCreateBranch, true),
         branchPattern: sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
-        commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}')
+        commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
+        agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude')
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now

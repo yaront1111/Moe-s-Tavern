@@ -84,12 +84,15 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           .map(item => item.task);
       }
 
+      // Capture total before limiting
+      const totalMatches = results.length;
+
       // Apply limit
       results = results.slice(0, limit);
 
       return {
         tasks: results,
-        totalMatches: results.length,
+        totalMatches,
         query: params.query || null,
         filters
       };

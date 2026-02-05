@@ -81,7 +81,8 @@ if (-not (Test-Path $moeDir)) {
 
 $env:MOE_PROJECT_PATH = $projectPath
 if (-not $WorkerId) {
-    $WorkerId = "$Role"
+    $shortId = [guid]::NewGuid().ToString().Substring(0, 4)
+    $WorkerId = "$Role-$shortId"
 }
 $env:MOE_WORKER_ID = $WorkerId
 

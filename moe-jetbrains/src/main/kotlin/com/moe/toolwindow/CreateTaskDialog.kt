@@ -36,6 +36,7 @@ class CreateTaskDialog(
 ) : DialogWrapper(ideaProject), Disposable {
 
     private val epicCombo = ComboBox<EpicOption>()
+    private val priorityCombo = ComboBox(arrayOf("CRITICAL", "HIGH", "MEDIUM", "LOW"))
     private val titleField = JBTextField()
     private val descriptionField = JBTextArea()
     private val dodField = JBTextArea()
@@ -119,6 +120,11 @@ class CreateTaskDialog(
 
         panel.add(epicCombo)
         panel.add(epicErrorLabel)
+
+        panel.add(JBLabel(MoeBundle.message("moe.label.priority")))
+        priorityCombo.selectedItem = "MEDIUM"
+        priorityCombo.maximumSize = Dimension(520, priorityCombo.preferredSize.height)
+        panel.add(priorityCombo)
 
         panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
@@ -218,7 +224,8 @@ class CreateTaskDialog(
                     .filter { it.isNotEmpty() }
                     .toList()
 
-                service.createTask(selectedEpic.id, taskTitle, description, dod)
+                val priority = priorityCombo.selectedItem as? String ?: "MEDIUM"
+                service.createTask(selectedEpic.id, taskTitle, description, dod, priority)
                 close(OK_EXIT_CODE)
             }
         }

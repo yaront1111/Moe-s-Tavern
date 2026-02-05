@@ -1,6 +1,14 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import type { TaskPriority } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState } from '../util/errors.js';
+
+const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
+  CRITICAL: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  LOW: 3
+};
 
 /**
  * Simple mutex to serialize claim operations.
@@ -62,11 +70,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         const tasks = Array.from(state.tasks.values())
         .filter((t) => statuses.includes(t.status))
         .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
-        .filter((t) =>
-          // Use !t.assignedWorkerId to match both null and undefined
-          params.workerId ? !t.assignedWorkerId || t.assignedWorkerId === params.workerId : true
-        )
-        .sort((a, b) => a.order - b.order);
+        .filter((t) => !t.assignedWorkerId) // Only claim unassigned tasks
+        .sort((a, b) => {
+          const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+          const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+          if (pa !== pb) return pa - pb;
+          return a.order - b.order;
+        });
 
       const task = tasks[0];
       if (!task) {
@@ -75,7 +85,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
 
       // Enforce single worker per epic constraint - but allow different roles to work in parallel
       // Architects (claiming PLANNING) can work alongside workers (on WORKING)
-      if (params.workerId && task.assignedWorkerId !== params.workerId) {
+      if (params.workerId) {
         const tasksInEpic = Array.from(state.tasks.values())
           .filter((t) => t.epicId === task.epicId && t.assignedWorkerId && t.assignedWorkerId !== params.workerId);
 
@@ -127,6 +137,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           definitionOfDone: task.definitionOfDone,
           taskRails: task.taskRails,
           status: task.status,
+          priority: task.priority,
           assignedWorkerId: task.assignedWorkerId,
           implementationPlan: task.implementationPlan
         },

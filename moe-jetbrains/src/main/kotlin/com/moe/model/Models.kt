@@ -19,7 +19,8 @@ data class ProjectSettings(
     val speedModeDelayMs: Int = 2000,
     val autoCreateBranch: Boolean = true,
     val branchPattern: String = "moe/{epicId}/{taskId}",
-    val commitPattern: String = "feat({epicId}): {taskTitle}"
+    val commitPattern: String = "feat({epicId}): {taskTitle}",
+    val agentCommand: String = "claude"
 )
 
 data class Epic(
@@ -45,6 +46,7 @@ data class Task(
     val title: String,
     val description: String,
     val status: String,
+    val priority: String = "MEDIUM",
     val order: Double,
     val definitionOfDone: List<String>,
     val implementationPlan: List<ImplementationStep>,

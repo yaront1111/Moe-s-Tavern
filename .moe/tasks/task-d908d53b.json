@@ -1,0 +1,46 @@
+{
+  "id": "task-d908d53b",
+  "epicId": "epic-daemon",
+  "title": "[BUG] StateManager approve/reject/reopen methods accept tasks in any status",
+  "description": "StateManager.approveTask() (line 492) transitions to WORKING without checking task is AWAITING_APPROVAL. rejectTask() (line 499) transitions to PLANNING without checking AWAITING_APPROVAL. reopenTask() (line 510) transitions to BACKLOG without checking DONE/REVIEW. These are called by WebSocket handlers (WebSocketServer.ts:222-257) which also have no validation. Compare with setTaskStatus.ts which properly validates transitions, and qaApprove/qaReject which check status. Fix: Add status precondition checks to all three StateManager methods - approveTask requires AWAITING_APPROVAL, rejectTask requires AWAITING_APPROVAL, reopenTask requires DONE or REVIEW.",
+  "definitionOfDone": [
+    "approveTask throws if task.status !== 'AWAITING_APPROVAL'",
+    "rejectTask throws if task.status !== 'AWAITING_APPROVAL'",
+    "reopenTask throws if task.status is not DONE or REVIEW",
+    "WebSocket handlers return ERROR messages for invalid transitions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add status precondition checks to the three StateManager methods. In approveTask() (line 492), add: if (task.status !== 'AWAITING_APPROVAL') throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`). In rejectTask() (line 499), add same check. In reopenTask() (line 510), add: if (task.status !== 'DONE' && task.status !== 'REVIEW') throw new Error(`Cannot reopen task in ${task.status} status, must be DONE or REVIEW`). Validate constraints before state mutations. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-05T22:37:17.539Z",
+      "completedAt": "2026-02-05T22:37:41.734Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update WebSocket handlers in WebSocketServer.ts to catch errors from approve/reject/reopen and return proper ERROR messages to the plugin client. The existing try/catch in handlePluginMessage should already propagate these, but verify the error format matches what the plugin expects (type: 'ERROR', message: string).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-05T22:37:46.570Z",
+      "completedAt": "2026-02-05T22:38:15.383Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 16,
+  "createdAt": "2026-02-05T22:34:12.761Z",
+  "updatedAt": "2026-02-05T23:23:03.114Z"
+}

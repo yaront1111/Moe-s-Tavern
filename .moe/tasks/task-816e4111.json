@@ -1,0 +1,34 @@
+{
+  "id": "task-816e4111",
+  "epicId": "epic-daemon",
+  "title": "[BUG] searchTasks totalMatches reports post-limit count instead of actual total",
+  "description": "In searchTasks.ts, line 88 slices results to limit, then line 92 reports totalMatches: results.length (the truncated count). If 50 tasks match and limit=20, totalMatches incorrectly says 20. Fix: capture total count before slicing, return it as totalMatches.",
+  "definitionOfDone": [
+    "totalMatches reflects the count of all matching tasks before limit is applied",
+    "Returned tasks array is still limited by the limit parameter"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In searchTasks.ts, before line 88 (the slice), capture the total: `const totalMatches = results.length;`. Then on line 92, use `totalMatches` instead of `results.length`. This ensures the returned count reflects all matching tasks before the limit is applied. Validate constraints before state mutations - the limit parameter constrains output size, not match counting.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.ts"
+      ],
+      "startedAt": "2026-02-05T22:34:03.504Z",
+      "completedAt": "2026-02-05T22:34:13.472Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 15,
+  "createdAt": "2026-02-05T22:24:01.838Z",
+  "updatedAt": "2026-02-05T22:34:58.449Z"
+}

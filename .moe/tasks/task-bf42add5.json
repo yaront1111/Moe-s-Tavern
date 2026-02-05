@@ -1,0 +1,66 @@
+{
+  "id": "task-bf42add5",
+  "epicId": "epic-daemon",
+  "title": "[BUG] Two agents with same role claim the same task - workerIds not unique",
+  "description": "When multiple agents share the same workerId (e.g., two workers both using workerId:\"worker\"), claimNextTask returns the same task to both.\n\nRoot cause in claimNextTask.ts:\n- Line 73-75: Filter includes tasks where assignedWorkerId === params.workerId (intended for reclaim after crash, but allows duplicate claims)\n- Line 91: Assignment block is skipped when task.assignedWorkerId === params.workerId\n- Agent scripts (moe-agent.ps1 line ~85, moe-agent.sh) default workerId to role name, so all workers share \"worker\"\n\nFix requires two changes:\n1. Agent scripts: Generate unique workerIds per instance (e.g., \"worker-{short-uuid}\" or \"worker-{pid}\")\n2. claimNextTask.ts: Tighten filter - exclude already-assigned tasks by default. Only allow reclaiming own task if task has no active progress (or with explicit replaceExisting:true)",
+  "definitionOfDone": [
+    "Agent scripts generate unique workerIds per instance (not just role name)",
+    "Two worker agents launched simultaneously claim different tasks",
+    "A crashed agent restarting with a new workerId can claim a new task",
+    "claimNextTask does not return tasks already assigned to a different agent instance"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix claimNextTask.ts filter logic. Change line 73-75 filter to EXCLUDE already-assigned tasks entirely: `.filter((t) => !t.assignedWorkerId)`. Remove the `|| t.assignedWorkerId === params.workerId` exception. If a worker needs to reclaim their own task (crash recovery), they should use `replaceExisting: true`. Update the assignment block (line 91) accordingly - always assign when workerId is provided and task is unassigned. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-02-05T23:26:31.669Z",
+      "completedAt": "2026-02-05T23:27:00.038Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update moe-agent.ps1 to generate unique workerIds. Change the default WorkerId from just the role name to `{role}-{short-id}`, e.g., `worker-a1b2`. Use a short random suffix: `$shortId = -join ((65..90) + (97..122) | Get-Random -Count 4 | ForEach-Object {[char]$_})` or use `[guid]::NewGuid().ToString().Substring(0,4)`. Apply at the line where $WorkerId defaults to $Role (around line 85). Keep the -WorkerId parameter so users can still override with a custom ID.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-05T23:27:03.838Z",
+      "completedAt": "2026-02-05T23:27:14.744Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update moe-agent.sh to generate unique workerIds. Change the default WORKER_ID from just $ROLE to `${ROLE}-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \\n' | head -c 4)` or similar short random suffix. Apply at the line where WORKER_ID defaults to ROLE. Keep the --worker-id flag so users can still override.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-05T23:27:18.636Z",
+      "completedAt": "2026-02-05T23:27:31.571Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update TerminalAgentLauncher.kt to pass unique workerIds when launching agents. In the commands list (line 81-84), append a unique suffix to each role name: e.g., `architect-${shortId}`, `worker-${shortId}`, `qa-${shortId}` where shortId is generated per launch via `UUID.randomUUID().toString().substring(0, 4)`. Pass it via the -WorkerId / --worker-id flag in buildCommand().",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-05T23:27:35.443Z",
+      "completedAt": "2026-02-05T23:28:10.696Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 20,
+  "createdAt": "2026-02-05T23:25:47.796Z",
+  "updatedAt": "2026-02-05T23:29:06.418Z"
+}

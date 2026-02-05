@@ -1,0 +1,46 @@
+{
+  "id": "task-b989f43b",
+  "epicId": "epic-daemon",
+  "title": "[BUG] startStep/completeStep allow modifications on non-WORKING tasks",
+  "description": "completeStep.ts has no guard that task.status === 'WORKING' before marking a step completed. Steps can be completed on DONE or REVIEW tasks, corrupting the audit trail. Similarly, startStep.ts does not validate the step is PENDING before transitioning to IN_PROGRESS, allowing overwrite of startedAt on already-started or completed steps. Fix: Add task status check (must be WORKING) to both tools. Add step state check (must be PENDING for startStep, must not be COMPLETED for completeStep).",
+  "definitionOfDone": [
+    "completeStep rejects calls when task.status !== 'WORKING'",
+    "startStep rejects calls when task.status !== 'WORKING'",
+    "startStep rejects calls when step.status !== 'PENDING'",
+    "completeStep rejects calls when step.status === 'COMPLETED'"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In startStep.ts, after retrieving the task (line 20-21), add a guard: if task.status !== 'WORKING', throw invalidState('Task', task.status, 'WORKING'). After finding the step (line 27-28), add a guard: if step.status !== 'PENDING', throw invalidState('Step', step.status, 'PENDING'). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts"
+      ],
+      "startedAt": "2026-02-05T22:33:09.947Z",
+      "completedAt": "2026-02-05T22:33:25.548Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In completeStep.ts, after retrieving the task (line 28-29), add a guard: if task.status !== 'WORKING', throw invalidState('Task', task.status, 'WORKING'). After finding the step (line 35-36), add a guard: if step.status === 'COMPLETED', throw invalidState('Step', 'COMPLETED', 'PENDING or IN_PROGRESS'). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "startedAt": "2026-02-05T22:33:29.492Z",
+      "completedAt": "2026-02-05T22:33:48.428Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 14,
+  "createdAt": "2026-02-05T22:24:01.797Z",
+  "updatedAt": "2026-02-05T22:34:44.662Z"
+}

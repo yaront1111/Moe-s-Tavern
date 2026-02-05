@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { writeInitFiles } from '../util/initFiles.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
   return {
@@ -76,7 +77,8 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
           speedModeDelayMs: 2000,
           autoCreateBranch: true,
           branchPattern: 'moe/{epicId}/{taskId}',
-          commitPattern: 'feat({epicId}): {taskTitle}'
+          commitPattern: 'feat({epicId}): {taskTitle}',
+          agentCommand: 'claude'
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -89,6 +91,9 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
 
       // Create empty activity.log
       fs.writeFileSync(path.join(moePath, 'activity.log'), '');
+
+      // Write role docs and .gitignore
+      writeInitFiles(moePath);
 
       return {
         success: true,

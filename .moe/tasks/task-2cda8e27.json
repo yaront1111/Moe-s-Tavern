@@ -2,13 +2,65 @@
   "id": "task-2cda8e27",
   "epicId": "epic-settings",
   "title": "allow choosing codex agent",
-  "description": "",
+  "description": "we want to be able to start also codex agent and not claude",
   "definitionOfDone": [
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add agentCommand field to daemon ProjectSettings type in schema.ts. Default value: 'claude'. This is a free-text string so users can specify 'claude', 'codex', 'gemini', or a custom CLI path. Settings changes go through daemon, never write directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-05T22:11:44.613Z",
+      "completedAt": "2026-02-05T22:16:53.077Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add agentCommand field to JetBrains ProjectSettings model in Models.kt with default 'claude'. Settings changes go through daemon, never write directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "startedAt": "2026-02-05T22:16:56.834Z",
+      "completedAt": "2026-02-05T22:17:05.354Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add agent command selector to MoeSettingsDialog.kt - an editable ComboBox with preset options ('claude', 'codex', 'gemini') that also accepts custom input. Add corresponding localization strings to MoeBundle.properties. Use standard IntelliJ keyboard shortcut conventions for the dialog. Settings changes go through daemon, never write directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-05T22:17:08.822Z",
+      "completedAt": "2026-02-05T22:17:51.758Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update TerminalAgentLauncher to read agentCommand from project settings and pass it as -Command (PowerShell) or --command (Bash) argument when building agent launch commands. Fall back to 'claude' if not set. Settings changes go through daemon, never write directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-05T22:17:55.526Z",
+      "completedAt": "2026-02-05T22:19:08.015Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add moe.agentCommand setting to VSCode extension package.json configuration with default 'claude' and description explaining supported values (claude, codex, gemini, or custom CLI path). Settings changes go through daemon, never write directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-05T22:19:12.287Z",
+      "completedAt": "2026-02-05T22:19:22.035Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -18,5 +70,5 @@
   "parentTaskId": null,
   "order": 1,
   "createdAt": "2026-02-05T15:14:44.481Z",
-  "updatedAt": "2026-02-05T20:40:06.523Z"
+  "updatedAt": "2026-02-05T22:24:51.420Z"
 }

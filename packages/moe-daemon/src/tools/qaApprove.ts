@@ -34,7 +34,7 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const updated = await state.updateTask(
         params.taskId,
         { status: 'DONE' },
-        'TASK_COMPLETED'
+        'QA_APPROVED'
       );
 
       return {

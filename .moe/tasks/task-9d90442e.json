@@ -1,0 +1,47 @@
+{
+  "id": "task-9d90442e",
+  "epicId": "epic-daemon",
+  "title": "[BUG] createTask and proposeRail accept invalid enum values",
+  "description": "createTask.ts:18 declares status as plain string without enum, and handler (line 52) passes any value through. An MCP client can create tasks with invalid statuses. proposeRail.ts:14-15 declares proposalType and targetScope as plain strings without enum. Handler casts without validation (line 24-31). Compare with setTaskStatus.ts which uses enum in inputSchema AND validates in handler. Fix: Add enum constraints to inputSchema for createTask.status (BACKLOG|PLANNING|AWAITING_APPROVAL|WORKING|REVIEW|DONE), proposeRail.proposalType (ADD_RAIL|MODIFY_RAIL|REMOVE_RAIL), and proposeRail.targetScope (GLOBAL|EPIC|TASK). Add runtime validation in handlers matching setTaskStatus pattern.",
+  "definitionOfDone": [
+    "createTask inputSchema has enum for status matching TaskStatus",
+    "createTask handler validates status before passing to StateManager",
+    "proposeRail inputSchema has enum for proposalType matching ProposalType",
+    "proposeRail inputSchema has enum for targetScope matching valid scopes",
+    "proposeRail handler validates both enums before creating proposal"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In createTask.ts, add enum constraint to the status property in inputSchema (line 18): enum: ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'DONE']. In the handler, after params extraction (line 37), add validation: if params.status is provided and not in the valid list, throw invalidInput (import from util/errors.ts, matching setTaskStatus.ts pattern at line 64-66). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ],
+      "startedAt": "2026-02-05T22:38:37.495Z",
+      "completedAt": "2026-02-05T22:39:01.382Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In proposeRail.ts, add enum constraints to inputSchema: proposalType (line 14) gets enum: ['ADD_RAIL', 'MODIFY_RAIL', 'REMOVE_RAIL']. targetScope (line 15) gets enum: ['GLOBAL', 'EPIC', 'TASK']. In the handler, after params extraction (line 31), add runtime validation for both fields using invalidInput error (import from util/errors.ts). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/proposeRail.ts"
+      ],
+      "startedAt": "2026-02-05T22:39:05.601Z",
+      "completedAt": "2026-02-05T22:39:36.465Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 17,
+  "createdAt": "2026-02-05T22:34:18.140Z",
+  "updatedAt": "2026-02-05T23:23:20.836Z"
+}

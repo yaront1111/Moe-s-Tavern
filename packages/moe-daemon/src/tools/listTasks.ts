@@ -47,6 +47,7 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
           id: string;
           title: string;
           status: string;
+          priority: string;
           order: number;
           hasWorker: boolean;
           reopenCount: number;
@@ -60,6 +61,7 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
           id: t.id,
           title: t.title,
           status: t.status,
+          priority: t.priority,
           order: t.order,
           hasWorker: Boolean(t.assignedWorkerId),
           reopenCount: t.reopenCount
