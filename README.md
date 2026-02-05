@@ -19,6 +19,7 @@
 </p>
 
 ---
+![134051250314850654](https://github.com/user-attachments/assets/af3bb64a-5e9b-49d9-8707-80087b99dcf1)
 
 ## Why Moe?
 
