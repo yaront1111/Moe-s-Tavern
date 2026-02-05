@@ -60,24 +60,65 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             return
         }
         val startAttempted = ensureDaemonRunning()
+
+        // If daemon was just started, poll for readiness with backoff
+        if (startAttempted) {
+            publishStatus(false, "Starting daemon...")
+            scheduler.schedule({
+                if (disposed) return@schedule
+                connectWithRetry(maxAttempts = 10, delayMs = 500)
+            }, 500, TimeUnit.MILLISECONDS)
+            return
+        }
+
         val daemonInfo = readDaemonInfo() ?: run {
             connecting = false
-            publishStatus(
-                false,
-                if (startAttempted) "Starting daemon..." else "Daemon not running. Start with: moe-daemon start"
-            )
+            publishStatus(false, "Daemon not running. Start with: moe-daemon start")
             scheduleReconnect()
             return
         }
         if (!isProcessAlive(daemonInfo.pid) || !isPortOpen(daemonInfo.port)) {
             connecting = false
-            publishStatus(
-                false,
-                if (startAttempted) "Starting daemon..." else "Daemon not running. Start with: moe-daemon start"
-            )
+            publishStatus(false, "Daemon not running. Start with: moe-daemon start")
             scheduleReconnect()
             return
         }
+
+        connecting = false
+        doConnect(daemonInfo)
+    }
+
+    private fun connectWithRetry(maxAttempts: Int, delayMs: Long, attempt: Int = 1) {
+        if (disposed || connected) {
+            connecting = false
+            return
+        }
+
+        val daemonInfo = readDaemonInfo()
+        if (daemonInfo != null && isProcessAlive(daemonInfo.pid) && isPortOpen(daemonInfo.port)) {
+            // Daemon is ready, proceed with connection
+            connecting = false
+            doConnect(daemonInfo)
+            return
+        }
+
+        if (attempt >= maxAttempts) {
+            connecting = false
+            publishStatus(false, "Daemon failed to start. Check logs.")
+            scheduleReconnect()
+            return
+        }
+
+        publishStatus(false, "Waiting for daemon... (${attempt}/${maxAttempts})")
+        scheduler.schedule({
+            if (disposed) return@schedule
+            connectWithRetry(maxAttempts, delayMs, attempt + 1)
+        }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun doConnect(daemonInfo: DaemonInfo) {
+        if (disposed || connected || connecting) return
+        connecting = true
 
         val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
         wsClient = object : WebSocketClient(uri) {
@@ -85,7 +126,6 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 connecting = false
                 connected = true
                 publishStatus(true, "Connected")
-                // Request state snapshot explicitly in case the server sent it before handlers were ready.
                 sendMessage("GET_STATE", JsonObject())
                 startAutoRefresh()
             }

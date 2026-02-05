@@ -9,11 +9,14 @@ import java.io.File
 
 class MoeProjectOpenListener : ProjectManagerListener {
     override fun projectOpened(project: Project) {
-        project.service<MoeProjectService>().ensureDaemonRunning()
         val basePath = project.basePath ?: return
         val moeDir = File(basePath, ".moe")
         if (moeDir.exists()) {
             MoeProjectRegistry.registerProject(basePath, project.name)
+            // Auto-connect to daemon when project opens
+            val service = project.service<MoeProjectService>()
+            service.ensureDaemonRunning()
+            service.connect()
         }
     }
 }

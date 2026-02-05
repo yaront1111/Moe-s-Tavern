@@ -67,6 +67,26 @@ if (-not $WorkerId) {
 }
 $env:MOE_WORKER_ID = $WorkerId
 
+# Build MCP config for moe-proxy
+$root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$proxyScript = Join-Path $root "packages\\moe-proxy\\dist\\index.js"
+if (-not (Test-Path $proxyScript)) {
+    Write-Error "Moe proxy script not found: $proxyScript. Run: cd packages/moe-proxy && npm run build"
+    exit 1
+}
+
+$mcpConfig = @{
+    mcpServers = @{
+        moe = @{
+            command = "node"
+            args = @($proxyScript)
+            env = @{
+                MOE_PROJECT_PATH = $projectPath.ToString()
+            }
+        }
+    }
+} | ConvertTo-Json -Depth 4 -Compress
+
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
     $running = $false
@@ -81,7 +101,6 @@ if (-not $NoStartDaemon) {
     }
 
     if (-not $running) {
-        $root = Resolve-Path (Join-Path $PSScriptRoot "..")
         $daemonScript = Join-Path $root "packages\\moe-daemon\\dist\\index.js"
         if (-not (Test-Path $daemonScript)) {
             Write-Error "Moe daemon script not found: $daemonScript"
@@ -109,10 +128,27 @@ $claimJson = ConvertTo-Json @{ statuses = $statuses; workerId = $WorkerId } -Com
 Write-Host ("moe.claim_next_task " + $claimJson)
 Write-Host ""
 
+# Load role-specific instructions from .moe/roles/
+$roleDoc = ""
+$roleDocPath = Join-Path $moeDir "roles\\$Role.md"
+if (Test-Path $roleDocPath) {
+    $roleDoc = Get-Content -Raw -Path $roleDocPath
+    Write-Host "Loaded role guide from $roleDocPath"
+}
+
 if ($AutoClaim) {
-    $systemAppend = "Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role."
+    $systemAppend = @"
+Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role.
+
+$roleDoc
+"@
     $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
-    & $Command @CommandArgs --append-system-prompt $systemAppend $prompt
+    & $Command @CommandArgs --mcp-config $mcpConfig --append-system-prompt $systemAppend $prompt
 } else {
-    & $Command @CommandArgs
+    $systemAppend = @"
+Role: $Role. Always use Moe MCP tools.
+
+$roleDoc
+"@
+    & $Command @CommandArgs --mcp-config $mcpConfig --append-system-prompt $systemAppend
 }

@@ -36,6 +36,79 @@ function daemonInfoPath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.json');
 }
 
+function lockFilePath(projectPath: string): string {
+  return path.join(projectPath, '.moe', 'daemon.lock');
+}
+
+function acquireLock(projectPath: string): boolean {
+  const lockPath = lockFilePath(projectPath);
+  try {
+    // O_EXCL ensures atomic creation - fails if file exists
+    const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    fs.writeSync(fd, String(process.pid));
+    fs.closeSync(fd);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'EEXIST') {
+      // Lock file exists, check if owning process is still alive
+      try {
+        const lockPid = parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10);
+        if (!isProcessAlive(lockPid)) {
+          // Stale lock, remove and retry
+          fs.unlinkSync(lockPath);
+          return acquireLock(projectPath);
+        }
+      } catch {
+        // Can't read lock file, try to remove it
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+        return acquireLock(projectPath);
+      }
+    }
+    return false;
+  }
+}
+
+function releaseLock(projectPath: string): void {
+  const lockPath = lockFilePath(projectPath);
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    // Ignore errors when releasing lock
+  }
+}
+
+function waitForPortListening(port: number, timeoutMs: number = 5000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const check = () => {
+      const socket = new net.Socket();
+      socket.setTimeout(200);
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('error', () => {
+        socket.destroy();
+        if (Date.now() - startTime >= timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(check, 100);
+        }
+      });
+      socket.once('timeout', () => {
+        socket.destroy();
+        if (Date.now() - startTime >= timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(check, 100);
+        }
+      });
+      socket.connect(port, '127.0.0.1');
+    };
+    check();
+  });
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -78,7 +151,10 @@ function readDaemonInfo(projectPath: string): DaemonInfo | null {
 
 function writeDaemonInfo(projectPath: string, info: DaemonInfo): void {
   const filePath = daemonInfoPath(projectPath);
-  fs.writeFileSync(filePath, JSON.stringify(info, null, 2));
+  const tempPath = `${filePath}.tmp.${process.pid}`;
+  // Atomic write: write to temp file, then rename
+  fs.writeFileSync(tempPath, JSON.stringify(info, null, 2));
+  fs.renameSync(tempPath, filePath);
 }
 
 function removeDaemonInfo(projectPath: string): void {
@@ -92,6 +168,20 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   const existing = readDaemonInfo(projectPath);
   if (existing && isProcessAlive(existing.pid)) {
     logger.info({ port: existing.port, pid: existing.pid }, 'Moe daemon already running');
+    return;
+  }
+
+  // Acquire lock to prevent race conditions
+  if (!acquireLock(projectPath)) {
+    logger.info('Another process is starting the daemon, waiting...');
+    // Wait a bit and check if daemon is now running
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const info = readDaemonInfo(projectPath);
+    if (info && isProcessAlive(info.pid)) {
+      logger.info({ port: info.port, pid: info.pid }, 'Daemon started by another process');
+      return;
+    }
+    logger.error('Failed to acquire lock and daemon not running');
     return;
   }
 
@@ -124,7 +214,20 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   const mcpAdapter = new McpAdapter(state);
   const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
 
-  httpServer.listen(port);
+  // Wait for server to actually start listening
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('listening', resolve);
+    httpServer.once('error', reject);
+    httpServer.listen(port);
+  });
+
+  // Verify port is actually accepting connections
+  const portReady = await waitForPortListening(port, 5000);
+  if (!portReady) {
+    logger.error({ port }, 'Server started but port not accepting connections');
+    releaseLock(projectPath);
+    process.exit(1);
+  }
 
   state.setEmitter((event) => {
     wsServer.broadcast(event);
@@ -147,7 +250,11 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     projectPath
   };
 
+  // Write daemon.json only after port is confirmed listening
   writeDaemonInfo(projectPath, info);
+
+  // Release lock now that daemon.json is written
+  releaseLock(projectPath);
 
   // Guard against multiple shutdown calls
   let isShuttingDown = false;
