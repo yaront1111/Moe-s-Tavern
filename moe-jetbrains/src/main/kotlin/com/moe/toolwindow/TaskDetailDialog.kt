@@ -3,6 +3,7 @@ package com.moe.toolwindow
 import com.moe.model.Task
 import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -35,20 +36,20 @@ class TaskDetailDialog(
     private val dodField = JBTextArea(task.definitionOfDone.joinToString("\n"))
 
     init {
-        title = "Task: ${task.title}"
+        title = MoeBundle.message("moe.dialog.taskDetail", task.title)
         init()
     }
 
     override fun createCenterPanel(): JComponent {
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
-        panel.add(JBLabel("Status: ${task.status}"))
+        panel.add(JBLabel(MoeBundle.message("moe.message.statusPrefix", task.status)))
 
-        panel.add(JBLabel("Title"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
         panel.add(titleField)
 
-        panel.add(JBLabel("Description"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.description")))
         descriptionField.lineWrap = true
         descriptionField.wrapStyleWord = true
         descriptionField.minimumSize = Dimension(360, 140)
@@ -56,7 +57,7 @@ class TaskDetailDialog(
         descriptionScroll.preferredSize = Dimension(520, 140)
         panel.add(descriptionScroll)
 
-        panel.add(JBLabel("Definition of Done (one per line)"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.definitionOfDone")))
         dodField.lineWrap = true
         dodField.wrapStyleWord = true
         dodField.minimumSize = Dimension(360, 120)
@@ -70,7 +71,7 @@ class TaskDetailDialog(
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 border = BorderFactory.createTitledBorder(
                     JBUI.Borders.customLine(JBColor.border()),
-                    "Implementation Plan"
+                    MoeBundle.message("moe.label.implementationPlan")
                 )
             }
 
@@ -84,8 +85,8 @@ class TaskDetailDialog(
             panel.add(planScroll)
         }
 
-        task.prLink?.let { panel.add(JBLabel("PR: $it")) }
-        task.reopenReason?.let { panel.add(JBLabel("Reopen reason: $it")) }
+        task.prLink?.let { panel.add(JBLabel(MoeBundle.message("moe.message.prLink", it))) }
+        task.reopenReason?.let { panel.add(JBLabel(MoeBundle.message("moe.message.reopenReasonLabel", it))) }
 
         return panel
     }
@@ -144,7 +145,7 @@ class TaskDetailDialog(
     override fun createActions(): Array<Action> {
         val actions = mutableListOf<Action>()
 
-        actions.add(object : DialogWrapperAction("Save") {
+        actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.save")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val newTitle = titleField.text.trim().ifEmpty { task.title }
                 val newDesc = descriptionField.text.trim()
@@ -160,35 +161,35 @@ class TaskDetailDialog(
         })
 
         if (task.status == "AWAITING_APPROVAL") {
-            actions.add(object : DialogWrapperAction("Approve") {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.approve")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
                     service.approveTask(task.id)
                     close(OK_EXIT_CODE)
                 }
             })
-            actions.add(object : DialogWrapperAction("Reject") {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.reject")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    service.rejectTask(task.id, "Rejected in UI")
+                    service.rejectTask(task.id, MoeBundle.message("moe.message.rejectedInUI"))
                     close(OK_EXIT_CODE)
                 }
             })
         }
 
         if (task.status == "REVIEW" || task.status == "DONE") {
-            actions.add(object : DialogWrapperAction("Reopen") {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.reopen")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    service.reopenTask(task.id, "Reopened in UI")
+                    service.reopenTask(task.id, MoeBundle.message("moe.message.reopenedInUI"))
                     close(OK_EXIT_CODE)
                 }
             })
         }
 
-        actions.add(object : DialogWrapperAction("Delete") {
+        actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.delete")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val result = Messages.showYesNoDialog(
                     project,
-                    "Delete \"${task.title}\"? This cannot be undone.",
-                    "Delete Task",
+                    MoeBundle.message("moe.message.deleteTask", task.title),
+                    MoeBundle.message("moe.message.deleteTaskTitle"),
                     Messages.getWarningIcon()
                 )
                 if (result == Messages.YES) {

@@ -12,6 +12,19 @@ This guide describes how to build and run the current implementation in this rep
 
 ---
 
+## Quick Install (Mac)
+
+If you just want to use Moe without building from source:
+
+```bash
+brew tap yaront1111/moe
+brew install moe
+```
+
+This installs `moe-daemon` and `moe-proxy` globally.
+
+---
+
 ## Build the Daemon + Proxy
 
 ```bash
@@ -33,8 +46,37 @@ Windows helper (build + optional plugin install):
 
 ## Initialize a Project
 
-The plugin can initialize `.moe/` automatically, or use the IDE action:
-- `Tools → Moe → Initialize Moe`
+**Using the CLI (recommended):**
+```bash
+# Initialize current directory
+node packages/moe-daemon/dist/index.js init
+
+# Initialize a specific path
+node packages/moe-daemon/dist/index.js init --project /path/to/project
+
+# Specify a custom project name
+node packages/moe-daemon/dist/index.js init --project /path/to/project --name "My Project"
+```
+
+**Using the JetBrains plugin:**
+- The plugin can initialize `.moe/` automatically when opening a project
+- Or use the IDE action: `Tools → Moe → Initialize Moe`
+
+**Using MCP (programmatic):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "moe.init_project",
+    "arguments": {
+      "projectPath": "/path/to/project",
+      "name": "My Project"
+    }
+  }
+}
+```
 
 Manual setup is also possible using the schema in `docs/SCHEMA.md`.
 
@@ -56,6 +98,36 @@ node packages/moe-daemon/dist/index.js stop --project <path>
 ```
 
 The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }`.
+
+---
+
+## Run with Docker
+
+Build and run using Docker:
+
+```bash
+# Build the image
+cd packages/moe-daemon
+docker build -t moe-daemon .
+
+# Run with your project mounted
+docker run -p 3141:3141 -v /path/to/project:/project moe-daemon
+```
+
+Or use docker-compose:
+
+```bash
+# From repo root
+docker-compose up -d
+
+# View logs
+docker-compose logs -f moe-daemon
+
+# Stop
+docker-compose down
+```
+
+See [CONFIGURATION.md](./CONFIGURATION.md#docker) for environment variables.
 
 ---
 
@@ -131,10 +203,61 @@ See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
 ## Troubleshooting
 
-- Daemon not running: start with `node packages/moe-daemon/dist/index.js start --project <path>`.
-- Proxy says daemon not running: check `.moe/daemon.json` and port.
-- Plugin shows "Disconnected": check daemon status and port in `.moe/daemon.json`.
-- "Start Agents" says Terminal plugin not available: enable the **Terminal** plugin in `Settings > Plugins` and restart the IDE.
+### Common Issues
+
+- **Daemon not running**: Start with `node packages/moe-daemon/dist/index.js start --project <path>`.
+- **Proxy says daemon not running**: Check `.moe/daemon.json` and port.
+- **Plugin shows "Disconnected"**: Check daemon status and port in `.moe/daemon.json`.
+- **"Start Agents" says Terminal plugin not available**: Enable the **Terminal** plugin in `Settings > Plugins` and restart the IDE.
+
+### Mac-Specific Issues
+
+- **Permission denied on scripts**: Run `chmod +x scripts/*.sh`
+- **python3 not found**: Install via `brew install python3`
+- **Port 3141 in use**: Daemon will scan for next available port, check daemon.json for actual port
+- **Apple Silicon vs Intel**: Both work identically; verify Node.js architecture with `node -p process.arch`
+
+For detailed Mac setup and verification checklist, see [MAC_INSTALL.md](./MAC_INSTALL.md).
+
+### WSL (Windows Subsystem for Linux) Issues
+
+When running Moe in WSL:
+
+**Path Conversion**
+- Windows paths like `C:\Users\...` need conversion to `/mnt/c/Users/...`
+- The `moe-agent.sh` script handles this automatically
+- For manual commands, use the WSL path format
+
+**Setup**
+```bash
+# Access Windows project from WSL
+cd /mnt/c/Users/yourname/projects/myproject
+
+# Or use wslpath to convert
+wslpath -u "C:\Users\yourname\projects\myproject"
+```
+
+**Common WSL Issues**
+- **Path not found**: Ensure you're using `/mnt/c/...` format, not `C:\...`
+- **Permission denied**: Windows filesystem permissions may differ; try `chmod +x` on scripts
+- **Node not found**: Install Node.js in WSL separately: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- **python3 not found**: `sudo apt-get install python3`
+- **Daemon can't write files**: Check Windows file has write access from WSL
+
+**Networking**
+- WSL2 uses a different IP than Windows host
+- Daemon runs on `127.0.0.1` which WSL can access
+- If using Docker in WSL, ensure Docker Desktop WSL integration is enabled
+
+**IDE Integration**
+- When using JetBrains IDE on Windows with WSL projects:
+  - Open project via `\\wsl$\Ubuntu\...` path in Windows
+  - Or use Remote Development with WSL backend
+  - The plugin connects to daemon via localhost (works across WSL/Windows boundary)
+
+### General Troubleshooting
+
+For comprehensive troubleshooting guide, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
 ---
 
@@ -142,4 +265,61 @@ See `docs/PLUGIN_SPEC.md` and `docs/UI_SPEC.md` for the roadmap.
 
 - Daemon: `packages/moe-daemon/src/`
 - Proxy: `packages/moe-proxy/src/`
-- Plugin: `moe-jetbrains/src/main/kotlin/com/moe/`
+- JetBrains Plugin: `moe-jetbrains/src/main/kotlin/com/moe/`
+- VSCode Extension: `moe-vscode/src/`
+
+---
+
+## Shared Patterns Between IDE Plugins
+
+Both the JetBrains plugin and VSCode extension share common architectural patterns for consistency and maintainability.
+
+### Daemon Communication
+
+Both plugins communicate with the daemon via WebSocket at `ws://host:port/ws`:
+
+| Pattern | JetBrains (Kotlin) | VSCode (TypeScript) |
+|---------|-------------------|---------------------|
+| Client class | `MoeProjectService` | `MoeDaemonClient` |
+| Connection mgmt | `connect()`, `disconnect()` | `connect()`, `disconnect()` |
+| Auto-reconnect | Yes (5s delay) | Yes (5s delay) |
+| Heartbeat | PING/PONG | PING/PONG |
+
+### Message Protocol
+
+Both use the same JSON message format:
+
+```json
+{ "type": "MESSAGE_TYPE", "payload": { ... } }
+```
+
+Inbound messages: `STATE_SNAPSHOT`, `TASK_UPDATED`, `TASK_CREATED`, `PONG`
+Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `REOPEN_TASK`, `PING`
+
+### UI Components
+
+| Component | JetBrains | VSCode |
+|-----------|-----------|--------|
+| Board view | `MoeToolWindowPanel` (Swing) | `BoardViewProvider` (Webview) |
+| Status indicator | `MoeStatusBarWidget` | `ConnectionStatusBar` |
+| Task detail | `TaskDetailDialog` (modal) | Quick pick + webview panel |
+| State events | `MoeStateListener` interface | `EventEmitter` pattern |
+
+### Activation
+
+| Trigger | JetBrains | VSCode |
+|---------|-----------|--------|
+| Condition | Project opened | `workspaceContains:.moe` |
+| Auto-connect | On project open | On activation (configurable) |
+| Config location | `MoeSettings` | `vscode.workspace.getConfiguration('moe')` |
+
+### Code Reuse Opportunities
+
+While the platforms differ (Kotlin/Swing vs TypeScript/Webview), these areas could share code if extracted:
+
+1. **Type definitions**: Task, Epic, Step, StateSnapshot interfaces
+2. **Message protocol constants**: Message types, status values
+3. **Board layout logic**: Column order, status mapping
+4. **Validation rules**: Status transitions, field requirements
+
+Currently each plugin implements these independently for simplicity, but a shared TypeScript library could be extracted to `packages/moe-common/` if the codebase grows.

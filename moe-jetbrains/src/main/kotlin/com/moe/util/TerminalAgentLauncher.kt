@@ -3,8 +3,28 @@ package com.moe.util
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import java.io.File
+import java.lang.reflect.Method
 
 object TerminalAgentLauncher {
+    // Cache reflection results to avoid repeated lookups
+    private val terminalManagerClass: Class<*>? by lazy {
+        try {
+            Class.forName("org.jetbrains.plugins.terminal.TerminalToolWindowManager")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private val getInstanceMethod: Method? by lazy {
+        terminalManagerClass?.getMethod("getInstance", Project::class.java)
+    }
+
+    // Cache for createLocalShellWidget methods per class (manager class may vary)
+    private val shellWidgetMethodsCache = mutableMapOf<Class<*>, List<Method>>()
+
+    // Cache for send command methods per widget class
+    private val sendCommandMethodCache = mutableMapOf<Class<*>, Method?>()
+    private val executeCommandMethodCache = mutableMapOf<Class<*>, Method?>()
     fun startAgents(project: Project) {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
@@ -59,9 +79,7 @@ object TerminalAgentLauncher {
 
     private fun resolveTerminalManager(project: Project): Any? {
         return try {
-            val clazz = Class.forName("org.jetbrains.plugins.terminal.TerminalToolWindowManager")
-            val getInstance = clazz.getMethod("getInstance", Project::class.java)
-            getInstance.invoke(null, project)
+            getInstanceMethod?.invoke(null, project)
         } catch (_: Exception) {
             null
         }
@@ -69,7 +87,9 @@ object TerminalAgentLauncher {
 
     private fun createTerminalWidget(manager: Any, basePath: String, tabName: String): Any? {
         val clazz = manager.javaClass
-        val methods = clazz.methods.filter { it.name == "createLocalShellWidget" }
+        val methods = shellWidgetMethodsCache.getOrPut(clazz) {
+            clazz.methods.filter { it.name == "createLocalShellWidget" }
+        }
         for (method in methods) {
             val params = method.parameterTypes
             try {
@@ -88,15 +108,23 @@ object TerminalAgentLauncher {
 
     private fun sendCommand(widget: Any, command: String) {
         val widgetClass = widget.javaClass
-        val send = widgetClass.methods.firstOrNull {
-            it.name == "sendCommandToExecute" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+
+        // Try cached sendCommandToExecute first
+        val send = sendCommandMethodCache.getOrPut(widgetClass) {
+            widgetClass.methods.firstOrNull {
+                it.name == "sendCommandToExecute" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+            }
         }
         if (send != null) {
             send.invoke(widget, command)
             return
         }
-        val exec = widgetClass.methods.firstOrNull {
-            it.name == "executeCommand" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+
+        // Fall back to executeCommand
+        val exec = executeCommandMethodCache.getOrPut(widgetClass) {
+            widgetClass.methods.firstOrNull {
+                it.name == "executeCommand" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+            }
         }
         exec?.invoke(widget, command)
     }

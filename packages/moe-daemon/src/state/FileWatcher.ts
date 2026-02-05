@@ -3,6 +3,7 @@
 // =============================================================================
 
 import chokidar from 'chokidar';
+import { logger } from '../util/logger.js';
 
 export type FileChangeEvent = {
   type: 'add' | 'change' | 'unlink';
@@ -44,6 +45,9 @@ export class FileWatcher {
     this.watcher.on('add', (path) => handleEvent('add', path));
     this.watcher.on('change', (path) => handleEvent('change', path));
     this.watcher.on('unlink', (path) => handleEvent('unlink', path));
+    this.watcher.on('error', (error) => {
+      logger.error({ error }, 'FileWatcher error');
+    });
   }
 
   /**
@@ -72,7 +76,7 @@ export class FileWatcher {
     try {
       await this.onChange(event);
     } catch (error) {
-      console.error('FileWatcher onChange error:', error);
+      logger.error({ error, event }, 'FileWatcher onChange error');
     } finally {
       this.isProcessing = false;
 

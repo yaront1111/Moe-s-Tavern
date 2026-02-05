@@ -2,6 +2,7 @@ package com.moe.toolwindow
 
 import com.moe.model.Task
 import com.moe.services.MoeProjectService
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -26,7 +27,7 @@ class PlanReviewDialog(
 ) : DialogWrapper(ideaProject) {
 
     init {
-        title = "Review Plan: ${task.title}"
+        title = MoeBundle.message("moe.dialog.planReview")
         init()
     }
 
@@ -65,12 +66,12 @@ class PlanReviewDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(8)
 
-        panel.add(JBLabel("Definition of Done").apply {
+        panel.add(JBLabel(MoeBundle.message("moe.label.definitionOfDone")).apply {
             font = font.deriveFont(Font.BOLD)
         })
 
         if (task.definitionOfDone.isEmpty()) {
-            panel.add(JBLabel("No criteria defined").apply {
+            panel.add(JBLabel(MoeBundle.message("moe.message.noCriteriaDefined")).apply {
                 font = JBUI.Fonts.smallFont()
                 foreground = java.awt.Color.GRAY
             })
@@ -86,7 +87,7 @@ class PlanReviewDialog(
         }
 
         val scrollPane = JBScrollPane(panel)
-        scrollPane.border = BorderFactory.createTitledBorder("Acceptance Criteria")
+        scrollPane.border = BorderFactory.createTitledBorder(MoeBundle.message("moe.label.acceptanceCriteria"))
         return scrollPane
     }
 
@@ -94,12 +95,12 @@ class PlanReviewDialog(
         val panel = JPanel(VerticalLayout(12))
         panel.border = JBUI.Borders.empty(8)
 
-        panel.add(JBLabel("Implementation Plan").apply {
+        panel.add(JBLabel(MoeBundle.message("moe.label.implementationPlan")).apply {
             font = font.deriveFont(Font.BOLD)
         })
 
         if (task.implementationPlan.isEmpty()) {
-            panel.add(JBLabel("No implementation plan defined").apply {
+            panel.add(JBLabel(MoeBundle.message("moe.message.noPlanDefined")).apply {
                 font = JBUI.Fonts.smallFont()
                 foreground = java.awt.Color.GRAY
             })
@@ -114,7 +115,7 @@ class PlanReviewDialog(
                     background = JBUI.CurrentTheme.ToolWindow.background()
                 }
 
-                stepPanel.add(JBLabel("Step ${index + 1}: ${step.status}").apply {
+                stepPanel.add(JBLabel(MoeBundle.message("moe.message.stepStatus", index + 1, step.status)).apply {
                     font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
                 })
 
@@ -128,7 +129,7 @@ class PlanReviewDialog(
                 stepPanel.add(descArea)
 
                 if (step.affectedFiles.isNotEmpty()) {
-                    stepPanel.add(JBLabel("Affected files:").apply {
+                    stepPanel.add(JBLabel(MoeBundle.message("moe.message.affectedFiles")).apply {
                         font = JBUI.Fonts.smallFont()
                         foreground = java.awt.Color.GRAY
                     })
@@ -157,19 +158,19 @@ class PlanReviewDialog(
     }
 
     override fun createActions(): Array<Action> {
-        val approveAction = object : DialogWrapperAction("Approve") {
+        val approveAction = object : DialogWrapperAction(MoeBundle.message("moe.button.approve")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 service.approveTask(task.id)
                 close(OK_EXIT_CODE)
             }
         }
 
-        val rejectAction = object : DialogWrapperAction("Reject") {
+        val rejectAction = object : DialogWrapperAction(MoeBundle.message("moe.button.reject")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
                 val reason = Messages.showInputDialog(
                     ideaProject,
-                    "Please provide a reason for rejection:",
-                    "Reject Plan",
+                    MoeBundle.message("moe.message.rejectReason"),
+                    MoeBundle.message("moe.button.reject"),
                     Messages.getQuestionIcon()
                 )
                 if (reason != null && reason.isNotBlank()) {

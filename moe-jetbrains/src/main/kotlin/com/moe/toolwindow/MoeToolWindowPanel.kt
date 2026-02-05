@@ -5,6 +5,7 @@ import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.toolwindow.board.TaskColumn
 import com.moe.toolwindow.board.BoardStyles
+import com.moe.util.MoeBundle
 import com.moe.util.MoeProjectInitializer
 import com.moe.util.MoeProjectRegistry
 import com.moe.util.TerminalAgentLauncher
@@ -27,14 +28,16 @@ import java.awt.Cursor
 import java.io.File
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import javax.swing.Box
 import javax.swing.JPanel
 import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 
-class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPanel>(BorderLayout()) {
+class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPanel>(BorderLayout()), Disposable {
     private val service = project.service<MoeProjectService>()
-    private val statusLabel = JBLabel("Disconnected")
+    private val statusLabel = JBLabel(MoeBundle.message("moe.panel.disconnected"))
     private val contentPanel = JBPanel<JBPanel<*>>(BorderLayout())
     private val collapsedEpics = mutableSetOf<String>()
     private var lastState: MoeState? = null
@@ -44,32 +47,33 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
     private val workerPanel = WorkerPanel()
+    private var stateListener: MoeStateListener? = null
 
     init {
         val header = JPanel(BorderLayout())
         header.border = com.intellij.util.ui.JBUI.Borders.empty(8, 12)
         header.isOpaque = false
 
-        val title = JBLabel("Moe Board").apply {
+        val title = JBLabel(MoeBundle.message("moe.panel.title")).apply {
             font = com.intellij.util.ui.JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD, 15f)
             foreground = BoardStyles.textPrimary
         }
 
-        styleStatusLabel(false, "Disconnected")
+        styleStatusLabel(false, MoeBundle.message("moe.panel.disconnected"))
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
             isOpaque = false
         }
-        right.add(JBLabel("Epic:"))
+        right.add(JBLabel(MoeBundle.message("moe.panel.epicFilter")))
         epicFilter.preferredSize = Dimension(180, epicFilter.preferredSize.height)
         right.add(epicFilter)
 
         right.add(Box.createHorizontalStrut(8))
-        right.add(JBLabel("Project:"))
+        right.add(JBLabel(MoeBundle.message("moe.panel.project")))
         projectSelector.preferredSize = Dimension(280, projectSelector.preferredSize.height)
         right.add(projectSelector)
 
-        val addEpicButton = JBLabel("+ Epic").apply {
+        val addEpicButton = JBLabel(MoeBundle.message("moe.panel.addEpic")).apply {
             isOpaque = true
             background = BoardStyles.columnHeaderBackground
             foreground = BoardStyles.textPrimary
@@ -83,7 +87,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         right.add(addEpicButton)
 
-        val agentsButton = JBLabel("Start Agents").apply {
+        val agentsButton = JBLabel(MoeBundle.message("moe.panel.startAgents")).apply {
             isOpaque = true
             background = BoardStyles.columnHeaderBackground
             foreground = BoardStyles.textPrimary
@@ -103,7 +107,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             foreground = BoardStyles.textPrimary
             border = com.intellij.util.ui.JBUI.Borders.empty(4, 8)
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Project Settings"
+            toolTipText = MoeBundle.message("moe.panel.settings.tooltip")
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     val currentState = service.getState()
@@ -133,14 +137,21 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             viewport.background = BoardStyles.boardBackground
         }
 
+        val proposalPanel = ProposalPanel(project)
+        val activityLogPanel = ActivityLogPanel(project)
+
         val tabbedPane = JTabbedPane().apply {
-            addTab("Board", scroll)
-            addTab("Proposals", ProposalPanel(project))
-            addTab("Activity Log", ActivityLogPanel(project))
+            addTab(MoeBundle.message("moe.tab.board"), scroll)
+            addTab(MoeBundle.message("moe.tab.proposals"), proposalPanel)
+            addTab(MoeBundle.message("moe.tab.activityLog"), activityLogPanel)
         }
         add(tabbedPane, BorderLayout.CENTER)
 
-        service.addListener(object : MoeStateListener {
+        // Register child disposables
+        Disposer.register(this, proposalPanel)
+        Disposer.register(this, activityLogPanel)
+
+        stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
                 updateBoard(state)
             }
@@ -152,10 +163,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             override fun onError(operation: String, message: String) {
                 NotificationGroupManager.getInstance()
                     .getNotificationGroup("Moe Notifications")
-                    .createNotification("Moe Error", "$operation: $message", NotificationType.ERROR)
+                    .createNotification(MoeBundle.message("moe.notification.error"), MoeBundle.message("moe.notification.operationFailed", operation, message), NotificationType.ERROR)
                     .notify(project)
             }
-        })
+        }
+        service.addListener(stateListener!!)
 
         service.connect()
 
@@ -179,7 +191,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     }
 
     private fun styleStatusLabel(connected: Boolean, message: String) {
-        statusLabel.text = if (connected) "Connected" else message
+        statusLabel.text = if (connected) MoeBundle.message("moe.panel.connected") else message
         statusLabel.isOpaque = true
         statusLabel.border = com.intellij.util.ui.JBUI.Borders.empty(2, 8)
         if (connected) {
@@ -270,8 +282,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     onDelete = { task ->
                         val result = Messages.showYesNoDialog(
                             project,
-                            "Delete \"${task.title}\"? This cannot be undone.",
-                            "Delete Task",
+                            MoeBundle.message("moe.message.deleteTask", task.title),
+                            MoeBundle.message("moe.message.deleteTaskTitle"),
                             Messages.getWarningIcon()
                         )
                         if (result == Messages.YES) {
@@ -293,11 +305,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 isOpaque = false
                 border = com.intellij.util.ui.JBUI.Borders.empty(8, 12, 12, 12)
             }
-            buildTaskColumn(taskBoard, "Backlog", "BACKLOG", isBacklog = true)
-            buildTaskColumn(taskBoard, "Planning", "PLANNING")
-            buildTaskColumn(taskBoard, "Working", "WORKING")
-            buildTaskColumn(taskBoard, "Review", "REVIEW")
-            buildTaskColumn(taskBoard, "Done", "DONE")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.backlog"), "BACKLOG", isBacklog = true)
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.planning"), "PLANNING")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.working"), "WORKING")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.review"), "REVIEW")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.done"), "DONE")
 
             if (taskBoard.componentCount > 0) {
                 taskBoard.remove(taskBoard.componentCount - 1)
@@ -319,15 +331,22 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         updatingEpicFilter = true
         val currentSelection = selectedEpicId
         val items = mutableListOf<EpicFilterItem>()
-        items.add(EpicFilterItem("All Epics", null))
+        items.add(EpicFilterItem(MoeBundle.message("moe.panel.allEpics"), null))
         for (epic in epics.sortedBy { it.order }) {
             items.add(EpicFilterItem(epic.title, epic.id))
         }
         epicFilter.model = javax.swing.DefaultComboBoxModel(items.toTypedArray())
-        // Restore selection if it still exists
-        val selectedIndex = if (currentSelection != null) {
-            items.indexOfFirst { it.epicId == currentSelection }.takeIf { it >= 0 } ?: 0
+        // Restore selection if it still exists, otherwise reset to "All Epics"
+        val foundIndex = if (currentSelection != null) {
+            items.indexOfFirst { it.epicId == currentSelection }
         } else {
+            -1
+        }
+        val selectedIndex = if (foundIndex >= 0) {
+            foundIndex
+        } else {
+            // Selected epic was deleted or not set - reset to "All Epics"
+            selectedEpicId = null
             0
         }
         epicFilter.selectedIndex = selectedIndex
@@ -339,14 +358,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val currentPath = project.basePath
         val items = mutableListOf<ProjectItem>()
         if (currentPath != null) {
-            items.add(ProjectItem("Current: ${project.name}", currentPath, false))
+            items.add(ProjectItem(MoeBundle.message("moe.panel.currentProject", project.name), currentPath, false))
         }
         for (info in MoeProjectRegistry.listProjects()) {
             if (currentPath == null || !samePath(info.path, currentPath)) {
                 items.add(ProjectItem("${info.name} — ${info.path}", info.path, false))
             }
         }
-        items.add(ProjectItem("Browse…", null, true))
+        items.add(ProjectItem(MoeBundle.message("moe.panel.browse"), null, true))
 
         projectSelector.model = javax.swing.DefaultComboBoxModel(items.toTypedArray())
         projectSelector.selectedIndex = 0
@@ -355,7 +374,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
     private fun chooseAndOpenProject() {
         val descriptor = FileChooserDescriptorFactory.createSingleFolderDescriptor()
-        descriptor.title = "Select Moe Project Folder"
+        descriptor.title = MoeBundle.message("moe.dialog.selectFolder")
         val selected = FileChooser.chooseFile(descriptor, project, null) ?: return
         openProject(selected.path)
         reloadProjectSelector()
@@ -369,7 +388,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         val root = File(path)
         if (!root.exists()) {
-            Messages.showErrorDialog(project, "Folder does not exist: $path", "Moe")
+            Messages.showErrorDialog(project, MoeBundle.message("moe.message.folderNotExist", path), "Moe")
             return
         }
 
@@ -377,8 +396,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         if (!moeDir.exists()) {
             val init = Messages.showYesNoDialog(
                 project,
-                "This folder is not initialized for Moe. Initialize now?",
-                "Initialize Moe",
+                MoeBundle.message("moe.message.initNotMoe"),
+                MoeBundle.message("moe.dialog.initMoe"),
                 Messages.getQuestionIcon()
             )
             if (init == Messages.YES) {
@@ -410,5 +429,10 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val epicId: String?
     ) {
         override fun toString(): String = label
+    }
+
+    override fun dispose() {
+        stateListener?.let { service.removeListener(it) }
+        stateListener = null
     }
 }

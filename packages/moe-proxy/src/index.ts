@@ -20,12 +20,31 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10000;
 
+// Per-message timeout configuration
+const MESSAGE_TIMEOUT_MS = parseInt(process.env.MOE_MESSAGE_TIMEOUT_MS || '30000', 10);
+const TIMEOUT_CHECK_INTERVAL_MS = 5000;
+
 let reconnectAttempts = 0;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let isConnected = false;
+let currentWebSocket: WebSocket | null = null;
 let pendingMessages: string[] = [];
-let pendingRequests = 0;
+let pendingRequestIds = new Set<string | number>();
+// Track when each request was sent for timeout detection
+let pendingRequestTimes = new Map<string | number, number>();
+let timeoutCheckTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
+
+/**
+ * Check if it's safe to send a message on the WebSocket.
+ * This checks both the isConnected flag AND the actual WebSocket readyState
+ * to prevent race conditions where the flag and state are out of sync.
+ */
+function isSafeToSend(): boolean {
+  return isConnected &&
+         currentWebSocket !== null &&
+         currentWebSocket.readyState === WebSocket.OPEN;
+}
 
 function readDaemonInfo(projectPath: string): DaemonInfo | null {
   const filePath = path.join(projectPath, '.moe', 'daemon.json');
@@ -71,24 +90,61 @@ function calculateReconnectDelay(): number {
   return baseDelay + jitter;
 }
 
+function checkMessageTimeouts(): void {
+  if (shuttingDown) return;
+  const now = Date.now();
+  const timedOut: (string | number)[] = [];
+
+  for (const [id, sentAt] of pendingRequestTimes) {
+    if (now - sentAt >= MESSAGE_TIMEOUT_MS) {
+      timedOut.push(id);
+    }
+  }
+
+  for (const id of timedOut) {
+    pendingRequestIds.delete(id);
+    pendingRequestTimes.delete(id);
+    const errorResponse = JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32000, message: `Request timed out after ${MESSAGE_TIMEOUT_MS}ms` }
+    });
+    process.stdout.write(errorResponse + '\n');
+    writeLog(`Request ${id} timed out`);
+  }
+}
+
+function startTimeoutChecker(): void {
+  if (timeoutCheckTimer) return;
+  timeoutCheckTimer = setInterval(checkMessageTimeouts, TIMEOUT_CHECK_INTERVAL_MS);
+}
+
+function stopTimeoutChecker(): void {
+  if (timeoutCheckTimer) {
+    clearInterval(timeoutCheckTimer);
+    timeoutCheckTimer = null;
+  }
+}
+
 function gracefulShutdown(): void {
   shuttingDown = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  stopTimeoutChecker();
 
-  if (pendingRequests <= 0) {
+  if (pendingRequestIds.size === 0) {
     process.exit(0);
     return;
   }
 
-  writeLog(`Waiting for ${pendingRequests} pending response(s)...`);
+  writeLog(`Waiting for ${pendingRequestIds.size} pending response(s)...`);
   const startTime = Date.now();
   const maxWaitMs = 2000;
 
   const checkInterval = setInterval(() => {
-    if (pendingRequests <= 0 || Date.now() - startTime >= maxWaitMs) {
+    if (pendingRequestIds.size === 0 || Date.now() - startTime >= maxWaitMs) {
       clearInterval(checkInterval);
-      if (pendingRequests > 0) {
-        writeLog(`Timeout waiting for ${pendingRequests} pending response(s)`);
+      if (pendingRequestIds.size > 0) {
+        writeLog(`Timeout waiting for ${pendingRequestIds.size} pending response(s)`);
       }
       process.exit(0);
     }
@@ -112,16 +168,27 @@ function connect(projectPath: string): void {
   }
 
   const ws = new WebSocket(`ws://127.0.0.1:${info.port}/mcp`);
+  currentWebSocket = ws;
 
   ws.on('open', () => {
     isConnected = true;
     reconnectAttempts = 0;
     writeLog('Connected to daemon');
 
+    // Start timeout checker
+    startTimeoutChecker();
+
     // Send any pending messages that arrived during reconnect
+    const now = Date.now();
     while (pendingMessages.length > 0) {
       const msg = pendingMessages.shift()!;
-      pendingRequests++;
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed.id !== undefined && parsed.id !== null) {
+          pendingRequestIds.add(parsed.id);
+          pendingRequestTimes.set(parsed.id, now);
+        }
+      } catch { /* already validated */ }
       ws.send(msg);
     }
   });
@@ -131,8 +198,12 @@ function connect(projectPath: string): void {
 
     // Validate response is valid JSON before forwarding
     try {
-      JSON.parse(message);
-      pendingRequests = Math.max(0, pendingRequests - 1);
+      const parsed = JSON.parse(message);
+      // Remove the request ID from pending set (handles both success and error responses)
+      if (parsed.id !== undefined && parsed.id !== null) {
+        pendingRequestIds.delete(parsed.id);
+        pendingRequestTimes.delete(parsed.id);
+      }
       process.stdout.write(message + '\n');
     } catch {
       writeError('Received invalid JSON from daemon');
@@ -141,7 +212,19 @@ function connect(projectPath: string): void {
 
   ws.on('close', (code, reason) => {
     isConnected = false;
+    currentWebSocket = null;
     writeLog(`Connection closed: ${code} ${reason}`);
+
+    // Stop timeout checker while disconnected
+    stopTimeoutChecker();
+
+    // Clear any existing reconnect timer to prevent stacking
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    if (shuttingDown) return;
 
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       const delay = calculateReconnectDelay();
@@ -149,6 +232,34 @@ function connect(projectPath: string): void {
       writeLog(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
       reconnectTimer = setTimeout(() => connect(projectPath), delay);
     } else {
+      // Send error responses for all pending requests before exiting
+      for (const reqId of pendingRequestIds) {
+        const errorResponse = JSON.stringify({
+          jsonrpc: '2.0',
+          id: reqId,
+          error: { code: -32000, message: 'Lost connection to daemon after max retries' }
+        });
+        process.stdout.write(errorResponse + '\n');
+      }
+      pendingRequestIds.clear();
+      pendingRequestTimes.clear();
+
+      // Also send errors for queued messages
+      for (const msg of pendingMessages) {
+        try {
+          const parsed = JSON.parse(msg);
+          if (parsed.id !== undefined && parsed.id !== null) {
+            const errorResponse = JSON.stringify({
+              jsonrpc: '2.0',
+              id: parsed.id,
+              error: { code: -32000, message: 'Lost connection to daemon after max retries' }
+            });
+            process.stdout.write(errorResponse + '\n');
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      pendingMessages = [];
+
       writeError('Lost connection to daemon after max retries');
       process.exit(1);
     }
@@ -163,9 +274,18 @@ function connect(projectPath: string): void {
   if (!process.stdin.readableFlowing) {
     process.stdin.setEncoding('utf-8');
 
+    const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer
     let buffer = '';
     process.stdin.on('data', (chunk) => {
       buffer += chunk;
+
+      // Prevent unbounded buffer growth if no newlines arrive
+      if (buffer.length > MAX_BUFFER_SIZE && buffer.indexOf('\n') === -1) {
+        writeError('Input buffer overflow: message too large without newline');
+        buffer = '';
+        return;
+      }
+
       let index: number;
       while ((index = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, index).trim();
@@ -174,17 +294,33 @@ function connect(projectPath: string): void {
 
         // Validate JSON before sending to daemon
         try {
-          JSON.parse(line);
-          if (isConnected && ws.readyState === WebSocket.OPEN) {
-            pendingRequests++;
-            ws.send(line);
+          const parsed = JSON.parse(line);
+          if (isSafeToSend()) {
+            // Track request ID for proper pending count and timeout
+            if (parsed.id !== undefined && parsed.id !== null) {
+              pendingRequestIds.add(parsed.id);
+              pendingRequestTimes.set(parsed.id, Date.now());
+            }
+            currentWebSocket!.send(line);
           } else {
             // Queue message for when connection is restored
             pendingMessages.push(line);
             if (pendingMessages.length > 100) {
-              // Prevent unbounded queue growth
-              pendingMessages.shift();
-              writeLog('Message queue overflow, dropping oldest message');
+              // Prevent unbounded queue growth - send error for dropped message
+              const droppedMsg = pendingMessages.shift()!;
+              try {
+                const droppedParsed = JSON.parse(droppedMsg);
+                if (droppedParsed.id !== undefined && droppedParsed.id !== null) {
+                  // Send error response for dropped request
+                  const errorResponse = JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: droppedParsed.id,
+                    error: { code: -32000, message: 'Message dropped: queue overflow while disconnected' }
+                  });
+                  process.stdout.write(errorResponse + '\n');
+                }
+              } catch { /* ignore parse errors for dropped messages */ }
+              writeLog('Message queue overflow, dropped oldest message');
             }
           }
         } catch {

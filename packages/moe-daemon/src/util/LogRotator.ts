@@ -108,11 +108,29 @@ export class LogRotator {
       const destination = fs.createWriteStream(destPath);
       const gzip = zlib.createGzip();
 
+      // Add error handlers to all streams to prevent hanging
+      source.on('error', (error) => {
+        gzip.destroy();
+        destination.destroy();
+        reject(error);
+      });
+
+      gzip.on('error', (error) => {
+        source.destroy();
+        destination.destroy();
+        reject(error);
+      });
+
+      destination.on('error', (error) => {
+        source.destroy();
+        gzip.destroy();
+        reject(error);
+      });
+
       source
         .pipe(gzip)
         .pipe(destination)
-        .on('finish', () => resolve())
-        .on('error', (error) => reject(error));
+        .on('finish', () => resolve());
     });
   }
 

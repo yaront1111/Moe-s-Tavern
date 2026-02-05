@@ -255,15 +255,30 @@ class TaskColumn(
         return panel
     }
 
+    /**
+     * Installs drag handlers on a component and all its children using an iterative approach.
+     * Uses a stack to avoid potential stack overflow on deeply nested components.
+     * Limits traversal depth to prevent issues with circular references.
+     */
     private fun installDragHandlers(component: Component, adapter: MouseAdapter) {
-        component.addMouseListener(adapter)
-        component.addMouseMotionListener(adapter)
-        if (component is javax.swing.JComponent) {
-            component.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-        }
-        if (component is Container) {
-            component.components.forEach { child ->
-                installDragHandlers(child, adapter)
+        val maxDepth = 20
+        val stack = ArrayDeque<Pair<Component, Int>>()
+        stack.addLast(component to 0)
+
+        while (stack.isNotEmpty()) {
+            val (current, depth) = stack.removeLast()
+
+            current.addMouseListener(adapter)
+            current.addMouseMotionListener(adapter)
+            if (current is javax.swing.JComponent) {
+                current.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            }
+
+            // Only traverse children if within depth limit
+            if (depth < maxDepth && current is Container) {
+                for (child in current.components) {
+                    stack.addLast(child to depth + 1)
+                }
             }
         }
     }

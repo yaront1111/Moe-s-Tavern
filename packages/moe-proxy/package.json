@@ -1,9 +1,45 @@
 {
   "name": "moe-proxy",
   "version": "0.1.0",
-  "description": "Moe MCP stdio proxy to daemon",
+  "description": "Moe MCP stdio proxy to daemon for AI agent integration",
   "license": "MIT",
+  "author": "yaront1111",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yaront1111/Moe-s-Tavern.git",
+    "directory": "packages/moe-proxy"
+  },
+  "bugs": {
+    "url": "https://github.com/yaront1111/Moe-s-Tavern/issues"
+  },
+  "homepage": "https://github.com/yaront1111/Moe-s-Tavern#readme",
+  "keywords": [
+    "moe",
+    "mcp",
+    "proxy",
+    "ai",
+    "agent",
+    "claude",
+    "gpt",
+    "stdio"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "bin": {
     "moe-proxy": "./dist/index.js"
   },
@@ -12,7 +48,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "ws": "^8.16.0"

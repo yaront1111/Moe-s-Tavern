@@ -4,6 +4,7 @@ import com.moe.model.Epic
 import com.moe.model.MoeState
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -12,19 +13,27 @@ import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBUI
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
+import com.intellij.ui.JBColor
+import java.awt.Color
 import java.awt.Dimension
 import java.awt.event.ItemEvent
+import java.awt.event.ItemListener
+import javax.swing.BorderFactory
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.Action
 import javax.swing.JScrollPane
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class CreateTaskDialog(
     private val ideaProject: Project,
     private var epics: List<Epic>,
     private val service: MoeProjectService
-) : DialogWrapper(ideaProject) {
+) : DialogWrapper(ideaProject), Disposable {
 
     private val epicCombo = ComboBox<EpicOption>()
     private val titleField = JBTextField()
@@ -33,9 +42,24 @@ class CreateTaskDialog(
     private var lastSelectedEpic: Epic? = null
     private var pendingNewEpicSelection = false
     private val stateListener: MoeStateListener
+    private var epicComboListener: ItemListener? = null
+
+    // Validation error labels
+    private val epicErrorLabel = JBLabel("").apply {
+        foreground = JBColor(Color(220, 53, 69), Color(255, 80, 80))
+        font = JBUI.Fonts.smallFont()
+    }
+    private val titleErrorLabel = JBLabel("").apply {
+        foreground = JBColor(Color(220, 53, 69), Color(255, 80, 80))
+        font = JBUI.Fonts.smallFont()
+    }
+
+    private val normalBorder = JBUI.Borders.empty()
+    private val errorBorder = BorderFactory.createLineBorder(JBColor(Color(220, 53, 69), Color(255, 80, 80)), 1)
+    private var createAction: DialogWrapperAction? = null
 
     init {
-        title = "Create Task"
+        title = MoeBundle.message("moe.dialog.createTask")
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
@@ -63,12 +87,12 @@ class CreateTaskDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
 
-        panel.add(JBLabel("Epic"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.epic")))
         refreshEpicCombo(null)
         epicCombo.renderer = EpicOptionRenderer()
         epicCombo.maximumSize = Dimension(520, epicCombo.preferredSize.height)
 
-        epicCombo.addItemListener { e ->
+        epicComboListener = ItemListener { e ->
             if (e.stateChange == ItemEvent.SELECTED) {
                 val selected = epicCombo.selectedItem as? EpicOption
                 if (selected?.isCreateNew == true) {
@@ -91,14 +115,22 @@ class CreateTaskDialog(
                 }
             }
         }
+        epicCombo.addItemListener(epicComboListener)
 
         panel.add(epicCombo)
+        panel.add(epicErrorLabel)
 
-        panel.add(JBLabel("Title"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
+        titleField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) { validateFields() }
+            override fun removeUpdate(e: DocumentEvent?) { validateFields() }
+            override fun changedUpdate(e: DocumentEvent?) { validateFields() }
+        })
         panel.add(titleField)
+        panel.add(titleErrorLabel)
 
-        panel.add(JBLabel("Description"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.description")))
         descriptionField.lineWrap = true
         descriptionField.wrapStyleWord = true
         descriptionField.minimumSize = Dimension(360, 140)
@@ -106,7 +138,7 @@ class CreateTaskDialog(
         descriptionScroll.preferredSize = Dimension(520, 140)
         panel.add(descriptionScroll)
 
-        panel.add(JBLabel("Definition of Done (one per line)"))
+        panel.add(JBLabel(MoeBundle.message("moe.label.definitionOfDone")))
         dodField.lineWrap = true
         dodField.wrapStyleWord = true
         dodField.minimumSize = Dimension(360, 120)
@@ -136,18 +168,49 @@ class CreateTaskDialog(
         }
     }
 
+    private fun validateFields(): Boolean {
+        var isValid = true
+
+        // Validate epic selection
+        val selectedOption = epicCombo.selectedItem as? EpicOption
+        val selectedEpic = selectedOption?.epic
+        if (selectedEpic == null) {
+            epicErrorLabel.text = MoeBundle.message("moe.validation.epicRequired")
+            isValid = false
+        } else {
+            epicErrorLabel.text = ""
+        }
+
+        // Validate title
+        val taskTitle = titleField.text.trim()
+        if (taskTitle.isEmpty()) {
+            titleErrorLabel.text = MoeBundle.message("moe.validation.titleRequired")
+            titleField.border = BorderFactory.createCompoundBorder(errorBorder, JBUI.Borders.empty(2))
+            isValid = false
+        } else if (taskTitle.length > 500) {
+            titleErrorLabel.text = MoeBundle.message("moe.validation.titleMaxLength")
+            titleField.border = BorderFactory.createCompoundBorder(errorBorder, JBUI.Borders.empty(2))
+            isValid = false
+        } else {
+            titleErrorLabel.text = ""
+            titleField.border = JBUI.Borders.empty(2)
+        }
+
+        // Enable/disable create button based on validation
+        createAction?.isEnabled = isValid
+
+        return isValid
+    }
+
     override fun createActions(): Array<Action> {
-        val createAction = object : DialogWrapperAction("Create") {
+        createAction = object : DialogWrapperAction(MoeBundle.message("moe.button.create")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
+                if (!validateFields()) {
+                    return
+                }
                 val selectedOption = epicCombo.selectedItem as? EpicOption
-                val selectedEpic = selectedOption?.epic
-                if (selectedEpic == null) {
-                    return
-                }
+                val selectedEpic = selectedOption?.epic ?: return
                 val taskTitle = titleField.text.trim()
-                if (taskTitle.isEmpty()) {
-                    return
-                }
                 val description = descriptionField.text.trim()
                 val dod = dodField.text
                     .lineSequence()
@@ -159,11 +222,16 @@ class CreateTaskDialog(
                 close(OK_EXIT_CODE)
             }
         }
-        return arrayOf(createAction, cancelAction)
+        // Initial validation
+        validateFields()
+        return arrayOf(createAction!!, cancelAction)
     }
 
     override fun dispose() {
+        // Remove all listeners to prevent memory leaks
         service.removeListener(stateListener)
+        epicComboListener?.let { epicCombo.removeItemListener(it) }
+        epicComboListener = null
         super.dispose()
     }
 
@@ -175,7 +243,7 @@ class CreateTaskDialog(
         constructor(epic: Epic) : this(epic, false)
 
         val displayText: String
-            get() = if (isCreateNew) "Create New Epic..." else (epic?.title ?: "")
+            get() = if (isCreateNew) MoeBundle.message("moe.message.createNewEpic") else (epic?.title ?: "")
     }
 
     private class EpicOptionRenderer : javax.swing.ListCellRenderer<EpicOption> {

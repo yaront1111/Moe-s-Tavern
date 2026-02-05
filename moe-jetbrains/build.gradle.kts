@@ -28,8 +28,8 @@ java {
 
 tasks {
     patchPluginXml {
-        sinceBuild.set("252")
-        untilBuild.set("252.*")
+        sinceBuild.set("231")
+        untilBuild.set("")  // No upper bound - compatible with all future versions
     }
 
     wrapper {

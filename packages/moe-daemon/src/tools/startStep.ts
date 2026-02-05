@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { notFound, invalidState } from '../util/errors.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -17,10 +18,14 @@ export function startStepTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       const params = args as { taskId: string; stepId: string };
       const task = state.getTask(params.taskId);
-      if (!task) throw new Error('TASK_NOT_FOUND');
+      if (!task) throw notFound('Task', params.taskId);
+
+      if (!task.implementationPlan || task.implementationPlan.length === 0) {
+        throw invalidState('Task', 'no-plan', 'has-plan');
+      }
 
       const stepIndex = task.implementationPlan.findIndex((s) => s.stepId === params.stepId);
-      if (stepIndex === -1) throw new Error('STEP_NOT_FOUND');
+      if (stepIndex === -1) throw notFound('Step', params.stepId);
 
       const steps = task.implementationPlan.map((step) =>
         step.stepId === params.stepId

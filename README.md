@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="https://yaront1111.github.io/Moe-s-Tavern/"><img src="https://img.shields.io/badge/website-live-brightgreen.svg" alt="Website"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://github.com/yaront1111/Moe-s-Tavern/releases"><img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version"></a>
   <a href="https://github.com/yaront1111/Moe-s-Tavern/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
@@ -66,13 +67,37 @@ cd Moe-s-Tavern
 .\scripts\install-all.ps1
 ```
 
-**Mac / Linux:**
+**Mac (Homebrew):**
+```bash
+brew tap yaront1111/moe
+brew install moe
+```
+
+**Mac / Linux (from source):**
 ```bash
 git clone https://github.com/yaront1111/Moe-s-Tavern.git
 cd Moe-s-Tavern
 chmod +x scripts/*.sh
 ./scripts/install-mac.sh
 ```
+
+**Docker:**
+```bash
+docker run -p 3141:3141 -v /path/to/project:/project ghcr.io/yaront1111/moe-daemon
+```
+
+### Initialize a Project
+
+```bash
+# Navigate to your project and initialize
+cd /path/to/your/project
+moe-daemon init
+
+# Or specify the path explicitly
+moe-daemon init --project /path/to/project --name "My Project"
+```
+
+This creates the `.moe/` folder structure with project settings.
 
 ### Run Your First Agent
 
@@ -200,7 +225,8 @@ moe/
 │   ├── ARCHITECTURE.md  # System design
 │   ├── MCP_SERVER.md    # MCP tool reference
 │   ├── SCHEMA.md        # Data schema
-│   └── DEVELOPMENT.md   # Dev guide
+│   ├── DEVELOPMENT.md   # Dev guide
+│   └── TROUBLESHOOTING.md # Common issues & solutions
 └── scripts/             # Cross-platform install scripts
 ```
 
@@ -234,6 +260,7 @@ Configure in `.moe/project.json`:
 - [MCP Server API](docs/MCP_SERVER.md)
 - [Data Schema](docs/SCHEMA.md)
 - [Development Guide](docs/DEVELOPMENT.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ---
 

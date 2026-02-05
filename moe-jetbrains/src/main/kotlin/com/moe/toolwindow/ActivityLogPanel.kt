@@ -4,6 +4,7 @@ import com.moe.model.ActivityEvent
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.model.MoeState
+import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.service
 import com.intellij.ui.components.JBPanel
@@ -16,16 +17,21 @@ import java.awt.FlowLayout
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import javax.swing.table.AbstractTableModel
+import java.util.concurrent.CopyOnWriteArrayList
 
-class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>(BorderLayout()) {
+class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>(BorderLayout()), Disposable {
     private val service = project.service<MoeProjectService>()
     private val tableModel = ActivityTableModel()
     private val table = JBTable(tableModel)
     private val filterCombo = ComboBox<String>()
-    private var allEvents: List<ActivityEvent> = emptyList()
-    private var selectedFilter: String = "All"
+    @Volatile private var allEvents: List<ActivityEvent> = emptyList()
+    @Volatile private var selectedFilter: String = "All"
+    private var stateListener: MoeStateListener? = null
 
     private val eventTypes = listOf(
         "All",
@@ -41,7 +47,7 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4)).apply {
             isOpaque = false
-            add(com.intellij.ui.components.JBLabel("Filter:"))
+            add(com.intellij.ui.components.JBLabel(MoeBundle.message("moe.filter.label")))
             eventTypes.forEach { filterCombo.addItem(it) }
             filterCombo.selectedItem = "All"
             filterCombo.addActionListener {
@@ -64,7 +70,7 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
         add(toolbar, BorderLayout.NORTH)
         add(scrollPane, BorderLayout.CENTER)
 
-        service.addListener(object : MoeStateListener {
+        stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
                 // Not used here
             }
@@ -76,13 +82,20 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
             }
 
             override fun onActivityLog(events: List<ActivityEvent>) {
-                allEvents = events
-                applyFilter()
+                // Thread-safe: store immutable snapshot and update UI on EDT
+                allEvents = events.toList()
+                SwingUtilities.invokeLater { applyFilter() }
             }
-        })
+        }
+        service.addListener(stateListener!!)
 
         // Request initial data
         service.requestActivityLog(200)
+    }
+
+    override fun dispose() {
+        stateListener?.let { service.removeListener(it) }
+        stateListener = null
     }
 
     private fun applyFilter() {
@@ -95,8 +108,12 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
     }
 
     private class ActivityTableModel : AbstractTableModel() {
-        private var events: List<ActivityEvent> = emptyList()
-        private val columns = arrayOf("Timestamp", "Event", "Details")
+        @Volatile private var events: List<ActivityEvent> = emptyList()
+        private val columns = arrayOf(
+            MoeBundle.message("moe.activity.columnTimestamp"),
+            MoeBundle.message("moe.activity.columnEvent"),
+            MoeBundle.message("moe.activity.columnDetails")
+        )
         private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
             .withZone(ZoneId.systemDefault())
 
@@ -110,7 +127,10 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
         override fun getColumnName(column: Int): String = columns[column]
 
         override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
-            val event = events[rowIndex]
+            // Defensive: capture reference to avoid race between size check and access
+            val currentEvents = events
+            if (rowIndex < 0 || rowIndex >= currentEvents.size) return ""
+            val event = currentEvents[rowIndex]
             return when (columnIndex) {
                 0 -> formatTimestamp(event.timestamp)
                 1 -> event.event

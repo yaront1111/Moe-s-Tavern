@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { FileWatcher, type FileChangeEvent } from './FileWatcher.js';
+import { logger } from '../util/logger.js';
 
 describe('FileWatcher', () => {
   let testDir: string;
@@ -91,7 +92,7 @@ describe('FileWatcher', () => {
   });
 
   it('handles onChange errors gracefully', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     watcher = new FileWatcher(moePath, () => {
       throw new Error('Handler error');
@@ -105,8 +106,11 @@ describe('FileWatcher', () => {
 
     await new Promise((r) => setTimeout(r, 400));
 
-    expect(consoleSpy).toHaveBeenCalledWith('FileWatcher onChange error:', expect.any(Error));
-    consoleSpy.mockRestore();
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(Error) }),
+      'FileWatcher onChange error'
+    );
+    loggerSpy.mockRestore();
   });
 
   it('handles async onChange callback', async () => {
