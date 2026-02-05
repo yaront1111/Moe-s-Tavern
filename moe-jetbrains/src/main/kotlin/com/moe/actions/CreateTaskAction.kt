@@ -15,8 +15,8 @@ class CreateTaskAction : AnAction("Create New Task") {
             return
         }
 
-        // Open create task dialog with first epic selected
-        val dialog = CreateTaskDialog(project, service, state.epics, state.epics.first())
+        // Open create task dialog
+        val dialog = CreateTaskDialog(project, state.epics, service)
         dialog.show()
     }
 
