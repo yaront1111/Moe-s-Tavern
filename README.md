@@ -19,7 +19,8 @@
 </p>
 
 ---
-![134051250314850654](https://github.com/user-attachments/assets/af3bb64a-5e9b-49d9-8707-80087b99dcf1)
+![scale](https://github.com/user-attachments/assets/346a627f-1ed3-403b-93df-9b95ae0d5543)
+
 
 ## Why Moe?
 
