@@ -95,7 +95,7 @@ export class McpAdapter {
     }
   }
 
-  async handle(request: JsonRpcRequest | JsonRpcRequest[]): Promise<JsonRpcResponse | JsonRpcResponse[]> {
+  async handle(request: JsonRpcRequest | JsonRpcRequest[]): Promise<JsonRpcResponse | JsonRpcResponse[] | null> {
     // Check rate limit for tool calls
     if (this.rateLimiter && !this.rateLimiter.checkLimit()) {
       const stats = this.rateLimiter.getStats();
@@ -118,16 +118,40 @@ export class McpAdapter {
     }
 
     if (Array.isArray(request)) {
-      const responses = await Promise.all(request.map((req) => this.handleSingle(req)));
-      return responses;
+      const results = await Promise.all(request.map((req) => this.handleSingle(req)));
+      const responses = results.filter((r): r is JsonRpcResponse => r !== null);
+      return responses.length > 0 ? responses : null;
     }
     return this.handleSingle(request);
   }
 
-  private async handleSingle(request: JsonRpcRequest): Promise<JsonRpcResponse> {
+  private async handleSingle(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
     const id: JsonRpcId = request.id ?? null;
 
     try {
+      // MCP lifecycle: initialize handshake
+      if (request.method === 'initialize') {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: {
+            protocolVersion: '2024-11-05',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'moe-daemon', version: '0.1.0' }
+          }
+        };
+      }
+
+      // MCP lifecycle: initialized notification (no response expected)
+      if (request.method === 'notifications/initialized') {
+        return null;
+      }
+
+      // MCP lifecycle: ping keepalive
+      if (request.method === 'ping') {
+        return { jsonrpc: '2.0', id, result: {} };
+      }
+
       if (request.method === 'tools/list') {
         const tools = Array.from(this.tools.values()).map((tool) => ({
           name: tool.name,

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { invalidState } from '../util/errors.js';
 
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
@@ -17,7 +18,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const taskId = params.taskId || process.env.MOE_TASK_ID || '';
 
       if (!state.project) {
-        throw new Error('Project not loaded');
+        throw invalidState('Project', 'not loaded', 'loaded');
       }
 
       let task = taskId ? state.getTask(taskId) : null;

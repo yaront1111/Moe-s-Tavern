@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine('Moe extension is activating...');
 
     // Initialize daemon client
-    daemonClient = new MoeDaemonClient();
+    daemonClient = new MoeDaemonClient(context.extensionPath);
     context.subscriptions.push(daemonClient);
 
     // Initialize status bar

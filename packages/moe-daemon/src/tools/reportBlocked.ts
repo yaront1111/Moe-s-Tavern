@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { notFound } from '../util/errors.js';
 
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
@@ -25,7 +26,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       };
 
       const task = state.getTask(params.taskId);
-      if (!task) throw new Error('TASK_NOT_FOUND');
+      if (!task) throw notFound('Task', params.taskId);
 
       if (task.assignedWorkerId) {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');

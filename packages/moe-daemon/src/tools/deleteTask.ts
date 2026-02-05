@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { missingRequired, notFound } from '../util/errors.js';
 
 export function deleteTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -17,12 +18,12 @@ export function deleteTaskTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as { taskId?: string };
 
       if (!params.taskId) {
-        throw new Error('taskId is required');
+        throw missingRequired('taskId');
       }
 
       const task = state.getTask(params.taskId);
       if (!task) {
-        throw new Error(`Task not found: ${params.taskId}`);
+        throw notFound('Task', params.taskId);
       }
 
       const deleted = await state.deleteTask(params.taskId);

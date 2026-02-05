@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { missingRequired, notFound, invalidState } from '../util/errors.js';
 
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
@@ -18,18 +19,16 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as { taskId?: string; summary?: string };
 
       if (!params.taskId) {
-        throw new Error('taskId is required');
+        throw missingRequired('taskId');
       }
 
       const task = state.getTask(params.taskId);
       if (!task) {
-        throw new Error(`Task not found: ${params.taskId}`);
+        throw notFound('Task', params.taskId);
       }
 
       if (task.status !== 'REVIEW') {
-        throw new Error(
-          `Task must be in REVIEW status to approve. Current status: ${task.status}`
-        );
+        throw invalidState('Task', task.status, 'REVIEW');
       }
 
       const updated = await state.updateTask(

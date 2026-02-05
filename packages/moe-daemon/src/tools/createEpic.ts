@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { EpicStatus } from '../types/schema.js';
+import { missingRequired } from '../util/errors.js';
 
 export function createEpicTool(_state: StateManager): ToolDefinition {
   return {
@@ -30,7 +31,7 @@ export function createEpicTool(_state: StateManager): ToolDefinition {
       };
 
       if (!params.title) {
-        throw new Error('title is required');
+        throw missingRequired('title');
       }
 
       const epic = await state.createEpic({

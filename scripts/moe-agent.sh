@@ -12,6 +12,9 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+NODE_CMD="${MOE_NODE_COMMAND:-node}"
+PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
+DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 
 # Secure temp directory creation (for any operations needing temp storage)
 # Uses mktemp with restricted permissions to prevent access on shared systems
@@ -150,6 +153,37 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Read install path from ~/.moe/config.json
+get_moe_install_path() {
+    local config_file="$HOME/.moe/config.json"
+    if [ ! -f "$config_file" ]; then
+        echo ""
+        return
+    fi
+    local install_path
+    install_path=$(python3 -c "
+import json, sys
+try:
+    with open('$config_file') as f:
+        config = json.load(f)
+    path = config.get('installPath', '')
+    if path:
+        print(path)
+except:
+    pass
+" 2>/dev/null)
+    if [ -z "$install_path" ]; then
+        echo ""
+        return
+    fi
+    local canary="$install_path/packages/moe-daemon/dist/index.js"
+    if [ ! -f "$canary" ]; then
+        echo ""
+        return
+    fi
+    echo "$install_path"
+}
+
 # Load project registry
 load_registry() {
     local registry_file="$HOME/.moe/projects.json"
@@ -243,15 +277,33 @@ ensure_mcp_config() {
     local config_file="$config_dir/mcp_servers.json"
 
     # Find moe-proxy command
-    if command -v moe-proxy &> /dev/null; then
+    PROXY_CMD=""
+    PROXY_ARGS=""
+    if [ -n "$PROXY_PATH_OVERRIDE" ] && [ -f "$PROXY_PATH_OVERRIDE" ]; then
+        PROXY_CMD="$NODE_CMD"
+        PROXY_ARGS="$PROXY_PATH_OVERRIDE"
+    elif command -v moe-proxy &> /dev/null; then
         PROXY_CMD="moe-proxy"
     else
         PROXY_SCRIPT="$ROOT_DIR/packages/moe-proxy/dist/index.js"
         if [ -f "$PROXY_SCRIPT" ]; then
-            PROXY_CMD="node $PROXY_SCRIPT"
+            PROXY_CMD="$NODE_CMD"
+            PROXY_ARGS="$PROXY_SCRIPT"
         else
-            echo -e "${YELLOW}[WARN]${NC} moe-proxy not found, MCP config not updated"
-            return
+            # Fall back to global install config
+            local global_install
+            global_install=$(get_moe_install_path)
+            if [ -n "$global_install" ]; then
+                PROXY_SCRIPT="$global_install/packages/moe-proxy/dist/index.js"
+                if [ -f "$PROXY_SCRIPT" ]; then
+                    PROXY_CMD="$NODE_CMD"
+                    PROXY_ARGS="$PROXY_SCRIPT"
+                fi
+            fi
+            if [ -z "$PROXY_CMD" ]; then
+                echo -e "${YELLOW}[WARN]${NC} moe-proxy not found, MCP config not updated"
+                return
+            fi
         fi
     fi
 
@@ -260,16 +312,34 @@ ensure_mcp_config() {
     # Create or update config
     if [ ! -f "$config_file" ]; then
         # Create new config
-        cat > "$config_file" << EOF
+        if [ -n "$PROXY_ARGS" ]; then
+            cat > "$config_file" << EOF
 {
-  "moe": {
-    "command": "$PROXY_CMD",
-    "env": {
-      "MOE_PROJECT_PATH": "$PROJECT"
+  "mcpServers": {
+    "moe": {
+      "command": "$PROXY_CMD",
+      "args": ["$PROXY_ARGS"],
+      "env": {
+        "MOE_PROJECT_PATH": "$PROJECT"
+      }
     }
   }
 }
 EOF
+        else
+            cat > "$config_file" << EOF
+{
+  "mcpServers": {
+    "moe": {
+      "command": "$PROXY_CMD",
+      "env": {
+        "MOE_PROJECT_PATH": "$PROJECT"
+      }
+    }
+  }
+}
+EOF
+        fi
         echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
     else
         # Update existing config using python3
@@ -280,6 +350,7 @@ import sys
 config_file = "$config_file"
 project_path = "$PROJECT"
 proxy_cmd = "$PROXY_CMD"
+proxy_args = "$PROXY_ARGS"
 
 try:
     with open(config_file, 'r') as f:
@@ -287,12 +358,18 @@ try:
 except:
     config = {}
 
-config['moe'] = {
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+
+entry = {
     'command': proxy_cmd,
     'env': {
         'MOE_PROJECT_PATH': project_path
     }
 }
+if proxy_args:
+    entry['args'] = [proxy_args]
+config['mcpServers']['moe'] = entry
 
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
@@ -342,19 +419,33 @@ if [ "$NO_START_DAEMON" = false ]; then
         echo -e "${YELLOW}Starting Moe daemon...${NC}"
 
         # Find daemon script
-        if command -v moe-daemon &> /dev/null; then
+        DAEMON_CMD=""
+        DAEMON_ARGS=()
+        if [ -n "$DAEMON_PATH_OVERRIDE" ] && [ -f "$DAEMON_PATH_OVERRIDE" ]; then
+            DAEMON_CMD="$NODE_CMD"
+            DAEMON_ARGS=("$DAEMON_PATH_OVERRIDE")
+        elif command -v moe-daemon &> /dev/null; then
             DAEMON_CMD="moe-daemon"
         else
             DAEMON_SCRIPT="$ROOT_DIR/packages/moe-daemon/dist/index.js"
             if [ ! -f "$DAEMON_SCRIPT" ]; then
+                # Fall back to global install config
+                local global_install
+                global_install=$(get_moe_install_path)
+                if [ -n "$global_install" ]; then
+                    DAEMON_SCRIPT="$global_install/packages/moe-daemon/dist/index.js"
+                fi
+            fi
+            if [ ! -f "$DAEMON_SCRIPT" ]; then
                 echo -e "${RED}Daemon not found. Run install-mac.sh first.${NC}"
                 exit 1
             fi
-            DAEMON_CMD="node $DAEMON_SCRIPT"
+            DAEMON_CMD="$NODE_CMD"
+            DAEMON_ARGS=("$DAEMON_SCRIPT")
         fi
 
         # Start daemon in background
-        $DAEMON_CMD start --project "$PROJECT" &
+        "$DAEMON_CMD" "${DAEMON_ARGS[@]}" start --project "$PROJECT" &
         DAEMON_PID=$!
 
         # Wait for daemon to be ready (poll for up to 10 seconds)

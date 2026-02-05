@@ -58,6 +58,11 @@ node packages/moe-daemon/dist/index.js init --project /path/to/project
 node packages/moe-daemon/dist/index.js init --project /path/to/project --name "My Project"
 ```
 
+`init` now starts the daemon and keeps running. Stop it with `Ctrl+C` or:
+```bash
+node packages/moe-daemon/dist/index.js stop --project /path/to/project
+```
+
 **Using the JetBrains plugin:**
 - The plugin can initialize `.moe/` automatically when opening a project
 - Or use the IDE action: `Tools → Moe → Initialize Moe`
@@ -158,13 +163,16 @@ Claude Code config example:
 Open `moe-jetbrains` in IntelliJ/PyCharm and run one of:
 
 ```bash
+cd packages/moe-daemon
+npm run build
+
 ./gradlew runIde     # launches a sandbox IDE
 ./gradlew buildPlugin
 ```
 
 The plugin:
 - Connects to `ws://127.0.0.1:<port>/ws`
-- Auto-starts the daemon if `MOE_DAEMON_COMMAND` is set or an installer shim exists
+- Auto-starts the daemon (bundled with the plugin) or uses a local repo daemon if available
 - Auto-initializes `.moe/` if missing
 
 Notes:
@@ -309,7 +317,7 @@ Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `R
 
 | Trigger | JetBrains | VSCode |
 |---------|-----------|--------|
-| Condition | Project opened | `workspaceContains:.moe` |
+| Condition | Project opened | `workspaceContains:.moe`, `onView:moe.board`, `onCommand:moe.connect` |
 | Auto-connect | On project open | On activation (configurable) |
 | Config location | `MoeSettings` | `vscode.workspace.getConfiguration('moe')` |
 

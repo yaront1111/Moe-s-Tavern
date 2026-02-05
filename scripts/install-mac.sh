@@ -341,13 +341,22 @@ EOF
     echo ""
 fi
 
-# Create ~/.moe directory
+# Create ~/.moe directory and write global config
 echo -e "${YELLOW}Step 9: Creating Moe config directory...${NC}"
 mkdir -p "$HOME/.moe"
 if [ ! -f "$HOME/.moe/projects.json" ]; then
     echo "[]" > "$HOME/.moe/projects.json"
 fi
-echo -e "${GREEN}[OK]${NC} Created ~/.moe directory"
+
+# Write global install config so other projects can find this installation
+cat > "$HOME/.moe/config.json" << EOF
+{
+  "installPath": "$ROOT_DIR",
+  "version": "0.1.0",
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+echo -e "${GREEN}[OK]${NC} Created ~/.moe directory and config.json"
 echo ""
 
 # Done

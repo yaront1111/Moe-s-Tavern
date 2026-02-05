@@ -15,6 +15,15 @@ npx moe-daemon start --project /path/to/project
 
 ## CLI Commands
 
+### Initialize Project (and start daemon)
+
+```bash
+moe-daemon init --project /path/to/project [--name "My Project"]
+```
+
+Creates the `.moe/` folder structure (if missing) and starts the daemon.
+Stop it with `Ctrl+C` or `moe-daemon stop --project /path/to/project` if you only need initialization.
+
 ### Start Daemon
 
 ```bash

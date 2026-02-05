@@ -14,10 +14,18 @@ Use the Gradle wrapper (cross-platform):
 
 ```bash
 # Mac/Linux
+cd packages/moe-daemon
+npm install
+npm run build
+
 cd moe-jetbrains
 ./gradlew buildPlugin
 
 # Windows
+cd packages\\moe-daemon
+npm install
+npm run build
+
 cd moe-jetbrains
 .\gradlew.bat buildPlugin
 ```

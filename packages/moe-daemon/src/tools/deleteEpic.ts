@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { missingRequired, notAllowed } from '../util/errors.js';
 
 export function deleteEpicTool(_state: StateManager): ToolDefinition {
   return {
@@ -25,7 +26,7 @@ export function deleteEpicTool(_state: StateManager): ToolDefinition {
       };
 
       if (!params.epicId) {
-        throw new Error('epicId is required');
+        throw missingRequired('epicId');
       }
 
       const cascadeDelete = params.cascadeDelete ?? false;
@@ -35,10 +36,9 @@ export function deleteEpicTool(_state: StateManager): ToolDefinition {
       const tasksInEpic = snapshot.tasks.filter(t => t.epicId === params.epicId);
 
       if (tasksInEpic.length > 0 && !cascadeDelete) {
-        throw new Error(
-          `Epic "${params.epicId}" has ${tasksInEpic.length} task(s). ` +
-          `Set cascadeDelete: true to delete epic and all its tasks, ` +
-          `or move/delete tasks first.`
+        throw notAllowed(
+          'delete epic',
+          `Epic "${params.epicId}" has ${tasksInEpic.length} task(s). Set cascadeDelete: true to delete epic and all its tasks, or move/delete tasks first.`
         );
       }
 

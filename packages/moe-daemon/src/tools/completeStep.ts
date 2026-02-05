@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { notFound, invalidState } from '../util/errors.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -25,14 +26,14 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       };
 
       const task = state.getTask(params.taskId);
-      if (!task) throw new Error('TASK_NOT_FOUND');
+      if (!task) throw notFound('Task', params.taskId);
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
-        throw new Error('TASK_HAS_NO_PLAN');
+        throw invalidState('Task', 'no implementation plan', 'has implementation plan');
       }
 
       const stepExists = task.implementationPlan.some((s) => s.stepId === params.stepId);
-      if (!stepExists) throw new Error('STEP_NOT_FOUND');
+      if (!stepExists) throw notFound('Step', params.stepId);
 
       const steps = task.implementationPlan.map((step) =>
         step.stepId === params.stepId
