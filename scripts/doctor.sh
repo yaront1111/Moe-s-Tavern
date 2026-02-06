@@ -111,7 +111,20 @@ echo ""
 
 # Node.js
 if ! check_command "node" "" "brew install node"; then
-    ERRORS=$((ERRORS + 1))
+    # Probe common locations when node isn't on PATH
+    NODE_FOUND=""
+    for candidate in /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.nvm/current/bin/node" "$HOME/.volta/bin/node" "$HOME/.fnm/current/bin/node"; do
+        if [ -x "$candidate" ]; then
+            NODE_VER=$("$candidate" --version 2>/dev/null || echo "unknown")
+            echo -e "${GREEN}[FOUND]${NC} node at $candidate ($NODE_VER)"
+            echo -e "    ${YELLOW}Tip:${NC} Add to PATH or set MOE_NODE_COMMAND=$candidate"
+            NODE_FOUND="$candidate"
+            break
+        fi
+    done
+    if [ -z "$NODE_FOUND" ]; then
+        ERRORS=$((ERRORS + 1))
+    fi
 else
     if ! check_node_version; then
         ERRORS=$((ERRORS + 1))
