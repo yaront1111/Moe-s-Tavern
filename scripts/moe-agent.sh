@@ -12,9 +12,64 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-NODE_CMD="${MOE_NODE_COMMAND:-node}"
 PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
 DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
+
+# Auto-detect node binary from common installation locations
+find_node() {
+    # 1. Explicit override via env var
+    if [ -n "${MOE_NODE_COMMAND:-}" ]; then
+        if command -v "$MOE_NODE_COMMAND" &> /dev/null; then
+            echo "$MOE_NODE_COMMAND"
+            return 0
+        fi
+    fi
+
+    # 2. node on PATH
+    if command -v node &> /dev/null; then
+        echo "node"
+        return 0
+    fi
+
+    # 3. Common Mac/Linux locations
+    local candidates=(
+        "/opt/homebrew/bin/node"          # Apple Silicon Homebrew
+        "/usr/local/bin/node"             # Intel Homebrew
+        "$HOME/.nvm/current/bin/node"     # nvm current symlink
+        "$HOME/.volta/bin/node"           # volta
+        "$HOME/.fnm/current/bin/node"     # fnm
+        "/usr/bin/node"                   # system
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    # 4. nvm direct (find newest installed version)
+    if [ -d "$HOME/.nvm/versions/node" ]; then
+        local newest
+        newest=$(ls -d "$HOME/.nvm/versions/node"/v* 2>/dev/null | sort -V | tail -n1)
+        if [ -n "$newest" ] && [ -x "$newest/bin/node" ]; then
+            echo "$newest/bin/node"
+            return 0
+        fi
+    fi
+
+    # Nothing found - return bare "node" and let it fail later
+    echo "node"
+    return 1
+}
+
+NODE_CMD=$(find_node)
+NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
+if [ "$NODE_VERSION" = "unknown" ]; then
+    echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
+    exit 1
+fi
+echo -e "${GREEN}[OK]${NC} Using node: $NODE_CMD ($NODE_VERSION)"
 
 # Secure temp directory creation (for any operations needing temp storage)
 # Uses mktemp with restricted permissions to prevent access on shared systems
@@ -73,6 +128,8 @@ COMMAND_ARGS=""
 LIST_PROJECTS=false
 NO_START_DAEMON=false
 AUTO_CLAIM=true
+POLL_INTERVAL=30
+NO_LOOP=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -109,6 +166,14 @@ while [[ $# -gt 0 ]]; do
             AUTO_CLAIM=false
             shift
             ;;
+        --poll-interval)
+            POLL_INTERVAL="$2"
+            shift 2
+            ;;
+        --no-loop)
+            NO_LOOP=true
+            shift
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -123,6 +188,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -l, --list-projects      List registered projects"
             echo "  --no-start-daemon        Don't auto-start daemon"
             echo "  --no-auto-claim          Don't auto-claim a task on start"
+            echo "  --poll-interval SECS     Seconds between task polls (default: 30)"
+            echo "  --no-loop                Run once and exit (no polling)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -146,12 +213,38 @@ if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
     exit 1
 fi
 
-# Check for python3 (used for JSON parsing)
-if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Error: python3 is required but not installed${NC}"
+# Auto-detect python3 from common installation locations
+find_python() {
+    if command -v python3 &> /dev/null; then
+        echo "python3"
+        return 0
+    fi
+
+    local candidates=(
+        "/opt/homebrew/bin/python3"                      # Apple Silicon Homebrew
+        "/usr/local/bin/python3"                         # Intel Homebrew
+        "/usr/bin/python3"                               # System / Xcode CLT
+        "/Library/Developer/CommandLineTools/usr/bin/python3"  # Xcode CLT explicit
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+PYTHON_CMD=$(find_python)
+if [ -z "$PYTHON_CMD" ]; then
+    echo -e "${RED}Error: python3 is required but not found${NC}"
     echo "Install Python 3: brew install python3"
     exit 1
 fi
+echo -e "${GREEN}[OK]${NC} Using python3: $PYTHON_CMD"
 
 # Read install path from ~/.moe/config.json
 get_moe_install_path() {
@@ -161,7 +254,7 @@ get_moe_install_path() {
         return
     fi
     local install_path
-    install_path=$(python3 -c "
+    install_path=$($PYTHON_CMD -c "
 import json, sys
 try:
     with open('$config_file') as f:
@@ -203,7 +296,7 @@ if [ "$LIST_PROJECTS" = true ]; then
         echo "No projects registered."
         echo "Open a project with the JetBrains plugin to register it."
     else
-        echo "$registry" | python3 -c "
+        echo "$registry" | $PYTHON_CMD -c "
 import json, sys
 data = json.load(sys.stdin)
 if not data:
@@ -221,7 +314,7 @@ if [ -z "$PROJECT" ]; then
     if [ -n "$PROJECT_NAME" ]; then
         # Look up in registry
         registry=$(load_registry)
-        PROJECT=$(echo "$registry" | python3 -c "
+        PROJECT=$(echo "$registry" | $PYTHON_CMD -c "
 import json, sys
 data = json.load(sys.stdin)
 name = '$PROJECT_NAME'
@@ -344,7 +437,7 @@ EOF
         echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
     else
         # Update existing config using python3
-        python3 << EOF
+        $PYTHON_CMD << EOF
 import json
 import sys
 
@@ -389,7 +482,7 @@ if [ "$NO_START_DAEMON" = false ]; then
 
     if [ -f "$DAEMON_INFO" ]; then
         # Try to read PID from daemon.json
-        PID_OUTPUT=$(python3 -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>&1)
+        PID_OUTPUT=$($PYTHON_CMD -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>&1)
         PID_EXIT_CODE=$?
 
         if [ $PID_EXIT_CODE -ne 0 ]; then
@@ -458,7 +551,7 @@ if [ "$NO_START_DAEMON" = false ]; then
 
             # Check if daemon.json exists and process is running
             if [ -f "$DAEMON_INFO" ]; then
-                NEW_PID=$(python3 -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>/dev/null || echo "")
+                NEW_PID=$($PYTHON_CMD -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>/dev/null || echo "")
                 if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
                     echo -e "${GREEN}[OK]${NC} Daemon started (waited ${WAITED}s)"
                     break
@@ -523,20 +616,49 @@ else
     echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
 fi
 
-if [ "$AUTO_CLAIM" = true ]; then
-    SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role.
+LOOP_ENABLED=true
+if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
+    LOOP_ENABLED=false
+fi
+
+if [ "$LOOP_ENABLED" = true ]; then
+    echo -e "Polling mode: will check for new tasks every ${POLL_INTERVAL}s after completion (Ctrl+C to stop)"
+fi
+
+# Trap SIGINT/SIGTERM to exit cleanly from the loop
+LOOP_RUNNING=true
+trap 'echo ""; echo "Agent stopped."; LOOP_RUNNING=false; exit 0' INT TERM
+
+FIRST_RUN=true
+
+while [ "$LOOP_RUNNING" = true ]; do
+    if [ "$FIRST_RUN" = false ]; then
+        echo ""
+        echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
+        sleep "$POLL_INTERVAL"
+        echo -e "${BLUE}Relaunching agent...${NC}"
+    fi
+    FIRST_RUN=false
+
+    if [ "$AUTO_CLAIM" = true ]; then
+        SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role.
 
 $ROLE_DOC"
-    PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
+        PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
 
-    echo "Starting Claude with auto-claim..."
-    echo ""
+        echo "Starting Claude with auto-claim..."
+        echo ""
 
-    $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT"
-else
-    echo "Suggested first call:"
-    echo "  moe.claim_next_task $CLAIM_JSON"
-    echo ""
+        $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT" || true
+    else
+        echo "Suggested first call:"
+        echo "  moe.claim_next_task $CLAIM_JSON"
+        echo ""
 
-    $COMMAND
-fi
+        $COMMAND || true
+    fi
+
+    if [ "$LOOP_ENABLED" = false ]; then
+        break
+    fi
+done

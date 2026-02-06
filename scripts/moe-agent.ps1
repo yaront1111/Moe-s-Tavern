@@ -14,7 +14,13 @@ param(
     [switch]$AutoClaim = $true,
 
     # Delay in seconds before starting (useful when launching multiple agents)
-    [int]$Delay = 0
+    [int]$Delay = 0,
+
+    # Seconds to wait between polling for new tasks (0 or -NoLoop to disable)
+    [int]$PollInterval = 30,
+
+    # Disable polling loop - run once and exit
+    [switch]$NoLoop
 )
 
 function Load-Registry {
@@ -216,22 +222,38 @@ if ($Delay -gt 0) {
 }
 
 Write-Host "Launching Claude CLI..."
+if (-not $NoLoop) {
+    Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
+}
 
-if ($AutoClaim) {
-    $systemAppend = @"
+$loopEnabled = (-not $NoLoop) -and ($PollInterval -gt 0)
+$firstRun = $true
+
+do {
+    if (-not $firstRun) {
+        Write-Host ""
+        Write-Host "Agent idle, checking for tasks in ${PollInterval} seconds... (Ctrl+C to stop)"
+        Start-Sleep -Seconds $PollInterval
+        Write-Host "Relaunching agent..."
+    }
+    $firstRun = $false
+
+    if ($AutoClaim) {
+        $systemAppend = @"
 Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role.
 
 $roleDoc
 "@
-    $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
-    Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$prompt`""
-    & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $prompt
-} else {
-    $systemAppend = @"
+        $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+        Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$prompt`""
+        & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $prompt
+    } else {
+        $systemAppend = @"
 Role: $Role. Always use Moe MCP tools.
 
 $roleDoc
 "@
-    Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
-    & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
-}
+        Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
+        & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
+    }
+} while ($loopEnabled)
