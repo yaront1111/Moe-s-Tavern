@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { TaskPriority } from '../types/schema.js';
+import type { TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState } from '../util/errors.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -109,6 +109,26 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         }
 
         await state.updateTask(task.id, { assignedWorkerId: params.workerId });
+
+        // Auto-register or update worker entity
+        const existingWorker = state.getWorker(params.workerId);
+        if (!existingWorker) {
+          const workerType: WorkerType = 'CLAUDE'; // Default; future: pass type from agent
+          await state.createWorker({
+            id: params.workerId,
+            type: workerType,
+            projectId: state.project!.id,
+            epicId: task.epicId,
+            currentTaskId: task.id,
+            status: 'READING_CONTEXT'
+          });
+        } else {
+          await state.updateWorker(params.workerId, {
+            currentTaskId: task.id,
+            epicId: task.epicId,
+            status: 'READING_CONTEXT'
+          });
+        }
       }
 
       const epic = state.getEpic(task.epicId);

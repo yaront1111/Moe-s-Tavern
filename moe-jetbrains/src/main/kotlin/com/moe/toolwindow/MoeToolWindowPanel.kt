@@ -28,6 +28,7 @@ import java.awt.Cursor
 import java.io.File
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JPopupMenu
 import javax.swing.JSeparator
@@ -99,19 +100,51 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     val popup = JPopupMenu()
-                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.all")).apply {
-                        addActionListener { TerminalAgentLauncher.startAgents(project) }
-                    })
+
+                    fun launchWithProvider(role: String?, provider: TerminalAgentLauncher.AgentProvider) {
+                        val command = if (provider == TerminalAgentLauncher.AgentProvider.CUSTOM) {
+                            val current = TerminalAgentLauncher.getCustomCommand(project)
+                            val input = Messages.showInputDialog(
+                                project,
+                                MoeBundle.message("moe.panel.agentsMenu.customPrompt"),
+                                MoeBundle.message("moe.panel.agentsMenu.customTitle"),
+                                null,
+                                current.ifEmpty { null },
+                                null
+                            ) ?: return
+                            if (input.isBlank()) return
+                            TerminalAgentLauncher.setCustomCommand(project, input)
+                            TerminalAgentLauncher.setLastUsedProvider(project, provider)
+                            input
+                        } else {
+                            TerminalAgentLauncher.setLastUsedProvider(project, provider)
+                            provider.command
+                        }
+                        if (role != null) {
+                            TerminalAgentLauncher.startAgent(project, role, command)
+                        } else {
+                            TerminalAgentLauncher.startAgents(project, command)
+                        }
+                    }
+
+                    fun buildProviderMenu(label: String, role: String?): JMenu {
+                        val menu = JMenu(label)
+                        val lastUsed = TerminalAgentLauncher.getLastUsedProvider(project)
+                        for (provider in TerminalAgentLauncher.AgentProvider.entries) {
+                            val name = MoeBundle.message("moe.panel.provider.${provider.name.lowercase()}")
+                            val suffix = if (provider == lastUsed) " \u2713" else ""
+                            menu.add(JMenuItem(name + suffix).apply {
+                                addActionListener { launchWithProvider(role, provider) }
+                            })
+                        }
+                        return menu
+                    }
+
+                    popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.all"), null))
                     popup.add(JSeparator())
-                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.architect")).apply {
-                        addActionListener { TerminalAgentLauncher.startAgent(project, "architect") }
-                    })
-                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.worker")).apply {
-                        addActionListener { TerminalAgentLauncher.startAgent(project, "worker") }
-                    })
-                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.qa")).apply {
-                        addActionListener { TerminalAgentLauncher.startAgent(project, "qa") }
-                    })
+                    popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.architect"), "architect"))
+                    popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.worker"), "worker"))
+                    popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.qa"), "qa"))
                     popup.show(e.component, e.x, e.y)
                 }
             })
