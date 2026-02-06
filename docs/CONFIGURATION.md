@@ -58,16 +58,15 @@ export LOG_LEVEL=debug
 node packages/moe-daemon/dist/index.js start --project "$MOE_PROJECT_PATH"
 ```
 
-### Docker
+### Docker (Optional)
+
+If you are using Docker (not required for most users):
 
 ```bash
-# Via docker run
 docker run -e MOE_PROJECT_PATH=/project \
            -e LOG_MAX_SIZE_MB=5 \
            -v /your/project:/project \
            moe-daemon
-
-# Via docker-compose (see docker-compose.yml)
 ```
 
 ---
