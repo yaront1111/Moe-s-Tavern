@@ -53,7 +53,7 @@ fun requireBundledAssets() {
 
 dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
-    implementation("org.java-websocket:Java-WebSocket:1.5.5")
+    implementation("org.java-websocket:Java-WebSocket:1.6.0")
 }
 
 intellij {
