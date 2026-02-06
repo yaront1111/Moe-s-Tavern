@@ -1,0 +1,56 @@
+{
+  "id": "task-160bb39f",
+  "epicId": "epic-daemon",
+  "title": "[BUG] QA approve/reject use wrong activity events - audit trail ambiguous",
+  "description": "qaApprove.ts:37 logs TASK_COMPLETED (same as completeTask.ts:27 worker→REVIEW), making QA approval indistinguishable from worker completion in the activity log. qaReject.ts:54 logs TASK_REOPENED, conflating QA rejection with manual task reopen. Fix: Add QA_APPROVED and QA_REJECTED to ACTIVITY_EVENT_TYPES in schema.ts, then use them in qaApprove.ts and qaReject.ts respectively.",
+  "definitionOfDone": [
+    "QA_APPROVED and QA_REJECTED event types added to ACTIVITY_EVENT_TYPES in schema.ts",
+    "qaApprove.ts uses QA_APPROVED event",
+    "qaReject.ts uses QA_REJECTED event",
+    "Activity log distinguishes QA actions from worker actions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add QA_APPROVED and QA_REJECTED to the ACTIVITY_EVENT_TYPES array in schema.ts (after TASK_REOPENED, line ~155). The ActivityEventType union type auto-derives from this array so no further type changes needed. Log all auto-approval actions to activity.log - these new events ensure QA actions are distinctly logged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-05T22:32:10.331Z",
+      "completedAt": "2026-02-05T22:32:23.674Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In qaApprove.ts line 37, change the activity event from 'TASK_COMPLETED' to 'QA_APPROVED' in the state.updateTask call. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts"
+      ],
+      "startedAt": "2026-02-05T22:32:27.551Z",
+      "completedAt": "2026-02-05T22:32:36.455Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "In qaReject.ts line 54, change the activity event from 'TASK_REOPENED' to 'QA_REJECTED' in the state.updateTask call. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-02-05T22:32:40.050Z",
+      "completedAt": "2026-02-05T22:32:48.977Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 13,
+  "createdAt": "2026-02-05T22:24:01.757Z",
+  "updatedAt": "2026-02-05T22:34:30.298Z"
+}

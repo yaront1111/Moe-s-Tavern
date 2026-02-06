@@ -28,12 +28,20 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
+      if (task.status !== 'WORKING') {
+        throw invalidState('Task', task.status, 'WORKING');
+      }
+
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no implementation plan', 'has implementation plan');
       }
 
-      const stepExists = task.implementationPlan.some((s) => s.stepId === params.stepId);
-      if (!stepExists) throw notFound('Step', params.stepId);
+      const existingStep = task.implementationPlan.find((s) => s.stepId === params.stepId);
+      if (!existingStep) throw notFound('Step', params.stepId);
+
+      if (existingStep.status === 'COMPLETED') {
+        throw invalidState('Step', 'COMPLETED', 'PENDING or IN_PROGRESS');
+      }
 
       const steps = task.implementationPlan.map((step) =>
         step.stepId === params.stepId

@@ -7,8 +7,41 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Refactor TerminalAgentLauncher to expose a public `startAgent(project, role)` method for launching a single agent by role. Extract the common validation/setup logic (script resolution, terminal manager, env overrides) into a shared helper. The existing `startAgents()` method delegates to `startAgent()` three times. This keeps backward compatibility while enabling individual agent launching.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-05T22:22:45.691Z",
+      "completedAt": "2026-02-05T22:23:09.836Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Convert the 'Start Agents' button in MoeToolWindowPanel from a single-click action to a popup menu. On click, show a JPopupMenu with four items: 'All Agents', then a separator, then 'Architect', 'Worker', 'QA'. Each item calls `TerminalAgentLauncher.startAgent(project, role)` for the respective role, or `startAgents()` for 'All'. Add corresponding bundle strings to MoeBundle.properties (moe.panel.agentsMenu.all, moe.panel.agentsMenu.architect, moe.panel.agentsMenu.worker, moe.panel.agentsMenu.qa).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-05T22:23:13.679Z",
+      "completedAt": "2026-02-05T22:23:38.757Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create StartAgentAction.kt with four action classes (StartAllAgentsAction, StartArchitectAction, StartWorkerAction, StartQAAction) following the existing AnAction pattern (see OpenBoardAction). Each calls the appropriate TerminalAgentLauncher method. Register actions in plugin.xml under the Moe menu group (rail: 'Register actions in plugin.xml'). Use standard IntelliJ keyboard shortcut conventions (rail: 'Use standard IntelliJ keyboard shortcut conventions') - no default shortcuts assigned since Ctrl+Alt combos are limited, but users can bind via IDE settings.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/actions/StartAgentAction.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "startedAt": "2026-02-05T22:23:42.651Z",
+      "completedAt": "2026-02-05T22:24:02.832Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -18,5 +51,5 @@
   "parentTaskId": null,
   "order": 2,
   "createdAt": "2026-02-05T15:15:15.984Z",
-  "updatedAt": "2026-02-05T20:40:15.694Z"
+  "updatedAt": "2026-02-05T22:30:00.105Z"
 }

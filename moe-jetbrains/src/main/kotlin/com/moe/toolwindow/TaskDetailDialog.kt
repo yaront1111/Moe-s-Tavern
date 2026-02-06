@@ -5,6 +5,7 @@ import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
 import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.JBColor
@@ -32,6 +33,7 @@ class TaskDetailDialog(
 ) : DialogWrapper(project) {
 
     private val titleField = JBTextField(task.title)
+    private val priorityCombo = ComboBox(arrayOf("CRITICAL", "HIGH", "MEDIUM", "LOW"))
     private val descriptionField = JBTextArea(task.description)
     private val dodField = JBTextArea(task.definitionOfDone.joinToString("\n"))
 
@@ -44,6 +46,11 @@ class TaskDetailDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
         panel.add(JBLabel(MoeBundle.message("moe.message.statusPrefix", task.status)))
+
+        panel.add(JBLabel(MoeBundle.message("moe.label.priority")))
+        priorityCombo.selectedItem = task.priority
+        priorityCombo.maximumSize = Dimension(520, priorityCombo.preferredSize.height)
+        panel.add(priorityCombo)
 
         panel.add(JBLabel(MoeBundle.message("moe.label.title")))
         titleField.maximumSize = Dimension(520, titleField.preferredSize.height)
@@ -155,7 +162,8 @@ class TaskDetailDialog(
                     .filter { it.isNotEmpty() }
                     .toList()
                 val finalDod = if (dod.isEmpty()) task.definitionOfDone else dod
-                service.updateTaskDetails(task.id, newTitle, newDesc, finalDod)
+                val newPriority = priorityCombo.selectedItem as? String ?: task.priority
+                service.updateTaskDetails(task.id, newTitle, newDesc, finalDod, newPriority)
                 close(OK_EXIT_CODE)
             }
         })

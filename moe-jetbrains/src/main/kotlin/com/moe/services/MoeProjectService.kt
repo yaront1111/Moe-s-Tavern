@@ -328,7 +328,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("UPDATE_TASK", payload)
     }
 
-    fun updateTaskDetails(taskId: String, title: String, description: String, definitionOfDone: List<String>? = null) {
+    fun updateTaskDetails(taskId: String, title: String, description: String, definitionOfDone: List<String>? = null, priority: String? = null) {
         if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("taskId", taskId)
@@ -339,6 +339,9 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                     val array = JsonArray()
                     definitionOfDone.forEach { array.add(it) }
                     add("definitionOfDone", array)
+                }
+                if (priority != null) {
+                    addProperty("priority", priority)
                 }
             })
         }
@@ -365,6 +368,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             addProperty("autoCreateBranch", settings.autoCreateBranch)
             addProperty("branchPattern", settings.branchPattern)
             addProperty("commitPattern", settings.commitPattern)
+            addProperty("agentCommand", settings.agentCommand)
         }
         sendMessage("UPDATE_SETTINGS", payload)
     }
@@ -422,12 +426,13 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("REOPEN_TASK", payload)
     }
 
-    fun createTask(epicId: String, title: String, description: String, definitionOfDone: List<String>) {
+    fun createTask(epicId: String, title: String, description: String, definitionOfDone: List<String>, priority: String = "MEDIUM") {
         if (!ensureConnected()) return
         val payload = JsonObject().apply {
             addProperty("epicId", epicId)
             addProperty("title", title)
             addProperty("description", description)
+            addProperty("priority", priority)
             val array = JsonArray()
             definitionOfDone.forEach { array.add(it) }
             add("definitionOfDone", array)

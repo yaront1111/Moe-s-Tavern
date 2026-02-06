@@ -1,0 +1,68 @@
+{
+  "id": "task-f45dcbfc",
+  "epicId": "epic-daemon",
+  "title": "Unify project init: all paths must create role docs, .gitignore, and consistent settings",
+  "description": "Three init paths produce inconsistent .moe/ structure:\n\n1. MCP tool (initProject.ts): Creates dirs + project.json + activity.log. NO role docs, NO .gitignore.\n2. Daemon CLI (index.ts:458-527): Same as MCP tool. NO role docs, NO .gitignore. Includes agentCommand:'claude' in settings that MCP tool omits.\n3. Plugin (MoeProjectInitializer.kt): Creates everything INCLUDING role docs and .gitignore. But role docs are hardcoded truncated versions of docs/roles/*.md (missing examples, status transitions, rejection guidance).\n\nFix: Extract init logic into a shared function in StateManager (or a dedicated InitService). All three paths should call it. The shared init must:\n- Create all dirs (epics, tasks, workers, proposals, roles)\n- Write project.json with consistent settings (including agentCommand)\n- Write activity.log\n- Write .gitignore (daemon.json, daemon.lock)\n- Write role docs: read from docs/roles/ source files if available, otherwise use full embedded content matching the source docs\n\nFor the plugin specifically: update MoeProjectInitializer.kt to either call the daemon init endpoint or embed the full role doc content (not truncated).",
+  "definitionOfDone": [
+    "MCP tool init creates role docs (architect.md, worker.md, qa.md) in .moe/roles/",
+    "Daemon CLI init creates role docs in .moe/roles/",
+    "Plugin init creates role docs matching source docs/roles/ content",
+    "All three paths create .moe/.gitignore",
+    "All three paths produce identical project.json settings schema",
+    "Role docs content matches docs/roles/*.md (not truncated)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create a shared init utility: packages/moe-daemon/src/util/initFiles.ts. This module exports: (1) ROLE_DOCS: Record<string, string> containing the full content of docs/roles/architect.md, worker.md, qa.md as embedded string constants (matching the source docs exactly - including examples, status transitions, and rejection guidance sections). (2) GITIGNORE_CONTENT: string with the .gitignore template (workers/, proposals/, daemon.json, daemon.lock). (3) writeInitFiles(moePath: string): void function that writes .gitignore and all 3 role docs to .moe/roles/ if they don't already exist. All state changes through StateManager - this utility handles file-level init only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ],
+      "startedAt": "2026-02-05T22:47:54.505Z",
+      "completedAt": "2026-02-05T22:48:54.770Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update initProject.ts (MCP tool) to call writeInitFiles(moePath) after creating directories and project.json (after line 92). This adds role docs and .gitignore creation to the MCP init path. Also verify project.json settings include agentCommand:'claude' (already present at line 80). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ],
+      "startedAt": "2026-02-05T22:48:58.269Z",
+      "completedAt": "2026-02-05T22:49:13.490Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update index.ts daemon CLI init function (line 458-527) to call writeInitFiles(moePath) after creating directories and project.json (after line 520). Import from the new util module. This adds role docs and .gitignore to the CLI init path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-02-05T22:49:16.734Z",
+      "completedAt": "2026-02-05T22:49:43.737Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update MoeProjectInitializer.kt to use the full role doc content matching docs/roles/*.md. Replace the truncated hardcoded content in createRoleDoc() (lines 82-188) with the complete content from the source docs - including: Status Transitions sections, Example/Example Session sections, Planning Guidelines with all 5 points, If Plan is Rejected / If Task is Reopened sections, Report Blocked tool for worker, Important section for QA. Also add agentCommand to settings (line 50-56, currently missing).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt"
+      ],
+      "startedAt": "2026-02-05T22:49:47.263Z",
+      "completedAt": "2026-02-05T23:23:23.813Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 19,
+  "createdAt": "2026-02-05T22:40:50.224Z",
+  "updatedAt": "2026-02-05T23:24:33.645Z"
+}

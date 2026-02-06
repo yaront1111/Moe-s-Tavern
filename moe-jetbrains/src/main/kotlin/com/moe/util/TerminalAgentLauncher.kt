@@ -1,10 +1,12 @@
 package com.moe.util
 
+import com.moe.services.MoeProjectService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfo
 import java.io.File
 import java.lang.reflect.Method
+import java.util.UUID
 
 object TerminalAgentLauncher {
     // Cache reflection results to avoid repeated lookups
@@ -44,20 +46,33 @@ object TerminalAgentLauncher {
         val kind: ScriptKind
     )
 
-    fun startAgents(project: Project) {
+    private data class AgentContext(
+        val basePath: String,
+        val script: ResolvedScript,
+        val manager: Any,
+        val envOverrides: Map<String, String>,
+        val agentCommand: String
+    )
+
+    private val roleTabNames = mapOf(
+        "architect" to "Moe Planner",
+        "worker" to "Moe Coder",
+        "qa" to "Moe QA"
+    )
+
+    private fun resolveContext(project: Project): AgentContext? {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
-            return
+            return null
         }
 
-        val script = resolveAgentScript(basePath)
-        if (script == null) {
+        val script = resolveAgentScript(basePath) ?: run {
             Messages.showErrorDialog(
                 project,
                 "Agent script not found. Install Moe and start the daemon once to register the install path.",
                 "Moe"
             )
-            return
+            return null
         }
 
         val manager = resolveTerminalManager(project) ?: run {
@@ -66,7 +81,7 @@ object TerminalAgentLauncher {
                 "Terminal plugin not available. Enable the Terminal plugin in Settings > Plugins and restart the IDE.",
                 "Moe"
             )
-            return
+            return null
         }
 
         val envOverrides = resolveAgentEnvOverrides(script.source)
@@ -76,39 +91,54 @@ object TerminalAgentLauncher {
                 "Agent dependencies not found. Ensure Moe is installed and daemon/proxy are built.",
                 "Moe"
             )
-            return
+            return null
         }
-        val commands = listOf(
-            "Moe Planner" to buildCommand(basePath, "architect", script, envOverrides),
-            "Moe Coder" to buildCommand(basePath, "worker", script, envOverrides),
-            "Moe QA" to buildCommand(basePath, "qa", script, envOverrides)
-        )
 
-        for ((tabName, command) in commands) {
-            try {
-                val widget = createTerminalWidget(manager, basePath, tabName)
-                if (widget != null) {
-                    sendCommand(widget, command)
-                }
-            } catch (ex: Exception) {
-                Messages.showErrorDialog(
-                    project,
-                    "Failed to start terminal \"$tabName\": ${ex.message}",
-                    "Moe"
-                )
+        val agentCommand = MoeProjectService.getInstance(project)
+            .getState()?.project?.settings?.agentCommand ?: "claude"
+
+        return AgentContext(basePath, script, manager, envOverrides, agentCommand)
+    }
+
+    private fun launchRole(project: Project, ctx: AgentContext, role: String) {
+        val tabName = roleTabNames[role] ?: "Moe $role"
+        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand)
+        try {
+            val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
+            if (widget != null) {
+                sendCommand(widget, command)
             }
+        } catch (ex: Exception) {
+            Messages.showErrorDialog(
+                project,
+                "Failed to start terminal \"$tabName\": ${ex.message}",
+                "Moe"
+            )
         }
+    }
+
+    fun startAgents(project: Project) {
+        val ctx = resolveContext(project) ?: return
+        for (role in listOf("architect", "worker", "qa")) {
+            launchRole(project, ctx, role)
+        }
+    }
+
+    fun startAgent(project: Project, role: String) {
+        val ctx = resolveContext(project) ?: return
+        launchRole(project, ctx, role)
     }
 
     private fun buildCommand(
         basePath: String,
         role: String,
         script: ResolvedScript,
-        envOverrides: Map<String, String>
+        envOverrides: Map<String, String>,
+        agentCommand: String
     ): String {
         return when (script.kind) {
-            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides)
-            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides)
+            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand)
         }
     }
 
@@ -116,10 +146,12 @@ object TerminalAgentLauncher {
         basePath: String,
         role: String,
         script: File,
-        envOverrides: Map<String, String>
+        envOverrides: Map<String, String>,
+        agentCommand: String
     ): String {
         val projectArg = psQuote(basePath)
         val scriptArg = psQuote(script.absolutePath)
+        val commandArg = psQuote(agentCommand)
         val envSet = if (envOverrides.isNotEmpty()) {
             envOverrides.entries.joinToString("; ") { (key, value) ->
                 "\$env:$key=${psQuote(value)}"
@@ -127,7 +159,9 @@ object TerminalAgentLauncher {
         } else {
             ""
         }
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg"
+        val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
+        val workerIdArg = psQuote(workerId)
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg"
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
@@ -136,10 +170,12 @@ object TerminalAgentLauncher {
         basePath: String,
         role: String,
         script: File,
-        envOverrides: Map<String, String>
+        envOverrides: Map<String, String>,
+        agentCommand: String
     ): String {
         val projectArg = shQuote(basePath)
         val scriptArg = shQuote(script.absolutePath)
+        val commandArg = shQuote(agentCommand)
         val envPrefix = if (envOverrides.isNotEmpty()) {
             envOverrides.entries.joinToString(" ") { (key, value) ->
                 "$key=${shQuote(value)}"
@@ -147,7 +183,9 @@ object TerminalAgentLauncher {
         } else {
             ""
         }
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg"
+        val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
+        val workerIdArg = shQuote(workerId)
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg"
     }
 
     private fun psQuote(value: String): String {

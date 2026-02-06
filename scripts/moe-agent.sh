@@ -267,7 +267,8 @@ fi
 # Set environment variables
 export MOE_PROJECT_PATH="$PROJECT"
 if [ -z "$WORKER_ID" ]; then
-    WORKER_ID="$ROLE"
+    SHORT_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 4)
+    WORKER_ID="${ROLE}-${SHORT_ID}"
 fi
 export MOE_WORKER_ID="$WORKER_ID"
 

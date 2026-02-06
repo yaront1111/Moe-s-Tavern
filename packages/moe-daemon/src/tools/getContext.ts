@@ -60,6 +60,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               definitionOfDone: task.definitionOfDone,
               taskRails: task.taskRails,
               status: task.status,
+              priority: task.priority,
               implementationPlan: task.implementationPlan
             }
           : null,

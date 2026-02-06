@@ -20,12 +20,21 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
+      if (task.status !== 'WORKING') {
+        throw invalidState('Task', task.status, 'WORKING');
+      }
+
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no-plan', 'has-plan');
       }
 
       const stepIndex = task.implementationPlan.findIndex((s) => s.stepId === params.stepId);
       if (stepIndex === -1) throw notFound('Step', params.stepId);
+
+      const step = task.implementationPlan[stepIndex];
+      if (step.status !== 'PENDING') {
+        throw invalidState('Step', step.status, 'PENDING');
+      }
 
       const steps = task.implementationPlan.map((step) =>
         step.stepId === params.stepId

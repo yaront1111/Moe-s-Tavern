@@ -51,7 +51,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
           reopenCount: task.reopenCount + 1,
           reopenReason: params.reason
         },
-        'TASK_REOPENED'
+        'QA_REJECTED'
       );
 
       return {

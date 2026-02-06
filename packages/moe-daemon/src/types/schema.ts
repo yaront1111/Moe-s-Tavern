@@ -12,6 +12,8 @@ export type TaskStatus =
 
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
+export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
 export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI';
 
 export type WorkerStatus =
@@ -39,6 +41,7 @@ export interface ProjectSettings {
   autoCreateBranch: boolean;
   branchPattern: string;
   commitPattern: string;
+  agentCommand: string;
 }
 
 export interface Project {
@@ -92,6 +95,7 @@ export interface Task {
   reopenReason: string | null;
   createdBy: 'HUMAN' | 'WORKER';
   parentTaskId: string | null;
+  priority: TaskPriority;
   order: number;
   createdAt: string;
   updatedAt: string;
@@ -152,6 +156,8 @@ export const ACTIVITY_EVENT_TYPES = [
   'TASK_COMPLETED',
   'PR_OPENED',
   'TASK_REOPENED',
+  'QA_APPROVED',
+  'QA_REJECTED',
   'WORKER_CONNECTED',
   'WORKER_DISCONNECTED',
   'WORKER_ERROR',

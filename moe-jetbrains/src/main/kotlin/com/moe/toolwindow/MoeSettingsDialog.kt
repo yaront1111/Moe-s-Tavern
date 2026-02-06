@@ -26,6 +26,9 @@ class MoeSettingsDialog(
 
     private val approvalModeCombo = ComboBox(arrayOf("CONTROL", "SPEED", "TURBO"))
     private val speedModeDelaySpinner = JSpinner(SpinnerNumberModel(2000, 500, 30000, 500))
+    private val agentCommandCombo = ComboBox(arrayOf("claude", "codex", "gemini")).apply {
+        isEditable = true
+    }
     private val autoCreateBranchCheckbox = JBCheckBox(MoeBundle.message("moe.settings.autoCreateBranch"))
     private val branchPatternField = JBTextField()
     private val commitPatternField = JBTextField()
@@ -37,6 +40,7 @@ class MoeSettingsDialog(
         currentSettings?.let { settings ->
             approvalModeCombo.selectedItem = settings.approvalMode
             speedModeDelaySpinner.value = settings.speedModeDelayMs
+            agentCommandCombo.selectedItem = settings.agentCommand
             autoCreateBranchCheckbox.isSelected = settings.autoCreateBranch
             branchPatternField.text = settings.branchPattern
             commitPatternField.text = settings.commitPattern
@@ -61,6 +65,13 @@ class MoeSettingsDialog(
         speedModeDelaySpinner.preferredSize = Dimension(100, speedModeDelaySpinner.preferredSize.height)
         panel.add(speedModeDelaySpinner)
         panel.add(JBLabel(MoeBundle.message("moe.settings.speedModeDelayHint")))
+
+        panel.add(createSeparator())
+
+        // Agent Command
+        panel.add(JBLabel(MoeBundle.message("moe.settings.agentCommandLabel")))
+        panel.add(agentCommandCombo)
+        panel.add(JBLabel(MoeBundle.message("moe.settings.agentCommandHint")))
 
         panel.add(createSeparator())
 
@@ -93,6 +104,7 @@ class MoeSettingsDialog(
                 val settings = ProjectSettings(
                     approvalMode = approvalModeCombo.selectedItem as String,
                     speedModeDelayMs = speedModeDelaySpinner.value as Int,
+                    agentCommand = (agentCommandCombo.selectedItem as? String)?.trim()?.ifEmpty { "claude" } ?: "claude",
                     autoCreateBranch = autoCreateBranchCheckbox.isSelected,
                     branchPattern = branchPatternField.text.trim(),
                     commitPattern = commitPatternField.text.trim()

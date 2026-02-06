@@ -1,0 +1,35 @@
+{
+  "id": "task-75eae924",
+  "epicId": "epic-daemon",
+  "title": "[BUG] updateEpic enum allows ARCHIVED (invalid) and omits PLANNED (valid)",
+  "description": "In updateEpic.ts:18, the inputSchema enum is ['ACTIVE', 'COMPLETED', 'ARCHIVED'] but schema.ts:25 defines EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED'. Fix: change enum to ['PLANNED', 'ACTIVE', 'COMPLETED'] to match schema.",
+  "definitionOfDone": [
+    "updateEpic inputSchema enum matches EpicStatus type in schema.ts",
+    "Setting status to PLANNED via updateEpic works",
+    "Setting status to ARCHIVED is rejected"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the inputSchema enum in updateEpic.ts line 18: change ['ACTIVE', 'COMPLETED', 'ARCHIVED'] to ['PLANNED', 'ACTIVE', 'COMPLETED'] to match the EpicStatus type in schema.ts. Validate constraints before state mutations - the enum itself serves as the constraint validation for this tool.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/updateEpic.ts"
+      ],
+      "startedAt": "2026-02-05T22:31:46.135Z",
+      "completedAt": "2026-02-05T22:31:57.410Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "order": 12,
+  "createdAt": "2026-02-05T22:23:59.024Z",
+  "updatedAt": "2026-02-05T22:34:11.727Z"
+}

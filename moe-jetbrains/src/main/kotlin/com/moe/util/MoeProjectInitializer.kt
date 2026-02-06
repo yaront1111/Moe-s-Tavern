@@ -28,7 +28,7 @@ object MoeProjectInitializer {
 
         val gitignore = File(moeDir, ".gitignore")
         if (!gitignore.exists()) {
-            gitignore.writeText("# Worker state is ephemeral\nworkers/\n# Proposals should be reviewed before committing\nproposals/\n")
+            gitignore.writeText("# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\n")
         }
 
         val now = Instant.now().toString()
@@ -53,6 +53,7 @@ object MoeProjectInitializer {
                 addProperty("autoCreateBranch", true)
                 addProperty("branchPattern", "moe/{epicId}/{taskId}")
                 addProperty("commitPattern", "feat({epicId}): {taskTitle}")
+                addProperty("agentCommand", "claude")
             })
 
             addProperty("createdAt", now)
@@ -98,6 +99,7 @@ object MoeProjectInitializer {
                 |moe.qa_approve { taskId, summary }
                 |```
                 |- Moves task to `DONE`
+                |- Logs approval with summary
                 |
                 |### Reject (QA FAIL)
                 |When DoD items are NOT satisfied:
@@ -105,14 +107,47 @@ object MoeProjectInitializer {
                 |moe.qa_reject { taskId, reason }
                 |```
                 |- Moves task back to `WORKING`
+                |- Increments `reopenCount`
                 |- Sets `reopenReason` for the worker to address
                 |
                 |## Review Checklist
                 |
                 |1. Read the task's `definitionOfDone` array
                 |2. For each DoD item, verify it's implemented
-                |3. If ALL items pass -> `moe.qa_approve`
-                |4. If ANY item fails -> `moe.qa_reject` with specific feedback
+                |3. Check affected files match the implementation plan
+                |4. If ALL items pass → `moe.qa_approve`
+                |5. If ANY item fails → `moe.qa_reject` with specific feedback
+                |
+                |## Status Transitions
+                |
+                |```
+                |REVIEW → DONE      (qa_approve)
+                |REVIEW → WORKING   (qa_reject - worker fixes issues)
+                |```
+                |
+                |## Example
+                |
+                |```json
+                |// Task DoD: ["Button renders", "Click handler works", "Tests pass"]
+                |
+                |// If all pass:
+                |moe.qa_approve {
+                |  "taskId": "task-abc123",
+                |  "summary": "All DoD items verified: button renders, click works, tests pass"
+                |}
+                |
+                |// If tests fail:
+                |moe.qa_reject {
+                |  "taskId": "task-abc123",
+                |  "reason": "DoD item 'Tests pass' not satisfied - ButtonTest.test.ts has 2 failing tests"
+                |}
+                |```
+                |
+                |## Important
+                |
+                |- Always provide specific feedback in rejection reasons
+                |- Reference exact DoD items that failed
+                |- Include file paths and line numbers when relevant
             """.trimMargin()
 
             "architect" -> """
@@ -125,29 +160,76 @@ object MoeProjectInitializer {
                 |1. **Claim tasks** in `PLANNING` status using `moe.claim_next_task`
                 |2. **Read context** to understand requirements and constraints
                 |3. **Create plan** with clear steps and affected files
-                |4. **Submit plan** for human approval using `moe.submit_plan`
+                |4. **Submit plan** for human approval
                 |
                 |## Tools
                 |
+                |### Get Context
+                |```
+                |moe.get_context { taskId }
+                |```
+                |Returns project, epic, task details and all applicable rails.
+                |
                 |### Submit Plan
                 |```
-                |moe.submit_plan { taskId, steps: [{ description, affectedFiles }] }
+                |moe.submit_plan {
+                |  taskId,
+                |  steps: [{ description, affectedFiles }]
+                |}
                 |```
                 |- Moves task to `AWAITING_APPROVAL`
+                |- Human reviews and approves/rejects
                 |
                 |### Check Approval
                 |```
                 |moe.check_approval { taskId }
                 |```
                 |- Returns `approved: true` when status is `WORKING`
-                |- Returns `rejected: true` with reason if plan was rejected
+                |- Returns `rejected: true` with `rejectionReason` if plan was rejected
                 |
                 |## Planning Guidelines
                 |
-                |1. Read all rails (global, epic, task constraints)
-                |2. Make steps atomic and testable
-                |3. List affected files explicitly
-                |4. Plan must address all Definition of Done items
+                |1. **Read all rails** - Global, epic, and task rails are constraints
+                |2. **Small steps** - Each step should be atomic and testable
+                |3. **List affected files** - Be specific about what files will change
+                |4. **Follow patterns** - Check existing code for conventions
+                |5. **Consider DoD** - Plan must address all Definition of Done items
+                |
+                |## Status Transitions
+                |
+                |```
+                |PLANNING → AWAITING_APPROVAL  (submit_plan)
+                |AWAITING_APPROVAL → WORKING   (human approves)
+                |AWAITING_APPROVAL → PLANNING  (human rejects)
+                |```
+                |
+                |## Example Plan
+                |
+                |```json
+                |moe.submit_plan {
+                |  "taskId": "task-abc123",
+                |  "steps": [
+                |    {
+                |      "description": "Create UserService interface with CRUD methods",
+                |      "affectedFiles": ["src/services/UserService.ts"]
+                |    },
+                |    {
+                |      "description": "Implement UserService with database calls",
+                |      "affectedFiles": ["src/services/UserServiceImpl.ts"]
+                |    },
+                |    {
+                |      "description": "Add unit tests for UserService",
+                |      "affectedFiles": ["src/services/UserService.test.ts"]
+                |    }
+                |  ]
+                |}
+                |```
+                |
+                |## If Plan is Rejected
+                |
+                |1. Read `reopenReason` to understand the issue
+                |2. Revise the plan addressing feedback
+                |3. Resubmit with `moe.submit_plan`
             """.trimMargin()
 
             "worker" -> """
@@ -167,17 +249,64 @@ object MoeProjectInitializer {
                 |```
                 |moe.start_step { taskId, stepId }
                 |```
+                |Marks a step as `IN_PROGRESS`.
                 |
                 |### Complete Step
                 |```
-                |moe.complete_step { taskId, stepId, modifiedFiles? }
+                |moe.complete_step { taskId, stepId, modifiedFiles?, note? }
                 |```
+                |Marks step as `COMPLETED`, optionally logging files modified.
                 |
                 |### Complete Task
                 |```
-                |moe.complete_task { taskId, summary? }
+                |moe.complete_task { taskId, prLink?, summary? }
                 |```
-                |- Moves task to `REVIEW` for QA
+                |Moves task to `REVIEW` for QA verification.
+                |
+                |### Report Blocked
+                |```
+                |moe.report_blocked { taskId, reason, needsFrom? }
+                |```
+                |Use when you cannot proceed without human help.
+                |
+                |## Execution Guidelines
+                |
+                |1. **Follow the plan** - Execute steps in order
+                |2. **One step at a time** - Start → implement → complete
+                |3. **Respect rails** - All constraints must be followed
+                |4. **Track files** - Report modified files in `complete_step`
+                |5. **Don't skip steps** - Each step must be completed
+                |
+                |## Status Transitions
+                |
+                |```
+                |WORKING → REVIEW   (complete_task - all steps done)
+                |WORKING → BLOCKED  (report_blocked - needs help)
+                |```
+                |
+                |## Example Session
+                |
+                |```json
+                |// Step 1
+                |moe.start_step { "taskId": "task-abc", "stepId": "step-1" }
+                |// ... implement the step ...
+                |moe.complete_step {
+                |  "taskId": "task-abc",
+                |  "stepId": "step-1",
+                |  "modifiedFiles": ["src/UserService.ts"]
+                |}
+                |
+                |// Step 2
+                |moe.start_step { "taskId": "task-abc", "stepId": "step-2" }
+                |// ... implement ...
+                |moe.complete_step { "taskId": "task-abc", "stepId": "step-2" }
+                |
+                |// All done
+                |moe.complete_task {
+                |  "taskId": "task-abc",
+                |  "summary": "Implemented UserService with CRUD operations"
+                |}
+                |```
                 |
                 |## If Task is Reopened (QA Rejected)
                 |

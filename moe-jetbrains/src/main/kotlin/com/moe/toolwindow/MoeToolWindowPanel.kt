@@ -28,6 +28,9 @@ import java.awt.Cursor
 import java.io.File
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.JMenuItem
+import javax.swing.JPopupMenu
+import javax.swing.JSeparator
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import javax.swing.Box
@@ -95,7 +98,21 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
-                    TerminalAgentLauncher.startAgents(project)
+                    val popup = JPopupMenu()
+                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.all")).apply {
+                        addActionListener { TerminalAgentLauncher.startAgents(project) }
+                    })
+                    popup.add(JSeparator())
+                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.architect")).apply {
+                        addActionListener { TerminalAgentLauncher.startAgent(project, "architect") }
+                    })
+                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.worker")).apply {
+                        addActionListener { TerminalAgentLauncher.startAgent(project, "worker") }
+                    })
+                    popup.add(JMenuItem(MoeBundle.message("moe.panel.agentsMenu.qa")).apply {
+                        addActionListener { TerminalAgentLauncher.startAgent(project, "qa") }
+                    })
+                    popup.show(e.component, e.x, e.y)
                 }
             })
         }

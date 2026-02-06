@@ -36,6 +36,7 @@ describe('StateManager', () => {
         autoCreateBranch: true,
         branchPattern: 'moe/{epicId}/{taskId}',
         commitPattern: 'feat({epicId}): {taskTitle}',
+        agentCommand: 'claude',
       },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

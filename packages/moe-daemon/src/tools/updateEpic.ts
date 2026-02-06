@@ -15,7 +15,7 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
         description: { type: 'string', description: 'New description' },
         architectureNotes: { type: 'string', description: 'Architecture notes and technical guidance' },
         epicRails: { type: 'array', items: { type: 'string' }, description: 'Constraints that apply to all tasks in this epic' },
-        status: { type: 'string', enum: ['ACTIVE', 'COMPLETED', 'ARCHIVED'], description: 'Epic status' },
+        status: { type: 'string', enum: ['PLANNED', 'ACTIVE', 'COMPLETED'], description: 'Epic status' },
         order: { type: 'number', description: 'Display order' }
       },
       required: ['epicId'],
