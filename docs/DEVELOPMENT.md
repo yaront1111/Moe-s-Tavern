@@ -106,36 +106,6 @@ The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }
 
 ---
 
-## Run with Docker
-
-Build and run using Docker:
-
-```bash
-# Build the image
-cd packages/moe-daemon
-docker build -t moe-daemon .
-
-# Run with your project mounted
-docker run -p 3141:3141 -v /path/to/project:/project moe-daemon
-```
-
-Or use docker-compose:
-
-```bash
-# From repo root
-docker-compose up -d
-
-# View logs
-docker-compose logs -f moe-daemon
-
-# Stop
-docker-compose down
-```
-
-See [CONFIGURATION.md](./CONFIGURATION.md#docker) for environment variables.
-
----
-
 ## Run the MCP Proxy
 
 The proxy reads `.moe/daemon.json` and forwards MCP JSON-RPC over stdio.
@@ -331,3 +301,35 @@ While the platforms differ (Kotlin/Swing vs TypeScript/Webview), these areas cou
 4. **Validation rules**: Status transitions, field requirements
 
 Currently each plugin implements these independently for simplicity, but a shared TypeScript library could be extracted to `packages/moe-common/` if the codebase grows.
+
+---
+
+## Docker (Optional - Advanced)
+
+> **Note:** Docker is NOT required to use Moe. Most users should use the native installation methods above. Docker is provided as an alternative for containerized deployments, CI/CD pipelines, or isolated testing environments.
+
+Build and run using Docker:
+
+```bash
+# Build the image
+cd packages/moe-daemon
+docker build -t moe-daemon .
+
+# Run with your project mounted
+docker run -p 3141:3141 -v /path/to/project:/project moe-daemon
+```
+
+Or use docker-compose:
+
+```bash
+# From repo root
+docker-compose up -d
+
+# View logs
+docker-compose logs -f moe-daemon
+
+# Stop
+docker-compose down
+```
+
+See [CONFIGURATION.md](./CONFIGURATION.md) for environment variables.

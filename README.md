@@ -81,11 +81,6 @@ chmod +x scripts/*.sh
 ./scripts/install-mac.sh
 ```
 
-**Docker:**
-```bash
-docker run -p 3141:3141 -v /path/to/project:/project ghcr.io/yaront1111/moe-daemon
-```
-
 ### Initialize a Project
 
 ```bash
