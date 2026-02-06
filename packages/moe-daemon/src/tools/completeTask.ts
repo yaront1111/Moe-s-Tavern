@@ -21,6 +21,11 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
+      // Update worker to IDLE before status change (which clears assignedWorkerId)
+      if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {
+        await state.updateWorker(task.assignedWorkerId, { status: 'IDLE', currentTaskId: null });
+      }
+
       const updated = await state.updateTask(
         task.id,
         { status: 'REVIEW', prLink: params.prLink || task.prLink },

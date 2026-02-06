@@ -44,6 +44,11 @@ export function startStepTool(_state: StateManager): ToolDefinition {
 
       await state.updateTask(task.id, { implementationPlan: steps, status: 'WORKING' }, 'STEP_STARTED');
 
+      // Update worker status to CODING
+      if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {
+        await state.updateWorker(task.assignedWorkerId, { status: 'CODING', currentTaskId: task.id });
+      }
+
       return {
         success: true,
         taskId: task.id,

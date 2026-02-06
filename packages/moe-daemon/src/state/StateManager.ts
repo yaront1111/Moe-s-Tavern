@@ -107,6 +107,7 @@ export type StateChangeEvent =
   | { type: 'EPIC_UPDATED'; payload: Epic }
   | { type: 'EPIC_CREATED'; payload: Epic }
   | { type: 'EPIC_DELETED'; payload: Epic }
+  | { type: 'WORKER_CREATED'; payload: Worker }
   | { type: 'WORKER_UPDATED'; payload: Worker }
   | { type: 'PROPOSAL_CREATED'; payload: RailProposal }
   | { type: 'PROPOSAL_UPDATED'; payload: RailProposal }
@@ -287,6 +288,42 @@ export class StateManager {
     return Array.from(workerIds)
       .map((id) => this.workers.get(id))
       .filter((w): w is Worker => w !== undefined);
+  }
+
+  async createWorker(input: {
+    id: string;
+    type: Worker['type'];
+    projectId: string;
+    epicId: string;
+    currentTaskId: string | null;
+    status: Worker['status'];
+  }): Promise<Worker> {
+    // Validate worker doesn't already exist
+    if (this.workers.has(input.id)) {
+      throw new Error(`Worker already exists: ${input.id}`);
+    }
+
+    const now = new Date().toISOString();
+    const worker: Worker = {
+      id: input.id,
+      type: input.type,
+      projectId: input.projectId,
+      epicId: input.epicId,
+      currentTaskId: input.currentTaskId,
+      status: input.status,
+      branch: '',
+      modifiedFiles: [],
+      startedAt: now,
+      lastActivityAt: now,
+      lastError: null,
+      errorCount: 0
+    };
+
+    this.workers.set(worker.id, worker);
+    await this.writeEntity('workers', worker.id, worker);
+    this.appendActivity('WORKER_CREATED', { workerId: worker.id, type: worker.type }, undefined, worker);
+    this.emit({ type: 'WORKER_CREATED', payload: worker });
+    return worker;
   }
 
   async createTask(input: Partial<Task>): Promise<Task> {

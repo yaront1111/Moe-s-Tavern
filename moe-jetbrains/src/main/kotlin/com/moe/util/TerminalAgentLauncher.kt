@@ -1,6 +1,7 @@
 package com.moe.util
 
 import com.moe.services.MoeProjectService
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfo
@@ -60,7 +61,52 @@ object TerminalAgentLauncher {
         "qa" to "Moe QA"
     )
 
-    private fun resolveContext(project: Project): AgentContext? {
+    enum class AgentProvider(val displayName: String, val command: String) {
+        CLAUDE("Claude", "claude"),
+        CODEX("Codex", "codex"),
+        GEMINI("Gemini", "gemini"),
+        CUSTOM("Custom...", "");
+
+        companion object {
+            fun fromCommand(command: String): AgentProvider {
+                return entries.firstOrNull { it != CUSTOM && it.command == command } ?: CUSTOM
+            }
+        }
+    }
+
+    private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
+    private const val CUSTOM_COMMAND_KEY = "moe.customAgentCommand"
+
+    fun getLastUsedProvider(project: Project): AgentProvider {
+        val stored = PropertiesComponent.getInstance(project).getValue(LAST_PROVIDER_KEY, AgentProvider.CLAUDE.name)
+        return try {
+            AgentProvider.valueOf(stored)
+        } catch (_: IllegalArgumentException) {
+            AgentProvider.CLAUDE
+        }
+    }
+
+    fun setLastUsedProvider(project: Project, provider: AgentProvider) {
+        PropertiesComponent.getInstance(project).setValue(LAST_PROVIDER_KEY, provider.name)
+    }
+
+    fun getCustomCommand(project: Project): String {
+        return PropertiesComponent.getInstance(project).getValue(CUSTOM_COMMAND_KEY, "")
+    }
+
+    fun setCustomCommand(project: Project, command: String) {
+        PropertiesComponent.getInstance(project).setValue(CUSTOM_COMMAND_KEY, command)
+    }
+
+    fun resolveAgentCommand(project: Project, provider: AgentProvider): String {
+        return if (provider == AgentProvider.CUSTOM) {
+            getCustomCommand(project).ifEmpty { "claude" }
+        } else {
+            provider.command
+        }
+    }
+
+    private fun resolveContext(project: Project, agentCommand: String? = null): AgentContext? {
         val basePath = project.basePath ?: run {
             Messages.showErrorDialog(project, "Project path not available.", "Moe")
             return null
@@ -94,10 +140,10 @@ object TerminalAgentLauncher {
             return null
         }
 
-        val agentCommand = MoeProjectService.getInstance(project)
+        val resolvedCommand = agentCommand ?: MoeProjectService.getInstance(project)
             .getState()?.project?.settings?.agentCommand ?: "claude"
 
-        return AgentContext(basePath, script, manager, envOverrides, agentCommand)
+        return AgentContext(basePath, script, manager, envOverrides, resolvedCommand)
     }
 
     private fun launchRole(project: Project, ctx: AgentContext, role: String) {
@@ -117,15 +163,15 @@ object TerminalAgentLauncher {
         }
     }
 
-    fun startAgents(project: Project) {
-        val ctx = resolveContext(project) ?: return
+    fun startAgents(project: Project, agentCommand: String? = null) {
+        val ctx = resolveContext(project, agentCommand) ?: return
         for (role in listOf("architect", "worker", "qa")) {
             launchRole(project, ctx, role)
         }
     }
 
-    fun startAgent(project: Project, role: String) {
-        val ctx = resolveContext(project) ?: return
+    fun startAgent(project: Project, role: String, agentCommand: String? = null) {
+        val ctx = resolveContext(project, agentCommand) ?: return
         launchRole(project, ctx, role)
     }
 
