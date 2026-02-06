@@ -165,7 +165,7 @@ describe('MCP Tools', () => {
 
     it('throws if project not loaded', async () => {
       const tool = getContextTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('Project not loaded');
+      await expect(tool.handler({}, state)).rejects.toThrow('not loaded state, expected loaded');
     });
   });
 
@@ -200,7 +200,7 @@ describe('MCP Tools', () => {
       const tool = submitPlanTool(state);
       await expect(
         tool.handler({ taskId: 'nonexistent', steps: [{ description: 'Step 1' }] }, state)
-      ).rejects.toThrow('TASK_NOT_FOUND');
+      ).rejects.toThrow('Task not found');
     });
 
     it('throws for wrong task status', async () => {
@@ -208,21 +208,21 @@ describe('MCP Tools', () => {
       const tool = submitPlanTool(state);
       await expect(
         tool.handler({ taskId: 'task-1', steps: [{ description: 'Step 1' }] }, state)
-      ).rejects.toThrow('INVALID_STATUS');
+      ).rejects.toThrow('expected PLANNING');
     });
 
     it('throws for empty plan', async () => {
       const tool = submitPlanTool(state);
       await expect(
         tool.handler({ taskId: 'task-1', steps: [] }, state)
-      ).rejects.toThrow('EMPTY_PLAN');
+      ).rejects.toThrow('plan cannot be empty');
     });
 
     it('rejects plan with forbidden pattern', async () => {
       const tool = submitPlanTool(state);
       await expect(
         tool.handler({ taskId: 'task-1', steps: [{ description: 'Run rm -rf /' }] }, state)
-      ).rejects.toThrow('RAIL_VIOLATION');
+      ).rejects.toThrow('Rail violation');
     });
   });
 
@@ -261,7 +261,7 @@ describe('MCP Tools', () => {
 
     it('throws for non-existent task', async () => {
       const tool = checkApprovalTool(state);
-      await expect(tool.handler({ taskId: 'nonexistent' }, state)).rejects.toThrow('TASK_NOT_FOUND');
+      await expect(tool.handler({ taskId: 'nonexistent' }, state)).rejects.toThrow('Task not found');
     });
   });
 
@@ -403,7 +403,7 @@ describe('MCP Tools', () => {
       const tool = reportBlockedTool(state);
       await expect(
         tool.handler({ taskId: 'nonexistent', reason: 'test' }, state)
-      ).rejects.toThrow('TASK_NOT_FOUND');
+      ).rejects.toThrow('Task not found');
     });
   });
 
@@ -507,12 +507,12 @@ describe('MCP Tools', () => {
 
     it('throws for missing epicId', async () => {
       const tool = createTaskTool(state);
-      await expect(tool.handler({ title: 'Test' }, state)).rejects.toThrow('epicId is required');
+      await expect(tool.handler({ title: 'Test' }, state)).rejects.toThrow('Missing required field: epicId');
     });
 
     it('throws for missing title', async () => {
       const tool = createTaskTool(state);
-      await expect(tool.handler({ epicId: 'epic-1' }, state)).rejects.toThrow('title is required');
+      await expect(tool.handler({ epicId: 'epic-1' }, state)).rejects.toThrow('Missing required field: title');
     });
   });
 
@@ -536,7 +536,7 @@ describe('MCP Tools', () => {
 
     it('throws for missing title', async () => {
       const tool = createEpicTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('title is required');
+      await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: title');
     });
   });
 
@@ -564,7 +564,7 @@ describe('MCP Tools', () => {
       // BACKLOG -> DONE is not valid
       await expect(
         tool.handler({ taskId: 'task-1', status: 'DONE' }, state)
-      ).rejects.toThrow('Invalid status transition');
+      ).rejects.toThrow('status transition not allowed');
     });
 
     it('rejects invalid status values', async () => {
@@ -632,7 +632,7 @@ describe('MCP Tools', () => {
 
     it('throws for empty statuses', async () => {
       const tool = claimNextTaskTool(state);
-      await expect(tool.handler({ statuses: [] }, state)).rejects.toThrow('statuses is required');
+      await expect(tool.handler({ statuses: [] }, state)).rejects.toThrow('Missing required field: statuses');
     });
 
     it('returns hasNext=false when no matching tasks', async () => {
@@ -677,7 +677,7 @@ describe('MCP Tools', () => {
           proposedValue: 'test',
           reason: 'test',
         }, state)
-      ).rejects.toThrow('TASK_NOT_FOUND');
+      ).rejects.toThrow('Task not found');
     });
 
     it('includes workerId from assigned task', async () => {
@@ -716,7 +716,7 @@ describe('MCP Tools', () => {
 
     it('throws for missing taskId', async () => {
       const tool = deleteTaskTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('taskId is required');
+      await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: taskId');
     });
 
     it('throws for non-existent task', async () => {
@@ -760,7 +760,7 @@ describe('MCP Tools', () => {
 
     it('throws for missing epicId', async () => {
       const tool = updateEpicTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('epicId is required');
+      await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: epicId');
     });
   });
 
@@ -810,7 +810,7 @@ describe('MCP Tools', () => {
 
     it('throws for missing epicId', async () => {
       const tool = deleteEpicTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('epicId is required');
+      await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: epicId');
     });
   });
 
@@ -894,7 +894,7 @@ describe('MCP Tools', () => {
 
     it('throws for missing taskId', async () => {
       const tool = qaApproveTool(state);
-      await expect(tool.handler({}, state)).rejects.toThrow('taskId is required');
+      await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: taskId');
     });
 
     it('throws for non-REVIEW status', async () => {
@@ -902,7 +902,7 @@ describe('MCP Tools', () => {
       const tool = qaApproveTool(state);
       await expect(
         tool.handler({ taskId: 'task-1' }, state)
-      ).rejects.toThrow('Task must be in REVIEW status');
+      ).rejects.toThrow('expected REVIEW');
     });
 
     it('throws for non-existent task', async () => {
@@ -953,21 +953,21 @@ describe('MCP Tools', () => {
       const tool = qaRejectTool(state);
       await expect(
         tool.handler({ reason: 'test' }, state)
-      ).rejects.toThrow('taskId is required');
+      ).rejects.toThrow('Missing required field: taskId');
     });
 
     it('throws for missing reason', async () => {
       const tool = qaRejectTool(state);
       await expect(
         tool.handler({ taskId: 'task-1' }, state)
-      ).rejects.toThrow('reason is required');
+      ).rejects.toThrow('Missing required field: reason');
     });
 
     it('throws for empty reason', async () => {
       const tool = qaRejectTool(state);
       await expect(
         tool.handler({ taskId: 'task-1', reason: '  ' }, state)
-      ).rejects.toThrow('reason is required');
+      ).rejects.toThrow('Missing required field: reason');
     });
 
     it('throws for non-REVIEW status', async () => {
@@ -975,7 +975,7 @@ describe('MCP Tools', () => {
       const tool = qaRejectTool(state);
       await expect(
         tool.handler({ taskId: 'task-1', reason: 'test' }, state)
-      ).rejects.toThrow('Task must be in REVIEW status');
+      ).rejects.toThrow('expected REVIEW');
     });
   });
 });
