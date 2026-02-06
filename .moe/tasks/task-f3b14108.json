@@ -1,0 +1,57 @@
+{
+  "id": "task-f3b14108",
+  "epicId": "epic-a205c7a1",
+  "title": "Add moe.get_activity_log tool for agents to query task history",
+  "description": "Activity log exists (.moe/activity.log) but agents have NO programmatic access to it. They can't see what was attempted before, what decisions were made, or why previous attempts failed.\n\n**New tool:** `moe.get_activity_log`\n```typescript\nmoe.get_activity_log({\n  taskId?: string,       // filter by task\n  epicId?: string,       // filter by epic\n  workerId?: string,     // filter by worker\n  eventTypes?: string[], // filter by event type\n  limit?: number         // default 50\n})\n→ {\n  events: [\n    { id, timestamp, event, taskId, workerId, payload }\n  ]\n}\n```\n\nStateManager already has `getActivityLog(limit)` method. This tool just exposes it via MCP with filtering.\n\n**Key files:**\n- `packages/moe-daemon/src/tools/` - new tool file\n- `packages/moe-daemon/src/state/StateManager.ts` - getActivityLog method\n- `packages/moe-daemon/src/tools/index.ts` - register tool",
+  "definitionOfDone": [
+    "New MCP tool moe.get_activity_log exists",
+    "Supports filtering by taskId, epicId, workerId, eventTypes",
+    "Returns events newest-first with configurable limit",
+    "Test added to tools.test.ts"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Create getActivityLog.ts tool file in packages/moe-daemon/src/tools/. The tool accepts optional filters: taskId, epicId, workerId, eventTypes (string[]), and limit (default 50). It calls state.getActivityLog(limit) then applies filters on taskId/epicId/workerId/eventTypes. Include error handling for invalid eventTypes. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "startedAt": "2026-02-06T22:18:58.259Z",
+      "completedAt": "2026-02-06T22:19:42.275Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Register the new tool in tools/index.ts. Import getActivityLogTool and add it to the getTools() array. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-02-06T22:19:46.637Z",
+      "completedAt": "2026-02-06T22:20:07.324Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Add test cases to tools.test.ts: (a) returns empty array when no activity, (b) returns events filtered by taskId, (c) returns events filtered by eventTypes, (d) respects limit parameter, (e) error handling for malformed filters. All new MCP tools must have tests in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__tests__/tools.test.ts"
+      ],
+      "startedAt": "2026-02-06T22:20:11.159Z",
+      "completedAt": "2026-02-06T22:21:36.919Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "createdAt": "2026-02-06T22:05:59.314Z",
+  "updatedAt": "2026-02-06T22:29:09.271Z"
+}

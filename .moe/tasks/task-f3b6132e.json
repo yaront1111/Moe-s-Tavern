@@ -1,0 +1,47 @@
+{
+  "id": "task-f3b6132e",
+  "epicId": "epic-a205c7a1",
+  "title": "Fix get_context to return worker record (currently always null)",
+  "description": "In `packages/moe-daemon/src/tools/getContext.ts` line 67, `worker` is always returned as `null`. Agents have no self-awareness - can't see their own status, lastError, errorCount.\n\n**Fix:** Look up the worker record using the task's assignedWorkerId or the workerId from environment/params. Return the full worker object.\n\n**Current code:**\n```typescript\nworker: null  // ← Always null\n```\n\n**Should be:**\n```typescript\nworker: task?.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null\n```\n\nReturn fields: id, type, status, lastError, errorCount, startedAt, lastActivityAt, currentTaskId.",
+  "definitionOfDone": [
+    "get_context returns worker object when task has assignedWorkerId",
+    "Worker object includes status, lastError, errorCount fields",
+    "Returns null only when no worker is assigned",
+    "Test added to tools.test.ts"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In `packages/moe-daemon/src/tools/getContext.ts`, replace `worker: null` with a lookup: if the resolved task has `assignedWorkerId`, call `state.getWorker(task.assignedWorkerId)` and return the worker record (id, type, status, lastError, errorCount, startedAt, lastActivityAt, currentTaskId). Keep returning null when no task or no assignedWorkerId. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "startedAt": "2026-02-06T22:13:45.527Z",
+      "completedAt": "2026-02-06T22:14:29.978Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add test cases in tools.test.ts for the enhanced get_context: (1) test that worker is returned when task has assignedWorkerId (2) test that worker is null when task has no assignedWorkerId (3) test that worker fields include status and lastError. All new MCP tools must have tests in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-02-06T22:14:33.655Z",
+      "completedAt": "2026-02-06T22:15:54.590Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "createdAt": "2026-02-06T22:05:35.439Z",
+  "updatedAt": "2026-02-06T22:23:21.508Z"
+}

@@ -1,0 +1,66 @@
+{
+  "id": "task-7324c24c",
+  "epicId": "epic-plugin-dialogs",
+  "title": "Add AI provider selection to agent launch menu (Claude, Codex, Gemini)",
+  "description": "**Feature:** The \"Start Agents\" dropdown menu in MoeToolWindowPanel currently only offers role-based options (Architect, Worker, QA). Users need to choose which AI provider/model to use when launching agents.\n\n**Current state:**\n- `MoeToolWindowPanel.kt` lines 93-119: Popup menu with \"Start All\", \"Architect\", \"Worker\", \"QA\"\n- `TerminalAgentLauncher.kt`: Launches agents via terminal with `moe-agent.sh`/`.ps1` scripts\n- Scripts use `MOE_AGENT_COMMAND` env var (defaults to 'claude') but UI never sets it\n\n**Desired:**\n- Sub-menus or a dialog that lets user pick the AI provider per agent launch\n- Supported providers: Claude (default), Codex (OpenAI), Gemini (Google), custom command\n- Provider selection should set the appropriate env var (`MOE_AGENT_COMMAND`) when launching the terminal\n- Persist last-used provider in project settings\n\n**Key files:**\n- `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt` - agent button menu\n- `moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt` - launch logic, env vars\n- `scripts/moe-agent.sh` / `scripts/moe-agent.ps1` - agent wrapper scripts\n- `.moe/project.json` - settings.agentCommand field",
+  "definitionOfDone": [
+    "Agent launch menu shows provider options (Claude, Codex, Gemini, Custom)",
+    "Selected provider is passed as MOE_AGENT_COMMAND env var to agent script",
+    "Last-used provider is remembered per project",
+    "Each role+provider combination launches correctly in terminal"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add an AgentProvider enum or data class to TerminalAgentLauncher.kt listing available AI providers: Claude (command='claude'), Codex (command='codex'), Gemini (command='gemini'), Custom (user-provided command string). Add a getLastUsedProvider(project) / setLastUsedProvider(project, provider) using PropertiesComponent to persist per-project. Use IntelliJ Platform UI components.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-05T23:44:39.666Z",
+      "completedAt": "2026-02-06T09:38:52.560Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Refactor the agent popup menu in MoeToolWindowPanel.kt lines 93-119. Replace flat menu items with sub-menus per role (Architect >, Worker >, QA >). Each sub-menu shows provider options (Claude, Codex, Gemini, Custom...). 'Start All' uses the last-used provider or prompts. When 'Custom' is selected, show an input dialog for the command string. On selection, save the provider and call TerminalAgentLauncher.startAgent(project, role, providerCommand). All dialogs must extend DialogWrapper. Send messages through MoeProjectService WebSocket.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-06T09:38:56.505Z",
+      "completedAt": "2026-02-06T09:39:21.147Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update TerminalAgentLauncher.startAgent() and startAgents() to accept an optional agentCommand parameter (defaulting to last-used or project setting). Pass this through resolveContext/launchRole/buildCommand instead of always reading from project settings. The command flows to buildPowerShellCommand/buildBashCommand which already pass it to scripts via -Command/--command args. Use IntelliJ Platform UI components.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-06T09:39:25.532Z",
+      "completedAt": "2026-02-06T09:39:29.964Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add MoeBundle message keys for the new menu labels: provider names (Claude, Codex, Gemini, Custom), sub-menu headers, and input dialog prompt. Update MoeBundle.properties with the new strings.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-06T09:39:33.400Z",
+      "completedAt": "2026-02-06T09:39:43.586Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 10,
+  "createdAt": "2026-02-05T23:41:33.133Z",
+  "updatedAt": "2026-02-06T09:43:15.221Z"
+}

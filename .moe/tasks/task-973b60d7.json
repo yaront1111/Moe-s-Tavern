@@ -1,0 +1,58 @@
+{
+  "id": "task-973b60d7",
+  "epicId": "epic-a205c7a1",
+  "title": "Enhance system prompt injection with project context and architecture",
+  "description": "Current system prompt is only ~3 lines + role doc. Agents start with almost no context about the project, architecture, or known issues.\n\n**Enhance agent scripts** to inject additional context:\n\n1. **Architecture overview** (brief):\n   - What Moe is, how daemon/proxy/plugin interact\n   - .moe/ folder is source of truth\n   - All state changes through MCP tools\n\n2. **Project settings** (from project.json):\n   - Approval mode (CONTROL/SPEED/TURBO)\n   - Tech stack (from globalRails.techStack)\n   - Testing requirements (from globalRails.testing)\n\n3. **Known issues** (from .moe/KNOWN_ISSUES.md if it exists):\n   - Rails validation quirks\n   - Project-specific gotchas\n\n4. **Data access patterns**:\n   - \"Call moe.get_context first to understand task requirements\"\n   - \"Use moe.list_tasks to see epic progress\"\n\nKeep total injection under 300 lines to avoid bloating context window.\n\n**Key files:**\n- `scripts/moe-agent.sh` - SYSTEM_APPEND construction\n- `scripts/moe-agent.ps1` - $systemAppend construction",
+  "definitionOfDone": [
+    "System prompt includes brief architecture overview",
+    "System prompt includes project approval mode",
+    "System prompt references moe.get_context as first step",
+    "Total injection is under 300 lines",
+    "Both bash and PowerShell scripts updated"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Create a shared context template file at docs/agent-context.md (~30-50 lines). Contains: brief Moe architecture overview (daemon/proxy/plugin/MCP), .moe/ as source of truth, data access patterns (call get_context first, use list_tasks for progress), and common workflow reminders. Role docs must be concise enough for system prompt injection (<200 lines). This template is loaded by both agent scripts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/agent-context.md"
+      ],
+      "startedAt": "2026-02-06T22:21:51.945Z",
+      "completedAt": "2026-02-06T22:22:10.830Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Update moe-agent.sh to build richer SYSTEM_APPEND. After loading role doc (lines 605-614), also: (a) load docs/agent-context.md if it exists, (b) read approval mode from .moe/project.json using lightweight JSON parsing (grep/sed, no jq dependency), (c) check for .moe/KNOWN_ISSUES.md and append if present. Concatenate all into SYSTEM_APPEND with total under 300 lines. Include error handling for missing files. Changes must not break existing agent scripts or MCP protocol. Test by running the script in dry-run mode.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-06T22:22:14.942Z",
+      "completedAt": "2026-02-06T22:23:01.863Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Update moe-agent.ps1 with matching logic. After loading role doc (lines 210-215), also: (a) load docs/agent-context.md with Test-Path check, (b) read approval mode from .moe/project.json using ConvertFrom-Json, (c) check for .moe/KNOWN_ISSUES.md. Build $systemAppend with same structure as bash. Include error handling for missing/malformed JSON. Changes must not break existing agent scripts or MCP protocol. Test by running the script.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-06T22:23:06.162Z",
+      "completedAt": "2026-02-06T22:23:54.686Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "createdAt": "2026-02-06T22:06:08.511Z",
+  "updatedAt": "2026-02-06T22:29:56.595Z"
+}

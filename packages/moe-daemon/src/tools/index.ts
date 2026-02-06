@@ -24,6 +24,8 @@ import { deleteTaskTool } from './deleteTask.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { initProjectTool } from './initProject.js';
+import { getActivityLogTool } from './getActivityLog.js';
+import { unblockWorkerTool } from './unblockWorker.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -56,6 +58,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     deleteTaskTool(state),
     qaApproveTool(state),
     qaRejectTool(state),
-    initProjectTool(state)
+    initProjectTool(state),
+    getActivityLogTool(state),
+    unblockWorkerTool(state)
   ];
 }

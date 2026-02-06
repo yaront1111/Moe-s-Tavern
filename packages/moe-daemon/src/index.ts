@@ -143,7 +143,7 @@ function isPortAvailable(port: number): Promise<boolean> {
     const server = net.createServer();
     server.unref();
     server.on('error', () => resolve(false));
-    server.listen({ port }, () => {
+    server.listen({ port, host: '127.0.0.1' }, () => {
       server.close(() => resolve(true));
     });
   });
@@ -291,7 +291,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   await new Promise<void>((resolve, reject) => {
     httpServer.once('listening', resolve);
     httpServer.once('error', reject);
-    httpServer.listen(port);
+    httpServer.listen(port, '127.0.0.1');
   });
 
   // Verify port is actually accepting connections

@@ -1,0 +1,57 @@
+{
+  "id": "task-47473f5d",
+  "epicId": "epic-a205c7a1",
+  "title": "Populate global rails with security, quality, and testing constraints",
+  "description": "Global forbiddenPatterns and requiredPatterns are completely empty. This means zero automated enforcement exists. Populate with baseline constraints.\n\n**forbiddenPatterns** (block these in plan text):\n- `eval(` - code injection risk\n- `innerHTML` - XSS risk  \n- `dangerouslySetInnerHTML` - XSS risk\n- `__proto__` - prototype pollution\n- `console.log` should NOT be forbidden (too many false positives in plan text)\n\n**requiredPatterns** (plans must mention these):\n- `error handling` - all plans should address errors\n- `test` - all plans should mention testing\n\n**Important**: Avoid patterns that cause false positives. \"any\" would match \"many\", \"company\", etc. Use word-boundary-aware patterns or longer phrases.\n\nUpdate `.moe/project.json` globalRails section.",
+  "definitionOfDone": [
+    "forbiddenPatterns populated with security-critical patterns",
+    "requiredPatterns include error handling and testing",
+    "No false positives on common English words",
+    "Existing plans still pass validation (verify with tests)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update `.moe/project.json` globalRails.forbiddenPatterns with security-critical patterns: `eval(`, `innerHTML`, `dangerouslySetInnerHTML`, `__proto__`. These are specific enough to avoid false positives in plan text. Do NOT include short words like `any` that match common English. Global rails must avoid false positives (e.g. 'any' matching 'many'). Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".moe/project.json"
+      ],
+      "startedAt": "2026-02-06T22:07:12.966Z",
+      "completedAt": "2026-02-06T22:07:31.496Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update `.moe/project.json` globalRails.requiredPatterns with `error handling` and `test`. These phrases are common enough that all well-designed plans will naturally include them. Also populate techStack with `TypeScript`, `Kotlin`, `Node.js` and testing with `vitest` to give agents context. Global rails must avoid false positives.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".moe/project.json"
+      ],
+      "startedAt": "2026-02-06T22:07:34.859Z",
+      "completedAt": "2026-02-06T22:07:49.936Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run existing rails validation tests to ensure new patterns don't cause regressions. Verify that existing completed task plans would still pass validation by spot-checking 3-5 plan descriptions against the new forbidden/required patterns. All new MCP tools must have tests in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-02-06T22:07:53.307Z",
+      "completedAt": "2026-02-06T22:08:49.976Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "createdAt": "2026-02-06T22:05:19.970Z",
+  "updatedAt": "2026-02-06T22:09:45.002Z"
+}

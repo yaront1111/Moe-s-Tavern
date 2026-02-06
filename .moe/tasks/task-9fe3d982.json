@@ -1,0 +1,36 @@
+{
+  "id": "task-9fe3d982",
+  "epicId": "epic-a205c7a1",
+  "title": "Fix PowerShell agent script: add fallback to docs/roles/ for role docs",
+  "description": "In `scripts/moe-agent.ps1` lines 205-209, the script ONLY checks `.moe/roles/$Role.md`. If the file doesn't exist, agent gets NO role documentation at all.\n\nThe bash script (`moe-agent.sh` lines 512-524) correctly falls back to `docs/roles/$Role.md`. PowerShell should do the same.\n\n**Fix:**\n```powershell\n$roleDocPath = Join-Path $moeDir \"roles\\\\$Role.md\"\nif (-not (Test-Path $roleDocPath)) {\n    $roleDocPath = Join-Path $root \"docs\\\\roles\\\\$Role.md\"\n}\nif (Test-Path $roleDocPath) {\n    $roleDoc = Get-Content -Raw -Path $roleDocPath\n}\n```",
+  "definitionOfDone": [
+    "PowerShell script falls back to docs/roles/ when .moe/roles/ missing",
+    "Behavior matches bash script fallback logic",
+    "Prints which path was loaded for debugging"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add fallback logic to PowerShell role doc loading (lines 210-215 of moe-agent.ps1). When .moe/roles/$Role.md doesn't exist, fall back to docs/roles/$Role.md — matching bash script behavior. Include error handling for missing files and print which path was loaded for debugging. Test by verifying both paths are checked in order.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-06T22:16:08.630Z",
+      "completedAt": "2026-02-06T22:16:49.485Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "createdAt": "2026-02-06T22:05:41.347Z",
+  "updatedAt": "2026-02-06T22:25:50.584Z"
+}

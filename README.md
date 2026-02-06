@@ -124,23 +124,21 @@ The plugin provides a visual Kanban board inside your IDE (IntelliJ IDEA, PyChar
 
 ### Build the Plugin
 
+The plugin bundles the daemon, proxy, agent scripts, and role documentation. Build the daemon and proxy first:
+
 **Mac / Linux:**
 ```bash
-cd packages/moe-daemon
-npm install
-npm run build
-
-cd moe-jetbrains
+cd packages/moe-daemon && npm install && npm run build
+cd ../moe-proxy && npm install && npm run build
+cd ../../moe-jetbrains
 ./gradlew buildPlugin
 ```
 
 **Windows:**
 ```powershell
-cd packages\moe-daemon
-npm install
-npm run build
-
-cd moe-jetbrains
+cd packages\moe-daemon; npm install; npm run build
+cd ..\moe-proxy; npm install; npm run build
+cd ..\..\moe-jetbrains
 .\gradlew.bat buildPlugin
 ```
 
@@ -230,8 +228,15 @@ moe/
 │   ├── MCP_SERVER.md    # MCP tool reference
 │   ├── SCHEMA.md        # Data schema
 │   ├── DEVELOPMENT.md   # Dev guide
-│   └── TROUBLESHOOTING.md # Common issues & solutions
-└── scripts/             # Cross-platform install scripts
+│   ├── TROUBLESHOOTING.md # Common issues & solutions
+│   └── roles/           # Agent role guides (bundled with plugin)
+│       ├── architect.md
+│       ├── worker.md
+│       └── qa.md
+└── scripts/             # Agent launcher & install scripts
+    ├── moe-agent.ps1    # Windows agent launcher
+    ├── moe-agent.sh     # Mac/Linux agent launcher
+    └── install-all.ps1  # Windows full install
 ```
 
 ---

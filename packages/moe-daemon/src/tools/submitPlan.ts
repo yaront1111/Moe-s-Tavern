@@ -85,7 +85,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
       await state.updateTask(task.id, {
         implementationPlan,
-        status: 'AWAITING_APPROVAL'
+        status: 'AWAITING_APPROVAL',
+        planSubmittedAt: new Date().toISOString(),
       }, 'PLAN_SUBMITTED');
 
       const approvalMode = project.settings.approvalMode;
@@ -94,7 +95,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
       if (approvalMode === 'TURBO') {
         // Instant auto-approval
-        await state.updateTask(task.id, { status: 'WORKING' }, 'PLAN_AUTO_APPROVED');
+        await state.updateTask(task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_AUTO_APPROVED');
         finalStatus = 'WORKING';
         message = 'Plan auto-approved (TURBO mode). Ready to work.';
       } else if (approvalMode === 'SPEED') {

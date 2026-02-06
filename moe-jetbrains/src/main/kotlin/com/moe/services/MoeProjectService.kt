@@ -564,6 +564,12 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
             val process = pb.start()
             spawnedDaemonProcess = process
+            // Drain stdout/stderr to prevent Windows pipe deadlock (buffer is ~4KB)
+            Thread({
+                try {
+                    process.inputStream.bufferedReader().forEachLine { /* discard */ }
+                } catch (_: Exception) { }
+            }, "Moe-DaemonDrain").apply { isDaemon = true }.start()
             log.info("Started Moe daemon for $basePath using ${direct?.joinToString(" ") ?: "shell command"} (pid tracking enabled)")
             return true
         } catch (ex: Exception) {

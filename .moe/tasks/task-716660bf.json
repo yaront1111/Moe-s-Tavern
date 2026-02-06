@@ -1,0 +1,57 @@
+{
+  "id": "task-716660bf",
+  "epicId": "epic-daemon",
+  "title": "Agents don't auto-pick new tasks - need idle polling or push notifications",
+  "description": "**Bug/Gap:** When a task moves to a claimable status (e.g., AWAITING_APPROVAL → WORKING after human approval), idle agents have no way to know there's new work. The agent scripts run once, do one task, and exit.\n\n**Current flow:**\n1. Agent script starts → calls `claim_next_task` → gets a task → works on it → `complete_task` → exits\n2. Human approves a plan → task moves to WORKING → nobody picks it up\n3. User has to manually re-launch an agent\n\n**Expected flow:**\n1. Agent completes a task → checks for more work → if none, stays alive and polls/waits\n2. When a task becomes available (status change, plan approved), an idle agent picks it up automatically\n\n**Two possible approaches:**\n\n**Option A: Agent-side polling loop (simpler)**\n- Modify `moe-agent.sh` / `moe-agent.ps1` to loop after completing a task\n- After `complete_task`, call `claim_next_task` again\n- If no task available, sleep N seconds and retry (configurable poll interval)\n- Agent stays alive in the terminal tab until manually stopped\n\n**Option B: Daemon push notification (better UX)**\n- Daemon detects when a task enters a claimable status (PLANNING, WORKING, REVIEW)\n- Daemon sends a notification to connected MCP clients via WebSocket\n- Agent proxy listens for these notifications and triggers the agent to claim\n- Requires changes to proxy + agent script protocol\n\n**Option A is the pragmatic first step.** The scripts just need a loop wrapper.\n\n**Key files:**\n- `scripts/moe-agent.sh` - main agent loop (bash)\n- `scripts/moe-agent.ps1` - main agent loop (PowerShell)\n- `packages/moe-daemon/src/server/WebSocketServer.ts` - for push notifications (Option B)\n- `packages/moe-proxy/src/index.ts` - for receiving push notifications (Option B)",
+  "definitionOfDone": [
+    "After completing a task, agent automatically checks for more work",
+    "If no work available, agent stays alive and polls periodically (configurable interval)",
+    "Agent picks up newly available tasks without manual re-launch",
+    "Works on both Windows (PowerShell) and Mac/Linux (Bash)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a polling loop to moe-agent.ps1. Wrap the Claude CLI invocation (lines 220-237) in a while($true) loop. After the CLI exits, sleep for a configurable interval (new -PollInterval param, default 30 seconds), print a message like 'Agent idle, checking for tasks in N seconds...', then re-launch the CLI with the same claim prompt. Add a -NoLoop switch to opt out (single-run mode for backward compat). Ctrl+C exits the loop. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-06T12:50:26.583Z",
+      "completedAt": "2026-02-06T12:51:02.058Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the same polling loop to moe-agent.sh. Wrap the agent CLI invocation (lines 526-542) in a while true loop. After the CLI exits, sleep for a configurable interval (new --poll-interval flag, default 30 seconds), print 'Agent idle, checking for tasks in N seconds...', then re-launch. Add --no-loop flag to opt out. Trap SIGINT/SIGTERM to exit cleanly. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-06T12:51:05.427Z",
+      "completedAt": "2026-02-06T12:51:37.231Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update the TerminalAgentLauncher.kt tab naming to indicate the agent is persistent (e.g. keep existing names). No functional changes needed since the terminal tab stays open and the loop runs inside it. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-06T12:51:41.486Z",
+      "completedAt": "2026-02-06T12:51:46.060Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 22,
+  "createdAt": "2026-02-06T12:41:34.961Z",
+  "updatedAt": "2026-02-06T12:57:09.370Z"
+}

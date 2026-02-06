@@ -1,0 +1,71 @@
+{
+  "id": "task-255c8b34",
+  "epicId": "epic-a205c7a1",
+  "title": "Rewrite role docs with error handling, code quality, and testing guidance",
+  "description": "All 3 role docs (architect, worker, qa) are too thin for autonomous agent execution. Current completeness: Architect 4.6/10, Worker 3.9/10, QA 3.5/10.\n\n**Add to ALL roles:**\n- Error recovery section (what to do when tools fail, retry strategy)\n- `moe.get_context` as first step (currently not mentioned)\n- Rails understanding (global=enforced, epic/task=guidance)\n- Known issues section\n\n**Architect additions:**\n- Read existing codebase patterns before planning\n- Step granularity guidance (what's atomic?)\n- `moe.propose_rail` tool reference\n- Code quality standards per step\n\n**Worker additions:**\n- Testing strategy (run tests before/after each step)\n- Git workflow (commit per step, branch naming)\n- `note` parameter usage in complete_step\n- `prLink` parameter in complete_task\n- DoD self-check before completing\n\n**QA additions:**\n- HOW to access code for review (prLink, branch, files)\n- Security review checklist\n- Rails compliance verification\n- Structured rejection feedback patterns\n- When to check beyond DoD (regressions, integration)\n\nUpdate both `docs/roles/*.md` AND `.moe/roles/*.md` files.",
+  "definitionOfDone": [
+    "All 3 role docs have error recovery section",
+    "All 3 role docs reference moe.get_context",
+    "Worker doc includes testing and git workflow guidance",
+    "QA doc explains how to access and review code",
+    "Each doc is under 200 lines (system prompt constraint)",
+    "docs/roles/ and .moe/roles/ are in sync"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Rewrite `docs/roles/architect.md` with enhanced sections: (1) Prerequisites - call moe.get_context first, read architectureNotes, review existing codebase patterns. (2) Enhanced Tools section - add moe.get_context and moe.propose_rail references. (3) Planning Best Practices - step granularity (one logical change per step), code quality (error handling, types, tests in each step). (4) Error Recovery - what to do when submit_plan fails (check rail violations, retry), what to do when plan rejected (read reopenReason, revise). (5) Rails Understanding - global=enforced, epic/task=guidance. Keep under 200 lines. Role docs must be concise enough for system prompt injection (<200 lines). Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/architect.md"
+      ],
+      "startedAt": "2026-02-06T22:09:06.071Z",
+      "completedAt": "2026-02-06T22:11:04.388Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Rewrite `docs/roles/worker.md` with enhanced sections: (1) Prerequisites - call moe.get_context, read implementationPlan carefully, check reopenReason if reopened. (2) Enhanced Tools - document `note` param in complete_step (use for design decisions, debugging info), `prLink` and `summary` in complete_task. (3) Testing Strategy - run tests before and after each step, add tests for new code. (4) Git Workflow - commit per step with clear messages, use task.branch. (5) Before Completing - self-check all DoD items, verify modified files list is complete. (6) Error Recovery - what to do if step fails, when to report_blocked vs fix locally. Keep under 200 lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.md"
+      ],
+      "startedAt": "2026-02-06T22:11:07.860Z",
+      "completedAt": "2026-02-06T22:11:43.342Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Rewrite `docs/roles/qa.md` with enhanced sections: (1) Prerequisites - call moe.get_context to get full task details including DoD and plan. (2) Code Access - how to review code: check prLink for PR, check task.branch, review modifiedFiles from steps. (3) Review Checklist - verify each DoD item, check rails compliance, look for security issues (injection, XSS, auth), run tests, check for regressions. (4) Rejection Patterns - examples of good rejection reasons with file paths, line numbers, specific DoD items. (5) Error Recovery - what to do if qa_approve/reject fails. Keep under 200 lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/qa.md"
+      ],
+      "startedAt": "2026-02-06T22:11:45.965Z",
+      "completedAt": "2026-02-06T22:12:15.796Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Copy the updated docs/roles/*.md files to .moe/roles/*.md to keep them in sync. The .moe/roles/ versions are what agents actually load (via the agent scripts). Verify both locations have identical content. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".moe/roles/architect.md",
+        ".moe/roles/worker.md",
+        ".moe/roles/qa.md"
+      ],
+      "startedAt": "2026-02-06T22:12:18.599Z",
+      "completedAt": "2026-02-06T22:13:30.087Z"
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 3,
+  "reopenReason": "THIRD REJECTION - DoD item 3 \"Worker doc includes testing and git workflow guidance\" is NOT satisfied. The file docs/roles/worker.md is UNCHANGED from the previous two reviews (still 117 lines, identical content).\n\nTHE SPECIFIC PROBLEM: The file has a \"Testing Strategy\" section (lines 66-72) but ZERO git workflow guidance. The words \"git\", \"commit\", \"branch\", and \"push\" do not appear anywhere in the file.\n\nEXACT FIX REQUIRED - Add these ~12 lines after line 81 (after \"Code Quality\" section, before \"Before Completing a Task\"):\n\n## Git Workflow\n\n- **Branch**: Use `task.branch` from context (pattern: `moe/epicId/taskId`)\n- **Commit per step**: After completing each step, commit with a message referencing the task and step\n- **Keep commits atomic**: Each commit should correspond to one step's changes\n- **Push before completing**: Push your branch before calling `complete_task`\n- **Include prLink**: If you create a PR, pass the URL in `complete_task { prLink }`\n\nALSO: Copy the updated file to .moe/roles/worker.md to keep them in sync (DoD item 6).\n\nWorker: Please READ the reopenReason via moe.get_context BEFORE resubmitting. The file must be EDITED, not just resubmitted as-is.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 2,
+  "createdAt": "2026-02-06T22:05:29.246Z",
+  "updatedAt": "2026-02-06T22:33:25.295Z"
+}

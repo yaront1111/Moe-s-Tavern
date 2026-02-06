@@ -61,10 +61,14 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               taskRails: task.taskRails,
               status: task.status,
               priority: task.priority,
+              assignedWorkerId: task.assignedWorkerId,
+              reopenCount: task.reopenCount,
+              reopenReason: task.reopenReason,
+              rejectionDetails: task.rejectionDetails || null,
               implementationPlan: task.implementationPlan
             }
           : null,
-        worker: null,
+        worker: task?.assignedWorkerId ? state.getWorker(task.assignedWorkerId) ?? null : null,
         allRails: {
           global: state.project.globalRails.requiredPatterns,
           epic: epic?.epicRails || [],

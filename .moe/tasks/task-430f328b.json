@@ -1,0 +1,67 @@
+{
+  "id": "task-430f328b",
+  "epicId": "epic-a205c7a1",
+  "title": "Track task timestamps (planSubmittedAt, workStartedAt, completedAt)",
+  "description": "Tasks only have createdAt and updatedAt. No timing data on phases. Can't measure how long planning, approval, or execution takes.\n\n**Add fields to Task schema:**\n```typescript\nplanSubmittedAt?: string;    // when architect submitted plan\nplanApprovedAt?: string;     // when human approved\nworkStartedAt?: string;      // when worker started first step\ncompletedAt?: string;        // when complete_task called\nreviewStartedAt?: string;    // when QA claimed for review\nreviewCompletedAt?: string;  // when QA approved/rejected\n```\n\nSet these automatically in the relevant tool handlers (submitPlan, startStep, completeTask, qaApprove/qaReject).\n\n**Key files:**\n- `packages/moe-daemon/src/types/schema.ts` - Task interface\n- `packages/moe-daemon/src/tools/submitPlan.ts`\n- `packages/moe-daemon/src/tools/startStep.ts`\n- `packages/moe-daemon/src/tools/completeTask.ts`\n- `packages/moe-daemon/src/tools/qaApprove.ts`\n- `packages/moe-daemon/src/tools/qaReject.ts`",
+  "definitionOfDone": [
+    "Task schema includes 6 new timestamp fields",
+    "Each timestamp set automatically by relevant tool handler",
+    "get_context returns timestamps to agents",
+    "Backwards compatible - existing tasks without timestamps still work",
+    "Migration handles existing tasks gracefully"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Add 6 optional timestamp fields to Task interface in schema.ts: planSubmittedAt?, planApprovedAt?, workStartedAt?, completedAt?, reviewStartedAt?, reviewCompletedAt?. All typed as `string | undefined` (ISO 8601). Backward-compatible since all optional — existing tasks without these fields still work. Include error handling for undefined values in any consumers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-06T22:33:32.933Z",
+      "completedAt": "2026-02-06T22:33:51.036Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Set timestamps in relevant tool handlers. submitPlan.ts: set planSubmittedAt on PLAN_SUBMITTED (line 86). submitPlan.ts: set planApprovedAt on PLAN_AUTO_APPROVED (lines 97, 108). startStep.ts: set workStartedAt on first STEP_STARTED (only if not already set, line 45). completeTask.ts: set completedAt and reviewStartedAt on move to REVIEW (line 29). qaApprove.ts: set reviewCompletedAt on move to DONE (line 34). qaReject.ts: set reviewCompletedAt on rejection (line 47). Include error handling to not overwrite existing timestamps on reopen cycles. Changes must not break existing agent scripts or MCP protocol. Test by verifying timestamps are set correctly in each workflow.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-02-06T22:33:51.528Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Expose timestamps in getContext.ts — add the 6 timestamp fields to the task response object (lines 55-65). Workers/architects can see timing data. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Step 4: Add test cases to tools.test.ts: (a) submitPlan sets planSubmittedAt, (b) approval sets planApprovedAt, (c) first startStep sets workStartedAt but second doesn't overwrite, (d) completeTask sets completedAt and reviewStartedAt, (e) qaApprove sets reviewCompletedAt. All new MCP tools must have tests in tools.test.ts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__tests__/tools.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d019",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 10,
+  "createdAt": "2026-02-06T22:06:31.394Z",
+  "updatedAt": "2026-02-06T22:33:51.528Z"
+}
