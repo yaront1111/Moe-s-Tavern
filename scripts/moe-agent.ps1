@@ -255,20 +255,50 @@ if (Test-Path $knownIssuesPath) {
     Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
-Write-Host "MCP config written to: $mcpConfigFile"
+# Detect CLI type from command name
+$cliType = "claude"
+$cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($Command)
+if ($cmdBase -eq "codex") { $cliType = "codex" }
+
+# For codex: register MCP server persistently instead of per-session config
+if ($cliType -eq "codex") {
+    Write-Host "Registering MCP server with codex..."
+    & codex mcp add moe --env "MOE_PROJECT_PATH=$($projectPath.ToString())" -- node $proxyScript 2>$null
+    Write-Host "Codex MCP server 'moe' registered"
+} else {
+    Write-Host "MCP config written to: $mcpConfigFile"
+}
 
 if ($Delay -gt 0) {
     Write-Host "Waiting $Delay seconds before starting..."
     Start-Sleep -Seconds $Delay
 }
 
-Write-Host "Launching Claude CLI..."
+Write-Host "Launching $cliType CLI..."
 if (-not $NoLoop) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
 }
 
 $loopEnabled = (-not $NoLoop) -and ($PollInterval -gt 0)
 $firstRun = $true
+
+# Build system/role context (shared across loop iterations)
+$systemAppend = "Role: $Role. Always use Moe MCP tools. "
+if ($AutoClaim) {
+    $systemAppend += "Start by claiming the next task for your role."
+}
+if ($agentContext) {
+    $systemAppend += "`n`n$agentContext"
+}
+if ($approvalMode) {
+    $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
+}
+if ($roleDoc) {
+    $systemAppend += "`n`n$roleDoc"
+}
+if ($knownIssues) {
+    $systemAppend += "`n`n# Known Issues`n$knownIssues"
+}
 
 do {
     if (-not $firstRun) {
@@ -279,40 +309,30 @@ do {
     }
     $firstRun = $false
 
-    if ($AutoClaim) {
-        $systemAppend = "Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role."
+    $claimPrompt = if ($AutoClaim) {
+        "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+    } else { $null }
 
-        if ($agentContext) {
-            $systemAppend += "`n`n$agentContext"
-        }
-        if ($approvalMode) {
-            $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
-        }
-        if ($roleDoc) {
-            $systemAppend += "`n`n$roleDoc"
-        }
-        if ($knownIssues) {
-            $systemAppend += "`n`n# Known Issues`n$knownIssues"
-        }
-        $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
-        Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$prompt`""
-        & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $prompt
+    if ($cliType -eq "codex") {
+        # Codex: embed role context in the prompt, use --full-auto and -C for project dir
+        $fullPrompt = $systemAppend
+        if ($claimPrompt) { $fullPrompt += "`n`n$claimPrompt" }
+
+        # Write prompt to temp file to avoid quoting issues
+        $promptFile = Join-Path $env:TEMP "moe-prompt-$Role-$PID.txt"
+        $fullPrompt | Set-Content -Path $promptFile -Encoding UTF8
+
+        Write-Host "Command: $Command --full-auto -C `"$projectPath`" (prompt from $promptFile)"
+        $promptContent = Get-Content -Raw -Path $promptFile
+        & $Command @CommandArgs --full-auto -C "$projectPath" $promptContent
     } else {
-        $systemAppend = "Role: $Role. Always use Moe MCP tools."
-
-        if ($agentContext) {
-            $systemAppend += "`n`n$agentContext"
+        # Claude Code: use --mcp-config and --append-system-prompt
+        if ($claimPrompt) {
+            Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$claimPrompt`""
+            & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $claimPrompt
+        } else {
+            Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
+            & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
         }
-        if ($approvalMode) {
-            $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
-        }
-        if ($roleDoc) {
-            $systemAppend += "`n`n$roleDoc"
-        }
-        if ($knownIssues) {
-            $systemAppend += "`n`n# Known Issues`n$knownIssues"
-        }
-        Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
-        & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
     }
 } while ($loopEnabled)
