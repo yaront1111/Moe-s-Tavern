@@ -93,7 +93,7 @@ JetBrains Plugin ── WS (/ws) ──▶ Moe Daemon ◀── WS (/mcp) ──
 - **Plugin → Server**: `PING`, `GET_STATE`, `CREATE_TASK`, `UPDATE_TASK`, `REORDER_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `REOPEN_TASK`
 
 ### MCP (`/mcp`)
-MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approval`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.report_blocked`, `moe.propose_rail`, `moe.list_tasks`, `moe.get_next_task`
+MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approval`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.report_blocked`, `moe.propose_rail`, `moe.list_tasks`, `moe.get_next_task`, `moe.claim_next_task`, `moe.create_task`, `moe.create_epic`, `moe.update_epic`, `moe.delete_epic`, `moe.delete_task`, `moe.set_task_status`, `moe.search_tasks`, `moe.qa_approve`, `moe.qa_reject`, `moe.init_project`, `moe.get_activity_log`, `moe.unblock_worker`, `moe.create_team`, `moe.join_team`, `moe.leave_team`, `moe.list_teams`
 
 ## Data Files
 
