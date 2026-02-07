@@ -1,0 +1,68 @@
+{
+  "id": "task-9b10dd8c",
+  "epicId": "epic-a205c7a1",
+  "title": "Add structured QA rejection feedback (not just free text)",
+  "description": "Currently qa_reject takes a single `reason` string. Workers must guess what failed. QA should provide structured feedback.\n\n**Enhance moe.qa_reject:**\n```typescript\nmoe.qa_reject({\n  taskId: string,\n  reason: string,           // existing - keep for backwards compat\n  failedDodItems?: string[], // which DoD items failed\n  issues?: Array<{\n    type: 'test_failure' | 'lint' | 'security' | 'missing_feature' | 'regression' | 'other',\n    description: string,\n    file?: string,\n    line?: number\n  }>\n})\n```\n\nStore structured feedback in task alongside reopenReason. Worker can read it via get_context.\n\n**Key files:**\n- `packages/moe-daemon/src/tools/qaReject.ts`\n- `packages/moe-daemon/src/types/schema.ts` - add rejectionDetails to Task type\n- `packages/moe-daemon/src/tools/getContext.ts` - expose rejectionDetails",
+  "definitionOfDone": [
+    "qa_reject accepts optional failedDodItems and issues arrays",
+    "Structured feedback stored in task JSON",
+    "get_context returns structured feedback to workers",
+    "Backwards compatible - reason string still works alone",
+    "Test added to tools.test.ts"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Add RejectionDetails interface to schema.ts. Define QAIssue type with fields: type ('test_failure'|'lint'|'security'|'missing_feature'|'regression'|'other'), description (string), file? (string), line? (number). Add rejectionDetails field to Task interface as optional: { failedDodItems?: string[], issues?: QAIssue[] }. This is backward-compatible since the field is optional. Include error handling types for validation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-06T22:24:23.870Z",
+      "completedAt": "2026-02-06T22:24:47.069Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Update qaReject.ts to accept optional failedDodItems (string[]) and issues (QAIssue[]) in inputSchema. Validate: failedDodItems max 20 items, issues max 20 items, each issue description max 500 chars. Store as rejectionDetails on the task alongside existing reopenReason. Backwards compatible — reason string still required and works alone. Include error handling for invalid issue types and oversized arrays. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-02-06T22:24:51.187Z",
+      "completedAt": "2026-02-06T22:25:26.095Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Update getContext.ts to include rejectionDetails in the task response object (line 55-65). When task has rejectionDetails, include it so workers can see structured feedback on what failed. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "startedAt": "2026-02-06T22:25:30.661Z",
+      "completedAt": "2026-02-06T22:25:51.901Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Step 4: Add test cases to tools.test.ts: (a) qa_reject with reason only still works (backward compat), (b) qa_reject with failedDodItems stores them, (c) qa_reject with issues array stores structured feedback, (d) get_context returns rejectionDetails to worker, (e) error handling for invalid issue type. All new MCP tools must have tests in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__tests__/tools.test.ts"
+      ],
+      "startedAt": "2026-02-06T22:25:56.596Z",
+      "completedAt": "2026-02-06T22:26:38.095Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 8,
+  "createdAt": "2026-02-06T22:06:15.346Z",
+  "updatedAt": "2026-02-06T22:30:28.282Z"
+}

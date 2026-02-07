@@ -1,0 +1,78 @@
+{
+  "id": "task-e624a2d4",
+  "epicId": "epic-daemon",
+  "title": "[BUG] Workers never registered - \"No active workers\" always shown",
+  "description": "**Bug:** The worker panel in the JetBrains plugin always shows \"No active workers\" because the daemon never creates Worker entities in `.moe/workers/`.\n\n**Root cause:** StateManager has `getWorker()` and `updateWorker()` but NO `createWorker()` method. When agents call `claim_next_task` with a workerId, the ID is assigned to the task (`assignedWorkerId`) but no Worker JSON file is ever written to `.moe/workers/`.\n\n**Data flow gap:**\n1. Agent script sets `MOE_WORKER_ID=architect-a1b2`\n2. Agent calls `moe.claim_next_task {workerId:\"architect-a1b2\"}`\n3. `claimNextTask.ts` sets `task.assignedWorkerId = \"architect-a1b2\"` ✅\n4. No Worker entity created in `.moe/workers/architect-a1b2.json` ❌\n5. Plugin reads `state.workers` → empty list → \"No active workers\"\n\n**Fix needed:**\n1. Add `createWorker()` method to StateManager.ts (similar to `createTask()`)\n2. In `claimNextTask.ts`, when `workerId` is provided: check if worker exists, if not create it with fields: `id`, `type` (detect from ID prefix or default), `projectId`, `epicId`, `currentTaskId`, `status: 'READING_CONTEXT'`\n3. Update worker status as task progresses (start_step → WORKING, complete_task → IDLE)\n4. Emit WORKER_CREATED/WORKER_UPDATED WebSocket events so plugin updates\n\n**Key files:**\n- `packages/moe-daemon/src/state/StateManager.ts` - add createWorker()\n- `packages/moe-daemon/src/tools/claimNextTask.ts` - auto-register worker\n- `packages/moe-daemon/src/tools/startStep.ts` - update worker status\n- `packages/moe-daemon/src/tools/completeTask.ts` - update worker status\n- `packages/moe-daemon/src/types/schema.ts` - Worker type (already defined)\n- `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt` - should work once data flows",
+  "definitionOfDone": [
+    "When an agent calls claim_next_task with a workerId, a Worker entity is created in .moe/workers/",
+    "Worker status updates as agent progresses through steps",
+    "Plugin worker panel shows active workers with their current task and status",
+    "Worker is cleaned up or marked IDLE when task completes",
+    "WORKER_CREATED and WORKER_UPDATED WebSocket events are emitted"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add WORKER_CREATED to StateChangeEvent type union in StateManager.ts (line 110, alongside WORKER_UPDATED). Add createWorker() method to StateManager that: creates Worker object with all required fields (id, type, projectId, epicId, currentTaskId, status, branch:'', modifiedFiles:[], startedAt, lastActivityAt, lastError:null, errorCount:0), writes to .moe/workers/<id>.json, adds to workers Map, logs WORKER_CREATED activity, and emits WORKER_CREATED event. All state changes through StateManager. Validate constraints before state mutations - check worker doesn't already exist.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-06T09:40:08.263Z",
+      "completedAt": "2026-02-06T09:40:45.211Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update claimNextTask.ts: after setting assignedWorkerId on the task (line 111), auto-register the worker. Check if state.getWorker(workerId) exists; if not, call state.createWorker() with: id=workerId, type=detect from ID prefix (architect→CLAUDE, worker→CLAUDE, qa→CLAUDE as default; future: pass type from agent), projectId=state.project.id, epicId=task.epicId, currentTaskId=task.id, status='READING_CONTEXT'. If worker exists, update it with new currentTaskId and status. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-02-06T09:40:49.571Z",
+      "completedAt": "2026-02-06T09:41:07.936Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update startStep.ts: after marking step as IN_PROGRESS, find the worker assigned to the task (via task.assignedWorkerId) and call state.updateWorker(workerId, { status: 'CODING', currentTaskId: task.id }). This keeps the worker panel showing live status. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts"
+      ],
+      "startedAt": "2026-02-06T09:41:11.122Z",
+      "completedAt": "2026-02-06T09:41:21.275Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update completeTask.ts: after moving task to REVIEW, find the worker assigned to the task and call state.updateWorker(workerId, { status: 'IDLE', currentTaskId: null }). Also clear assignedWorkerId on the task so the worker is freed. All state changes through StateManager. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "startedAt": "2026-02-06T09:41:25.008Z",
+      "completedAt": "2026-02-06T09:41:35.895Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify the plugin side handles WORKER_CREATED events. Check MoeProjectService.kt WebSocket message handler and MoeJson.kt parseWorker(). The WORKER_UPDATED event is already in StateChangeEvent and broadcast() sends all events to plugin clients. Ensure WORKER_CREATED is handled the same way (added to state.workers list). Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "startedAt": "2026-02-06T09:41:39.072Z",
+      "completedAt": "2026-02-06T09:42:00.638Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "order": 21,
+  "createdAt": "2026-02-05T23:41:22.320Z",
+  "updatedAt": "2026-02-06T09:46:05.879Z"
+}

@@ -616,6 +616,32 @@ else
     echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
 fi
 
+# Load shared agent context
+AGENT_CONTEXT=""
+AGENT_CONTEXT_PATH="$ROOT_DIR/docs/agent-context.md"
+if [ -f "$AGENT_CONTEXT_PATH" ]; then
+    AGENT_CONTEXT=$(cat "$AGENT_CONTEXT_PATH")
+    echo -e "${GREEN}[OK]${NC} Loaded agent context from: $AGENT_CONTEXT_PATH"
+fi
+
+# Read approval mode from project.json (lightweight, no jq dependency)
+APPROVAL_MODE=""
+PROJECT_JSON="$MOE_DIR/project.json"
+if [ -f "$PROJECT_JSON" ]; then
+    APPROVAL_MODE=$(grep -o '"approvalMode"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROJECT_JSON" 2>/dev/null | head -1 | sed 's/.*"approvalMode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    if [ -n "$APPROVAL_MODE" ]; then
+        echo -e "${GREEN}[OK]${NC} Approval mode: $APPROVAL_MODE"
+    fi
+fi
+
+# Load known issues if present
+KNOWN_ISSUES=""
+KNOWN_ISSUES_PATH="$MOE_DIR/KNOWN_ISSUES.md"
+if [ -f "$KNOWN_ISSUES_PATH" ]; then
+    KNOWN_ISSUES=$(cat "$KNOWN_ISSUES_PATH")
+    echo -e "${GREEN}[OK]${NC} Loaded known issues from: $KNOWN_ISSUES_PATH"
+fi
+
 LOOP_ENABLED=true
 if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
     LOOP_ENABLED=false
@@ -641,9 +667,37 @@ while [ "$LOOP_RUNNING" = true ]; do
     FIRST_RUN=false
 
     if [ "$AUTO_CLAIM" = true ]; then
-        SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role.
+        SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role."
+
+        # Append agent context
+        if [ -n "$AGENT_CONTEXT" ]; then
+            SYSTEM_APPEND="$SYSTEM_APPEND
+
+$AGENT_CONTEXT"
+        fi
+
+        # Append approval mode
+        if [ -n "$APPROVAL_MODE" ]; then
+            SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Project Settings
+Approval mode: $APPROVAL_MODE"
+        fi
+
+        # Append role doc
+        if [ -n "$ROLE_DOC" ]; then
+            SYSTEM_APPEND="$SYSTEM_APPEND
 
 $ROLE_DOC"
+        fi
+
+        # Append known issues
+        if [ -n "$KNOWN_ISSUES" ]; then
+            SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Known Issues
+$KNOWN_ISSUES"
+        fi
         PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
 
         echo "Starting Claude with auto-claim..."

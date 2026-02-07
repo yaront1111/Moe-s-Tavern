@@ -206,12 +206,53 @@ $claimJson = ConvertTo-Json @{ statuses = $statuses; workerId = $WorkerId } -Com
 Write-Host ("moe.claim_next_task " + $claimJson)
 Write-Host ""
 
-# Load role-specific instructions from .moe/roles/
+# Plugin/install root is always the parent of the scripts/ folder
+$pluginRoot = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
+
+# Load role-specific instructions (.moe/roles/ with fallback to plugin docs/roles/)
 $roleDoc = ""
-$roleDocPath = Join-Path $moeDir "roles\\$Role.md"
+$roleDocPath = Join-Path $moeDir "roles\$Role.md"
+if (-not (Test-Path $roleDocPath)) {
+    if ($pluginRoot) {
+        $roleDocPath = Join-Path $pluginRoot "docs\roles\$Role.md"
+    }
+}
 if (Test-Path $roleDocPath) {
     $roleDoc = Get-Content -Raw -Path $roleDocPath
     Write-Host "Loaded role guide from $roleDocPath"
+} else {
+    Write-Host "WARNING: Role documentation not found: $Role.md" -ForegroundColor Yellow
+}
+
+# Load shared agent context
+$agentContext = ""
+$agentContextPath = if ($pluginRoot) { Join-Path $pluginRoot "docs\agent-context.md" } else { $null }
+if ($agentContextPath -and (Test-Path $agentContextPath)) {
+    $agentContext = Get-Content -Raw -Path $agentContextPath
+    Write-Host "Loaded agent context from $agentContextPath"
+}
+
+# Read approval mode from project.json
+$approvalMode = ""
+$projectJsonPath = Join-Path $moeDir "project.json"
+if (Test-Path $projectJsonPath) {
+    try {
+        $projConfig = Get-Content -Raw -Path $projectJsonPath | ConvertFrom-Json
+        if ($projConfig.settings.approvalMode) {
+            $approvalMode = $projConfig.settings.approvalMode
+            Write-Host "Approval mode: $approvalMode"
+        }
+    } catch {
+        Write-Host "WARNING: Could not parse project.json" -ForegroundColor Yellow
+    }
+}
+
+# Load known issues if present
+$knownIssues = ""
+$knownIssuesPath = Join-Path $moeDir "KNOWN_ISSUES.md"
+if (Test-Path $knownIssuesPath) {
+    $knownIssues = Get-Content -Raw -Path $knownIssuesPath
+    Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
 Write-Host "MCP config written to: $mcpConfigFile"
@@ -239,20 +280,38 @@ do {
     $firstRun = $false
 
     if ($AutoClaim) {
-        $systemAppend = @"
-Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role.
+        $systemAppend = "Role: $Role. Always use Moe MCP tools. Start by claiming the next task for your role."
 
-$roleDoc
-"@
+        if ($agentContext) {
+            $systemAppend += "`n`n$agentContext"
+        }
+        if ($approvalMode) {
+            $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
+        }
+        if ($roleDoc) {
+            $systemAppend += "`n`n$roleDoc"
+        }
+        if ($knownIssues) {
+            $systemAppend += "`n`n# Known Issues`n$knownIssues"
+        }
         $prompt = "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
         Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$prompt`""
         & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $prompt
     } else {
-        $systemAppend = @"
-Role: $Role. Always use Moe MCP tools.
+        $systemAppend = "Role: $Role. Always use Moe MCP tools."
 
-$roleDoc
-"@
+        if ($agentContext) {
+            $systemAppend += "`n`n$agentContext"
+        }
+        if ($approvalMode) {
+            $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
+        }
+        if ($roleDoc) {
+            $systemAppend += "`n`n$roleDoc"
+        }
+        if ($knownIssues) {
+            $systemAppend += "`n`n# Known Issues`n$knownIssues"
+        }
         Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
         & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
     }

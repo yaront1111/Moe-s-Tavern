@@ -115,6 +115,7 @@ export type StateChangeEvent =
 
 export interface StateManagerOptions {
   projectPath: string;
+  blockedTimeoutMs?: number;
 }
 
 export class StateManager {
@@ -133,10 +134,13 @@ export class StateManager {
   private logRotator?: LogRotator;
   private pendingActivityWrites = 0;
   private activityFlushResolvers: Array<() => void> = [];
+  private blockedTimeoutInterval?: NodeJS.Timeout;
+  private readonly blockedTimeoutMs: number;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
     this.moePath = path.join(this.projectPath, '.moe');
+    this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
@@ -156,6 +160,56 @@ export class StateManager {
    */
   isLoaded(): boolean {
     return this.project !== null;
+  }
+
+  /**
+   * Start periodic check for blocked worker timeouts.
+   * Runs every 5 minutes by default.
+   */
+  startBlockedTimeoutCheck(intervalMs = 300000): void {
+    this.stopBlockedTimeoutCheck();
+    this.blockedTimeoutInterval = setInterval(() => {
+      this.checkBlockedTimeouts().catch((err) => {
+        logger.error({ error: err }, 'Error checking blocked worker timeouts');
+      });
+    }, intervalMs);
+    // Don't prevent process exit
+    if (this.blockedTimeoutInterval.unref) {
+      this.blockedTimeoutInterval.unref();
+    }
+  }
+
+  /**
+   * Stop the periodic blocked timeout check.
+   */
+  stopBlockedTimeoutCheck(): void {
+    if (this.blockedTimeoutInterval) {
+      clearInterval(this.blockedTimeoutInterval);
+      this.blockedTimeoutInterval = undefined;
+    }
+  }
+
+  /**
+   * Scan workers with status=BLOCKED and auto-timeout if lastActivityAt exceeds threshold.
+   */
+  async checkBlockedTimeouts(): Promise<void> {
+    const now = Date.now();
+    for (const worker of this.workers.values()) {
+      if (worker.status !== 'BLOCKED') continue;
+
+      const lastActivity = worker.lastActivityAt ? new Date(worker.lastActivityAt).getTime() : 0;
+      if (isNaN(lastActivity) || lastActivity === 0) continue;
+
+      if (now - lastActivity > this.blockedTimeoutMs) {
+        logger.info({ workerId: worker.id, blockedSince: worker.lastActivityAt }, 'Auto-timing out blocked worker');
+
+        await this.updateWorker(worker.id, {
+          status: 'IDLE',
+          lastError: null,
+          currentTaskId: null,
+        }, 'WORKER_TIMEOUT');
+      }
+    }
   }
 
   /**
@@ -235,6 +289,9 @@ export class StateManager {
       // Initialize log rotator
       const activityLogPath = path.join(this.moePath, 'activity.log');
       this.logRotator = new LogRotator(activityLogPath);
+
+      // Start periodic blocked worker timeout check
+      this.startBlockedTimeoutCheck();
     });
 
     return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');

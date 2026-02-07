@@ -45,7 +45,13 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
 
       const steps = task.implementationPlan.map((step) =>
         step.stepId === params.stepId
-          ? { ...step, status: 'COMPLETED' as const, completedAt: new Date().toISOString() }
+          ? {
+              ...step,
+              status: 'COMPLETED' as const,
+              completedAt: new Date().toISOString(),
+              ...(params.note ? { note: params.note } : {}),
+              ...(params.modifiedFiles?.length ? { modifiedFiles: params.modifiedFiles } : {}),
+            }
           : step
       );
 

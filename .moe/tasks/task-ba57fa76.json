@@ -1,0 +1,57 @@
+{
+  "id": "task-ba57fa76",
+  "epicId": "epic-a205c7a1",
+  "title": "Add moe.get_step_notes tool - make step notes readable",
+  "description": "complete_step accepts a `note` parameter but NO tool reads notes back. Agent learnings are permanently lost between iterations. When a task is reopened, the new worker has zero context on what was tried before.\n\n**New tool:** `moe.get_completed_steps` or enhance `moe.get_context` to include step notes.\n\n**Option A (new tool):**\n```typescript\nmoe.get_completed_steps({ taskId })\n→ {\n  steps: [\n    { stepId, description, status, note, modifiedFiles, startedAt, completedAt }\n  ]\n}\n```\n\n**Option B (enhance get_context):**\nInclude full step details (with notes) in the task.implementationPlan returned by get_context.\n\n**Data already exists** - step notes are stored in the task JSON. This is just exposing existing data.\n\n**Key files:**\n- `packages/moe-daemon/src/tools/getContext.ts` - if enhancing existing tool\n- `packages/moe-daemon/src/tools/` - if creating new tool\n- `packages/moe-daemon/src/types/schema.ts` - ImplementationStep type",
+  "definitionOfDone": [
+    "Step notes are readable via MCP tool",
+    "Agent can see notes from previous iterations after task reopen",
+    "Test added to tools.test.ts",
+    "Works for both architect and worker roles"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Step 1: Add note and modifiedFiles fields to ImplementationStep interface in schema.ts (line 73-80). Add `note?: string` and `modifiedFiles?: string[]` as optional fields. This is backward-compatible — existing steps without these fields remain valid. Changes must not break existing agent scripts or MCP protocol.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-02-06T22:17:02.648Z",
+      "completedAt": "2026-02-06T22:17:29.872Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Step 2: Fix completeStep.ts to persist note and modifiedFiles on the step object (line 46-50). Currently the spread `...step` loses params.note and params.modifiedFiles. Add them to the step update so they're saved to the task JSON. Include error handling for undefined/empty values.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "startedAt": "2026-02-06T22:17:33.799Z",
+      "completedAt": "2026-02-06T22:17:52.859Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Step 3: Add test cases to tools.test.ts verifying: (a) completeStep stores note and modifiedFiles on the step, (b) getContext returns step notes in implementationPlan, (c) notes survive task reopen cycle. All new MCP tools must have tests in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__tests__/tools.test.ts"
+      ],
+      "startedAt": "2026-02-06T22:17:56.545Z",
+      "completedAt": "2026-02-06T22:18:43.233Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "createdAt": "2026-02-06T22:05:52.568Z",
+  "updatedAt": "2026-02-06T22:27:53.390Z"
+}

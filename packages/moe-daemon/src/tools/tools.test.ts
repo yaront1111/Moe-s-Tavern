@@ -23,6 +23,8 @@ import { deleteEpicTool } from './deleteEpic.js';
 import { searchTasksTool } from './searchTasks.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
+import { getActivityLogTool } from './getActivityLog.js';
+import { unblockWorkerTool } from './unblockWorker.js';
 import type { Task, Epic, Worker, Project, RailProposal } from '../types/schema.js';
 
 describe('MCP Tools', () => {
@@ -166,6 +168,64 @@ describe('MCP Tools', () => {
     it('throws if project not loaded', async () => {
       const tool = getContextTool(state);
       await expect(tool.handler({}, state)).rejects.toThrow('not loaded state, expected loaded');
+    });
+
+    it('returns worker when task has assignedWorkerId', async () => {
+      setupMoeFolder();
+      createEpic();
+      createWorker({ id: 'worker-ctx', status: 'CODING', lastError: 'prev error', errorCount: 2 });
+      createTask({ assignedWorkerId: 'worker-ctx' });
+      await state.load();
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+        worker: { id: string; status: string; lastError: string | null; errorCount: number } | null;
+      };
+
+      expect(result.worker).not.toBeNull();
+      expect(result.worker!.id).toBe('worker-ctx');
+      expect(result.worker!.status).toBe('CODING');
+      expect(result.worker!.lastError).toBe('prev error');
+      expect(result.worker!.errorCount).toBe(2);
+    });
+
+    it('returns null worker when task has no assignedWorkerId', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ assignedWorkerId: null });
+      await state.load();
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as { worker: null };
+
+      expect(result.worker).toBeNull();
+    });
+
+    it('returns null worker when no task provided', async () => {
+      setupMoeFolder();
+      await state.load();
+      const tool = getContextTool(state);
+      const result = await tool.handler({}, state) as { worker: null };
+
+      expect(result.worker).toBeNull();
+    });
+
+    it('returns step notes in implementationPlan', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        implementationPlan: [
+          { stepId: 'step-1', description: 'First', status: 'COMPLETED', affectedFiles: ['a.ts'], note: 'Design decision: used factory pattern', modifiedFiles: ['a.ts', 'b.ts'] },
+          { stepId: 'step-2', description: 'Second', status: 'PENDING', affectedFiles: [] },
+        ],
+      });
+      await state.load();
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+        task: { implementationPlan: Array<{ stepId: string; note?: string; modifiedFiles?: string[] }> };
+      };
+
+      const step1 = result.task.implementationPlan.find(s => s.stepId === 'step-1');
+      expect(step1?.note).toBe('Design decision: used factory pattern');
+      expect(step1?.modifiedFiles).toEqual(['a.ts', 'b.ts']);
     });
   });
 
@@ -337,6 +397,31 @@ describe('MCP Tools', () => {
       const tool = completeStepTool(state);
       const result = await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, state) as { nextStep: null };
       expect(result.nextStep).toBeNull();
+    });
+
+    it('stores note and modifiedFiles on the step', async () => {
+      const tool = completeStepTool(state);
+      await tool.handler({
+        taskId: 'task-1',
+        stepId: 'step-1',
+        note: 'Used workaround for edge case',
+        modifiedFiles: ['src/foo.ts', 'src/bar.ts'],
+      }, state);
+
+      const task = state.getTask('task-1');
+      const step = task?.implementationPlan.find(s => s.stepId === 'step-1');
+      expect(step?.note).toBe('Used workaround for edge case');
+      expect(step?.modifiedFiles).toEqual(['src/foo.ts', 'src/bar.ts']);
+    });
+
+    it('does not set note or modifiedFiles when not provided', async () => {
+      const tool = completeStepTool(state);
+      await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, state);
+
+      const task = state.getTask('task-1');
+      const step = task?.implementationPlan.find(s => s.stepId === 'step-1');
+      expect(step?.note).toBeUndefined();
+      expect(step?.modifiedFiles).toBeUndefined();
     });
   });
 
@@ -976,6 +1061,271 @@ describe('MCP Tools', () => {
       await expect(
         tool.handler({ taskId: 'task-1', reason: 'test' }, state)
       ).rejects.toThrow('expected REVIEW');
+    });
+
+    it('stores failedDodItems on rejection', async () => {
+      const tool = qaRejectTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        reason: 'DoD items failed',
+        failedDodItems: ['Tests pass', 'Code reviewed'],
+      }, state) as { success: boolean; rejectionDetails: { failedDodItems: string[] } };
+
+      expect(result.success).toBe(true);
+      expect(result.rejectionDetails.failedDodItems).toEqual(['Tests pass', 'Code reviewed']);
+
+      const task = state.getTask('task-1');
+      expect(task?.rejectionDetails?.failedDodItems).toEqual(['Tests pass', 'Code reviewed']);
+    });
+
+    it('stores structured issues on rejection', async () => {
+      // Reset task to REVIEW for this test
+      await state.updateTask('task-1', { status: 'REVIEW' });
+
+      const tool = qaRejectTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        reason: 'Multiple issues found',
+        issues: [
+          { type: 'test_failure', description: 'UserService test fails', file: 'src/UserService.test.ts', line: 42 },
+          { type: 'security', description: 'Missing input validation' },
+        ],
+      }, state) as { rejectionDetails: { issues: Array<{ type: string; file?: string }> } };
+
+      expect(result.rejectionDetails.issues).toHaveLength(2);
+      expect(result.rejectionDetails.issues[0].type).toBe('test_failure');
+      expect(result.rejectionDetails.issues[0].file).toBe('src/UserService.test.ts');
+
+      const task = state.getTask('task-1');
+      expect(task?.rejectionDetails?.issues).toHaveLength(2);
+    });
+
+    it('works with reason only (backward compat)', async () => {
+      await state.updateTask('task-1', { status: 'REVIEW' });
+
+      const tool = qaRejectTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        reason: 'Simple rejection',
+      }, state) as { success: boolean; rejectionDetails: null };
+
+      expect(result.success).toBe(true);
+      expect(result.rejectionDetails).toBeNull();
+    });
+
+    it('throws for invalid issue type', async () => {
+      await state.updateTask('task-1', { status: 'REVIEW' });
+
+      const tool = qaRejectTool(state);
+      await expect(
+        tool.handler({
+          taskId: 'task-1',
+          reason: 'Bad issue type',
+          issues: [{ type: 'invalid_type', description: 'test' }],
+        }, state)
+      ).rejects.toThrow('invalid type');
+    });
+
+    it('get_context returns rejectionDetails to worker', async () => {
+      // Reject with structured feedback
+      const rejectTool = qaRejectTool(state);
+      await rejectTool.handler({
+        taskId: 'task-1',
+        reason: 'Tests fail',
+        failedDodItems: ['Tests pass'],
+        issues: [{ type: 'test_failure', description: 'Failing test in foo.test.ts' }],
+      }, state);
+
+      // Now check get_context as worker
+      const ctxTool = getContextTool(state);
+      const result = await ctxTool.handler({ taskId: 'task-1' }, state) as {
+        task: {
+          reopenReason: string;
+          rejectionDetails: { failedDodItems: string[]; issues: Array<{ type: string }> };
+        };
+      };
+
+      expect(result.task.reopenReason).toBe('Tests fail');
+      expect(result.task.rejectionDetails.failedDodItems).toEqual(['Tests pass']);
+      expect(result.task.rejectionDetails.issues).toHaveLength(1);
+      expect(result.task.rejectionDetails.issues[0].type).toBe('test_failure');
+    });
+  });
+
+  describe('moe.get_activity_log', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      await state.load();
+    });
+
+    it('returns empty array when no activity log exists', async () => {
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({}, state) as { events: unknown[]; count: number };
+
+      expect(result.events).toEqual([]);
+      expect(result.count).toBe(0);
+    });
+
+    it('returns events after task operations', async () => {
+      // Creating a task generates activity log entries
+      createTask({ id: 'task-log-1', status: 'BACKLOG' });
+      await state.load();
+      await state.updateTask('task-log-1', { status: 'PLANNING' });
+
+      // Flush pending writes
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({}, state) as { events: Array<{ event: string }>; count: number };
+
+      expect(result.count).toBeGreaterThan(0);
+      expect(result.events.length).toBeGreaterThan(0);
+    });
+
+    it('filters by taskId', async () => {
+      createTask({ id: 'task-a', status: 'BACKLOG' });
+      createTask({ id: 'task-b', status: 'BACKLOG' });
+      await state.load();
+      await state.updateTask('task-a', { status: 'PLANNING' });
+      await state.updateTask('task-b', { status: 'PLANNING' });
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({ taskId: 'task-a' }, state) as {
+        events: Array<{ taskId?: string }>;
+      };
+
+      for (const event of result.events) {
+        expect(event.taskId).toBe('task-a');
+      }
+    });
+
+    it('filters by eventTypes', async () => {
+      createTask({ id: 'task-evt', status: 'PLANNING' });
+      await state.load();
+      // Submit a plan to create PLAN_SUBMITTED event
+      const submitTool = submitPlanTool(state);
+      await submitTool.handler({
+        taskId: 'task-evt',
+        steps: [{ description: 'Test step' }],
+      }, state);
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({ eventTypes: ['PLAN_SUBMITTED'] }, state) as {
+        events: Array<{ event: string }>;
+      };
+
+      for (const event of result.events) {
+        expect(event.event).toBe('PLAN_SUBMITTED');
+      }
+    });
+
+    it('respects limit parameter', async () => {
+      // Create multiple tasks to generate activity
+      createTask({ id: 'task-l1', status: 'BACKLOG' });
+      createTask({ id: 'task-l2', status: 'BACKLOG' });
+      createTask({ id: 'task-l3', status: 'BACKLOG' });
+      await state.load();
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({ limit: 2 }, state) as { events: unknown[]; count: number };
+
+      expect(result.events.length).toBeLessThanOrEqual(2);
+      expect(result.count).toBeLessThanOrEqual(2);
+    });
+
+    it('throws if project not loaded', async () => {
+      const freshState = new StateManager({ projectPath: testDir });
+      const tool = getActivityLogTool(freshState);
+      await expect(tool.handler({}, freshState)).rejects.toThrow('not loaded state, expected loaded');
+    });
+  });
+
+  describe('moe.unblock_worker', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', assignedWorkerId: 'worker-1', status: 'WORKING' });
+      createWorker({
+        id: 'worker-1',
+        status: 'BLOCKED',
+        currentTaskId: 'task-1',
+        lastError: 'Need clarification',
+      });
+      await state.load();
+    });
+
+    it('clears BLOCKED status to IDLE', async () => {
+      const tool = unblockWorkerTool(state);
+      const result = await tool.handler({
+        workerId: 'worker-1',
+        resolution: 'Clarification provided',
+      }, state) as { success: boolean; status: string; currentTaskId: string | null };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('IDLE');
+      expect(result.currentTaskId).toBeNull();
+
+      const worker = state.getWorker('worker-1');
+      expect(worker?.status).toBe('IDLE');
+      expect(worker?.lastError).toBeNull();
+      expect(worker?.currentTaskId).toBeNull();
+    });
+
+    it('keeps currentTaskId when retryTask is true', async () => {
+      const tool = unblockWorkerTool(state);
+      const result = await tool.handler({
+        workerId: 'worker-1',
+        resolution: 'Issue resolved, retrying',
+        retryTask: true,
+      }, state) as { success: boolean; status: string; currentTaskId: string | null; retryTask: boolean };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('IDLE');
+      expect(result.currentTaskId).toBe('task-1');
+      expect(result.retryTask).toBe(true);
+
+      const worker = state.getWorker('worker-1');
+      expect(worker?.currentTaskId).toBe('task-1');
+    });
+
+    it('fails if worker is not BLOCKED', async () => {
+      // Create an IDLE worker
+      createWorker({ id: 'worker-idle', status: 'IDLE' });
+      await state.load();
+
+      const tool = unblockWorkerTool(state);
+      await expect(
+        tool.handler({ workerId: 'worker-idle', resolution: 'test' }, state)
+      ).rejects.toThrow('BLOCKED');
+    });
+
+    it('fails if worker does not exist', async () => {
+      const tool = unblockWorkerTool(state);
+      await expect(
+        tool.handler({ workerId: 'nonexistent', resolution: 'test' }, state)
+      ).rejects.toThrow('not found');
+    });
+
+    it('logs WORKER_UNBLOCKED to activity', async () => {
+      const tool = unblockWorkerTool(state);
+      await tool.handler({
+        workerId: 'worker-1',
+        resolution: 'Fixed the issue',
+      }, state);
+      await state.flushActivityLog();
+
+      const logTool = getActivityLogTool(state);
+      const result = await logTool.handler({
+        eventTypes: ['WORKER_UNBLOCKED'],
+      }, state) as { events: Array<{ event: string; workerId?: string }> };
+
+      expect(result.events.length).toBeGreaterThanOrEqual(1);
+      const unblockEvent = result.events.find(e => e.event === 'WORKER_UNBLOCKED');
+      expect(unblockEvent).toBeDefined();
     });
   });
 });

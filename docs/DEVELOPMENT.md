@@ -160,6 +160,60 @@ The current UI does not create epics or tasks yet. To see data in the board:
 
 ---
 
+## Running Agents
+
+The agent scripts handle daemon startup, MCP config, role documentation injection, and polling:
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\moe-agent.ps1 -Role architect -Project "C:\your\project"
+.\scripts\moe-agent.ps1 -Role worker -ProjectName "MyProject"
+.\scripts\moe-agent.ps1 -Role qa -Project "C:\your\project"
+```
+
+**Mac / Linux (Bash):**
+```bash
+./scripts/moe-agent.sh --role architect --project /your/project
+./scripts/moe-agent.sh --role worker --project-name "MyProject"
+./scripts/moe-agent.sh --role qa --project /your/project
+```
+
+Key flags:
+- `-Role` / `--role`: `architect`, `worker`, or `qa`
+- `-Project` / `--project`: Path to your project
+- `-ProjectName` / `--project-name`: Look up project from `~/.moe/projects.json` registry
+- `-NoLoop` / `--no-loop`: Run once and exit (default: poll for new tasks every 30s)
+- `-PollInterval` / `--poll-interval`: Seconds between polls (default: 30)
+- `-ListProjects` / `--list-projects`: Show registered projects
+- `-AutoClaim:$false` / `--no-auto-claim`: Don't auto-claim a task on start
+
+The script loads role-specific documentation from `.moe/roles/<role>.md` (project-level) with fallback to `docs/roles/<role>.md` (bundled with plugin or install).
+
+---
+
+## Plugin Bundling
+
+The JetBrains plugin bundles everything needed to run agents:
+
+```
+moe-jetbrains/          (installed plugin directory)
+├── lib/                # Plugin JARs
+├── daemon/             # Bundled moe-daemon (dist + node_modules)
+├── proxy/              # Bundled moe-proxy (dist + node_modules)
+├── scripts/            # moe-agent.ps1, moe-agent.sh
+└── docs/roles/         # Role documentation (architect.md, worker.md, qa.md)
+```
+
+The `build.gradle.kts` copies these from the repo during `prepareSandbox` and `buildPlugin`. When building from source, ensure daemon and proxy are built first:
+
+```bash
+cd packages/moe-daemon && npm install && npm run build
+cd ../moe-proxy && npm install && npm run build
+cd ../../moe-jetbrains && ./gradlew buildPlugin
+```
+
+---
+
 ## Current Feature Coverage
 
 Implemented now:
@@ -167,7 +221,7 @@ Implemented now:
 - Drag/drop status change
 - Task detail dialog (approve/reject/reopen)
 - Daemon state manager + file watcher
-- MCP tools: `get_context`, `submit_plan`, `check_approval`, `start_step`, `complete_step`, `complete_task`, `report_blocked`, `propose_rail`, `list_tasks`, `get_next_task`
+- MCP tools: `get_context`, `submit_plan`, `check_approval`, `start_step`, `complete_step`, `complete_task`, `report_blocked`, `propose_rail`, `list_tasks`, `get_next_task`, `claim_next_task`, `search_tasks`, `qa_approve`, `qa_reject`, `create_task`, `create_epic`, `update_epic`, `delete_task`, `delete_epic`, `get_activity_log`, `unblock_worker`, `set_task_status`
 
 Not yet implemented (planned):
 - Epic CRUD UI

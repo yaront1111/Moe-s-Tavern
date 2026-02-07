@@ -77,6 +77,22 @@ export interface ImplementationStep {
   affectedFiles: string[];
   startedAt?: string;
   completedAt?: string;
+  note?: string;
+  modifiedFiles?: string[];
+}
+
+export type QAIssueType = 'test_failure' | 'lint' | 'security' | 'missing_feature' | 'regression' | 'other';
+
+export interface QAIssue {
+  type: QAIssueType;
+  description: string;
+  file?: string;
+  line?: number;
+}
+
+export interface RejectionDetails {
+  failedDodItems?: string[];
+  issues?: QAIssue[];
 }
 
 export interface Task {
@@ -93,12 +109,19 @@ export interface Task {
   prLink: string | null;
   reopenCount: number;
   reopenReason: string | null;
+  rejectionDetails?: RejectionDetails;
   createdBy: 'HUMAN' | 'WORKER';
   parentTaskId: string | null;
   priority: TaskPriority;
   order: number;
   createdAt: string;
   updatedAt: string;
+  planSubmittedAt?: string;
+  planApprovedAt?: string;
+  workStartedAt?: string;
+  completedAt?: string;
+  reviewStartedAt?: string;
+  reviewCompletedAt?: string;
 }
 
 export interface Worker {
@@ -164,6 +187,8 @@ export const ACTIVITY_EVENT_TYPES = [
   'WORKER_ERROR',
   'WORKER_BLOCKED',
   'WORKER_REPLACED',
+  'WORKER_UNBLOCKED',
+  'WORKER_TIMEOUT',
   'TASK_BLOCKED',
   'PROPOSAL_CREATED',
   'PROPOSAL_APPROVED',

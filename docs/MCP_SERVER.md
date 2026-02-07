@@ -522,6 +522,66 @@ Delete an epic and optionally its tasks.
 
 ---
 
+### moe.get_activity_log
+
+Query the activity log for task history, decisions, and events.
+
+**Parameters:**
+```typescript
+{
+  taskId?: string,        // Filter by task ID
+  epicId?: string,        // Filter by epic ID
+  workerId?: string,      // Filter by worker ID
+  eventTypes?: string[],  // Filter by event types (e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)
+  limit?: number          // Max events to return (default 50)
+}
+```
+
+**Returns:**
+```typescript
+{
+  events: ActivityLogEntry[],
+  count: number,
+  filters: { taskId, epicId, workerId, eventTypes, limit }
+}
+```
+
+---
+
+### moe.unblock_worker
+
+Clear BLOCKED status on a worker, setting it back to IDLE.
+
+**Parameters:**
+```typescript
+{
+  workerId: string,       // Required: the worker ID to unblock
+  resolution: string,     // Required: what was done to resolve the block
+  retryTask?: boolean     // If true, worker keeps currentTaskId to retry (default false)
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  workerId: string,
+  status: "IDLE",
+  currentTaskId: string | null,
+  resolution: string,
+  retryTask: boolean,
+  message: string
+}
+```
+
+**Errors:**
+- `workerId is required`
+- `resolution is required`
+- `Worker not found: <workerId>`
+- `Worker must be in BLOCKED status` - if worker is not BLOCKED
+
+---
+
 ### moe.qa_approve
 
 QA approves a task in REVIEW status, moving it to DONE.

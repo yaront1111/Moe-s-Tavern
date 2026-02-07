@@ -1,0 +1,68 @@
+{
+  "id": "task-66964feb",
+  "epicId": "epic-daemon",
+  "title": "Mac agent scripts require manual MOE_NODE_COMMAND - add auto-detection",
+  "description": "**Bug:** On Mac, `moe-agent.sh` line 15 defaults to `NODE_CMD=\"${MOE_NODE_COMMAND:-node}\"`. When the IDE terminal launches a non-interactive shell, `node` may not be in PATH if installed via nvm, Homebrew, or volta. Users have to manually set `MOE_NODE_COMMAND` env var to get agents working.\n\n**Root cause:** Non-interactive shells don't source `~/.bashrc`/`~/.zshrc`, so nvm/Homebrew PATH additions aren't available.\n\n**Expected:** The agent script should auto-detect node from common installation locations before falling back to bare `node`.\n\n**Common Mac node locations to check:**\n- `/opt/homebrew/bin/node` (Apple Silicon Homebrew)\n- `/usr/local/bin/node` (Intel Homebrew)\n- `$HOME/.nvm/current/bin/node` (nvm symlink)\n- `$HOME/.nvm/versions/node/*/bin/node` (nvm direct, latest version)\n- `$HOME/.volta/bin/node` (volta)\n- `$HOME/.fnm/current/bin/node` (fnm)\n- `/usr/bin/node` (system)\n\n**Key files:**\n- `scripts/moe-agent.sh` - line 15, NODE_CMD resolution\n- `scripts/moe-agent.ps1` - similar issue may exist on Windows (less common since node installer adds to PATH)\n- `scripts/install-mac.sh` - may need to hint about MOE_NODE_COMMAND in output",
+  "definitionOfDone": [
+    "moe-agent.sh auto-detects node from common Mac locations (Homebrew, nvm, volta, fnm) without requiring MOE_NODE_COMMAND",
+    "MOE_NODE_COMMAND env var still works as an override when set",
+    "Auto-detection prints which node binary was found for debugging",
+    "Works on both Intel and Apple Silicon Macs",
+    "install-mac.sh mentions MOE_NODE_COMMAND as optional override"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a `find_node()` function to `moe-agent.sh` (before line 15). The function checks these locations in order: (1) `MOE_NODE_COMMAND` env var if set (existing override), (2) `node` on PATH via `command -v`, (3) `/opt/homebrew/bin/node` (Apple Silicon Homebrew), (4) `/usr/local/bin/node` (Intel Homebrew), (5) `$HOME/.nvm/current/bin/node` (nvm current symlink), (6) newest match in `$HOME/.nvm/versions/node/*/bin/node` (nvm direct), (7) `$HOME/.volta/bin/node` (volta), (8) `$HOME/.fnm/current/bin/node` (fnm). Returns the first working binary (verified with `$candidate --version`). Prints `[OK] Using node: <path> (<version>)` for debugging. Falls back to `node` with a warning if nothing found. Replace line 15 with a call to this function. All state changes through StateManager.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-06T12:52:00.381Z",
+      "completedAt": "2026-02-06T12:52:37.754Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Apply similar node auto-detection to `moe-agent.sh` python3 dependency (line 150). Add a `find_python()` function that checks common Mac python3 locations: PATH, `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, `/usr/bin/python3`, and the Xcode CommandLineTools python. Replace the hard `exit 1` with the auto-detected path. Log all auto-approval actions to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-06T12:52:41.065Z",
+      "completedAt": "2026-02-06T12:54:15.189Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update `install-mac.sh` to mention `MOE_NODE_COMMAND` in the final 'Next steps' output. Add a note after the agent example: 'Tip: If agents can't find node, set MOE_NODE_COMMAND: export MOE_NODE_COMMAND=/path/to/node'. This serves as a fallback hint for edge cases the auto-detection doesn't cover. Validate constraints before state mutations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/install-mac.sh"
+      ],
+      "startedAt": "2026-02-06T12:54:18.662Z",
+      "completedAt": "2026-02-06T12:54:29.012Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update `doctor.sh` `check_command` for node to also probe Homebrew paths (`/opt/homebrew/bin/node`, `/usr/local/bin/node`) if bare `node` isn't found. This makes the doctor report more accurate on non-interactive shells. Print the detected path so users can verify.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/doctor.sh"
+      ],
+      "startedAt": "2026-02-06T12:54:32.402Z",
+      "completedAt": "2026-02-06T12:54:53.383Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 23,
+  "createdAt": "2026-02-06T12:48:46.546Z",
+  "updatedAt": "2026-02-06T14:36:42.617Z"
+}
