@@ -5,7 +5,8 @@ data class MoeState(
     val epics: List<Epic>,
     val tasks: List<Task>,
     val proposals: List<RailProposal> = emptyList(),
-    val workers: List<Worker> = emptyList()
+    val workers: List<Worker> = emptyList(),
+    val teams: List<Team> = emptyList()
 )
 
 data class Project(
@@ -92,5 +93,14 @@ data class Worker(
     val epicId: String,
     val currentTaskId: String?,
     val status: String,
-    val lastError: String?
+    val lastError: String?,
+    val teamId: String? = null
+)
+
+data class Team(
+    val id: String,
+    val name: String,
+    val role: String,
+    val memberIds: List<String>,
+    val maxSize: Int = 10
 )

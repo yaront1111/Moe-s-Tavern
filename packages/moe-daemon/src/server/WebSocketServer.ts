@@ -24,7 +24,12 @@ export type PluginMessage =
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'APPROVE_PROPOSAL'; payload: { proposalId: string } }
   | { type: 'REJECT_PROPOSAL'; payload: { proposalId: string } }
-  | { type: 'UPDATE_SETTINGS'; payload: Record<string, unknown> };
+  | { type: 'UPDATE_SETTINGS'; payload: Record<string, unknown> }
+  | { type: 'CREATE_TEAM'; payload: { name: string; role: string; maxSize?: number } }
+  | { type: 'UPDATE_TEAM'; payload: { teamId: string; updates: Record<string, unknown> } }
+  | { type: 'DELETE_TEAM'; payload: { teamId: string } }
+  | { type: 'ADD_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
+  | { type: 'REMOVE_TEAM_MEMBER'; payload: { teamId: string; workerId: string } };
 
 export class MoeWebSocketServer {
   private wss: WSS;
@@ -281,6 +286,76 @@ export class MoeWebSocketServer {
           }
           const project = await this.state.updateSettings(message.payload as Record<string, unknown>);
           this.safeSend(ws, JSON.stringify({ type: 'SETTINGS_UPDATED', payload: project }));
+          return;
+        }
+        case 'CREATE_TEAM': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { name, role, maxSize } = message.payload as { name: string; role: string; maxSize?: number };
+          if (!name || !role) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
+            return;
+          }
+          const team = await this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize });
+          this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
+          return;
+        }
+        case 'UPDATE_TEAM': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { teamId, updates } = message.payload as { teamId: string; updates: Record<string, unknown> };
+          if (!teamId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
+            return;
+          }
+          const team = await this.state.updateTeam(teamId, updates as Record<string, unknown>);
+          this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
+          return;
+        }
+        case 'DELETE_TEAM': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { teamId } = message.payload as { teamId: string };
+          if (!teamId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
+            return;
+          }
+          const team = await this.state.deleteTeam(teamId);
+          this.safeSend(ws, JSON.stringify({ type: 'TEAM_DELETED', payload: team }));
+          return;
+        }
+        case 'ADD_TEAM_MEMBER': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { teamId, workerId } = message.payload as { teamId: string; workerId: string };
+          if (!teamId || !workerId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
+            return;
+          }
+          const team = await this.state.addTeamMember(teamId, workerId);
+          this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
+          return;
+        }
+        case 'REMOVE_TEAM_MEMBER': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { teamId, workerId } = message.payload as { teamId: string; workerId: string };
+          if (!teamId || !workerId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
+            return;
+          }
+          const team = await this.state.removeTeamMember(teamId, workerId);
+          this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
         default:

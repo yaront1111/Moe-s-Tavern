@@ -261,7 +261,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             // Update worker panel
             val taskMap = state.tasks.associateBy { it.id }
-            workerPanel.updateWorkers(state.workers, taskMap)
+            workerPanel.updateWorkers(state.workers, taskMap, state.teams)
 
             // Filter tasks by selected epic
             val allTasks = state.tasks.sortedBy { it.order }

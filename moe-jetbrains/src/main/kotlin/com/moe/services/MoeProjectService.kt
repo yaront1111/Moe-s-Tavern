@@ -304,6 +304,24 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 state = newState
                 publishState(newState)
             }
+            "TEAM_CREATED", "TEAM_UPDATED" -> {
+                val payload = json.getAsJsonObject("payload")
+                val team = MoeJson.parseTeam(payload)
+                val current = state ?: return
+                val teams = current.teams.filter { it.id != team.id } + team
+                val newState = current.copy(teams = teams)
+                state = newState
+                publishState(newState)
+            }
+            "TEAM_DELETED" -> {
+                val payload = json.getAsJsonObject("payload")
+                val team = MoeJson.parseTeam(payload)
+                val current = state ?: return
+                val teams = current.teams.filter { it.id != team.id }
+                val newState = current.copy(teams = teams)
+                state = newState
+                publishState(newState)
+            }
         }
     }
 

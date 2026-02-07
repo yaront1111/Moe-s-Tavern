@@ -97,10 +97,17 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         );
 
         if (activeWorkerOnSameStatus && !params.replaceExisting) {
-          throw notAllowed(
-            'claim_next_task',
-            `Epic already has an active worker (${activeWorkerOnSameStatus.assignedWorkerId}) on ${claimingStatus} tasks. Use replaceExisting:true to take over.`
-          );
+          // Team members can work in parallel on different tasks in the same epic
+          const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
+          if (!claimingWorkerTeam) {
+            // Solo worker -> keep original constraint
+            throw notAllowed(
+              'claim_next_task',
+              `Epic already has an active worker (${activeWorkerOnSameStatus.assignedWorkerId}) on ${claimingStatus} tasks. Use replaceExisting:true to take over.`
+            );
+          }
+          // Team member -> allow parallel claims (same-task conflicts already
+          // prevented by the !t.assignedWorkerId filter on line 73)
         }
 
         // If replaceExisting is true, clear the previous worker's assignment

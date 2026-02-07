@@ -27,13 +27,13 @@ Implementation notes (current):
 └──────┬──────┘
        │ 1:many
        ▼
-┌─────────────┐       ┌─────────────┐
-│    Task     │ ◀───▶ │   Worker    │
-│             │       │             │
-│ taskRails   │       │   status    │
-│ plan        │       │   branch    │
-│ status      │       └─────────────┘
-└─────────────┘
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│    Task     │ ◀───▶ │   Worker    │ ────▶ │    Team     │
+│             │       │             │       │             │
+│ taskRails   │       │   status    │       │   role      │
+│ plan        │       │   branch    │       │   members   │
+│ status      │       │   teamId    │       └─────────────┘
+└─────────────┘       └─────────────┘
 ```
 
 ---
@@ -383,9 +383,12 @@ interface Worker {
   // Errors
   lastError: string | null;
   errorCount: number;
+
+  // Team membership
+  teamId: string | null;         // Reference to Team (null = solo worker)
 }
 
-type WorkerType = 
+type WorkerType =
   | 'CLAUDE'    // Claude Code CLI
   | 'CODEX'     // OpenAI Codex CLI
   | 'GEMINI';   // Google Gemini CLI
@@ -422,9 +425,56 @@ type WorkerStatus =
   "lastActivityAt": "2025-02-02T14:05:00Z",
   
   "lastError": null,
-  "errorCount": 0
+  "errorCount": 0,
+
+  "teamId": null
 }
 ```
+
+---
+
+## Team
+
+**File:** `.moe/teams/{team-id}.json`
+
+Teams are logical groupings of workers by role. Team members bypass the per-epic per-status constraint, allowing multiple workers of the same role to work on different tasks in the same epic simultaneously.
+
+```typescript
+type TeamRole = 'architect' | 'worker' | 'qa';
+
+interface Team {
+  // Identity
+  id: string;                    // "team-abc123"
+  projectId: string;             // Reference to parent project
+
+  // Configuration
+  name: string;                  // "Coders"
+  role: TeamRole;                // Team role type
+  memberIds: string[];           // Worker IDs belonging to this team
+  maxSize: number;               // Maximum members (default 10)
+
+  // Timestamps
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+**Example:**
+
+```json
+{
+  "id": "team-a1b2c3d4",
+  "projectId": "proj-a1b2c3d4",
+  "name": "Coders",
+  "role": "worker",
+  "memberIds": ["worker-w1x2y3z4", "worker-w5x6y7z8"],
+  "maxSize": 10,
+  "createdAt": "2025-02-03T10:00:00Z",
+  "updatedAt": "2025-02-03T10:05:00Z"
+}
+```
+
+**Key behavior:** When a worker belongs to a team, `claim_next_task` allows them to claim tasks in an epic that already has another team member working on it (same status). Solo workers (no team) retain the existing one-worker-per-status-per-epic constraint.
 
 ---
 
@@ -549,7 +599,14 @@ type ActivityEventType =
   // Proposal
   | 'PROPOSAL_CREATED'
   | 'PROPOSAL_APPROVED'
-  | 'PROPOSAL_REJECTED';
+  | 'PROPOSAL_REJECTED'
+
+  // Team
+  | 'TEAM_CREATED'
+  | 'TEAM_UPDATED'
+  | 'TEAM_DELETED'
+  | 'TEAM_MEMBER_ADDED'
+  | 'TEAM_MEMBER_REMOVED';
 ```
 
 **Example (one line per event):**
@@ -575,7 +632,7 @@ The daemon supports schema versioning to safely evolve the `.moe/` file structur
 ```typescript
 interface Project {
   // ... other fields
-  schemaVersion: number;  // Current: 2
+  schemaVersion: number;  // Current: 3
 }
 ```
 
@@ -664,7 +721,8 @@ function generateId(prefix: string): string {
 
 ### Worker
 - `epicId` must exist
-- Only one worker per epic (for now)
+- Solo workers (no team): one worker per status per epic
+- Team workers: multiple workers of same role allowed per epic
 - `branch` must be unique
 
 ---
