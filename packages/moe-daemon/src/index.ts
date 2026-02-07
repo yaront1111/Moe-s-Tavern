@@ -237,6 +237,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   const port = await findAvailablePort(preferredPort || DEFAULT_PORT);
   const state = new StateManager({ projectPath });
   await state.load();
+  state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
 
   const startTime = Date.now();
 

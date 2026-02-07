@@ -112,6 +112,7 @@ export type StateChangeEvent =
   | { type: 'EPIC_DELETED'; payload: Epic }
   | { type: 'WORKER_CREATED'; payload: Worker }
   | { type: 'WORKER_UPDATED'; payload: Worker }
+  | { type: 'WORKER_DELETED'; payload: Worker }
   | { type: 'PROPOSAL_CREATED'; payload: RailProposal }
   | { type: 'PROPOSAL_UPDATED'; payload: RailProposal }
   | { type: 'SETTINGS_UPDATED'; payload: Project }
@@ -122,6 +123,7 @@ export type StateChangeEvent =
 export interface StateManagerOptions {
   projectPath: string;
   blockedTimeoutMs?: number;
+  staleWorkerTimeoutMs?: number;
 }
 
 export class StateManager {
@@ -143,11 +145,13 @@ export class StateManager {
   private activityFlushResolvers: Array<() => void> = [];
   private blockedTimeoutInterval?: NodeJS.Timeout;
   private readonly blockedTimeoutMs: number;
+  private readonly staleWorkerTimeoutMs: number;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
     this.moePath = path.join(this.projectPath, '.moe');
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
+    this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
@@ -216,6 +220,22 @@ export class StateManager {
           currentTaskId: null,
         }, 'WORKER_TIMEOUT');
       }
+    }
+
+    // Layer 3: Sweep stale workers whose lastActivityAt exceeds threshold
+    let deletedCount = 0;
+    for (const worker of Array.from(this.workers.values())) {
+      const lastActivity = worker.lastActivityAt ? new Date(worker.lastActivityAt).getTime() : 0;
+      if (isNaN(lastActivity) || lastActivity === 0) continue;
+
+      if (now - lastActivity > this.staleWorkerTimeoutMs) {
+        logger.info({ workerId: worker.id, lastActivityAt: worker.lastActivityAt }, 'Deleting stale worker (exceeded timeout)');
+        this.deleteWorker(worker.id);
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      this.emit({ type: 'STATE_SNAPSHOT', payload: this.getSnapshot() });
     }
   }
 
@@ -799,6 +819,135 @@ export class StateManager {
     }
     this.emit({ type: 'WORKER_UPDATED', payload: updated });
     return updated;
+  }
+
+  /**
+   * Delete a worker: remove from memory, disk, clear references on tasks and teams.
+   */
+  deleteWorker(workerId: string): void {
+    const worker = this.workers.get(workerId);
+    if (!worker) return;
+
+    // Remove from memory
+    this.workers.delete(workerId);
+
+    // Remove from disk
+    const filePath = path.join(this.moePath, 'workers', `${workerId}.json`);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (error) {
+      logger.error({ error, workerId }, 'Failed to delete worker file');
+    }
+
+    // Clear assignedWorkerId on tasks referencing this worker (don't change task status)
+    for (const task of this.tasks.values()) {
+      if (task.assignedWorkerId === workerId) {
+        const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+        this.tasks.set(task.id, updated);
+        try {
+          fs.writeFileSync(
+            path.join(this.moePath, 'tasks', `${task.id}.json`),
+            JSON.stringify(updated, null, 2)
+          );
+        } catch (error) {
+          logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
+        }
+      }
+    }
+
+    // Remove from team memberIds
+    for (const team of this.teams.values()) {
+      if (team.memberIds.includes(workerId)) {
+        const updated = {
+          ...team,
+          memberIds: team.memberIds.filter((id) => id !== workerId),
+          updatedAt: new Date().toISOString()
+        };
+        this.teams.set(team.id, updated);
+        try {
+          fs.writeFileSync(
+            path.join(this.moePath, 'teams', `${team.id}.json`),
+            JSON.stringify(updated, null, 2)
+          );
+        } catch (error) {
+          logger.error({ error, teamId: team.id }, 'Failed to update team after worker deletion');
+        }
+      }
+    }
+
+    this.appendActivity('WORKER_DISCONNECTED', { workerId: worker.id }, undefined, worker);
+    this.emit({ type: 'WORKER_DELETED', payload: worker });
+  }
+
+  /**
+   * Purge all workers at startup. Since the daemon is (re)starting,
+   * no workers are connected yet — all existing files are guaranteed stale.
+   */
+  purgeAllWorkers(): void {
+    const workersDir = path.join(this.moePath, 'workers');
+    let deletedCount = 0;
+
+    // Delete all worker files from disk
+    try {
+      if (fs.existsSync(workersDir)) {
+        const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
+        for (const file of files) {
+          try {
+            fs.unlinkSync(path.join(workersDir, file));
+            deletedCount++;
+          } catch (error) {
+            logger.error({ error, file }, 'Failed to delete worker file during purge');
+          }
+        }
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to read workers directory during purge');
+    }
+
+    // Clear stale assignedWorkerId references on tasks
+    const workerIds = new Set(Array.from(this.workers.keys()));
+    if (workerIds.size > 0) {
+      for (const task of this.tasks.values()) {
+        if (task.assignedWorkerId && workerIds.has(task.assignedWorkerId)) {
+          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+          this.tasks.set(task.id, updated);
+          try {
+            fs.writeFileSync(
+              path.join(this.moePath, 'tasks', `${task.id}.json`),
+              JSON.stringify(updated, null, 2)
+            );
+          } catch (error) {
+            logger.error({ error, taskId: task.id }, 'Failed to clear task assignedWorkerId during purge');
+          }
+        }
+      }
+
+      // Clear stale memberIds from teams
+      for (const team of this.teams.values()) {
+        const cleanedMembers = team.memberIds.filter((id) => !workerIds.has(id));
+        if (cleanedMembers.length !== team.memberIds.length) {
+          const updated = { ...team, memberIds: cleanedMembers, updatedAt: new Date().toISOString() };
+          this.teams.set(team.id, updated);
+          try {
+            fs.writeFileSync(
+              path.join(this.moePath, 'teams', `${team.id}.json`),
+              JSON.stringify(updated, null, 2)
+            );
+          } catch (error) {
+            logger.error({ error, teamId: team.id }, 'Failed to clear team memberIds during purge');
+          }
+        }
+      }
+    }
+
+    // Clear workers map
+    this.workers.clear();
+
+    if (deletedCount > 0) {
+      logger.info({ count: deletedCount }, 'Purged stale workers from previous run');
+    }
   }
 
   async createProposal(input: RailProposal): Promise<RailProposal> {

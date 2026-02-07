@@ -35,6 +35,7 @@ export class MoeWebSocketServer {
   private wss: WSS;
   private pluginClients = new Set<WebSocket>();
   private mcpClients = new Set<WebSocket>();
+  private mcpWorkerMap = new Map<WebSocket, Set<string>>();
   private isClosed = false;
 
   constructor(
@@ -78,10 +79,14 @@ export class MoeWebSocketServer {
     if (url.startsWith('/mcp')) {
       this.mcpClients.add(ws);
       ws.on('message', (data: WebSocket.RawData) => this.handleMcpMessage(ws, data.toString()));
-      ws.on('close', () => this.mcpClients.delete(ws));
+      ws.on('close', () => {
+        this.mcpClients.delete(ws);
+        this.cleanupMcpWorkers(ws);
+      });
       ws.on('error', (error) => {
         logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
         this.mcpClients.delete(ws);
+        this.cleanupMcpWorkers(ws);
       });
       return;
     }
@@ -384,6 +389,7 @@ export class MoeWebSocketServer {
   private async handleMcpMessage(ws: WebSocket, raw: string): Promise<void> {
     try {
       const request = JSON.parse(raw);
+      this.trackMcpWorker(ws, request);
       const response = await this.mcpAdapter.handle(request);
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));
@@ -398,6 +404,51 @@ export class MoeWebSocketServer {
           error: { code: -32700, message: messageText }
         })
       );
+    }
+  }
+
+  /**
+   * Track which MCP WebSocket connection owns which worker IDs.
+   * Extracts workerId from tools/call request arguments.
+   */
+  private trackMcpWorker(ws: WebSocket, request: Record<string, unknown>): void {
+    if (request.method !== 'tools/call') return;
+    const params = request.params as { arguments?: Record<string, unknown> } | undefined;
+    const workerId = params?.arguments?.workerId;
+    if (typeof workerId !== 'string') return;
+
+    let workerIds = this.mcpWorkerMap.get(ws);
+    if (!workerIds) {
+      workerIds = new Set();
+      this.mcpWorkerMap.set(ws, workerIds);
+    }
+    workerIds.add(workerId);
+  }
+
+  /**
+   * Clean up workers owned by a disconnected MCP connection.
+   */
+  private cleanupMcpWorkers(ws: WebSocket): void {
+    const workerIds = this.mcpWorkerMap.get(ws);
+    if (!workerIds || workerIds.size === 0) {
+      this.mcpWorkerMap.delete(ws);
+      return;
+    }
+
+    let deletedCount = 0;
+    for (const workerId of workerIds) {
+      const worker = this.state.getWorker(workerId);
+      if (worker) {
+        logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
+        this.state.deleteWorker(workerId);
+        deletedCount++;
+      }
+    }
+
+    this.mcpWorkerMap.delete(ws);
+
+    if (deletedCount > 0) {
+      this.broadcast({ type: 'STATE_SNAPSHOT', payload: this.state.getSnapshot() });
     }
   }
 
@@ -427,6 +478,7 @@ export class MoeWebSocketServer {
       }
       this.pluginClients.clear();
       this.mcpClients.clear();
+      this.mcpWorkerMap.clear();
 
       this.wss.close((err) => {
         if (err) {
