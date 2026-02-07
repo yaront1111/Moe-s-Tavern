@@ -1,0 +1,85 @@
+{
+  "id": "task-7f229565",
+  "epicId": "epic-d8c8abea",
+  "title": "[MEDIUM] Proxy: WebSocket not closed on SIGTERM/SIGINT",
+  "description": "In packages/moe-proxy/src/index.ts lines 343-352, the SIGTERM and SIGINT handlers clear the reconnect timer and call process.exit(0) but never close the WebSocket connection.\n\n```typescript\nprocess.on('SIGTERM', () => {\n    writeLog('Received SIGTERM, shutting down');\n    if (reconnectTimer) clearTimeout(reconnectTimer);\n    process.exit(0);  // ← currentWebSocket never closed\n});\n```\n\nThis means:\n- The daemon doesn't get a clean close frame, so it may not detect the disconnect promptly\n- The worker record in .moe/workers/ may linger as active longer than necessary\n- The connection stays in TIME_WAIT state longer\n\nNote: gracefulShutdown() at line 129 also doesn't close the WebSocket - it only stops the timeout checker and waits for pending requests.\n\n**Fix:** Call currentWebSocket?.close() before process.exit(0) in both signal handlers. Also close the WebSocket in gracefulShutdown().",
+  "definitionOfDone": [
+    "SIGTERM handler closes WebSocket before exiting",
+    "SIGINT handler closes WebSocket before exiting",
+    "gracefulShutdown() closes WebSocket",
+    "Daemon receives clean close frame on proxy shutdown"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a closeWebSocket() helper function in packages/moe-proxy/src/index.ts that safely closes the current WebSocket connection with proper error handling. It should: (1) check if currentWebSocket exists and is in OPEN or CONNECTING state, (2) call currentWebSocket.close() wrapped in try/catch to handle errors if the socket is already closing, (3) set currentWebSocket to null and isConnected to false. This centralizes cleanup logic and avoids duplicating close code across signal handlers and gracefulShutdown(). Verify fix on the actual code path, not just the symptom.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-07T21:27:51.097Z",
+      "completedAt": "2026-02-07T21:28:02.653Z",
+      "note": "Added closeWebSocket() helper that checks readyState (OPEN or CONNECTING), calls close() with try/catch, and resets currentWebSocket/isConnected.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update SIGTERM handler (line 343) and SIGINT handler (line 349) to call closeWebSocket() before process.exit(0). Also call stopTimeoutChecker() in both handlers (currently only done in gracefulShutdown). No regression in existing functionality - the reconnect timer clearing is preserved.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-07T21:28:05.736Z",
+      "completedAt": "2026-02-07T21:28:15.234Z",
+      "note": "Both SIGTERM and SIGINT handlers now call stopTimeoutChecker() and closeWebSocket() before process.exit(0). Reconnect timer clearing preserved.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update gracefulShutdown() (line 129) to call closeWebSocket() after setting shuttingDown=true and stopping timers. The WebSocket should be closed early in shutdown so the daemon receives the close frame while we wait for pending responses (the daemon may still be processing them). The pending response wait loop still functions since responses arrive before close completes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-07T21:28:18.673Z",
+      "completedAt": "2026-02-07T21:28:27.300Z",
+      "note": "Added closeWebSocket() call in gracefulShutdown() after setting shuttingDown=true and stopping timers. The close frame is sent early so the daemon detects the disconnect while we wait for pending responses.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add test in packages/moe-proxy/src/index.test.ts that verifies the daemon's mock WebSocket server receives a close event when the proxy shuts down via stdin close (gracefulShutdown path). Use the existing test pattern - spawn proxy, connect, close stdin, verify the mock server's ws connection gets a 'close' event. All fixes must include tests where applicable.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.test.ts"
+      ],
+      "startedAt": "2026-02-07T21:28:30.358Z",
+      "completedAt": "2026-02-07T21:29:57.467Z",
+      "note": "Added test verifying mock server receives close event on graceful shutdown. Also adjusted closeWebSocket() placement in gracefulShutdown() to close AFTER pending responses are received (not before), preventing a regression where responses were lost. All 26 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "createdAt": "2026-02-07T20:36:23.082Z",
+  "updatedAt": "2026-02-07T21:32:50.755Z",
+  "planSubmittedAt": "2026-02-07T20:51:10.808Z"
+}

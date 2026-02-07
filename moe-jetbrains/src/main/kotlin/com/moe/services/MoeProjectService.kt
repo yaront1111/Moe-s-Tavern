@@ -234,14 +234,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 state = newState
                 publishState(newState)
 
-                // Send notifications for status changes
+                // Send notifications for status changes (must run on EDT)
                 if (oldTask?.status != task.status) {
-                    val notificationService = MoeNotificationService.getInstance(project)
-                    when (task.status) {
-                        "AWAITING_APPROVAL" -> notificationService.notifyAwaitingApproval(task)
-                        "BLOCKED" -> notificationService.notifyTaskBlocked(task)
-                        "REVIEW" -> notificationService.notifyTaskInReview(task)
-                        "DONE" -> notificationService.notifyTaskCompleted(task)
+                    val newStatus = task.status
+                    ApplicationManager.getApplication().invokeLater {
+                        val notificationService = MoeNotificationService.getInstance(project)
+                        when (newStatus) {
+                            "AWAITING_APPROVAL" -> notificationService.notifyAwaitingApproval(task)
+                            "BLOCKED" -> notificationService.notifyTaskBlocked(task)
+                            "REVIEW" -> notificationService.notifyTaskInReview(task)
+                            "DONE" -> notificationService.notifyTaskCompleted(task)
+                        }
                     }
                 }
             }

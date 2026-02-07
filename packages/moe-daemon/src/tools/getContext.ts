@@ -65,7 +65,13 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               reopenCount: task.reopenCount,
               reopenReason: task.reopenReason,
               rejectionDetails: task.rejectionDetails || null,
-              implementationPlan: task.implementationPlan
+              implementationPlan: task.implementationPlan,
+              planSubmittedAt: task.planSubmittedAt || null,
+              planApprovedAt: task.planApprovedAt || null,
+              workStartedAt: task.workStartedAt || null,
+              completedAt: task.completedAt || null,
+              reviewStartedAt: task.reviewStartedAt || null,
+              reviewCompletedAt: task.reviewCompletedAt || null
             }
           : null,
         worker: task?.assignedWorkerId ? state.getWorker(task.assignedWorkerId) ?? null : null,

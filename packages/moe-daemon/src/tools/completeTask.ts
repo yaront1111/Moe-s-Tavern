@@ -26,9 +26,10 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         await state.updateWorker(task.assignedWorkerId, { status: 'IDLE', currentTaskId: null });
       }
 
+      const now = new Date().toISOString();
       const updated = await state.updateTask(
         task.id,
-        { status: 'REVIEW', prLink: params.prLink || task.prLink },
+        { status: 'REVIEW', prLink: params.prLink || task.prLink, completedAt: now, reviewStartedAt: now },
         'TASK_COMPLETED'
       );
 

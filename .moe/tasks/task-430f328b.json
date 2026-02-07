@@ -25,7 +25,7 @@
     {
       "stepId": "step-2",
       "description": "Step 2: Set timestamps in relevant tool handlers. submitPlan.ts: set planSubmittedAt on PLAN_SUBMITTED (line 86). submitPlan.ts: set planApprovedAt on PLAN_AUTO_APPROVED (lines 97, 108). startStep.ts: set workStartedAt on first STEP_STARTED (only if not already set, line 45). completeTask.ts: set completedAt and reviewStartedAt on move to REVIEW (line 29). qaApprove.ts: set reviewCompletedAt on move to DONE (line 34). qaReject.ts: set reviewCompletedAt on rejection (line 47). Include error handling to not overwrite existing timestamps on reopen cycles. Changes must not break existing agent scripts or MCP protocol. Test by verifying timestamps are set correctly in each workflow.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/tools/startStep.ts",
@@ -33,27 +33,49 @@
         "packages/moe-daemon/src/tools/qaApprove.ts",
         "packages/moe-daemon/src/tools/qaReject.ts"
       ],
-      "startedAt": "2026-02-06T22:33:51.528Z"
+      "startedAt": "2026-02-06T22:33:51.528Z",
+      "completedAt": "2026-02-07T21:35:32.869Z",
+      "note": "Set all 6 timestamps: planSubmittedAt in submitPlan (already done by prev worker), planApprovedAt in TURBO (already done), SPEED auto-approve, and manual approveTask. workStartedAt in startStep (only first step). completedAt+reviewStartedAt in completeTask. reviewCompletedAt in qaApprove and qaReject. All 203 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Step 3: Expose timestamps in getContext.ts — add the 6 timestamp fields to the task response object (lines 55-65). Workers/architects can see timing data. Changes must not break existing agent scripts or MCP protocol.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "startedAt": "2026-02-07T21:35:36.738Z",
+      "completedAt": "2026-02-07T21:35:48.605Z",
+      "note": "Added all 6 timestamp fields to the task response in getContext. Uses || null for backward compatibility with existing tasks that don't have these fields.",
+      "modifiedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts"
       ]
     },
     {
       "stepId": "step-4",
       "description": "Step 4: Add test cases to tools.test.ts: (a) submitPlan sets planSubmittedAt, (b) approval sets planApprovedAt, (c) first startStep sets workStartedAt but second doesn't overwrite, (d) completeTask sets completedAt and reviewStartedAt, (e) qaApprove sets reviewCompletedAt. All new MCP tools must have tests in tools.test.ts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/__tests__/tools.test.ts"
+      ],
+      "startedAt": "2026-02-07T21:35:53.068Z",
+      "completedAt": "2026-02-07T21:36:40.805Z",
+      "note": "Added 7 timestamp tests: planSubmittedAt via submitPlan, planApprovedAt via manual approval, workStartedAt via startStep (with non-overwrite check), completedAt+reviewStartedAt via completeTask, reviewCompletedAt via qaApprove and qaReject, and getContext exposure. All 210 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
       ]
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d019",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -63,5 +85,5 @@
   "priority": "MEDIUM",
   "order": 10,
   "createdAt": "2026-02-06T22:06:31.394Z",
-  "updatedAt": "2026-02-06T22:33:51.528Z"
+  "updatedAt": "2026-02-07T21:37:56.334Z"
 }

@@ -112,6 +112,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         status: 'WORKING',
         reopenCount: task.reopenCount + 1,
         reopenReason: params.reason,
+        reviewCompletedAt: new Date().toISOString(),
       };
       if (rejectionDetails) {
         updatePayload.rejectionDetails = rejectionDetails;

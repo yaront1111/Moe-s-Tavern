@@ -90,11 +90,11 @@ if [ -z "$PROJECT" ] && [ -z "$PROJECT_NAME" ]; then
     exit 1
 fi
 
-# Build project argument for moe-agent.sh
+# Build project argument for moe-agent.sh (shell-escaped to handle special chars)
 if [ -n "$PROJECT" ]; then
-    PROJECT_ARG="--project \"$PROJECT\""
+    PROJECT_ARG="--project $(printf '%q' "$PROJECT")"
 else
-    PROJECT_ARG="--project-name \"$PROJECT_NAME\""
+    PROJECT_ARG="--project-name $(printf '%q' "$PROJECT_NAME")"
 fi
 
 # Auto-detect terminal emulator
@@ -135,7 +135,9 @@ launch_agent() {
     local role="$1"
     local color="$2"
     local terminal=$(detect_terminal)
-    local cmd="$SCRIPT_DIR/moe-agent.sh --role $role $PROJECT_ARG"
+    local safe_script_dir
+    safe_script_dir=$(printf '%q' "$SCRIPT_DIR")
+    local cmd="$safe_script_dir/moe-agent.sh --role $role $PROJECT_ARG"
 
     echo -e "${color}Starting $role agent...${NC}"
 
@@ -157,7 +159,7 @@ launch_agent() {
 tell application "iTerm"
     create window with default profile
     tell current session of current window
-        write text "cd '$SCRIPT_DIR' && ./moe-agent.sh --role $role $PROJECT_ARG"
+        write text "cd $safe_script_dir && $cmd"
     end tell
 end tell
 EOF
@@ -165,7 +167,7 @@ EOF
         terminal.app)
             osascript <<EOF
 tell application "Terminal"
-    do script "cd '$SCRIPT_DIR' && ./moe-agent.sh --role $role $PROJECT_ARG"
+    do script "cd $safe_script_dir && $cmd"
     activate
 end tell
 EOF

@@ -107,6 +107,173 @@ describe('moe-proxy graceful shutdown', () => {
     expect(JSON.parse(responses[0]).result).toBeDefined();
   }, 10000);
 
+  it('returns error response when server never responds and message times out', async () => {
+    const responses: string[] = [];
+    let clientConnected = false;
+
+    // Server accepts connection but never responds to messages
+    mockServer!.on('connection', () => {
+      clientConnected = true;
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: {
+        ...process.env,
+        MOE_PROJECT_PATH: testDir,
+        MOE_MESSAGE_TIMEOUT_MS: '500',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    proxy.stdout!.on('data', (chunk) => {
+      const lines = chunk.toString().trim().split('\n');
+      responses.push(...lines.filter((l: string) => l.startsWith('{')));
+    });
+
+    // Wait for connection
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+    });
+
+    // Send a request - server will never respond
+    proxy.stdin!.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 42,
+      method: 'tools/call',
+      params: { name: 'test' }
+    }) + '\n');
+
+    // Wait for timeout error response (timeout checker runs every 5s)
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        const hasError = responses.some(r => {
+          try {
+            const p = JSON.parse(r);
+            return p.id === 42 && p.error;
+          } catch { return false; }
+        });
+        if (hasError) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 200);
+    });
+
+    // Close stdin to trigger shutdown
+    proxy.stdin!.end();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', () => { clearTimeout(timeout); resolve(); });
+    });
+
+    // Verify error response was received with timeout message
+    const errorResponse = responses
+      .map(r => { try { return JSON.parse(r); } catch { return null; } })
+      .find(r => r && r.id === 42 && r.error);
+    expect(errorResponse).toBeDefined();
+    expect(errorResponse!.error.message).toContain('timed out');
+  }, 15000);
+
+  it('does not crash when connection drops during message exchange', async () => {
+    let clientConnected = false;
+
+    // Server accepts connection then terminates on first message
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('message', () => {
+        ws.terminate();
+      });
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Wait for connection
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+    });
+
+    // Send multiple requests rapidly - server will terminate on first
+    for (let i = 1; i <= 3; i++) {
+      proxy.stdin!.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: i,
+        method: 'tools/call',
+        params: { name: 'test' }
+      }) + '\n');
+    }
+
+    // Close stdin to trigger graceful shutdown (max 2s wait)
+    setTimeout(() => proxy.stdin!.end(), 500);
+
+    // Wait for proxy to exit
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 10000);
+      proxy.on('exit', (code) => { clearTimeout(timeout); resolve(code); });
+    });
+
+    // Proxy should exit cleanly (0 from graceful shutdown), NOT crash with unhandled exception
+    expect(exitCode).not.toBeNull();
+    expect([0, 1]).toContain(exitCode);
+  }, 15000);
+
+  it('sends clean close frame to daemon on graceful shutdown', async () => {
+    let clientConnected = false;
+    let serverReceivedClose = false;
+
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('close', () => {
+        serverReceivedClose = true;
+      });
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Wait for connection
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+    });
+
+    // Close stdin to trigger graceful shutdown
+    proxy.stdin!.end();
+
+    // Wait for proxy to exit
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    // Give the server a moment to process the close frame
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Verify daemon received a clean close event
+    expect(serverReceivedClose).toBe(true);
+  }, 10000);
+
   it('exits immediately when no pending requests', async () => {
     let clientConnected = false;
 

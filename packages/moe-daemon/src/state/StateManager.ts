@@ -24,6 +24,7 @@ import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { logger, createContextLogger } from '../util/logger.js';
 import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
+import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import {
   sanitizeString,
   sanitizeNumber,
@@ -741,7 +742,8 @@ export class StateManager {
     if (task.status !== 'AWAITING_APPROVAL') {
       throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
     }
-    const updated = await this.updateTask(taskId, { status: 'WORKING' }, 'PLAN_APPROVED');
+    cancelSpeedModeTimeout(taskId);
+    const updated = await this.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');
     return updated;
   }
 
@@ -751,6 +753,7 @@ export class StateManager {
     if (task.status !== 'AWAITING_APPROVAL') {
       throw new Error(`Cannot reject task in ${task.status} status, must be AWAITING_APPROVAL`);
     }
+    cancelSpeedModeTimeout(taskId);
     const updated = await this.updateTask(
       taskId,
       { status: 'PLANNING', reopenReason: reason },

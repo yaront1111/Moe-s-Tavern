@@ -71,6 +71,12 @@ Use when you cannot proceed without human help. Include the current step ID.
 - **Before completing**: Run the full test suite one final time
 - Use the project's configured test runner (check `globalRails.testing`)
 
+## Git Workflow
+
+- **Branch**: Use `task.branch` if set; otherwise create a branch following the project's `branchPattern`
+- **Commit per step**: Make a descriptive commit after completing each step (e.g., `feat: add validation to user input`)
+- **PR**: Create a pull request when all steps are done; pass the URL via `prLink` in `complete_task`
+
 ## Code Quality
 
 - Handle errors explicitly - don't let exceptions propagate silently

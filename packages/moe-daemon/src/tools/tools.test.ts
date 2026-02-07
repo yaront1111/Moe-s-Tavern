@@ -1328,4 +1328,140 @@ describe('MCP Tools', () => {
       expect(unblockEvent).toBeDefined();
     });
   });
+
+  describe('Task timestamps', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      await state.load();
+    });
+
+    it('submitPlan sets planSubmittedAt', async () => {
+      createTask({ status: 'PLANNING' });
+      await state.load();
+
+      const tool = submitPlanTool(state);
+      await tool.handler({
+        taskId: 'task-1',
+        steps: [{ description: 'Step 1' }],
+      }, state);
+
+      const task = state.getTask('task-1');
+      expect(task?.planSubmittedAt).toBeDefined();
+      expect(new Date(task!.planSubmittedAt!).getTime()).not.toBeNaN();
+    });
+
+    it('manual approval sets planApprovedAt', async () => {
+      createTask({ status: 'AWAITING_APPROVAL', implementationPlan: [
+        { stepId: 'step-1', description: 'Step', status: 'PENDING', affectedFiles: [] }
+      ]});
+      await state.load();
+
+      await state.approveTask('task-1');
+
+      const task = state.getTask('task-1');
+      expect(task?.planApprovedAt).toBeDefined();
+      expect(task?.status).toBe('WORKING');
+    });
+
+    it('first startStep sets workStartedAt but second does not overwrite', async () => {
+      createTask({
+        status: 'WORKING',
+        implementationPlan: [
+          { stepId: 'step-1', description: 'First', status: 'PENDING', affectedFiles: [] },
+          { stepId: 'step-2', description: 'Second', status: 'PENDING', affectedFiles: [] },
+        ],
+      });
+      await state.load();
+
+      const tool = startStepTool(state);
+      await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, state);
+
+      const taskAfterFirst = state.getTask('task-1');
+      const firstTimestamp = taskAfterFirst?.workStartedAt;
+      expect(firstTimestamp).toBeDefined();
+
+      // Complete first step so second can start
+      const completeTool = completeStepTool(state);
+      await completeTool.handler({ taskId: 'task-1', stepId: 'step-1' }, state);
+
+      // Start second step
+      await tool.handler({ taskId: 'task-1', stepId: 'step-2' }, state);
+
+      const taskAfterSecond = state.getTask('task-1');
+      expect(taskAfterSecond?.workStartedAt).toBe(firstTimestamp);
+    });
+
+    it('completeTask sets completedAt and reviewStartedAt', async () => {
+      createTask({
+        status: 'WORKING',
+        implementationPlan: [
+          { stepId: 'step-1', description: 'Done', status: 'COMPLETED', affectedFiles: [] },
+        ],
+      });
+      await state.load();
+
+      const tool = completeTaskTool(state);
+      await tool.handler({ taskId: 'task-1' }, state);
+
+      const task = state.getTask('task-1');
+      expect(task?.completedAt).toBeDefined();
+      expect(task?.reviewStartedAt).toBeDefined();
+      expect(task?.status).toBe('REVIEW');
+    });
+
+    it('qaApprove sets reviewCompletedAt', async () => {
+      createTask({ status: 'REVIEW' });
+      await state.load();
+
+      const tool = qaApproveTool(state);
+      await tool.handler({ taskId: 'task-1' }, state);
+
+      const task = state.getTask('task-1');
+      expect(task?.reviewCompletedAt).toBeDefined();
+      expect(task?.status).toBe('DONE');
+    });
+
+    it('qaReject sets reviewCompletedAt', async () => {
+      createTask({ status: 'REVIEW' });
+      await state.load();
+
+      const tool = qaRejectTool(state);
+      await tool.handler({ taskId: 'task-1', reason: 'Needs work' }, state);
+
+      const task = state.getTask('task-1');
+      expect(task?.reviewCompletedAt).toBeDefined();
+      expect(task?.status).toBe('WORKING');
+    });
+
+    it('getContext exposes timestamps', async () => {
+      const now = new Date().toISOString();
+      createTask({
+        status: 'WORKING',
+        planSubmittedAt: now,
+        planApprovedAt: now,
+        workStartedAt: now,
+      } as Partial<Task>);
+      await state.load();
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+        task: {
+          planSubmittedAt: string | null;
+          planApprovedAt: string | null;
+          workStartedAt: string | null;
+          completedAt: string | null;
+          reviewStartedAt: string | null;
+          reviewCompletedAt: string | null;
+        };
+      };
+
+      expect(result.task.planSubmittedAt).toBe(now);
+      expect(result.task.planApprovedAt).toBe(now);
+      expect(result.task.workStartedAt).toBe(now);
+      expect(result.task.completedAt).toBeNull();
+      expect(result.task.reviewStartedAt).toBeNull();
+      expect(result.task.reviewCompletedAt).toBeNull();
+    });
+  });
 });

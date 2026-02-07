@@ -482,7 +482,9 @@ if [ "$NO_START_DAEMON" = false ]; then
 
     if [ -f "$DAEMON_INFO" ]; then
         # Try to read PID from daemon.json
-        PID_OUTPUT=$($PYTHON_CMD -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>&1)
+        # NOTE: Uses sys.argv[1] instead of string interpolation to safely handle
+        # paths containing single quotes, double quotes, or spaces.
+        PID_OUTPUT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>&1)
         PID_EXIT_CODE=$?
 
         if [ $PID_EXIT_CODE -ne 0 ]; then
@@ -551,7 +553,7 @@ if [ "$NO_START_DAEMON" = false ]; then
 
             # Check if daemon.json exists and process is running
             if [ -f "$DAEMON_INFO" ]; then
-                NEW_PID=$($PYTHON_CMD -c "import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))" 2>/dev/null || echo "")
+                NEW_PID=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
                 if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
                     echo -e "${GREEN}[OK]${NC} Daemon started (waited ${WAITED}s)"
                     break

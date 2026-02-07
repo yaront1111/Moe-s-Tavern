@@ -1,0 +1,86 @@
+{
+  "id": "task-d00d4518",
+  "epicId": "epic-d8c8abea",
+  "title": "[MEDIUM] Daemon: SPEED mode setTimeout not cancellable",
+  "description": "In packages/moe-daemon/src/tools/submitPlan.ts lines 104-119, SPEED mode auto-approval uses a bare setTimeout() that is never stored or cancellable.\n\nIssues:\n1. On daemon shutdown, the timeout may fire after StateManager is being torn down, causing file write errors\n2. The timeout holds a closure reference to `state` (StateManager), preventing GC during the delay\n3. While the status check at line 108 prevents double-approval, the timeout still runs unnecessarily if the task was manually approved or rejected\n\nThe timeout reference is not stored anywhere - there's no way to cancel it.\n\n**Fix:** Store the timeout ID (e.g., in a Map<taskId, NodeJS.Timeout>) and clear it when:\n- The task status changes away from AWAITING_APPROVAL (manual approve/reject)\n- The daemon is shutting down (in a cleanup handler)",
+  "definitionOfDone": [
+    "setTimeout ID stored and trackable per task",
+    "Timeout cancelled on manual approval/rejection",
+    "Timeout cancelled on daemon shutdown",
+    "No state mutations attempted after StateManager teardown"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a module-level Map<string, NodeJS.Timeout> called speedModeTimeouts in packages/moe-daemon/src/tools/submitPlan.ts. Store the setTimeout ID at line 104 into this map keyed by taskId. Export two functions: cancelSpeedModeTimeout(taskId: string) which clears and deletes a single timeout, and clearAllSpeedModeTimeouts() which clears all timeouts (for shutdown). This provides proper error handling for orphaned timeouts. Verify fix on the actual code path - the timeout at line 104 is the only SPEED mode timer.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "startedAt": "2026-02-07T21:10:09.487Z",
+      "completedAt": "2026-02-07T21:12:31.898Z",
+      "note": "Added speedModeTimeouts Map, cancelSpeedModeTimeout(), clearAllSpeedModeTimeouts() exports. setTimeout ID is now stored in the map and removed on callback execution.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Call cancelSpeedModeTimeout(taskId) from StateManager.approveTask() (line 738) and StateManager.rejectTask() (line 748) to cancel the SPEED mode timer when a task is manually approved or rejected. Import the function from submitPlan.ts. No regression in existing functionality - the status check at line 108 already prevents double-approval, but cancelling the timeout is cleaner and avoids unnecessary state reads.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "startedAt": "2026-02-07T21:12:35.052Z",
+      "completedAt": "2026-02-07T21:13:16.515Z",
+      "note": "Added cancelSpeedModeTimeout(taskId) calls in both approveTask() and rejectTask() methods, before the state update. Imported from submitPlan.ts.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Call clearAllSpeedModeTimeouts() in the shutdown handler in packages/moe-daemon/src/index.ts, before flushing the activity log (before line 371). This ensures no SPEED mode timeouts fire after StateManager teardown begins. Import the function from submitPlan.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "startedAt": "2026-02-07T21:13:19.760Z",
+      "completedAt": "2026-02-07T21:13:33.853Z",
+      "note": "Added clearAllSpeedModeTimeouts() call in shutdown handler, before flushActivityLog(). This ensures no SPEED mode timeouts fire after StateManager teardown begins.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add test coverage for the timeout cancellation. Create a test in packages/moe-daemon/src/tools/submitPlan.test.ts using vitest that verifies: (1) cancelSpeedModeTimeout removes a tracked timeout, (2) clearAllSpeedModeTimeouts clears all tracked timeouts. All fixes must include tests where applicable. Use vitest fake timers to test without real delays.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "startedAt": "2026-02-07T21:13:37.080Z",
+      "completedAt": "2026-02-07T21:14:45.599Z",
+      "note": "Created 4 tests using vitest fake timers: (1) cancelSpeedModeTimeout cancels a tracked timeout, (2) clearAllSpeedModeTimeouts cancels all tracked timeouts, (3) cancel is a no-op for unknown taskId, (4) timeout auto-approves when not cancelled. All 203 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "createdAt": "2026-02-07T20:36:16.159Z",
+  "updatedAt": "2026-02-07T21:32:09.489Z",
+  "planSubmittedAt": "2026-02-07T20:50:54.504Z"
+}
