@@ -14,6 +14,8 @@ import type {
   RailProposal,
   Task,
   TaskPriority,
+  Team,
+  TeamRole,
   Worker
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
@@ -111,7 +113,10 @@ export type StateChangeEvent =
   | { type: 'WORKER_UPDATED'; payload: Worker }
   | { type: 'PROPOSAL_CREATED'; payload: RailProposal }
   | { type: 'PROPOSAL_UPDATED'; payload: RailProposal }
-  | { type: 'SETTINGS_UPDATED'; payload: Project };
+  | { type: 'SETTINGS_UPDATED'; payload: Project }
+  | { type: 'TEAM_CREATED'; payload: Team }
+  | { type: 'TEAM_UPDATED'; payload: Team }
+  | { type: 'TEAM_DELETED'; payload: Team };
 
 export interface StateManagerOptions {
   projectPath: string;
@@ -127,6 +132,7 @@ export class StateManager {
   tasks = new Map<string, Task>();
   workers = new Map<string, Worker>();
   proposals = new Map<string, RailProposal>();
+  teams = new Map<string, Team>();
 
   private emitter?: (event: StateChangeEvent) => void;
   private readonly mutex = new AsyncMutex();
@@ -284,6 +290,13 @@ export class StateManager {
         }
       }
       this.workers = this.loadEntities<Worker>(path.join(this.moePath, 'workers'));
+      // Backfill teamId for workers that predate the teams feature
+      for (const [id, worker] of this.workers) {
+        if (worker.teamId === undefined) {
+          this.workers.set(id, { ...worker, teamId: null });
+        }
+      }
+      this.teams = this.loadEntities<Team>(path.join(this.moePath, 'teams'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
 
       // Initialize log rotator
@@ -307,7 +320,8 @@ export class StateManager {
       epics: sortByOrder(Array.from(this.epics.values())),
       tasks: sortByOrder(Array.from(this.tasks.values())),
       workers: Array.from(this.workers.values()),
-      proposals: Array.from(this.proposals.values())
+      proposals: Array.from(this.proposals.values()),
+      teams: Array.from(this.teams.values())
     };
   }
 
@@ -347,6 +361,135 @@ export class StateManager {
       .filter((w): w is Worker => w !== undefined);
   }
 
+  // ---- Team methods ----
+
+  getTeam(teamId: string): Team | null {
+    return this.teams.get(teamId) || null;
+  }
+
+  getTeamByNameAndRole(name: string, role: TeamRole): Team | null {
+    for (const team of this.teams.values()) {
+      if (team.name === name && team.role === role) return team;
+    }
+    return null;
+  }
+
+  getTeamForWorker(workerId: string): Team | null {
+    const worker = this.workers.get(workerId);
+    if (!worker?.teamId) return null;
+    return this.teams.get(worker.teamId) || null;
+  }
+
+  async createTeam(input: { name: string; role: TeamRole; maxSize?: number }): Promise<Team> {
+    if (!this.project) throw new Error('Project not loaded');
+
+    const now = new Date().toISOString();
+    const team: Team = {
+      id: generateId('team'),
+      projectId: this.project.id,
+      name: input.name,
+      role: input.role,
+      memberIds: [],
+      maxSize: input.maxSize ?? 10,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.teams.set(team.id, team);
+    await this.writeEntity('teams', team.id, team);
+    this.appendActivity('TEAM_CREATED', { name: team.name, role: team.role });
+    this.emit({ type: 'TEAM_CREATED', payload: team });
+    return team;
+  }
+
+  async updateTeam(teamId: string, updates: Partial<Team>): Promise<Team> {
+    const team = this.teams.get(teamId);
+    if (!team) throw new Error(`Team not found: ${teamId}`);
+
+    const updated: Team = {
+      ...team,
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.teams.set(teamId, updated);
+    await this.writeEntity('teams', teamId, updated);
+    this.appendActivity('TEAM_UPDATED', updates as Record<string, unknown>);
+    this.emit({ type: 'TEAM_UPDATED', payload: updated });
+    return updated;
+  }
+
+  async deleteTeam(teamId: string): Promise<Team> {
+    const team = this.teams.get(teamId);
+    if (!team) throw new Error(`Team not found: ${teamId}`);
+
+    // Clear teamId on all members
+    for (const memberId of team.memberIds) {
+      const worker = this.workers.get(memberId);
+      if (worker) {
+        await this.updateWorker(memberId, { teamId: null });
+      }
+    }
+
+    this.teams.delete(teamId);
+    const filePath = path.join(this.moePath, 'teams', `${teamId}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    this.appendActivity('TEAM_DELETED', { name: team.name });
+    this.emit({ type: 'TEAM_DELETED', payload: team });
+    return team;
+  }
+
+  async addTeamMember(teamId: string, workerId: string): Promise<Team> {
+    const team = this.teams.get(teamId);
+    if (!team) throw new Error(`Team not found: ${teamId}`);
+
+    if (team.memberIds.includes(workerId)) {
+      return team; // Already a member, idempotent
+    }
+
+    if (team.memberIds.length >= team.maxSize) {
+      throw new Error(`Team ${team.name} is full (max ${team.maxSize} members)`);
+    }
+
+    const updated = await this.updateTeam(teamId, {
+      memberIds: [...team.memberIds, workerId]
+    });
+
+    // Set worker's teamId
+    const worker = this.workers.get(workerId);
+    if (worker) {
+      await this.updateWorker(workerId, { teamId });
+    }
+
+    this.appendActivity('TEAM_MEMBER_ADDED', { teamId, workerId });
+    return updated;
+  }
+
+  async removeTeamMember(teamId: string, workerId: string): Promise<Team> {
+    const team = this.teams.get(teamId);
+    if (!team) throw new Error(`Team not found: ${teamId}`);
+
+    if (!team.memberIds.includes(workerId)) {
+      return team; // Not a member, idempotent
+    }
+
+    const updated = await this.updateTeam(teamId, {
+      memberIds: team.memberIds.filter((id) => id !== workerId)
+    });
+
+    // Clear worker's teamId
+    const worker = this.workers.get(workerId);
+    if (worker) {
+      await this.updateWorker(workerId, { teamId: null });
+    }
+
+    this.appendActivity('TEAM_MEMBER_REMOVED', { teamId, workerId });
+    return updated;
+  }
+
   async createWorker(input: {
     id: string;
     type: Worker['type'];
@@ -373,7 +516,8 @@ export class StateManager {
       startedAt: now,
       lastActivityAt: now,
       lastError: null,
-      errorCount: 0
+      errorCount: 0,
+      teamId: null
     };
 
     this.workers.set(worker.id, worker);

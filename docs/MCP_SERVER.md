@@ -627,3 +627,94 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes.
 - `reason is required - explain which DoD items failed and why`
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to reject`
+
+---
+
+## Team Management Tools
+
+Teams allow multiple agents of the same role to work in parallel within an epic. Team members bypass the per-epic per-status constraint.
+
+### moe.create_team
+
+Create a team or return an existing team with the same name+role (idempotent).
+
+**Parameters:**
+```typescript
+{
+  name: string,          // Required: team display name (e.g. "Coders")
+  role: 'architect' | 'worker' | 'qa',  // Required: team role
+  maxSize?: number       // Maximum members (default 10)
+}
+```
+
+**Returns:**
+```typescript
+{
+  team: Team,            // The created or existing team
+  created: boolean       // true if newly created, false if already existed
+}
+```
+
+---
+
+### moe.join_team
+
+Add a worker to a team. Auto-registers the worker if it doesn't exist.
+
+**Parameters:**
+```typescript
+{
+  teamId: string,        // Required: the team ID to join
+  workerId: string       // Required: the worker ID
+}
+```
+
+**Returns:**
+```typescript
+{ team: Team }           // Updated team with new member
+```
+
+**Errors:**
+- `Team not found: <teamId>`
+- `Team is full (max N members)`
+
+---
+
+### moe.leave_team
+
+Remove a worker from a team.
+
+**Parameters:**
+```typescript
+{
+  teamId: string,        // Required: the team ID to leave
+  workerId: string       // Required: the worker ID
+}
+```
+
+**Returns:**
+```typescript
+{ team: Team }           // Updated team without the member
+```
+
+---
+
+### moe.list_teams
+
+List all teams, optionally filtered by role.
+
+**Parameters:**
+```typescript
+{
+  role?: string          // Optional: filter by role (architect, worker, qa)
+}
+```
+
+**Returns:**
+```typescript
+{
+  teams: Array<Team & {
+    members: Array<{ id: string, type: string, status: string }>
+  }>
+}
+```

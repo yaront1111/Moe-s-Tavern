@@ -55,7 +55,20 @@ export interface Project {
   updatedAt: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
+
+export type TeamRole = 'architect' | 'worker' | 'qa';
+
+export interface Team {
+  id: string;
+  projectId: string;
+  name: string;
+  role: TeamRole;
+  memberIds: string[];
+  maxSize: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface Epic {
   id: string;
@@ -137,6 +150,7 @@ export interface Worker {
   lastActivityAt: string;
   lastError: string | null;
   errorCount: number;
+  teamId: string | null;
 }
 
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
@@ -192,7 +206,12 @@ export const ACTIVITY_EVENT_TYPES = [
   'TASK_BLOCKED',
   'PROPOSAL_CREATED',
   'PROPOSAL_APPROVED',
-  'PROPOSAL_REJECTED'
+  'PROPOSAL_REJECTED',
+  'TEAM_CREATED',
+  'TEAM_UPDATED',
+  'TEAM_DELETED',
+  'TEAM_MEMBER_ADDED',
+  'TEAM_MEMBER_REMOVED'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];
@@ -214,6 +233,7 @@ export interface MoeStateSnapshot {
   tasks: Task[];
   workers: Worker[];
   proposals: RailProposal[];
+  teams: Team[];
 }
 
 export interface DaemonInfo {

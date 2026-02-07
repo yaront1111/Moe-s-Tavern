@@ -72,7 +72,8 @@ describe('Schema Migrations', () => {
       expect(result.fromVersion).toBe(1);
       expect(result.toVersion).toBe(CURRENT_SCHEMA_VERSION);
       expect(result.migrationsApplied).toContain('Add schemaVersion field to project.json');
-      expect(data.schemaVersion).toBe(2);
+      expect(result.migrationsApplied).toContain('Add teams support');
+      expect(data.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     });
 
     it('should skip migrations for current version projects', () => {

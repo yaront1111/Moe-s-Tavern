@@ -9,6 +9,7 @@ import com.moe.model.MoeState
 import com.moe.model.Project
 import com.moe.model.RailProposal
 import com.moe.model.Task
+import com.moe.model.Team
 import com.moe.model.Worker
 
 object MoeJson {
@@ -59,12 +60,17 @@ object MoeJson {
             ?.takeIf { it.isJsonArray }
             ?.asJsonArray
             ?: JsonArray()
+        val teamsArray = payload.get("teams")
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+            ?: JsonArray()
         val epics = parseEpics(epicsArray)
         val tasks = parseTasks(tasksArray)
         val proposals = parseProposals(proposalsArray)
         val workers = parseWorkers(workersArray)
+        val teams = parseTeams(teamsArray)
 
-        return MoeState(project, epics, tasks, proposals, workers)
+        return MoeState(project, epics, tasks, proposals, workers, teams)
     }
 
     private fun parseEpics(array: JsonArray): List<Epic> {
@@ -215,7 +221,33 @@ object MoeJson {
             epicId = obj.getStringOrDefault("epicId", ""),
             currentTaskId = obj.getStringOrNull("currentTaskId"),
             status = obj.getStringOrDefault("status", "IDLE"),
-            lastError = obj.getStringOrNull("lastError")
+            lastError = obj.getStringOrNull("lastError"),
+            teamId = obj.getStringOrNull("teamId")
+        )
+    }
+
+    private fun parseTeams(array: JsonArray): List<Team> {
+        return array.mapNotNull { element ->
+            if (!element.isJsonObject) return@mapNotNull null
+            parseTeam(element.asJsonObject)
+        }
+    }
+
+    fun parseTeam(obj: JsonObject): Team {
+        val memberIds = obj.get("memberIds")
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+            ?.map { it.asString }
+            ?: emptyList()
+        val maxSize = obj.get("maxSize")?.let {
+            if (it.isJsonNull) 10 else try { it.asInt } catch (_: Exception) { 10 }
+        } ?: 10
+        return Team(
+            id = obj.getStringOrDefault("id", "unknown"),
+            name = obj.getStringOrDefault("name", ""),
+            role = obj.getStringOrDefault("role", "worker"),
+            memberIds = memberIds,
+            maxSize = maxSize
         )
     }
 

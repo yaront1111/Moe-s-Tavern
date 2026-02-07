@@ -26,6 +26,10 @@ import { qaRejectTool } from './qaReject.js';
 import { initProjectTool } from './initProject.js';
 import { getActivityLogTool } from './getActivityLog.js';
 import { unblockWorkerTool } from './unblockWorker.js';
+import { createTeamTool } from './createTeam.js';
+import { joinTeamTool } from './joinTeam.js';
+import { leaveTeamTool } from './leaveTeam.js';
+import { listTeamsTool } from './listTeams.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -60,6 +64,10 @@ export function getTools(state: StateManager): ToolDefinition[] {
     qaRejectTool(state),
     initProjectTool(state),
     getActivityLogTool(state),
-    unblockWorkerTool(state)
+    unblockWorkerTool(state),
+    createTeamTool(state),
+    joinTeamTool(state),
+    leaveTeamTool(state),
+    listTeamsTool(state)
   ];
 }

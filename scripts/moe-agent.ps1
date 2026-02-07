@@ -20,7 +20,10 @@ param(
     [int]$PollInterval = 30,
 
     # Disable polling loop - run once and exit
-    [switch]$NoLoop
+    [switch]$NoLoop,
+
+    # Team name to auto-create/join (enables parallel same-role workers)
+    [string]$Team
 )
 
 function Load-Registry {
@@ -274,6 +277,29 @@ if ($Delay -gt 0) {
     Start-Sleep -Seconds $Delay
 }
 
+# Auto-create/join team if -Team specified
+$teamContext = ""
+if ($Team) {
+    Write-Host "Setting up team '$Team' for role '$Role'..."
+    $nodeExe = "node"
+    $createTeamJson = ConvertTo-Json @{ name = $Team; role = $Role } -Compress
+    $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
+    try {
+        $createResult = $createRpc | & $nodeExe $proxyScript 2>$null | ConvertFrom-Json
+        $teamObj = $createResult.result.content[0].text | ConvertFrom-Json
+        $teamId = $teamObj.team.id
+        Write-Host "Team '$Team' ready (id: $teamId)"
+
+        $joinJson = ConvertTo-Json @{ teamId = $teamId; workerId = $WorkerId } -Compress
+        $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + $joinJson + '}}'
+        $joinRpc | & $nodeExe $proxyScript 2>$null | Out-Null
+        Write-Host "Worker $WorkerId joined team '$Team'"
+        $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
+    } catch {
+        Write-Host "WARNING: Failed to set up team: $_" -ForegroundColor Yellow
+    }
+}
+
 Write-Host "Launching $cliType CLI..."
 if (-not $NoLoop) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
@@ -298,6 +324,9 @@ if ($roleDoc) {
 }
 if ($knownIssues) {
     $systemAppend += "`n`n# Known Issues`n$knownIssues"
+}
+if ($teamContext) {
+    $systemAppend += "`n`n# Team`n$teamContext"
 }
 
 do {

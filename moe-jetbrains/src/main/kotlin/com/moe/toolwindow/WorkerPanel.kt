@@ -1,6 +1,7 @@
 package com.moe.toolwindow
 
 import com.moe.model.Task
+import com.moe.model.Team
 import com.moe.model.Worker
 import com.moe.toolwindow.board.BoardStyles
 import com.moe.util.MoeBundle
@@ -21,7 +22,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
         isOpaque = false
     }
 
-    fun updateWorkers(workers: List<Worker>, tasks: Map<String, Task>) {
+    fun updateWorkers(workers: List<Worker>, tasks: Map<String, Task>, teams: List<Team> = emptyList()) {
         removeAll()
 
         if (workers.isEmpty()) {
@@ -29,7 +30,40 @@ class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
                 foreground = JBColor.GRAY
             })
         } else {
+            // Group workers by team
+            val teamMap = teams.associateBy { it.id }
+            val teamWorkers = mutableMapOf<String, MutableList<Worker>>() // teamId -> workers
+            val soloWorkers = mutableListOf<Worker>()
+
             for (worker in workers) {
+                val tid = worker.teamId
+                if (tid != null && teamMap.containsKey(tid)) {
+                    teamWorkers.getOrPut(tid) { mutableListOf() }.add(worker)
+                } else {
+                    soloWorkers.add(worker)
+                }
+            }
+
+            // Render team sections
+            for ((teamId, members) in teamWorkers) {
+                val team = teamMap[teamId] ?: continue
+                add(JBLabel("[${team.name}]").apply {
+                    foreground = BoardStyles.textPrimary
+                    font = font.deriveFont(Font.BOLD, font.size - 1f)
+                })
+                for (worker in members) {
+                    add(createWorkerCard(worker, tasks))
+                }
+            }
+
+            // Render solo workers
+            if (soloWorkers.isNotEmpty() && teamWorkers.isNotEmpty()) {
+                add(JBLabel("[Solo]").apply {
+                    foreground = JBColor.GRAY
+                    font = font.deriveFont(Font.BOLD, font.size - 1f)
+                })
+            }
+            for (worker in soloWorkers) {
                 add(createWorkerCard(worker, tasks))
             }
         }

@@ -18,6 +18,7 @@ object MoeProjectInitializer {
         File(moeDir, "epics").mkdirs()
         File(moeDir, "tasks").mkdirs()
         File(moeDir, "workers").mkdirs()
+        File(moeDir, "teams").mkdirs()
         File(moeDir, "proposals").mkdirs()
         File(moeDir, "roles").mkdirs()
 
@@ -28,13 +29,13 @@ object MoeProjectInitializer {
 
         val gitignore = File(moeDir, ".gitignore")
         if (!gitignore.exists()) {
-            gitignore.writeText("# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\n")
+            gitignore.writeText("# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nteams/\nproposals/\n")
         }
 
         val now = Instant.now().toString()
         val projectJson = JsonObject().apply {
             addProperty("id", "proj-${shortId()}")
-            addProperty("schemaVersion", 2)
+            addProperty("schemaVersion", 3)
             addProperty("name", projectName ?: root.name)
             addProperty("rootPath", root.absolutePath)
 
