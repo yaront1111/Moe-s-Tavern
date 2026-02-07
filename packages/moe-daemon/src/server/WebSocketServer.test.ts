@@ -119,7 +119,10 @@ describe('MoeWebSocketServer Integration', () => {
   });
 
   afterEach(async () => {
-    // Close all connections
+    // Close all WebSocket connections first, then the HTTP server
+    if (wsServer) {
+      wsServer.close();
+    }
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());
     });
@@ -127,15 +130,44 @@ describe('MoeWebSocketServer Integration', () => {
   });
 
   describe('Plugin endpoint (/ws)', () => {
-    it('sends STATE_SNAPSHOT on connection', async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    // Helper: connect and collect messages in order to avoid race conditions.
+    // The STATE_SNAPSHOT can arrive before a late-registered handler, so we
+    // buffer messages from the start.
+    function connectAndCollect(endpoint = '/ws') {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
+      const messages: string[] = [];
+      let waiting: ((msg: string) => void) | null = null;
 
-      const message = await new Promise<string>((resolve, reject) => {
-        ws.on('message', (data) => resolve(data.toString()));
-        ws.on('error', reject);
-        setTimeout(() => reject(new Error('Timeout')), 5000);
+      ws.on('message', (data) => {
+        const msg = data.toString();
+        if (waiting) {
+          const resolve = waiting;
+          waiting = null;
+          resolve(msg);
+        } else {
+          messages.push(msg);
+        }
       });
 
+      const ready = new Promise<void>((resolve) => ws.on('open', () => resolve()));
+
+      function nextMessage(timeoutMs = 5000): Promise<string> {
+        if (messages.length > 0) {
+          return Promise.resolve(messages.shift()!);
+        }
+        return new Promise<string>((resolve, reject) => {
+          waiting = resolve;
+          setTimeout(() => { waiting = null; reject(new Error('Timeout')); }, timeoutMs);
+        });
+      }
+
+      return { ws, ready, nextMessage };
+    }
+
+    it('sends STATE_SNAPSHOT on connection', async () => {
+      const { ws, nextMessage } = connectAndCollect();
+
+      const message = await nextMessage();
       const parsed = JSON.parse(message);
       expect(parsed.type).toBe('STATE_SNAPSHOT');
       expect(parsed.payload.project.name).toBe('Test Project');
@@ -145,25 +177,16 @@ describe('MoeWebSocketServer Integration', () => {
     });
 
     it('responds to PING with PONG', async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-
-      await new Promise<void>((resolve) => {
-        ws.on('open', () => resolve());
-      });
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
 
       // Skip initial STATE_SNAPSHOT
-      await new Promise<void>((resolve) => {
-        ws.once('message', () => resolve());
-      });
+      await nextMessage();
 
       // Send PING
       ws.send(JSON.stringify({ type: 'PING' }));
 
-      const response = await new Promise<string>((resolve, reject) => {
-        ws.on('message', (data) => resolve(data.toString()));
-        setTimeout(() => reject(new Error('Timeout')), 5000);
-      });
-
+      const response = await nextMessage();
       const parsed = JSON.parse(response);
       expect(parsed.type).toBe('PONG');
 
@@ -171,25 +194,16 @@ describe('MoeWebSocketServer Integration', () => {
     });
 
     it('responds to GET_STATE', async () => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
-
-      await new Promise<void>((resolve) => {
-        ws.on('open', () => resolve());
-      });
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
 
       // Skip initial STATE_SNAPSHOT
-      await new Promise<void>((resolve) => {
-        ws.once('message', () => resolve());
-      });
+      await nextMessage();
 
       // Request state
       ws.send(JSON.stringify({ type: 'GET_STATE' }));
 
-      const response = await new Promise<string>((resolve, reject) => {
-        ws.on('message', (data) => resolve(data.toString()));
-        setTimeout(() => reject(new Error('Timeout')), 5000);
-      });
-
+      const response = await nextMessage();
       const parsed = JSON.parse(response);
       expect(parsed.type).toBe('STATE_SNAPSHOT');
       expect(parsed.payload.epics.length).toBe(1);
@@ -293,26 +307,46 @@ describe('MoeWebSocketServer Integration', () => {
 
     it('handles invalid JSON gracefully', async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const messages: string[] = [];
+      let waiting: ((msg: string) => void) | null = null;
 
-      await new Promise<void>((resolve) => {
-        ws.on('open', () => resolve());
+      ws.on('message', (data) => {
+        const msg = data.toString();
+        if (waiting) {
+          const resolve = waiting;
+          waiting = null;
+          resolve(msg);
+        } else {
+          messages.push(msg);
+        }
       });
+
+      await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+
+      function nextMessage(timeoutMs = 5000): Promise<string> {
+        if (messages.length > 0) return Promise.resolve(messages.shift()!);
+        return new Promise<string>((resolve, reject) => {
+          waiting = resolve;
+          setTimeout(() => { waiting = null; reject(new Error('Timeout')); }, timeoutMs);
+        });
+      }
 
       // Skip initial STATE_SNAPSHOT
-      await new Promise<void>((resolve) => {
-        ws.once('message', () => resolve());
-      });
+      await nextMessage();
 
       // Send invalid JSON - should not crash server
       ws.send('not valid json');
 
+      // Server responds with ERROR for invalid JSON, then we send PING
+      // Consume the ERROR response first
+      const errorMsg = await nextMessage();
+      const errorParsed = JSON.parse(errorMsg);
+      expect(errorParsed.type).toBe('ERROR');
+
       // Server should still respond to valid messages
       ws.send(JSON.stringify({ type: 'PING' }));
 
-      const response = await new Promise<string>((resolve, reject) => {
-        ws.on('message', (data) => resolve(data.toString()));
-        setTimeout(() => reject(new Error('Timeout')), 5000);
-      });
+      const response = await nextMessage();
 
       const parsed = JSON.parse(response);
       expect(parsed.type).toBe('PONG');

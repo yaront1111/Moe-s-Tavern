@@ -108,13 +108,21 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
-          cache-dependency-path: packages/moe-daemon/package-lock.json
+          cache-dependency-path: |
+            packages/moe-daemon/package-lock.json
+            packages/moe-proxy/package-lock.json
 
       - name: Build daemon
         run: |
           npm ci
           npm run build
         working-directory: packages/moe-daemon
+
+      - name: Build proxy
+        run: |
+          npm ci
+          npm run build
+        working-directory: packages/moe-proxy
 
       - name: Setup JDK
         uses: actions/setup-java@v5
