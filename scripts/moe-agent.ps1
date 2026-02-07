@@ -314,17 +314,16 @@ do {
     } else { $null }
 
     if ($cliType -eq "codex") {
-        # Codex: embed role context in the prompt, use --full-auto and -C for project dir
+        # Codex: embed role context in the prompt, pipe via stdin to avoid arg parsing issues
         $fullPrompt = $systemAppend
         if ($claimPrompt) { $fullPrompt += "`n`n$claimPrompt" }
 
-        # Write prompt to temp file to avoid quoting issues
+        # Write prompt to temp file and pipe to codex exec via stdin ("-" reads from stdin)
         $promptFile = Join-Path $env:TEMP "moe-prompt-$Role-$PID.txt"
         $fullPrompt | Set-Content -Path $promptFile -Encoding UTF8
 
-        Write-Host "Command: $Command --full-auto -C `"$projectPath`" (prompt from $promptFile)"
-        $promptContent = Get-Content -Raw -Path $promptFile
-        & $Command @CommandArgs --full-auto -C "$projectPath" $promptContent
+        Write-Host "Command: $Command exec --full-auto -C `"$projectPath`" - < $promptFile"
+        Get-Content -Raw -Path $promptFile | & $Command @CommandArgs exec --full-auto -C "$projectPath" -
     } else {
         # Claude Code: use --mcp-config and --append-system-prompt
         if ($claimPrompt) {
