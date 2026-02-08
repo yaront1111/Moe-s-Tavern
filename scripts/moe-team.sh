@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT=""
 PROJECT_NAME=""
 DELAY_BETWEEN=1
+TEAM="Moe Team"
+NO_TEAM=false
 NO_WORKER=false
 NO_QA=false
 NO_ARCHITECT=false
@@ -37,6 +39,14 @@ while [[ $# -gt 0 ]]; do
         -d|--delay)
             DELAY_BETWEEN="$2"
             shift 2
+            ;;
+        --team)
+            TEAM="$2"
+            shift 2
+            ;;
+        --no-team)
+            NO_TEAM=true
+            shift
             ;;
         --no-worker)
             NO_WORKER=true
@@ -63,6 +73,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -p, --project PATH       Project path"
             echo "  -n, --project-name NAME  Project name from registry"
             echo "  -d, --delay SECONDS      Delay between agent launches (default: 1)"
+            echo "  --team NAME              Team name for agents (default: Moe Team)"
+            echo "  --no-team                Disable team mode"
             echo "  --no-worker              Don't start worker agent"
             echo "  --no-qa                  Don't start QA agent"
             echo "  --no-architect           Don't start architect agent"
@@ -95,6 +107,11 @@ if [ -n "$PROJECT" ]; then
     PROJECT_ARG="--project $(printf '%q' "$PROJECT")"
 else
     PROJECT_ARG="--project-name $(printf '%q' "$PROJECT_NAME")"
+fi
+if [ "$NO_TEAM" = true ]; then
+    TEAM_ARG=""
+else
+    TEAM_ARG="--team $(printf '%q' "$TEAM")"
 fi
 
 # Auto-detect terminal emulator
@@ -137,7 +154,7 @@ launch_agent() {
     local terminal=$(detect_terminal)
     local safe_script_dir
     safe_script_dir=$(printf '%q' "$SCRIPT_DIR")
-    local cmd="$safe_script_dir/moe-agent.sh --role $role $PROJECT_ARG"
+    local cmd="$safe_script_dir/moe-agent.sh --role $role $PROJECT_ARG $TEAM_ARG"
 
     echo -e "${color}Starting $role agent...${NC}"
 
