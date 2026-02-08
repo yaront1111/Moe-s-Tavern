@@ -2,14 +2,20 @@ package com.moe.util
 
 import com.moe.services.MoeProjectService
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfo
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.UUID
+import javax.swing.SwingUtilities
 
 object TerminalAgentLauncher {
+    private val LOG = Logger.getInstance(TerminalAgentLauncher::class.java)
+
     // Cache reflection results to avoid repeated lookups
     private val terminalManagerClass: Class<*>? by lazy {
         try {
@@ -76,6 +82,7 @@ object TerminalAgentLauncher {
 
     private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
     private const val CUSTOM_COMMAND_KEY = "moe.customAgentCommand"
+    private const val TEAM_MODE_KEY = "moe.teamModeEnabled"
 
     fun getLastUsedProvider(project: Project): AgentProvider {
         val stored = PropertiesComponent.getInstance(project).getValue(LAST_PROVIDER_KEY, AgentProvider.CLAUDE.name)
@@ -96,6 +103,13 @@ object TerminalAgentLauncher {
 
     fun setCustomCommand(project: Project, command: String) {
         PropertiesComponent.getInstance(project).setValue(CUSTOM_COMMAND_KEY, command)
+    }
+
+    fun isTeamModeEnabled(project: Project): Boolean =
+        PropertiesComponent.getInstance(project).getBoolean(TEAM_MODE_KEY, false)
+
+    fun setTeamModeEnabled(project: Project, enabled: Boolean) {
+        PropertiesComponent.getInstance(project).setValue(TEAM_MODE_KEY, enabled)
     }
 
     fun resolveAgentCommand(project: Project, provider: AgentProvider): String {
@@ -148,7 +162,8 @@ object TerminalAgentLauncher {
 
     private fun launchRole(project: Project, ctx: AgentContext, role: String) {
         val tabName = roleTabNames[role] ?: "Moe $role"
-        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand)
+        val teamName = if (isTeamModeEnabled(project)) "Moe Team" else null
+        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName)
         try {
             val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
             if (widget != null) {
@@ -165,8 +180,31 @@ object TerminalAgentLauncher {
 
     fun startAgents(project: Project, agentCommand: String? = null) {
         val ctx = resolveContext(project, agentCommand) ?: return
-        for (role in listOf("architect", "worker", "qa")) {
-            launchRole(project, ctx, role)
+        val roles = listOf("architect", "worker", "qa")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            for ((index, role) in roles.withIndex()) {
+                try {
+                    SwingUtilities.invokeAndWait {
+                        launchRole(project, ctx, role)
+                    }
+                } catch (ex: InvocationTargetException) {
+                    LOG.warn("Failed to launch agent terminal for role $role", ex.targetException ?: ex)
+                } catch (ex: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    LOG.warn("Interrupted while launching agent terminal for role $role", ex)
+                    return@executeOnPooledThread
+                }
+
+                if (index < roles.size - 1) {
+                    try {
+                        Thread.sleep(1500)
+                    } catch (ex: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        LOG.warn("Interrupted while waiting between agent launches", ex)
+                        return@executeOnPooledThread
+                    }
+                }
+            }
         }
     }
 
@@ -180,11 +218,12 @@ object TerminalAgentLauncher {
         role: String,
         script: ResolvedScript,
         envOverrides: Map<String, String>,
-        agentCommand: String
+        agentCommand: String,
+        teamName: String? = null
     ): String {
         return when (script.kind) {
-            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand)
-            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand)
+            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand, teamName)
         }
     }
 
@@ -193,7 +232,8 @@ object TerminalAgentLauncher {
         role: String,
         script: File,
         envOverrides: Map<String, String>,
-        agentCommand: String
+        agentCommand: String,
+        teamName: String? = null
     ): String {
         val projectArg = psQuote(basePath)
         val scriptArg = psQuote(script.absolutePath)
@@ -207,7 +247,8 @@ object TerminalAgentLauncher {
         }
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = psQuote(workerId)
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg"
+        val teamArg = if (teamName != null) " -Team ${psQuote(teamName)}" else ""
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg"
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
@@ -217,7 +258,8 @@ object TerminalAgentLauncher {
         role: String,
         script: File,
         envOverrides: Map<String, String>,
-        agentCommand: String
+        agentCommand: String,
+        teamName: String? = null
     ): String {
         val projectArg = shQuote(basePath)
         val scriptArg = shQuote(script.absolutePath)
@@ -231,7 +273,8 @@ object TerminalAgentLauncher {
         }
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = shQuote(workerId)
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg"
+        val teamArg = if (teamName != null) " --team ${shQuote(teamName)}" else ""
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg"
     }
 
     private fun psQuote(value: String): String {
