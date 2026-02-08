@@ -77,6 +77,9 @@ moe-daemon stop --project /path/to/project
 # QA role
 ./scripts/moe-agent.sh -r qa -p ~/myproject
 
+# Codex (interactive)
+./scripts/moe-agent.sh -r worker -p ~/myproject -c codex
+
 # List registered projects
 ./scripts/moe-agent.sh --list-projects
 ```
@@ -117,6 +120,7 @@ Use this checklist to verify your installation works correctly.
 - [ ] Agent starts with `--role architect --project ~/test-project`
 - [ ] Role documentation loads (shows "Loaded role doc from:")
 - [ ] MCP config updates for project
+- [ ] Codex registers MCP when using `--command codex`
 
 ### JetBrains Plugin (Optional)
 

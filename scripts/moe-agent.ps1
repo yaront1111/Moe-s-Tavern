@@ -343,6 +343,7 @@ if ($cmdForDetect) {
 }
 $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
+$codexInteractive = ($cliType -eq "codex")
 
 # For codex: register MCP server persistently instead of per-session config
 if ($cliType -eq "codex") {
@@ -390,11 +391,20 @@ if ($Team) {
 }
 
 Write-Host "Launching $cliType CLI..."
-if (-not $NoLoop) {
+if ($cliType -eq "codex") {
+    Write-Host "Codex mode: interactive"
+}
+if (-not $NoLoop -and -not $codexInteractive) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
 }
 
 $loopEnabled = (-not $NoLoop) -and ($PollInterval -gt 0)
+if ($codexInteractive) {
+    $loopEnabled = $false
+    if (-not $NoLoop) {
+        Write-Host "Interactive mode: polling disabled"
+    }
+}
 $firstRun = $true
 
 # Build system/role context (shared across loop iterations)
@@ -432,16 +442,20 @@ do {
     } else { $null }
 
     if ($cliType -eq "codex") {
-        # Codex: embed role context in the prompt, pipe via stdin to avoid arg parsing issues
+        # Codex: always interactive TUI. Write prompt to a temp file and instruct Codex to read it.
         $fullPrompt = $systemAppend
         if ($claimPrompt) { $fullPrompt += "`n`n$claimPrompt" }
 
-        # Write prompt to temp file and pipe to codex exec via stdin ("-" reads from stdin)
-        $promptFile = Join-Path $env:TEMP "moe-prompt-$Role-$PID.txt"
+        $promptDir = Join-Path $env:TEMP "moe-codex-$Role-$PID"
+        New-Item -ItemType Directory -Force -Path $promptDir | Out-Null
+        $promptFile = Join-Path $promptDir "prompt.txt"
         $fullPrompt | Set-Content -Path $promptFile -Encoding UTF8
 
-        Write-Host "Command: $Command exec --full-auto -C `"$projectPath`" - < $promptFile"
-        Get-Content -Raw -Path $promptFile | & $Command @CommandArgs exec --full-auto -C "$projectPath" -
+        $initialPrompt = "Read and follow the instructions in `"$promptFile`"."
+        Write-Host "Command: $Command -C `"$projectPath`" --add-dir `"$promptDir`" `"$initialPrompt`""
+        & $Command @CommandArgs -C "$projectPath" --add-dir "$promptDir" $initialPrompt
+
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $promptDir
     } else {
         # Claude Code: use --mcp-config and --append-system-prompt
         if ($claimPrompt) {

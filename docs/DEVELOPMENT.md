@@ -182,6 +182,7 @@ Key flags:
 - `-Role` / `--role`: `architect`, `worker`, or `qa`
 - `-Project` / `--project`: Path to your project
 - `-ProjectName` / `--project-name`: Look up project from `~/.moe/projects.json` registry
+- `-Command` / `--command`: Agent CLI to run (`claude`, `codex`, `gemini`, or custom path)
 - `-NoLoop` / `--no-loop`: Run once and exit (default: poll for new tasks every 30s)
 - `-PollInterval` / `--poll-interval`: Seconds between polls (default: 30)
 - `-ListProjects` / `--list-projects`: Show registered projects
