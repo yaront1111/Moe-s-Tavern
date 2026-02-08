@@ -130,6 +130,7 @@ NO_START_DAEMON=false
 AUTO_CLAIM=true
 POLL_INTERVAL=30
 NO_LOOP=false
+TEAM=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -174,6 +175,10 @@ while [[ $# -gt 0 ]]; do
             NO_LOOP=true
             shift
             ;;
+        -t|--team)
+            TEAM="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -184,12 +189,13 @@ while [[ $# -gt 0 ]]; do
             echo "  -p, --project PATH       Project path"
             echo "  -n, --project-name NAME  Project name from registry"
             echo "  -w, --worker-id ID       Worker ID (default: same as role)"
-            echo "  -c, --command CMD        Claude command (default: claude)"
+            echo "  -c, --command CMD        Agent command (claude, codex, gemini, or custom; default: claude)"
             echo "  -l, --list-projects      List registered projects"
             echo "  --no-start-daemon        Don't auto-start daemon"
             echo "  --no-auto-claim          Don't auto-claim a task on start"
             echo "  --poll-interval SECS     Seconds between task polls (default: 30)"
             echo "  --no-loop                Run once and exit (no polling)"
+            echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -211,6 +217,17 @@ if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
     echo -e "${RED}Invalid role: $ROLE${NC}"
     echo "Valid roles: architect, worker, qa"
     exit 1
+fi
+
+# Detect CLI type from command name
+CLI_TYPE="claude"
+CMD_BASE=$(basename "${COMMAND%% *}")
+if [ "$CMD_BASE" = "codex" ]; then
+    CLI_TYPE="codex"
+fi
+CODEX_INTERACTIVE=false
+if [ "$CLI_TYPE" = "codex" ]; then
+    CODEX_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -475,6 +492,25 @@ EOF
 
 ensure_mcp_config
 
+# For codex: register MCP server persistently instead of per-session config
+if [ "$CLI_TYPE" = "codex" ]; then
+    echo "Registering MCP server with codex..."
+    if [ -n "$PROXY_ARGS" ]; then
+        "$COMMAND" mcp add moe --env "MOE_PROJECT_PATH=$PROJECT" -- "$NODE_CMD" "$PROXY_ARGS" || {
+            echo -e "${RED}[ERROR]${NC} Failed to register MCP server with codex"
+            exit 1
+        }
+    elif [ -n "$PROXY_CMD" ]; then
+        "$COMMAND" mcp add moe --env "MOE_PROJECT_PATH=$PROJECT" -- "$PROXY_CMD" || {
+            echo -e "${RED}[ERROR]${NC} Failed to register MCP server with codex"
+            exit 1
+        }
+    else
+        echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot register MCP server with codex"
+    fi
+    echo "Codex MCP server 'moe' registered"
+fi
+
 # Start daemon if needed
 if [ "$NO_START_DAEMON" = false ]; then
     DAEMON_INFO="$MOE_DIR/daemon.json"
@@ -578,6 +614,71 @@ if [ "$NO_START_DAEMON" = false ]; then
     fi
 fi
 
+# Auto-create/join team if --team specified
+TEAM_CONTEXT=""
+if [ -n "$TEAM" ]; then
+    echo -e "${BLUE}Setting up team '$TEAM' for role '$ROLE'...${NC}"
+
+    # Find proxy script
+    TEAM_PROXY=""
+    if [ -n "$PROXY_ARGS" ]; then
+        TEAM_PROXY="$PROXY_ARGS"
+    elif [ -n "$PROXY_CMD" ] && [ "$PROXY_CMD" != "$NODE_CMD" ]; then
+        # proxy is a standalone binary
+        TEAM_PROXY=""
+    else
+        TEAM_PROXY="$ROOT_DIR/packages/moe-proxy/dist/index.js"
+        if [ ! -f "$TEAM_PROXY" ]; then
+            global_install=$(get_moe_install_path)
+            if [ -n "$global_install" ]; then
+                TEAM_PROXY="$global_install/packages/moe-proxy/dist/index.js"
+            fi
+        fi
+    fi
+
+    TEAM_CREATE_JSON="{\"name\":\"$TEAM\",\"role\":\"$ROLE\"}"
+    TEAM_CREATE_RPC="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"moe.create_team\",\"arguments\":$TEAM_CREATE_JSON}}"
+
+    TEAM_RESULT=""
+    if [ -n "$TEAM_PROXY" ]; then
+        TEAM_RESULT=$(echo "$TEAM_CREATE_RPC" | "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null || true)
+    else
+        TEAM_RESULT=$(echo "$TEAM_CREATE_RPC" | "$PROXY_CMD" 2>/dev/null || true)
+    fi
+
+    if [ -n "$TEAM_RESULT" ]; then
+        TEAM_ID=$($PYTHON_CMD -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    text = data['result']['content'][0]['text']
+    team = json.loads(text)
+    print(team['team']['id'])
+except:
+    pass
+" <<< "$TEAM_RESULT" 2>/dev/null || true)
+
+        if [ -n "$TEAM_ID" ]; then
+            echo -e "${GREEN}[OK]${NC} Team '$TEAM' ready (id: $TEAM_ID)"
+
+            TEAM_JOIN_JSON="{\"teamId\":\"$TEAM_ID\",\"workerId\":\"$WORKER_ID\"}"
+            TEAM_JOIN_RPC="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"moe.join_team\",\"arguments\":$TEAM_JOIN_JSON}}"
+
+            if [ -n "$TEAM_PROXY" ]; then
+                echo "$TEAM_JOIN_RPC" | "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null > /dev/null || true
+            else
+                echo "$TEAM_JOIN_RPC" | "$PROXY_CMD" 2>/dev/null > /dev/null || true
+            fi
+            echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM'"
+            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
+        else
+            echo -e "${YELLOW}[WARN]${NC} Failed to parse team ID from response"
+        fi
+    else
+        echo -e "${YELLOW}[WARN]${NC} Failed to create team '$TEAM'"
+    fi
+fi
+
 # Determine status filter based on role
 case $ROLE in
     architect)
@@ -597,6 +698,9 @@ echo -e "Role:      ${GREEN}$ROLE${NC}"
 echo -e "Project:   $PROJECT"
 echo -e "WorkerId:  $WORKER_ID"
 echo -e "AutoClaim: $AUTO_CLAIM"
+if [ -n "$TEAM" ]; then
+    echo -e "Team:      ${GREEN}$TEAM${NC}"
+fi
 echo -e "${BLUE}================================${NC}"
 echo ""
 
@@ -649,6 +753,13 @@ if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
     LOOP_ENABLED=false
 fi
 
+if [ "$CODEX_INTERACTIVE" = true ]; then
+    LOOP_ENABLED=false
+    if [ "$NO_LOOP" = false ]; then
+        echo "Interactive mode: polling disabled"
+    fi
+fi
+
 if [ "$LOOP_ENABLED" = true ]; then
     echo -e "Polling mode: will check for new tasks every ${POLL_INTERVAL}s after completion (Ctrl+C to stop)"
 fi
@@ -668,50 +779,81 @@ while [ "$LOOP_RUNNING" = true ]; do
     fi
     FIRST_RUN=false
 
+    SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools."
     if [ "$AUTO_CLAIM" = true ]; then
-        SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools. Start by claiming the next task for your role."
+        SYSTEM_APPEND="$SYSTEM_APPEND Start by claiming the next task for your role."
+    fi
 
-        # Append agent context
-        if [ -n "$AGENT_CONTEXT" ]; then
-            SYSTEM_APPEND="$SYSTEM_APPEND
+    # Append agent context
+    if [ -n "$AGENT_CONTEXT" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
 
 $AGENT_CONTEXT"
-        fi
+    fi
 
-        # Append approval mode
-        if [ -n "$APPROVAL_MODE" ]; then
-            SYSTEM_APPEND="$SYSTEM_APPEND
+    # Append approval mode
+    if [ -n "$APPROVAL_MODE" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
 
 # Project Settings
 Approval mode: $APPROVAL_MODE"
-        fi
+    fi
 
-        # Append role doc
-        if [ -n "$ROLE_DOC" ]; then
-            SYSTEM_APPEND="$SYSTEM_APPEND
+    # Append role doc
+    if [ -n "$ROLE_DOC" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
 
 $ROLE_DOC"
-        fi
+    fi
 
-        # Append known issues
-        if [ -n "$KNOWN_ISSUES" ]; then
-            SYSTEM_APPEND="$SYSTEM_APPEND
+    # Append known issues
+    if [ -n "$KNOWN_ISSUES" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
 
 # Known Issues
 $KNOWN_ISSUES"
-        fi
+    fi
+
+    # Append team context
+    if [ -n "$TEAM_CONTEXT" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Team
+$TEAM_CONTEXT"
+    fi
+
+    PROMPT=""
+    if [ "$AUTO_CLAIM" = true ]; then
         PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
-
-        echo "Starting Claude with auto-claim..."
-        echo ""
-
-        $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT" || true
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
         echo ""
+    fi
 
-        $COMMAND || true
+    if [ "$CLI_TYPE" = "codex" ]; then
+        FULL_PROMPT="$SYSTEM_APPEND"
+        if [ -n "$PROMPT" ]; then
+            FULL_PROMPT="$FULL_PROMPT"$'\n\n'"$PROMPT"
+        fi
+
+        PROMPT_DIR=$(create_secure_temp)
+        PROMPT_FILE="$PROMPT_DIR/moe-prompt-$ROLE-$$.txt"
+        printf "%s" "$FULL_PROMPT" > "$PROMPT_FILE"
+
+        echo "Starting Codex (interactive)..."
+        echo ""
+        INITIAL_PROMPT="Read and follow the instructions in $PROMPT_FILE."
+        echo "Command: $COMMAND -C \"$PROJECT\" --add-dir \"$PROMPT_DIR\" \"$INITIAL_PROMPT\""
+        $COMMAND -C "$PROJECT" --add-dir "$PROMPT_DIR" "$INITIAL_PROMPT" || true
+    else
+        if [ "$AUTO_CLAIM" = true ]; then
+            echo "Starting ${CLI_TYPE} with auto-claim..."
+            echo ""
+            $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT" || true
+        else
+            $COMMAND || true
+        fi
     fi
 
     if [ "$LOOP_ENABLED" = false ]; then
