@@ -28,6 +28,7 @@ import java.awt.Cursor
 import java.io.File
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.JCheckBoxMenuItem
 import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JPopupMenu
@@ -52,6 +53,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var updatingEpicFilter = false
     private val workerPanel = WorkerPanel()
     private var stateListener: MoeStateListener? = null
+    private lateinit var agentsButton: JBLabel
 
     init {
         val header = JPanel(BorderLayout())
@@ -91,7 +93,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         right.add(addEpicButton)
 
-        val agentsButton = JBLabel(MoeBundle.message("moe.panel.startAgents")).apply {
+        agentsButton = JBLabel(agentButtonLabel()).apply {
             isOpaque = true
             background = BoardStyles.columnHeaderBackground
             foreground = BoardStyles.textPrimary
@@ -100,6 +102,19 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     val popup = JPopupMenu()
+
+                    val teamCheckbox = object : JCheckBoxMenuItem(
+                        MoeBundle.message("moe.panel.agentsMenu.teamMode"),
+                        TerminalAgentLauncher.isTeamModeEnabled(project)
+                    ) {
+                        override fun doClick(pressTime: Int) {
+                            isSelected = !isSelected
+                            TerminalAgentLauncher.setTeamModeEnabled(project, isSelected)
+                            updateAgentsButtonLabel()
+                        }
+                    }
+                    popup.add(teamCheckbox)
+                    popup.add(JSeparator())
 
                     fun launchWithProvider(role: String?, provider: TerminalAgentLauncher.AgentProvider) {
                         val command = if (provider == TerminalAgentLauncher.AgentProvider.CUSTOM) {
@@ -238,6 +253,18 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             selectedEpicId = item.epicId
             lastState?.let { updateBoard(it) }
         }
+    }
+
+    private fun agentButtonLabel(): String {
+        return if (TerminalAgentLauncher.isTeamModeEnabled(project)) {
+            MoeBundle.message("moe.panel.startAgentsTeam")
+        } else {
+            MoeBundle.message("moe.panel.startAgents")
+        }
+    }
+
+    private fun updateAgentsButtonLabel() {
+        agentsButton.text = agentButtonLabel()
     }
 
     private fun styleStatusLabel(connected: Boolean, message: String) {
