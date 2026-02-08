@@ -8,6 +8,7 @@ param(
     # Agent command and args (claude, codex, gemini, or custom path)
     [string]$Command = "claude",
     [string[]]$CommandArgs = @(),
+    [string]$Team = "Moe Team",
 
     # Which roles to start (default: all)
     [switch]$NoWorker,
@@ -46,9 +47,11 @@ if ($CommandArgs -and $CommandArgs.Count -gt 0) {
     $argsQuoted = $CommandArgs | ForEach-Object { Quote-ForCommand $_ }
     $commandArg += " -CommandArgs " + ($argsQuoted -join " ")
 }
+$teamArg = "-Team " + (Quote-ForCommand $Team)
 
 Write-Host "=== Moe Agent Team Launcher ===" -ForegroundColor Cyan
 Write-Host "Delay between windows: ${DelayBetween}s"
+Write-Host "Team: $Team"
 Write-Host ""
 
 $launched = 0
@@ -56,7 +59,7 @@ $launched = 0
 # Launch Worker
 if (-not $NoWorker) {
     Write-Host "Starting WORKER agent..." -ForegroundColor Green
-    $workerCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role worker $projectArg $commandArg"
+    $workerCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role worker $projectArg $commandArg $teamArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $workerCmd
     $launched++
 
@@ -69,7 +72,7 @@ if (-not $NoWorker) {
 # Launch QA
 if (-not $NoQa) {
     Write-Host "Starting QA agent..." -ForegroundColor Yellow
-    $qaCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role qa $projectArg $commandArg"
+    $qaCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role qa $projectArg $commandArg $teamArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $qaCmd
     $launched++
 
@@ -82,7 +85,7 @@ if (-not $NoQa) {
 # Launch Architect
 if (-not $NoArchitect) {
     Write-Host "Starting ARCHITECT agent..." -ForegroundColor Magenta
-    $archCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role architect $projectArg $commandArg"
+    $archCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role architect $projectArg $commandArg $teamArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $archCmd
     $launched++
 }
