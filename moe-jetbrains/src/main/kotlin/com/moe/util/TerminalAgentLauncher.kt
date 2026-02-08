@@ -168,6 +168,13 @@ object TerminalAgentLauncher {
             val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
             if (widget != null) {
                 sendCommand(widget, command)
+            } else {
+                LOG.warn("Failed to create terminal widget for tab \"$tabName\"")
+                Messages.showWarningDialog(
+                    project,
+                    "Failed to create terminal for \"$tabName\". Ensure the Terminal plugin is enabled.",
+                    "Moe"
+                )
             }
         } catch (ex: Exception) {
             Messages.showErrorDialog(
@@ -311,6 +318,7 @@ object TerminalAgentLauncher {
                 // Try next overload
             }
         }
+        LOG.warn("Failed to create terminal widget: no matching createLocalShellWidget overload found for ${clazz.name}")
         return null
     }
 
@@ -334,7 +342,11 @@ object TerminalAgentLauncher {
                 it.name == "executeCommand" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
             }
         }
-        exec?.invoke(widget, command)
+        if (exec != null) {
+            exec.invoke(widget, command)
+        } else {
+            LOG.warn("Failed to send command to terminal: no matching method found on ${widgetClass.name}")
+        }
     }
 
     private fun resolveAgentScript(basePath: String): ResolvedScript? {
