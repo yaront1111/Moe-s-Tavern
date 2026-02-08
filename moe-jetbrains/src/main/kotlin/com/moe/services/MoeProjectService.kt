@@ -69,6 +69,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
         // If daemon was just started, poll for readiness with backoff
         if (startAttempted) {
+            reconnectAttempts = 0  // Reset counter for fresh spawn
             publishStatus(false, "Starting daemon...")
             scheduler.schedule({
                 if (disposed) return@schedule
@@ -554,6 +555,19 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         val info = readDaemonInfo()
         if (info != null && isProcessAlive(info.pid) && isPortOpen(info.port)) {
             return false
+        }
+
+        // Clean up stale daemon.json so connectWithRetry reads fresh data from the new daemon
+        if (info != null) {
+            val base = project.basePath
+            if (base != null) {
+                try {
+                    File(base, ".moe/daemon.json").delete()
+                    log.info("Removed stale daemon.json (PID ${info.pid} not running)")
+                } catch (ex: Exception) {
+                    log.debug("Failed to remove stale daemon.json: ${ex.message}")
+                }
+            }
         }
 
         val now = System.currentTimeMillis()
