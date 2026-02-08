@@ -186,6 +186,27 @@ Key flags:
 - `-PollInterval` / `--poll-interval`: Seconds between polls (default: 30)
 - `-ListProjects` / `--list-projects`: Show registered projects
 - `-AutoClaim:$false` / `--no-auto-claim`: Don't auto-claim a task on start
+- `-Team <name>` / `--team <name>`: Auto-create/join a team for parallel agent work
+
+### Running a Team (Parallel Agents)
+
+Launch a full team of agents (architect + worker + QA) working on the same epic:
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\moe-team.ps1 -Project "C:\your\project"
+.\scripts\moe-team.ps1 -Project "C:\your\project" -NoQa       # Skip QA agent
+.\scripts\moe-team.ps1 -Project "C:\your\project" -NoArchitect # Skip architect
+```
+
+**Mac / Linux (Bash):**
+```bash
+./scripts/moe-team.sh --project /your/project
+./scripts/moe-team.sh --project /your/project --no-qa
+./scripts/moe-team.sh --project /your/project --no-architect
+```
+
+Each agent runs in its own terminal window and claims tasks matching its role.
 
 The script loads role-specific documentation from `.moe/roles/<role>.md` (project-level) with fallback to `docs/roles/<role>.md` (bundled with plugin or install).
 

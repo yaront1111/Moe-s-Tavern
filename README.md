@@ -47,6 +47,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Real-time Sync** | Live updates via WebSocket |
 | **Activity Log** | Complete audit trail with log rotation |
 | **Rails System** | Define constraints AI must follow |
+| **Teams** | Launch parallel agent teams within epics |
 
 ---
 <img width="1488" height="833" alt="Screenshot 2026-02-05 011749" src="https://github.com/user-attachments/assets/cc68f17b-137f-42f3-b90c-eba0b68ba032" />
@@ -110,6 +111,18 @@ The agent will:
 2. Claim a task from the board
 3. Submit a plan for your approval
 4. Execute the plan step-by-step
+
+### Run a Full Team
+
+Launch architect + worker + QA agents in parallel:
+
+```bash
+# Windows
+.\scripts\moe-team.ps1 -Project "C:\your\project"
+
+# Mac / Linux
+./scripts/moe-team.sh --project /your/project
+```
 
 ---
 
