@@ -56,16 +56,28 @@
       "completedAt": "2026-02-06T22:13:30.087Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 3,
-  "reopenReason": "THIRD REJECTION - DoD item 3 \"Worker doc includes testing and git workflow guidance\" is NOT satisfied. The file docs/roles/worker.md is UNCHANGED from the previous two reviews (still 117 lines, identical content).\n\nTHE SPECIFIC PROBLEM: The file has a \"Testing Strategy\" section (lines 66-72) but ZERO git workflow guidance. The words \"git\", \"commit\", \"branch\", and \"push\" do not appear anywhere in the file.\n\nEXACT FIX REQUIRED - Add these ~12 lines after line 81 (after \"Code Quality\" section, before \"Before Completing a Task\"):\n\n## Git Workflow\n\n- **Branch**: Use `task.branch` from context (pattern: `moe/epicId/taskId`)\n- **Commit per step**: After completing each step, commit with a message referencing the task and step\n- **Keep commits atomic**: Each commit should correspond to one step's changes\n- **Push before completing**: Push your branch before calling `complete_task`\n- **Include prLink**: If you create a PR, pass the URL in `complete_task { prLink }`\n\nALSO: Copy the updated file to .moe/roles/worker.md to keep them in sync (DoD item 6).\n\nWorker: Please READ the reopenReason via moe.get_context BEFORE resubmitting. The file must be EDITED, not just resubmitted as-is.",
+  "reopenCount": 4,
+  "reopenReason": "DoD item \"Worker doc includes testing and git workflow guidance\" is NOT satisfied. Testing guidance exists (worker.md lines 66-72), but there is ZERO git workflow guidance anywhere in the worker doc. No mention of commits, branches, branch naming, or any git-related workflow. The task description explicitly requires: \"Git Workflow - commit per step with clear messages, use task.branch\". Add a \"Git Workflow\" section to docs/roles/worker.md covering: (1) commit per step with descriptive messages, (2) branch naming using task.branch, (3) when/how to create PRs. Then sync to .moe/roles/worker.md. Keep total under 200 lines (currently 117, so ~10-15 lines available).",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 2,
   "createdAt": "2026-02-06T22:05:29.246Z",
-  "updatedAt": "2026-02-06T22:33:25.295Z"
+  "updatedAt": "2026-02-07T21:31:16.006Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Worker doc includes testing and git workflow guidance"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "Worker doc missing git workflow section - no mention of commits, branches, or branch naming. DoD requires 'testing and git workflow guidance'.",
+        "file": "docs/roles/worker.md"
+      }
+    ]
+  }
 }

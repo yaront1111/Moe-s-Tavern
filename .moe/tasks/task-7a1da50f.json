@@ -1,0 +1,70 @@
+{
+  "id": "task-7a1da50f",
+  "epicId": "epic-d8c8abea",
+  "title": "[MEDIUM] Scripts: Command injection in moe-team.sh via PROJECT_ARG",
+  "description": "In scripts/moe-team.sh line 95, PROJECT_ARG is constructed with embedded quotes:\n```bash\nPROJECT_ARG=\"--project \\\"$PROJECT\\\"\"\n```\n\nThis is then interpolated into command strings at line 138:\n```bash\nlocal cmd=\"$SCRIPT_DIR/moe-agent.sh --role $role $PROJECT_ARG\"\n```\n\nAnd passed to terminal emulators including osascript (lines 160, 168):\n```bash\nwrite text \"cd '$SCRIPT_DIR' && ./moe-agent.sh --role $role $PROJECT_ARG\"\n```\n\nIf $PROJECT contains shell metacharacters (single quotes, backticks, $(...)), this breaks command execution or allows injection. The osascript paths are the most dangerous since the string is passed directly to AppleScript's `write text` / `do script`.\n\n**Fix:** Use array-based argument passing instead of string interpolation. For the osascript paths, escape the arguments properly using printf '%q' or similar.",
+  "definitionOfDone": [
+    "PROJECT_ARG uses safe argument passing (arrays or proper escaping)",
+    "Paths with spaces, quotes, and special characters work correctly",
+    "osascript paths properly escape all arguments",
+    "Tested with path containing spaces and single quotes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Replace the PROJECT_ARG string construction at lines 94-98 with properly escaped versions using printf '%q'. Change from PROJECT_ARG=\"--project \\\"$PROJECT\\\"\" to using a shell-escaped value: ESCAPED_PROJECT=$(printf '%q' \"$PROJECT\") and PROJECT_ARG=\"--project $ESCAPED_PROJECT\". This ensures shell metacharacters in the path are properly escaped before interpolation into command strings. Apply the same fix for PROJECT_NAME. This provides proper error handling for special character paths. Verify fix on the actual code path - PROJECT_ARG flows into $cmd at line 138 and from there into all terminal launchers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.sh"
+      ],
+      "startedAt": "2026-02-07T21:31:01.068Z",
+      "completedAt": "2026-02-07T21:31:12.695Z",
+      "note": "Replaced embedded quote construction with printf '%q' for both PROJECT and PROJECT_NAME. This properly escapes all shell metacharacters (spaces, quotes, backticks, $, etc.).",
+      "modifiedFiles": [
+        "scripts/moe-team.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix the osascript paths (iTerm at lines 156-163 and Terminal.app at lines 165-171) separately. These pass the command as an AppleScript string, requiring different escaping. Replace the direct $PROJECT_ARG interpolation with a pre-escaped command string that uses shell-safe quoting. Use a dedicated variable like SAFE_CMD=$(printf '%q ' \"$SCRIPT_DIR/moe-agent.sh\" \"--role\" \"$role\" \"--project\" \"$PROJECT\") for the osascript paths. Also escape SCRIPT_DIR in the cd command (currently using single quotes which break on paths with single quotes). No regression in existing functionality - normal paths without special characters work identically.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.sh"
+      ],
+      "startedAt": "2026-02-07T21:31:16.464Z",
+      "completedAt": "2026-02-07T21:31:58.727Z",
+      "note": "Fixed osascript paths: SCRIPT_DIR now escaped via printf '%q' into safe_script_dir, used in both cd and cmd construction. Replaced single-quoted '$SCRIPT_DIR' (vulnerable to single-quote injection) with properly escaped version. The cmd variable also uses safe_script_dir. All terminal launcher paths now use the escaped variables consistently.",
+      "modifiedFiles": [
+        "scripts/moe-team.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add a test script scripts/test-team-quoting.sh that verifies moe-team.sh correctly handles paths with spaces, single quotes, double quotes, and dollar signs. The test should: (1) create a temp directory with a tricky name like /tmp/moe test'dir$, (2) run moe-team.sh in dry-run mode (or with a mock terminal) to verify the command string is constructed correctly, (3) clean up. All fixes must include tests where applicable. Since moe-team.sh launches terminals, the test should mock the terminal detection to use 'background' mode and verify the constructed command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/test-team-quoting.sh"
+      ],
+      "startedAt": "2026-02-07T21:32:02.170Z",
+      "completedAt": "2026-02-07T21:33:12.706Z",
+      "note": "Created test script that uses a mock moe-agent.sh (records args to file) with background terminal mode. Tests paths with spaces, single quotes, and dollar signs. All 5 assertions pass. The quoting fix correctly preserves all special characters through the command construction.",
+      "modifiedFiles": [
+        "scripts/test-team-quoting.sh"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "createdAt": "2026-02-07T20:36:30.774Z",
+  "updatedAt": "2026-02-07T21:35:22.880Z",
+  "planSubmittedAt": "2026-02-07T20:51:39.089Z"
+}

@@ -5,8 +5,10 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.moe.model.Task
 import com.moe.toolwindow.TaskDetailDialog
@@ -15,11 +17,19 @@ import com.moe.toolwindow.TaskDetailDialog
 class MoeNotificationService(private val project: Project) {
 
     companion object {
+        private val log = Logger.getInstance(MoeNotificationService::class.java)
         fun getInstance(project: Project): MoeNotificationService = project.service()
         private const val GROUP_ID = "Moe Notifications"
     }
 
+    private fun assertEdt() {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            log.error("MoeNotificationService called from non-EDT thread: ${Thread.currentThread().name}")
+        }
+    }
+
     fun notifyAwaitingApproval(task: Task) {
+        assertEdt()
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(
@@ -33,6 +43,7 @@ class MoeNotificationService(private val project: Project) {
     }
 
     fun notifyTaskBlocked(task: Task) {
+        assertEdt()
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(
@@ -46,6 +57,7 @@ class MoeNotificationService(private val project: Project) {
     }
 
     fun notifyTaskInReview(task: Task) {
+        assertEdt()
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(
@@ -59,6 +71,7 @@ class MoeNotificationService(private val project: Project) {
     }
 
     fun notifyTaskCompleted(task: Task) {
+        assertEdt()
         val notification = NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(
@@ -71,6 +84,7 @@ class MoeNotificationService(private val project: Project) {
     }
 
     fun notifyConnectionLost() {
+        assertEdt()
         NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(
@@ -82,6 +96,7 @@ class MoeNotificationService(private val project: Project) {
     }
 
     fun notifyConnectionRestored() {
+        assertEdt()
         NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)
             .createNotification(

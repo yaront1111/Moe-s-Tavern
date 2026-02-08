@@ -1,0 +1,55 @@
+{
+  "id": "task-c8257ac0",
+  "epicId": "epic-d8c8abea",
+  "title": "[HIGH] Plugin: Notifications fired from WebSocket thread (EDT violation)",
+  "description": "In moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt lines 237-246, notification calls happen inside handleMessage() which executes on the WebSocket thread (called from onMessage at line 146).\n\nThe code calls notificationService.notifyAwaitingApproval(), notifyTaskBlocked(), etc. directly from the WebSocket thread, before the later invokeLater() call that dispatches state updates to the EDT.\n\nIntelliJ notification APIs should only be called from the EDT or at minimum be thread-safe. This can cause:\n- Swing thread safety violations\n- Occasional NPEs or visual glitches\n- Potential deadlocks if notification code touches UI components\n\n**Fix:** Move the notification block (lines 237-246) inside an ApplicationManager.getApplication().invokeLater {} block, or move it after the existing publishState() call which already dispatches to EDT.",
+  "definitionOfDone": [
+    "Notification calls at lines 237-246 execute on the EDT",
+    "No thread safety violations in notification dispatch",
+    "Notifications still fire correctly for status changes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Move the notification block (lines 237-246) in MoeProjectService.kt handleMessage() inside an ApplicationManager.getApplication().invokeLater {} block. Currently notifications are dispatched on the WebSocket thread while publishState() at line 235 correctly uses invokeLater. The notification block should follow the same pattern. Capture oldTask status and new task status before the invokeLater call, then check and fire notifications inside it. This ensures proper error handling on the EDT and verifies the fix on the actual code path (WebSocket onMessage -> handleMessage -> invokeLater -> notify). No regression in existing functionality - notifications still fire for the same status transitions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-07T21:09:39.120Z",
+      "completedAt": "2026-02-07T21:10:00.861Z",
+      "note": "Wrapped the notification block in ApplicationManager.getApplication().invokeLater {}. Captured newStatus before the invokeLater to avoid any potential race on the task object. The notification calls now execute on the EDT, consistent with publishState() and publishStatus().",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify that MoeNotificationService methods are only called from EDT context. Add a debug assertion (assert ApplicationManager.getApplication().isDispatchThread) at the top of each notify* method in MoeNotificationService.kt during development, to catch any remaining non-EDT callers. This serves as a test safeguard. All fixes must include tests where applicable - since this is a Kotlin/Swing plugin without unit test infrastructure, the assertion acts as a runtime test.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt"
+      ],
+      "startedAt": "2026-02-07T21:10:04.664Z",
+      "completedAt": "2026-02-07T21:11:15.729Z",
+      "note": "Added assertEdt() helper that logs an error via Logger if called from non-EDT thread. Added assertEdt() call at the top of all 6 notify* methods. Used log.error() instead of assert() since assert() is disabled in production JVMs — log.error() is always active and will surface violations in idea.log. Kotlin plugin compiles successfully.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "createdAt": "2026-02-07T20:36:09.251Z",
+  "updatedAt": "2026-02-07T21:12:29.628Z",
+  "planSubmittedAt": "2026-02-07T20:49:59.724Z"
+}

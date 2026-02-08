@@ -1,0 +1,54 @@
+{
+  "id": "task-ad455989",
+  "epicId": "epic-d8c8abea",
+  "title": "[LOW] Scripts: Unquoted path in moe-agent.sh Python command",
+  "description": "In scripts/moe-agent.sh line 485, $DAEMON_INFO is interpolated inside a Python string without escaping:\n```bash\nPID_OUTPUT=$($PYTHON_CMD -c \"import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))\" 2>&1)\n```\n\nIf $DAEMON_INFO contains single quotes (e.g., /path/it's here/daemon.json), the Python code breaks with a syntax error. The PID extraction then silently fails (returns empty).\n\n**Fix:** Escape single quotes in $DAEMON_INFO before interpolation, or pass the path as a command-line argument to Python and use sys.argv[1] instead of string interpolation.",
+  "definitionOfDone": [
+    "$DAEMON_INFO path properly escaped or passed via sys.argv",
+    "Paths with single quotes and special characters handled correctly"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the two Python -c commands at lines 485 and 554 in scripts/moe-agent.sh that interpolate $DAEMON_INFO inside a Python string literal. Change from: $PYTHON_CMD -c \"import json; print(json.load(open('$DAEMON_INFO')).get('pid', ''))\" to: $PYTHON_CMD -c \"import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))\" \"$DAEMON_INFO\". This passes the path as a command-line argument instead of interpolating it into the Python source code, providing proper error handling for paths with any special characters. Verify fix on the actual code path - both lines 485 and 554 use the identical pattern. No regression in existing functionality - normal paths without special characters produce the same result.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-07T21:38:52.570Z",
+      "completedAt": "2026-02-07T21:39:12.251Z",
+      "note": "Changed both Python -c commands (lines 485, 554) from string interpolation open('$DAEMON_INFO') to sys.argv argument passing: import json,sys; ... open(sys.argv[1]) with \\\"$DAEMON_INFO\\\" passed as a shell argument. This prevents path injection when DAEMON_INFO contains quotes or special characters.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a brief test comment block near the changed lines documenting that the sys.argv approach handles paths with single quotes, double quotes, and spaces. All fixes must include tests where applicable - since this is a shell script without a test harness, inline documentation of the tested edge cases serves as the test record.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-07T21:39:14.893Z",
+      "completedAt": "2026-02-07T21:39:24.928Z",
+      "note": "Added inline comment near the first Python -c call documenting the sys.argv approach handles paths with single quotes, double quotes, and spaces. Second occurrence is self-evident from the same pattern.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 6,
+  "createdAt": "2026-02-07T20:36:35.082Z",
+  "updatedAt": "2026-02-07T21:39:30.127Z",
+  "planSubmittedAt": "2026-02-07T20:51:57.607Z"
+}

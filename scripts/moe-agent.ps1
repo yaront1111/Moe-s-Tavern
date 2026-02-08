@@ -51,6 +51,78 @@ function Get-MoeInstallPath {
     }
 }
 
+function Split-CommandLine {
+    param([string]$Line)
+    if (-not $Line) { return @() }
+
+    $tokens = @()
+    $current = ""
+    $inSingle = $false
+    $inDouble = $false
+    $escapeNext = $false
+
+    foreach ($ch in $Line.ToCharArray()) {
+        if ($escapeNext) {
+            $current += $ch
+            $escapeNext = $false
+            continue
+        }
+        if ($inDouble -and $ch -eq '`') {
+            $escapeNext = $true
+            continue
+        }
+        if (-not $inSingle -and $ch -eq '"') {
+            $inDouble = -not $inDouble
+            continue
+        }
+        if (-not $inDouble -and $ch -eq "'") {
+            $inSingle = -not $inSingle
+            continue
+        }
+        if (-not $inSingle -and -not $inDouble -and [char]::IsWhiteSpace($ch)) {
+            if ($current.Length -gt 0) {
+                $tokens += $current
+                $current = ""
+            }
+            continue
+        }
+        $current += $ch
+    }
+
+    if ($current.Length -gt 0) { $tokens += $current }
+    return $tokens
+}
+
+function Resolve-CommandParts {
+    param(
+        [string]$Cmd,
+        [string[]]$CmdArgs
+    )
+
+    $resolvedCmd = $Cmd
+    $resolvedArgs = $CmdArgs
+
+    $hasArgs = $CmdArgs -and $CmdArgs.Count -gt 0
+    if (-not $hasArgs -and $Cmd -match '\s') {
+        # Only split if the full string isn't an existing path (e.g., "C:\Program Files\...").
+        if (-not (Test-Path $Cmd)) {
+            $split = Split-CommandLine $Cmd
+            if ($split.Count -gt 0) {
+                $resolvedCmd = $split[0]
+                if ($split.Count -gt 1) {
+                    $resolvedArgs = $split[1..($split.Count - 1)]
+                    Write-Host "Parsed -Command into executable + args. Prefer -CommandArgs for clarity." -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Command     = $resolvedCmd
+        CommandArgs = $resolvedArgs
+    }
+}
+
 if ($ListProjects) {
     $projects = Load-Registry
     if (-not $projects -or $projects.Count -eq 0) {
@@ -258,15 +330,32 @@ if (Test-Path $knownIssuesPath) {
     Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
+# Normalize Command + CommandArgs (allow custom command strings with args)
+$resolvedCommand = Resolve-CommandParts -Cmd $Command -CmdArgs $CommandArgs
+$Command = $resolvedCommand.Command
+$CommandArgs = $resolvedCommand.CommandArgs
+
 # Detect CLI type from command name
 $cliType = "claude"
-$cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($Command)
+$cmdForDetect = $Command
+if ($cmdForDetect) {
+    $cmdForDetect = $cmdForDetect.Trim().Trim('"').Trim("'")
+}
+$cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 
 # For codex: register MCP server persistently instead of per-session config
 if ($cliType -eq "codex") {
     Write-Host "Registering MCP server with codex..."
-    & codex mcp add moe --env "MOE_PROJECT_PATH=$($projectPath.ToString())" -- node $proxyScript 2>$null
+    try {
+        & $Command @CommandArgs mcp add moe --env "MOE_PROJECT_PATH=$($projectPath.ToString())" -- node $proxyScript
+        if (-not $?) {
+            throw "codex mcp add failed"
+        }
+    } catch {
+        Write-Error "Failed to register MCP server with codex: $_"
+        exit 1
+    }
     Write-Host "Codex MCP server 'moe' registered"
 } else {
     Write-Host "MCP config written to: $mcpConfigFile"

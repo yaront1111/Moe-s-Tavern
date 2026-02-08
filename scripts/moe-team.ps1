@@ -5,6 +5,10 @@ param(
     # Delay in seconds BETWEEN launching each window
     [int]$DelayBetween = 1,
 
+    # Agent command and args (claude, codex, gemini, or custom path)
+    [string]$Command = "claude",
+    [string[]]$CommandArgs = @(),
+
     # Which roles to start (default: all)
     [switch]$NoWorker,
     [switch]$NoQa,
@@ -19,6 +23,13 @@ if (-not (Test-Path $agentScript)) {
     exit 1
 }
 
+function Quote-ForCommand {
+    param([string]$Value)
+    if ($null -eq $Value) { return '""' }
+    $escaped = $Value -replace '`', '``' -replace '"', '``"'
+    return "`"$escaped`""
+}
+
 # Build project argument
 $projectArg = ""
 if ($Project) {
@@ -30,6 +41,12 @@ if ($Project) {
     exit 1
 }
 
+$commandArg = "-Command " + (Quote-ForCommand $Command)
+if ($CommandArgs -and $CommandArgs.Count -gt 0) {
+    $argsQuoted = $CommandArgs | ForEach-Object { Quote-ForCommand $_ }
+    $commandArg += " -CommandArgs " + ($argsQuoted -join " ")
+}
+
 Write-Host "=== Moe Agent Team Launcher ===" -ForegroundColor Cyan
 Write-Host "Delay between windows: ${DelayBetween}s"
 Write-Host ""
@@ -39,7 +56,7 @@ $launched = 0
 # Launch Worker
 if (-not $NoWorker) {
     Write-Host "Starting WORKER agent..." -ForegroundColor Green
-    $workerCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role worker $projectArg"
+    $workerCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role worker $projectArg $commandArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $workerCmd
     $launched++
 
@@ -52,7 +69,7 @@ if (-not $NoWorker) {
 # Launch QA
 if (-not $NoQa) {
     Write-Host "Starting QA agent..." -ForegroundColor Yellow
-    $qaCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role qa $projectArg"
+    $qaCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role qa $projectArg $commandArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $qaCmd
     $launched++
 
@@ -65,7 +82,7 @@ if (-not $NoQa) {
 # Launch Architect
 if (-not $NoArchitect) {
     Write-Host "Starting ARCHITECT agent..." -ForegroundColor Magenta
-    $archCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role architect $projectArg"
+    $archCmd = "cd `"$scriptDir`"; .\moe-agent.ps1 -Role architect $projectArg $commandArg"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", $archCmd
     $launched++
 }

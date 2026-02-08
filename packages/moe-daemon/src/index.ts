@@ -15,6 +15,7 @@ import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
+import { clearAllSpeedModeTimeouts } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
@@ -367,6 +368,9 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     } catch (error) {
       logger.error({ error }, 'Error closing HTTP server');
     }
+
+    // Cancel any pending SPEED mode auto-approval timeouts
+    clearAllSpeedModeTimeouts();
 
     // Flush any pending activity log writes
     try {

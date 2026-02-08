@@ -80,6 +80,40 @@ function writeLog(message: string) {
   process.stderr.write(`[moe-proxy] ${message}\n`);
 }
 
+/**
+ * Safely send a message over WebSocket with error handling.
+ * On failure: logs the error, cleans up pendingRequestIds/pendingRequestTimes,
+ * and writes a JSON-RPC error response to stdout for tracked request IDs.
+ * Returns true if send succeeded, false otherwise.
+ */
+function safeSend(ws: WebSocket, data: string): boolean {
+  try {
+    ws.send(data);
+    return true;
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Unknown send error';
+    writeLog(`ws.send() failed: ${errorMsg}`);
+
+    // Clean up tracking and send error response for this message's request ID
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.id !== undefined && parsed.id !== null) {
+        pendingRequestIds.delete(parsed.id);
+        pendingRequestTimes.delete(parsed.id);
+
+        const errorResponse = JSON.stringify({
+          jsonrpc: '2.0',
+          id: parsed.id,
+          error: { code: -32000, message: `Failed to send to daemon: ${errorMsg}` }
+        });
+        process.stdout.write(errorResponse + '\n');
+      }
+    } catch { /* message wasn't valid JSON or had no ID */ }
+
+    return false;
+  }
+}
+
 function calculateReconnectDelay(): number {
   // Exponential backoff with jitter
   const baseDelay = Math.min(
@@ -126,26 +160,51 @@ function stopTimeoutChecker(): void {
   }
 }
 
+/**
+ * Safely close the current WebSocket connection.
+ * Sends a clean close frame to the daemon so it detects the disconnect promptly.
+ */
+function closeWebSocket(): void {
+  if (currentWebSocket) {
+    try {
+      if (currentWebSocket.readyState === WebSocket.OPEN ||
+          currentWebSocket.readyState === WebSocket.CONNECTING) {
+        currentWebSocket.close();
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      writeLog(`Error closing WebSocket: ${errorMsg}`);
+    }
+    currentWebSocket = null;
+    isConnected = false;
+  }
+}
+
 function gracefulShutdown(): void {
   shuttingDown = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
   stopTimeoutChecker();
 
-  if (pendingRequestIds.size === 0) {
+  if (pendingRequestIds.size === 0 && pendingMessages.length === 0) {
+    closeWebSocket();
     process.exit(0);
     return;
   }
 
-  writeLog(`Waiting for ${pendingRequestIds.size} pending response(s)...`);
+  const pendingCount = pendingRequestIds.size + pendingMessages.length;
+  writeLog(`Waiting for ${pendingCount} pending request(s)...`);
   const startTime = Date.now();
   const maxWaitMs = 2000;
 
   const checkInterval = setInterval(() => {
-    if (pendingRequestIds.size === 0 || Date.now() - startTime >= maxWaitMs) {
+    if ((pendingRequestIds.size === 0 && pendingMessages.length === 0) ||
+        Date.now() - startTime >= maxWaitMs) {
       clearInterval(checkInterval);
-      if (pendingRequestIds.size > 0) {
-        writeLog(`Timeout waiting for ${pendingRequestIds.size} pending response(s)`);
+      const remaining = pendingRequestIds.size + pendingMessages.length;
+      if (remaining > 0) {
+        writeLog(`Timeout waiting for ${remaining} pending request(s)`);
       }
+      closeWebSocket();
       process.exit(0);
     }
   }, 50);
@@ -189,7 +248,7 @@ function connect(projectPath: string): void {
           pendingRequestTimes.set(parsed.id, now);
         }
       } catch { /* already validated */ }
-      ws.send(msg);
+      safeSend(ws, msg);
     }
   });
 
@@ -301,7 +360,7 @@ function connect(projectPath: string): void {
               pendingRequestIds.add(parsed.id);
               pendingRequestTimes.set(parsed.id, Date.now());
             }
-            currentWebSocket!.send(line);
+            safeSend(currentWebSocket!, line);
           } else {
             // Queue message for when connection is restored
             pendingMessages.push(line);
@@ -343,12 +402,16 @@ async function main() {
   process.on('SIGTERM', () => {
     writeLog('Received SIGTERM, shutting down');
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    stopTimeoutChecker();
+    closeWebSocket();
     process.exit(0);
   });
 
   process.on('SIGINT', () => {
     writeLog('Received SIGINT, shutting down');
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    stopTimeoutChecker();
+    closeWebSocket();
     process.exit(0);
   });
 

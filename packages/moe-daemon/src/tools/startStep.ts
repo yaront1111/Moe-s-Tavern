@@ -42,7 +42,12 @@ export function startStepTool(_state: StateManager): ToolDefinition {
           : step
       );
 
-      await state.updateTask(task.id, { implementationPlan: steps, status: 'WORKING' }, 'STEP_STARTED');
+      const updates: Record<string, unknown> = { implementationPlan: steps, status: 'WORKING' };
+      // Set workStartedAt only on the first step start (don't overwrite on subsequent steps)
+      if (!task.workStartedAt) {
+        updates.workStartedAt = new Date().toISOString();
+      }
+      await state.updateTask(task.id, updates, 'STEP_STARTED');
 
       // Update worker status to CODING
       if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {

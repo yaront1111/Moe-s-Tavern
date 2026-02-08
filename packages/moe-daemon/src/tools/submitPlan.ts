@@ -3,6 +3,26 @@ import type { StateManager } from '../state/StateManager.js';
 import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 
+/** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
+const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
+
+/** Cancel a specific SPEED mode timeout (e.g. on manual approve/reject). */
+export function cancelSpeedModeTimeout(taskId: string): void {
+  const timeout = speedModeTimeouts.get(taskId);
+  if (timeout) {
+    clearTimeout(timeout);
+    speedModeTimeouts.delete(taskId);
+  }
+}
+
+/** Cancel all SPEED mode timeouts (e.g. on daemon shutdown). */
+export function clearAllSpeedModeTimeouts(): void {
+  for (const timeout of speedModeTimeouts.values()) {
+    clearTimeout(timeout);
+  }
+  speedModeTimeouts.clear();
+}
+
 export function submitPlanTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.submit_plan',
@@ -101,12 +121,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       } else if (approvalMode === 'SPEED') {
         // Delayed auto-approval
         const delayMs = project.settings.speedModeDelayMs || 2000;
-        setTimeout(async () => {
+        const timeoutId = setTimeout(async () => {
+          speedModeTimeouts.delete(task.id);
           try {
             const currentTask = state.getTask(task.id);
             // Only auto-approve if still in AWAITING_APPROVAL (not manually rejected/approved)
             if (currentTask && currentTask.status === 'AWAITING_APPROVAL') {
-              await state.updateTask(task.id, { status: 'WORKING' }, 'PLAN_AUTO_APPROVED');
+              await state.updateTask(task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_AUTO_APPROVED');
             }
           } catch (error) {
             // Log error via activity log so task doesn't get stuck silently
@@ -117,6 +138,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             }, state.getTask(task.id) ?? undefined);
           }
         }, delayMs);
+        speedModeTimeouts.set(task.id, timeoutId);
         message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
       }
 

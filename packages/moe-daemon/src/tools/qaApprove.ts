@@ -33,7 +33,7 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
 
       const updated = await state.updateTask(
         params.taskId,
-        { status: 'DONE' },
+        { status: 'DONE', reviewCompletedAt: new Date().toISOString() },
         'QA_APPROVED'
       );
 
