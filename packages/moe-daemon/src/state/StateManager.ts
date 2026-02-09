@@ -138,6 +138,7 @@ export class StateManager {
   teams = new Map<string, Team>();
 
   private emitter?: (event: StateChangeEvent) => void;
+  private subscribers = new Set<(event: StateChangeEvent) => void>();
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
   private logRotator?: LogRotator;
@@ -163,6 +164,14 @@ export class StateManager {
    */
   clearEmitter(): void {
     this.emitter = undefined;
+  }
+
+  /**
+   * Subscribe to state change events. Returns an unsubscribe function.
+   */
+  subscribe(fn: (event: StateChangeEvent) => void): () => void {
+    this.subscribers.add(fn);
+    return () => { this.subscribers.delete(fn); };
   }
 
   /**
@@ -270,6 +279,9 @@ export class StateManager {
         logger.error({ error }, 'Error in state emitter');
       }
     }
+    for (const sub of this.subscribers) {
+      try { sub(event); } catch (error) { logger.error({ error }, 'Error in subscriber'); }
+    }
   }
 
   async load(): Promise<void> {
@@ -304,10 +316,13 @@ export class StateManager {
 
       this.epics = this.loadEntities<Epic>(path.join(this.moePath, 'epics'));
       this.tasks = this.loadEntities<Task>(path.join(this.moePath, 'tasks'));
-      // Backfill priority for existing tasks that predate the priority field
+      // Backfill priority and comments for existing tasks
       for (const [id, task] of this.tasks) {
-        if (!task.priority) {
-          this.tasks.set(id, { ...task, priority: 'MEDIUM' as TaskPriority });
+        const updates: Partial<Task> = {};
+        if (!task.priority) updates.priority = 'MEDIUM' as TaskPriority;
+        if (!Array.isArray(task.comments)) updates.comments = [];
+        if (Object.keys(updates).length > 0) {
+          this.tasks.set(id, { ...task, ...updates });
         }
       }
       this.workers = this.loadEntities<Worker>(path.join(this.moePath, 'workers'));
@@ -591,6 +606,8 @@ export class StateManager {
       parentTaskId: input.parentTaskId || null,
       priority: (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(input.priority as string) ? input.priority : 'MEDIUM') as TaskPriority,
       order: input.order ?? this.nextTaskOrder(input.epicId),
+      comments: Array.isArray(input.comments) ? input.comments : [],
+      hasPendingQuestion: false,
       createdAt: now,
       updatedAt: now
     };
@@ -710,9 +727,24 @@ export class StateManager {
       throw new Error('Project not loaded');
     }
 
+    // Sanitize columnLimits: merge with existing, validate values are positive integers
+    let columnLimits = this.project.settings.columnLimits;
+    if (settings.columnLimits !== undefined) {
+      const incoming = settings.columnLimits || {};
+      const merged: Record<string, number> = { ...(columnLimits || {}) };
+      for (const [key, value] of Object.entries(incoming)) {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+          throw new Error(`Invalid column limit for ${key}: must be a positive integer`);
+        }
+        merged[key] = value;
+      }
+      columnLimits = merged;
+    }
+
     const updatedSettings: ProjectSettings = {
       ...this.project.settings,
-      ...settings
+      ...settings,
+      columnLimits
     };
 
     const updatedProject: Project = {
@@ -1345,7 +1377,8 @@ export class StateManager {
         autoCreateBranch: sanitizeBoolean(project.settings?.autoCreateBranch, true),
         branchPattern: sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
         commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
-        agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude')
+        agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude'),
+        columnLimits: project.settings?.columnLimits as Record<string, number> | undefined
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now

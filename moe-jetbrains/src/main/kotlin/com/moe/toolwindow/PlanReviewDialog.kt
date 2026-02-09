@@ -1,7 +1,10 @@
 package com.moe.toolwindow
 
+import com.moe.model.MoeState
 import com.moe.model.Task
+import com.moe.model.TaskComment
 import com.moe.services.MoeProjectService
+import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -10,24 +13,35 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBUI
+import com.intellij.ui.JBColor
+import com.intellij.ui.components.JBTextField
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Dimension
 import java.awt.Font
 import javax.swing.Action
 import javax.swing.BorderFactory
+import javax.swing.BoxLayout
+import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTextArea
+import javax.swing.SwingUtilities
 
 class PlanReviewDialog(
     private val ideaProject: Project,
-    private val task: Task,
+    private var task: Task,
     private val service: MoeProjectService
-) : DialogWrapper(ideaProject) {
+) : DialogWrapper(ideaProject), MoeStateListener {
+
+    private lateinit var commentsPanel: JPanel
+    private lateinit var commentsScroll: JScrollPane
 
     init {
         title = MoeBundle.message("moe.dialog.planReview")
+        service.addListener(this)
         init()
     }
 
@@ -56,10 +70,104 @@ class PlanReviewDialog(
             }
         }
 
+        // Comments section
+        val commentsSection = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(8)
+        }
+        commentsSection.add(JBLabel(MoeBundle.message("moe.label.comments")).apply {
+            border = JBUI.Borders.emptyBottom(4)
+        }, BorderLayout.NORTH)
+
+        commentsPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+        renderComments(task.comments ?: emptyList())
+
+        commentsScroll = JScrollPane(commentsPanel)
+        commentsScroll.preferredSize = Dimension(780, 100)
+        commentsScroll.border = JBUI.Borders.empty()
+        commentsSection.add(commentsScroll, BorderLayout.CENTER)
+
+        val askPanel = JPanel(BorderLayout()).apply { isOpaque = false }
+        val questionField = JBTextField().apply {
+            toolTipText = MoeBundle.message("moe.message.typeQuestion")
+        }
+        val askButton = JButton(MoeBundle.message("moe.button.askQuestion"))
+        askButton.addActionListener {
+            val text = questionField.text.trim()
+            if (text.isNotEmpty()) {
+                service.addTaskComment(task.id, text)
+                questionField.text = ""
+            }
+        }
+        askPanel.add(questionField, BorderLayout.CENTER)
+        askPanel.add(askButton, BorderLayout.EAST)
+        commentsSection.add(askPanel, BorderLayout.SOUTH)
+
         container.add(header, BorderLayout.NORTH)
         container.add(splitPane, BorderLayout.CENTER)
+        container.add(commentsSection, BorderLayout.SOUTH)
 
         return container
+    }
+
+    private fun renderComments(comments: List<TaskComment>) {
+        commentsPanel.removeAll()
+
+        if (comments.isEmpty()) {
+            commentsPanel.add(JBLabel(MoeBundle.message("moe.message.noComments")).apply {
+                foreground = JBColor.GRAY
+                font = JBUI.Fonts.smallFont()
+            })
+        } else {
+            for (comment in comments) {
+                val isHuman = comment.author == "human"
+                val commentRow = JPanel(BorderLayout()).apply {
+                    isOpaque = true
+                    background = if (isHuman) {
+                        JBColor(Color(230, 240, 255), Color(40, 50, 70))
+                    } else {
+                        JBColor(Color(240, 255, 240), Color(40, 60, 40))
+                    }
+                    border = JBUI.Borders.empty(4, 8)
+                }
+                val commentHeader = JBLabel("${comment.author} - ${comment.timestamp.take(19)}").apply {
+                    foreground = JBColor.GRAY
+                    font = JBUI.Fonts.smallFont()
+                }
+                val body = JBLabel("<html>${comment.content.replace("\n", "<br>")}</html>")
+                commentRow.add(commentHeader, BorderLayout.NORTH)
+                commentRow.add(body, BorderLayout.CENTER)
+                commentsPanel.add(commentRow)
+            }
+        }
+
+        commentsPanel.revalidate()
+        commentsPanel.repaint()
+
+        // Scroll to bottom to show latest comment
+        SwingUtilities.invokeLater {
+            val scrollBar = commentsScroll.verticalScrollBar
+            scrollBar.value = scrollBar.maximum
+        }
+    }
+
+    override fun onState(state: MoeState) {
+        val updated = state.tasks.find { it.id == task.id } ?: return
+        val oldCommentCount = task.comments?.size ?: 0
+        val newCommentCount = updated.comments?.size ?: 0
+        task = updated
+        if (newCommentCount != oldCommentCount) {
+            renderComments(updated.comments ?: emptyList())
+        }
+    }
+
+    override fun onStatus(connected: Boolean, message: String) {}
+
+    override fun dispose() {
+        service.removeListener(this)
+        super.dispose()
     }
 
     private fun createDodPanel(): JComponent {

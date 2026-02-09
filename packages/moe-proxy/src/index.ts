@@ -22,6 +22,7 @@ const MAX_RECONNECT_DELAY_MS = 10000;
 
 // Per-message timeout configuration
 const MESSAGE_TIMEOUT_MS = parseInt(process.env.MOE_MESSAGE_TIMEOUT_MS || '30000', 10);
+const WAIT_FOR_TASK_TIMEOUT_MS = 11 * 60 * 1000; // 11 minutes (longer than max wait_for_task timeout)
 const TIMEOUT_CHECK_INTERVAL_MS = 5000;
 
 let reconnectAttempts = 0;
@@ -30,8 +31,8 @@ let isConnected = false;
 let currentWebSocket: WebSocket | null = null;
 let pendingMessages: string[] = [];
 let pendingRequestIds = new Set<string | number>();
-// Track when each request was sent for timeout detection
-let pendingRequestTimes = new Map<string | number, number>();
+// Track when each request was sent and its timeout for timeout detection
+let pendingRequestTimes = new Map<string | number, { sentAt: number; timeoutMs: number }>();
 let timeoutCheckTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
 
@@ -114,6 +115,20 @@ function safeSend(ws: WebSocket, data: string): boolean {
   }
 }
 
+/**
+ * Compute per-request timeout based on the tool being called.
+ * moe.wait_for_task is a blocking long-poll, so it needs a much longer timeout.
+ */
+function getRequestTimeout(parsed: Record<string, unknown>): number {
+  if (parsed.method === 'tools/call') {
+    const params = parsed.params as { name?: string } | undefined;
+    if (params?.name === 'moe.wait_for_task') {
+      return WAIT_FOR_TASK_TIMEOUT_MS;
+    }
+  }
+  return MESSAGE_TIMEOUT_MS;
+}
+
 function calculateReconnectDelay(): number {
   // Exponential backoff with jitter
   const baseDelay = Math.min(
@@ -129,19 +144,21 @@ function checkMessageTimeouts(): void {
   const now = Date.now();
   const timedOut: (string | number)[] = [];
 
-  for (const [id, sentAt] of pendingRequestTimes) {
-    if (now - sentAt >= MESSAGE_TIMEOUT_MS) {
+  for (const [id, entry] of pendingRequestTimes) {
+    if (now - entry.sentAt >= entry.timeoutMs) {
       timedOut.push(id);
     }
   }
 
   for (const id of timedOut) {
+    const entry = pendingRequestTimes.get(id);
     pendingRequestIds.delete(id);
     pendingRequestTimes.delete(id);
+    const timeoutMs = entry?.timeoutMs ?? MESSAGE_TIMEOUT_MS;
     const errorResponse = JSON.stringify({
       jsonrpc: '2.0',
       id,
-      error: { code: -32000, message: `Request timed out after ${MESSAGE_TIMEOUT_MS}ms` }
+      error: { code: -32000, message: `Request timed out after ${timeoutMs}ms` }
     });
     process.stdout.write(errorResponse + '\n');
     writeLog(`Request ${id} timed out`);
@@ -245,7 +262,7 @@ function connect(projectPath: string): void {
         const parsed = JSON.parse(msg);
         if (parsed.id !== undefined && parsed.id !== null) {
           pendingRequestIds.add(parsed.id);
-          pendingRequestTimes.set(parsed.id, now);
+          pendingRequestTimes.set(parsed.id, { sentAt: now, timeoutMs: getRequestTimeout(parsed) });
         }
       } catch { /* already validated */ }
       safeSend(ws, msg);
@@ -358,7 +375,7 @@ function connect(projectPath: string): void {
             // Track request ID for proper pending count and timeout
             if (parsed.id !== undefined && parsed.id !== null) {
               pendingRequestIds.add(parsed.id);
-              pendingRequestTimes.set(parsed.id, Date.now());
+              pendingRequestTimes.set(parsed.id, { sentAt: Date.now(), timeoutMs: getRequestTimeout(parsed) });
             }
             safeSend(currentWebSocket!, line);
           } else {

@@ -488,6 +488,35 @@ with open(config_file, 'w') as f:
 print(f"[OK] Updated MCP config: {config_file}")
 EOF
     fi
+
+    # Also write project-level .mcp.json so Claude Code finds MCP tools
+    # regardless of working directory or global config issues
+    local project_mcp="$PROJECT/.mcp.json"
+    if [ -n "$PROXY_CMD" ]; then
+        $PYTHON_CMD << MCPEOF
+import json
+
+project_mcp = "$project_mcp"
+proxy_cmd = "$PROXY_CMD"
+proxy_args = "$PROXY_ARGS"
+project_path = "$PROJECT"
+
+entry = {
+    'command': proxy_cmd,
+    'env': {
+        'MOE_PROJECT_PATH': project_path
+    }
+}
+if proxy_args:
+    entry['args'] = [proxy_args]
+
+config = {'mcpServers': {'moe': entry}}
+
+with open(project_mcp, 'w') as f:
+    json.dump(config, f, indent=2)
+print(f"[OK] Wrote project MCP config: {project_mcp}")
+MCPEOF
+    fi
 }
 
 ensure_mcp_config
@@ -773,13 +802,26 @@ FIRST_RUN=true
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
-        echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
-        sleep "$POLL_INTERVAL"
+        echo -e "${YELLOW}Agent exited, relaunching in 2 seconds... (Ctrl+C to stop)${NC}"
+        sleep 2
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
     FIRST_RUN=false
 
-    SYSTEM_APPEND="Role: $ROLE. Always use Moe MCP tools."
+    ROLE_STATUS_DESC=""
+    case $ROLE in
+        architect)
+            ROLE_STATUS_DESC="You handle tasks in PLANNING status."
+            ;;
+        worker)
+            ROLE_STATUS_DESC="You handle tasks in WORKING status."
+            ;;
+        qa)
+            ROLE_STATUS_DESC="You handle tasks in REVIEW status (the REVIEW column on the board)."
+            ;;
+    esac
+    SYSTEM_APPEND="Role: $ROLE. $ROLE_STATUS_DESC
+CRITICAL: You MUST use Moe MCP tools (moe.claim_next_task, moe.get_context, moe.wait_for_task, etc.) for ALL task operations. NEVER read or parse .moe/ files directly. NEVER use bash, grep, python, or any other method to inspect .moe/ task files. The MCP tools are the ONLY correct way to interact with the task system."
     if [ "$AUTO_CLAIM" = true ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND Start by claiming the next task for your role."
     fi
@@ -822,9 +864,37 @@ $KNOWN_ISSUES"
 $TEAM_CONTEXT"
     fi
 
+    # Add pending questions instructions
+    SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Pending Questions
+Before claiming a task, call moe.get_pending_questions to check for unanswered human questions.
+For each pending question, call moe.add_comment with your workerId and a response in this format:
+  Q: <the human's question>
+  A: <your answer based on task context>
+This clears the pending flag so the question is answered for the next agent.
+If moe.wait_for_task returns hasPendingQuestion:true, call moe.get_pending_questions and answer them, then resume waiting."
+
+    # Add fallback CLI helper info
+    moe_call="$SCRIPT_DIR/moe-call.sh"
+    if [ -f "$moe_call" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Fallback CLI
+If MCP tools (moe.*) are not available, use the CLI helper instead:
+  bash $moe_call <tool> '<json_args>' --project $PROJECT
+Examples:
+  bash $moe_call claim_next_task '{\"statuses\":[\"PLANNING\"],\"workerId\":\"$WORKER_ID\"}'
+  bash $moe_call get_context '{\"workerId\":\"$WORKER_ID\"}'
+  bash $moe_call submit_plan '{\"taskId\":\"task-xxx\",\"plan\":[...]}'
+  bash $moe_call add_comment '{\"taskId\":\"task-xxx\",\"content\":\"my message\",\"workerId\":\"$WORKER_ID\"}'
+  bash $moe_call wait_for_task '{\"statuses\":[\"PLANNING\"],\"workerId\":\"$WORKER_ID\",\"timeoutMs\":300000}'
+Run: bash $moe_call --help for full list."
+    fi
+
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
-        PROMPT="Call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say: 'No tasks in $ROLE queue' and wait."
+        PROMPT="First call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
@@ -850,9 +920,9 @@ $TEAM_CONTEXT"
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""
-            $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT" || true
+            (cd "$PROJECT" && $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT") || true
         else
-            $COMMAND || true
+            (cd "$PROJECT" && $COMMAND) || true
         fi
     fi
 
