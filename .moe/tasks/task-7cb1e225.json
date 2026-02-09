@@ -1,0 +1,118 @@
+{
+  "id": "task-7cb1e225",
+  "epicId": "epic-93811519",
+  "title": "add 'next' 'previouse' button to task",
+  "description": "add another button to a task to move it to the next column.\nconsider dragging restrictions - sometimes only on approvals.\nif a task is previoused, need to add a reason so the task accepter agent will know what should he fix",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add next/previous arrow buttons to TaskCard. Add two small clickable arrow labels (< and >) to the right side of the TaskCard component. Add new callback parameters: onNext: ((Task) -> Unit)? and onPrevious: ((Task) -> Unit)?. Render arrows only when the callbacks are provided. Hide the > arrow when task is in DONE status (no next). Hide the < arrow when task is in BACKLOG (no previous). Include error handling via the existing safeCallback wrapper.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt"
+      ],
+      "startedAt": "2026-02-08T22:29:34.501Z",
+      "completedAt": "2026-02-08T22:30:00.764Z",
+      "note": "Added onNext and onPrevious optional callbacks to TaskCard. Renders left arrow and right arrow buttons on the right side of the card content when callbacks are provided. Uses safeCallback for error handling and e.consume() to prevent click propagation to the card open handler.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add Next/Previous buttons to TaskDetailDialog action bar. Add a Next button and Previous button alongside the existing Save/Approve/Reject/Reopen/Delete buttons. Next button is hidden when task is DONE. Previous button is hidden when task is BACKLOG. When Previous is clicked, show an input dialog to capture a reason before proceeding. Include error handling: validate that reason is not blank for previous action.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "startedAt": "2026-02-08T22:30:04.823Z",
+      "completedAt": "2026-02-08T22:30:45.771Z",
+      "note": "Added onNext and onPrevious optional callbacks to TaskDetailDialog. Renders Previous and Next buttons in action bar when provided. The reason dialog is handled by the callback itself (from MoeToolWindowPanel) rather than in the dialog, to keep the transition logic centralized.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement status transition logic in MoeToolWindowPanel. Define a column order list: BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, DEPLOYING, DONE. Create helper functions getNextStatus(current) and getPreviousStatus(current) that return the adjacent status. Wire onNext and onPrevious callbacks in buildTaskColumn: (1) Next: if current is AWAITING_APPROVAL call service.approveTask(), otherwise call service.updateTaskStatus(taskId, nextStatus, order). (2) Previous: show reason input dialog, then if current is DONE/REVIEW call service.reopenTask(taskId, reason), otherwise call service.updateTaskStatus with the previous status and attach the reason via service.updateTaskDetails to set reopenReason. Include error handling for edge cases (first/last column, null state).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:30:50.585Z",
+      "completedAt": "2026-02-08T22:31:28.658Z",
+      "note": "Added columnOrder list, getNextStatus/getPreviousStatus helpers, handleNext (approves AWAITING_APPROVAL, otherwise moves forward), handlePrevious (prompts for reason, uses reopenTask for DONE/REVIEW/DEPLOYING). Wired onOpen in buildTaskColumn to pass onNext/onPrevious to TaskDetailDialog.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Pass onNext and onPrevious callbacks through TaskColumn to TaskCard. Update TaskColumn constructor to accept onNext and onPrevious callbacks. Pass them down when creating TaskCard instances in the epic group loop. Include error handling: null-safe callback invocation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ],
+      "startedAt": "2026-02-08T22:31:32.735Z",
+      "completedAt": "2026-02-08T22:32:19.255Z",
+      "note": "Added onNext/onPrevious to TaskColumn constructor and passed to TaskCard. In buildTaskColumn, onNext is null for DONE column, onPrevious is null for BACKLOG column.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add bundle messages to MoeBundle.properties for next/previous UI. Add: moe.button.next=Next, moe.button.previous=Previous, moe.message.previousReason=Reason for moving task back:, moe.message.previousReasonTitle=Move Task Back.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T22:32:24.122Z",
+      "completedAt": "2026-02-08T22:32:47.574Z",
+      "note": "Added moe.button.next, moe.button.previous, moe.message.previousReason, moe.message.previousReasonTitle bundle keys.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test the next/previous feature. Build plugin with gradlew buildPlugin. Verify: (1) arrow buttons appear on task cards, (2) clicking Next moves task to next column, (3) clicking Previous shows reason dialog then moves task back, (4) AWAITING_APPROVAL Next triggers approval flow, (5) DONE tasks have no Next arrow, BACKLOG tasks have no Previous arrow, (6) reason is saved and visible to agents via reopenReason field, (7) buttons also work in TaskDetailDialog. Test error handling: empty reason rejection, edge column states.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "startedAt": "2026-02-08T22:32:52.154Z",
+      "completedAt": "2026-02-08T22:34:12.672Z",
+      "note": "Fixed missing Task import. Plugin builds successfully. 226 daemon tests pass.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "createdAt": "2026-02-08T21:39:24.101Z",
+  "updatedAt": "2026-02-08T23:39:36.693Z",
+  "planSubmittedAt": "2026-02-08T22:15:05.088Z",
+  "planApprovedAt": "2026-02-08T22:19:12.348Z",
+  "workStartedAt": "2026-02-08T22:29:34.501Z",
+  "completedAt": "2026-02-08T22:34:21.234Z",
+  "reviewStartedAt": "2026-02-08T22:34:21.234Z",
+  "reviewCompletedAt": "2026-02-08T22:43:16.889Z",
+  "comments": []
+}

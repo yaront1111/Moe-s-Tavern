@@ -18,7 +18,7 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           properties: {
             status: {
               type: 'string',
-              enum: ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'DONE', 'BLOCKED'],
+              enum: ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'DEPLOYING', 'DONE', 'ARCHIVED', 'BLOCKED'],
               description: 'Filter by task status'
             },
             epicId: {

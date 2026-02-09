@@ -83,18 +83,23 @@ interface GlobalRails {
 interface ProjectSettings {
   // Approval mode
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
-  
+
   // Speed mode delay (ms)
   speedModeDelayMs: number;      // default: 2000
-  
+
   // Auto-create branch on task start
   autoCreateBranch: boolean;     // default: true
-  
+
   // Branch naming pattern
   branchPattern: string;         // default: "moe/{epicId}/{taskId}"
-  
+
   // Commit message pattern
   commitPattern: string;         // default: "feat({epicId}): {taskTitle}"
+
+  // Per-column WIP limits (optional)
+  // Key is TaskStatus, value is max tasks allowed in that column
+  // Example: { "DEPLOYING": 1 } limits deploying to 1 task at a time
+  columnLimits?: Record<string, number>;
 }
 ```
 
@@ -262,6 +267,7 @@ type TaskStatus =
   | 'AWAITING_APPROVAL' // Plan ready for human review
   | 'WORKING'           // Worker executing plan
   | 'REVIEW'            // Work done, PR ready
+  | 'DEPLOYING'         // Being deployed (WIP-limited)
   | 'DONE';             // Merged, complete
 
 interface ImplementationStep {
@@ -632,7 +638,7 @@ The daemon supports schema versioning to safely evolve the `.moe/` file structur
 ```typescript
 interface Project {
   // ... other fields
-  schemaVersion: number;  // Current: 3
+  schemaVersion: number;  // Current: 4
 }
 ```
 
@@ -764,7 +770,14 @@ function generateId(prefix: string): string {
              └──────│    REVIEW    │──────────────────────┐
                     │              │      reopen          │
                     └──────┬───────┘                      │
-                           │ merge                       │
+                           │ merge or deploy              │
+                           ▼                              │
+                    ┌──────────────┐                      │
+                    │  DEPLOYING   │──────────────────────┤
+                    │  (optional,  │      reopen          │
+                    │  WIP-limited)│                      │
+                    └──────┬───────┘                      │
+                           │ deploy done                  │
                            ▼                              │
                     ┌──────────────┐                      │
                     │              │                      │
@@ -772,6 +785,10 @@ function generateId(prefix: string): string {
                     │              │      (can reopen DONE)
                     └──────────────┘
 ```
+
+**Note:** REVIEW can transition directly to DONE (skipping DEPLOYING) or to DEPLOYING.
+DONE can also transition to DEPLOYING for re-deployment.
+The DEPLOYING column is WIP-limited (default: 1) via `columnLimits` in project settings.
 
 ### Worker Status Transitions
 

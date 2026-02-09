@@ -1,0 +1,123 @@
+{
+  "id": "task-7e77f244",
+  "epicId": "epic-93811519",
+  "title": "clear DONE column",
+  "description": "add a button to clean the 'done' column and move the finished tasks to archive so the list wont get infinity long",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add ARCHIVED status to TaskStatus type in schema.ts. Add ARCHIVED to the TaskStatus union type after DONE. This enables soft-archiving tasks instead of deleting them. ARCHIVED tasks remain on disk in .moe/tasks/ but are hidden from the board. Include error handling: update status validation and enum lists in searchTasks.ts to include ARCHIVED.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/searchTasks.ts"
+      ],
+      "startedAt": "2026-02-08T22:23:53.985Z",
+      "completedAt": "2026-02-08T22:24:23.728Z",
+      "note": "Added ARCHIVED to TaskStatus union, TASK_ARCHIVED to activity events, ARCHIVED to searchTasks enum, and ARCHIVED to setTaskStatus valid statuses and transitions (DONE->ARCHIVED, ARCHIVED->BACKLOG/WORKING).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/searchTasks.ts",
+        "packages/moe-daemon/src/tools/setTaskStatus.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add ARCHIVE_DONE_TASKS WebSocket message type and handler in WebSocketServer.ts. Add to PluginMessage union type with optional payload epicId. Handler finds all DONE tasks, updates each to ARCHIVED via state.updateTask(), logs TASK_ARCHIVED activity events. Include error handling: catch errors per task so one failure does not block the rest. Also add DONE to ARCHIVED in the valid status transitions map. Filter ARCHIVED tasks out of STATE_SNAPSHOT broadcasts to plugin.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-08T22:24:29.314Z",
+      "completedAt": "2026-02-08T22:25:29.102Z",
+      "note": "Added ARCHIVE_DONE_TASKS message type and handler. Handler finds DONE tasks (optionally filtered by epicId), archives each with error handling per task. Added DONE->ARCHIVED and ARCHIVED->BACKLOG/WORKING transitions. Filtered ARCHIVED tasks from STATE_SNAPSHOT and cleanup broadcast. Added archived count to listTasks.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/listTasks.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add Clear Done button to DONE column in plugin. Add optional onClearColumn callback to TaskColumn.kt similar to onCreateTask. Render a clear button in the column header when provided. In MoeToolWindowPanel.kt pass onClearColumn to DONE column that shows confirmation dialog and calls service.archiveDoneTasks(). Include error handling: guard against empty column.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:25:33.004Z",
+      "completedAt": "2026-02-08T22:26:39.558Z",
+      "note": "Added onClearColumn callback to TaskColumn (renders X button when provided and column is non-empty). Wired DONE column in MoeToolWindowPanel with confirmation dialog showing task count and calling service.archiveDoneTasks().",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add archiveDoneTasks method to MoeProjectService.kt. Send ARCHIVE_DONE_TASKS WebSocket message with optional epicId from current epic filter. Include error handling via ensureConnected() check.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-08T22:26:44.087Z",
+      "completedAt": "2026-02-08T22:27:00.971Z",
+      "note": "Added archiveDoneTasks(epicId?) method that sends ARCHIVE_DONE_TASKS message with optional epicId. Uses ensureConnected() guard.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add bundle messages for archive UI to MoeBundle.properties: moe.column.clearDone, moe.message.archiveDone, moe.message.archiveDoneTitle.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T22:27:05.870Z",
+      "completedAt": "2026-02-08T22:27:16.675Z",
+      "note": "Added moe.column.clearDone, moe.message.archiveDone (with {0} placeholder for count), and moe.message.archiveDoneTitle bundle keys.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test the archive feature. Build daemon with npm run build, build plugin with gradlew buildPlugin. Verify: Clear Done button appears in DONE column, confirmation dialog shows task count, archiving hides tasks from board, tasks still exist on disk, search_tasks finds ARCHIVED tasks. Test error handling for empty DONE column.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T22:27:20.696Z",
+      "completedAt": "2026-02-08T22:29:11.957Z",
+      "note": "Fixed TS cast for columnLimits. Added 5 ARCHIVED tests. 226 tests passing. Both daemon and plugin build clean.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 2,
+  "createdAt": "2026-02-08T21:58:47.699Z",
+  "updatedAt": "2026-02-08T23:39:36.686Z",
+  "planSubmittedAt": "2026-02-08T22:11:01.423Z",
+  "planApprovedAt": "2026-02-08T22:18:48.581Z",
+  "workStartedAt": "2026-02-08T22:23:53.985Z",
+  "completedAt": "2026-02-08T22:29:20.990Z",
+  "reviewStartedAt": "2026-02-08T22:29:20.990Z",
+  "reviewCompletedAt": "2026-02-08T22:42:34.155Z",
+  "comments": []
+}

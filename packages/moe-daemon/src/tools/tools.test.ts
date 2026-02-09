@@ -25,6 +25,8 @@ import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { getActivityLogTool } from './getActivityLog.js';
 import { unblockWorkerTool } from './unblockWorker.js';
+import { addCommentTool } from './addComment.js';
+import { getPendingQuestionsTool } from './getPendingQuestions.js';
 import type { Task, Epic, Worker, Project, RailProposal } from '../types/schema.js';
 
 describe('MCP Tools', () => {
@@ -1329,6 +1331,261 @@ describe('MCP Tools', () => {
     });
   });
 
+  describe('DEPLOYING status and WIP limits', () => {
+    beforeEach(async () => {
+      setupMoeFolder({
+        settings: {
+          approvalMode: 'CONTROL',
+          speedModeDelayMs: 2000,
+          autoCreateBranch: true,
+          branchPattern: 'moe/{epicId}/{taskId}',
+          commitPattern: 'feat({epicId}): {taskTitle}',
+          agentCommand: 'claude',
+          columnLimits: { DEPLOYING: 1 }
+        }
+      } as Partial<Project>);
+      createEpic();
+      createTask({ id: 'task-1', status: 'REVIEW' });
+      await state.load();
+    });
+
+    it('allows REVIEW -> DEPLOYING transition', async () => {
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'DEPLOYING',
+      }, state) as { success: boolean; status: string };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('DEPLOYING');
+    });
+
+    it('allows DEPLOYING -> DONE transition', async () => {
+      await state.updateTask('task-1', { status: 'DEPLOYING' });
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'DONE',
+      }, state) as { success: boolean; status: string };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('DONE');
+    });
+
+    it('allows DEPLOYING -> WORKING reopen transition', async () => {
+      await state.updateTask('task-1', { status: 'DEPLOYING' });
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'WORKING',
+        reason: 'Deploy failed',
+      }, state) as { success: boolean; status: string };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('WORKING');
+
+      const task = state.getTask('task-1');
+      expect(task?.reopenCount).toBe(1);
+      expect(task?.reopenReason).toBe('Deploy failed');
+    });
+
+    it('allows DONE -> DEPLOYING transition', async () => {
+      await state.updateTask('task-1', { status: 'DONE' });
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'DEPLOYING',
+      }, state) as { success: boolean; status: string };
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('DEPLOYING');
+    });
+
+    it('blocks transition when WIP limit reached', async () => {
+      // Move task-1 to DEPLOYING first (occupying the 1 slot)
+      await state.updateTask('task-1', { status: 'DEPLOYING' });
+
+      // Create a second task in REVIEW
+      createTask({ id: 'task-2', status: 'REVIEW', order: 2 });
+      await state.load();
+
+      const tool = setTaskStatusTool(state);
+      await expect(
+        tool.handler({ taskId: 'task-2', status: 'DEPLOYING' }, state)
+      ).rejects.toThrow('WIP limit of 1');
+    });
+
+    it('allows transition when under WIP limit', async () => {
+      // task-1 is in REVIEW, DEPLOYING column is empty
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'DEPLOYING',
+      }, state) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
+
+    it('treats missing columnLimits as no limit', async () => {
+      // Create a state without columnLimits
+      const noLimitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-nolimit-'));
+      const noLimitMoePath = path.join(noLimitDir, '.moe');
+      fs.mkdirSync(noLimitMoePath, { recursive: true });
+      fs.mkdirSync(path.join(noLimitMoePath, 'epics'));
+      fs.mkdirSync(path.join(noLimitMoePath, 'tasks'));
+      fs.mkdirSync(path.join(noLimitMoePath, 'workers'));
+      fs.mkdirSync(path.join(noLimitMoePath, 'proposals'));
+      fs.writeFileSync(path.join(noLimitMoePath, 'project.json'), JSON.stringify({
+        id: 'proj-nolimit',
+        name: 'No Limit Project',
+        rootPath: noLimitDir,
+        schemaVersion: 4,
+        globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
+        settings: { approvalMode: 'CONTROL', speedModeDelayMs: 2000, autoCreateBranch: true, branchPattern: '', commitPattern: '', agentCommand: 'claude' }
+      }, null, 2));
+      const epic: Epic = { id: 'epic-nl', projectId: 'proj-nolimit', title: 'E', description: '', architectureNotes: '', epicRails: [], status: 'ACTIVE', order: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      fs.writeFileSync(path.join(noLimitMoePath, 'epics', 'epic-nl.json'), JSON.stringify(epic, null, 2));
+      const task: Task = { id: 'task-nl', epicId: 'epic-nl', title: 'T', description: '', definitionOfDone: ['done'], taskRails: [], implementationPlan: [], status: 'REVIEW', assignedWorkerId: null, branch: null, prLink: null, reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null, priority: 'MEDIUM', order: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      fs.writeFileSync(path.join(noLimitMoePath, 'tasks', 'task-nl.json'), JSON.stringify(task, null, 2));
+
+      const nlState = new StateManager({ projectPath: noLimitDir });
+      await nlState.load();
+
+      const tool = setTaskStatusTool(nlState);
+      const result = await tool.handler({
+        taskId: 'task-nl',
+        status: 'DEPLOYING',
+      }, nlState) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      fs.rmSync(noLimitDir, { recursive: true, force: true });
+    });
+
+    it('listTasks includes deploying count', async () => {
+      await state.updateTask('task-1', { status: 'DEPLOYING' });
+      const tool = listTasksTool(state);
+      const result = await tool.handler({}, state) as { counts: { deploying: number } };
+      expect(result.counts.deploying).toBe(1);
+    });
+
+    it('searchTasks can filter by DEPLOYING status', async () => {
+      await state.updateTask('task-1', { status: 'DEPLOYING' });
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({
+        filters: { status: 'DEPLOYING' },
+      }, state) as { tasks: Task[] };
+
+      expect(result.tasks.length).toBe(1);
+      expect(result.tasks[0].id).toBe('task-1');
+    });
+  });
+
+  describe('ARCHIVED status', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', status: 'DONE' });
+      await state.load();
+    });
+
+    it('allows DONE to ARCHIVED transition', async () => {
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'ARCHIVED',
+      }, state) as { success: boolean; status: string };
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('ARCHIVED');
+    });
+
+    it('allows ARCHIVED to BACKLOG transition (un-archive)', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = setTaskStatusTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        status: 'BACKLOG',
+      }, state) as { success: boolean; status: string };
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('BACKLOG');
+    });
+
+    it('rejects BACKLOG to ARCHIVED transition', async () => {
+      createTask({ id: 'task-bl', status: 'BACKLOG' });
+      await state.load();
+      const tool = setTaskStatusTool(state);
+      await expect(tool.handler({
+        taskId: 'task-bl',
+        status: 'ARCHIVED',
+      }, state)).rejects.toThrow();
+    });
+
+    it('listTasks includes archived count', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = listTasksTool(state);
+      const result = await tool.handler({}, state) as { counts: { archived: number } };
+      expect(result.counts.archived).toBe(1);
+    });
+
+    it('searchTasks can filter by ARCHIVED status', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({
+        filters: { status: 'ARCHIVED' },
+      }, state) as { tasks: Task[] };
+      expect(result.tasks.length).toBe(1);
+      expect(result.tasks[0].id).toBe('task-1');
+    });
+  });
+
+  describe('Task comments', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', status: 'WORKING' });
+      await state.load();
+    });
+
+    it('adds a comment to a task', async () => {
+      const tool = addCommentTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        content: 'What does this feature do?',
+      }, state) as { success: boolean; commentId: string; totalComments: number };
+      expect(result.success).toBe(true);
+      expect(result.totalComments).toBe(1);
+      const task = state.getTask('task-1');
+      expect(task?.comments.length).toBe(1);
+      expect(task?.comments[0].content).toBe('What does this feature do?');
+      expect(task?.comments[0].author).toBe('agent');
+    });
+
+    it('uses workerId as author when provided', async () => {
+      const tool = addCommentTool(state);
+      await tool.handler({
+        taskId: 'task-1',
+        content: 'Response here',
+        workerId: 'worker-123',
+      }, state);
+      const task = state.getTask('task-1');
+      expect(task?.comments[0].author).toBe('worker-123');
+    });
+
+    it('rejects empty content', async () => {
+      const tool = addCommentTool(state);
+      await expect(tool.handler({
+        taskId: 'task-1',
+        content: '  ',
+      }, state)).rejects.toThrow();
+    });
+
+    it('rejects missing taskId', async () => {
+      const tool = addCommentTool(state);
+      await expect(tool.handler({
+        content: 'test',
+      }, state)).rejects.toThrow();
+    });
+  });
+
   describe('Task timestamps', () => {
     beforeEach(async () => {
       setupMoeFolder();
@@ -1462,6 +1719,135 @@ describe('MCP Tools', () => {
       expect(result.task.completedAt).toBeNull();
       expect(result.task.reviewStartedAt).toBeNull();
       expect(result.task.reviewCompletedAt).toBeNull();
+    });
+  });
+
+  describe('moe.get_pending_questions', () => {
+    it('returns empty when no tasks have pending questions', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', comments: [] });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const result = await tool.handler({}, state) as { count: number; tasks: unknown[] };
+      expect(result.count).toBe(0);
+      expect(result.tasks).toHaveLength(0);
+    });
+
+    it('returns task after human comment sets hasPendingQuestion', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        id: 'task-1',
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c1', author: 'human', content: 'How should I test this?', timestamp: new Date().toISOString() }
+        ]
+      });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const result = await tool.handler({}, state) as {
+        count: number;
+        tasks: Array<{ taskId: string; questions: Array<{ content: string }> }>;
+      };
+      expect(result.count).toBe(1);
+      expect(result.tasks[0].taskId).toBe('task-1');
+      expect(result.tasks[0].questions).toHaveLength(1);
+      expect(result.tasks[0].questions[0].content).toBe('How should I test this?');
+    });
+
+    it('returns multiple unanswered questions on same task', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        id: 'task-1',
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c1', author: 'human', content: 'Question 1?', timestamp: new Date().toISOString() },
+          { id: 'c2', author: 'human', content: 'Question 2?', timestamp: new Date().toISOString() }
+        ]
+      });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const result = await tool.handler({}, state) as {
+        count: number;
+        tasks: Array<{ questions: Array<{ content: string }> }>;
+      };
+      expect(result.count).toBe(1);
+      expect(result.tasks[0].questions).toHaveLength(2);
+    });
+
+    it('only returns questions after last agent response', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        id: 'task-1',
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c1', author: 'human', content: 'Old question', timestamp: '2024-01-01T00:00:00Z' },
+          { id: 'c2', author: 'worker-1', content: 'Answer to old question', timestamp: '2024-01-01T00:01:00Z' },
+          { id: 'c3', author: 'human', content: 'New question?', timestamp: '2024-01-01T00:02:00Z' }
+        ]
+      });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const result = await tool.handler({}, state) as {
+        count: number;
+        tasks: Array<{ questions: Array<{ content: string }> }>;
+      };
+      expect(result.count).toBe(1);
+      expect(result.tasks[0].questions).toHaveLength(1);
+      expect(result.tasks[0].questions[0].content).toBe('New question?');
+    });
+
+    it('add_comment clears the hasPendingQuestion flag', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        id: 'task-1',
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c1', author: 'human', content: 'A question?', timestamp: new Date().toISOString() }
+        ]
+      });
+      await state.load();
+
+      const commentTool = addCommentTool(state);
+      await commentTool.handler({ taskId: 'task-1', content: 'Q: A question?\nA: Here is the answer.', workerId: 'worker-1' }, state);
+
+      const task = state.getTask('task-1')!;
+      expect(task.hasPendingQuestion).toBe(false);
+    });
+
+    it('filters by epicId', async () => {
+      setupMoeFolder();
+      createEpic({ id: 'epic-1' });
+      createEpic({ id: 'epic-2', title: 'Other Epic' });
+      createTask({
+        id: 'task-1',
+        epicId: 'epic-1',
+        hasPendingQuestion: true,
+        comments: [{ id: 'c1', author: 'human', content: 'Q1?', timestamp: new Date().toISOString() }]
+      });
+      createTask({
+        id: 'task-2',
+        epicId: 'epic-2',
+        hasPendingQuestion: true,
+        comments: [{ id: 'c2', author: 'human', content: 'Q2?', timestamp: new Date().toISOString() }]
+      });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const result = await tool.handler({ epicId: 'epic-1' }, state) as {
+        count: number;
+        tasks: Array<{ taskId: string }>;
+      };
+      expect(result.count).toBe(1);
+      expect(result.tasks[0].taskId).toBe('task-1');
     });
   });
 });

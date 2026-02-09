@@ -25,6 +25,7 @@ class TaskColumn(
     private val title: String,
     private val status: String,
     private val tasks: List<Task>,
+    private val wipLimit: Int? = null,
     private val epicMeta: Map<String, Epic>,
     private val collapsedEpics: Set<String>,
     private val onToggleEpic: (String) -> Unit,
@@ -33,7 +34,10 @@ class TaskColumn(
     private val onEpicDrop: (epicId: String, status: String) -> Unit,
     private val onOpen: (Task) -> Unit,
     private val onDelete: (Task) -> Unit,
-    private val onCreateTask: (() -> Unit)? = null
+    private val onCreateTask: (() -> Unit)? = null,
+    private val onClearColumn: (() -> Unit)? = null,
+    private val onNext: ((Task) -> Unit)? = null,
+    private val onPrevious: ((Task) -> Unit)? = null
 ) : JBPanel<TaskColumn>(BorderLayout()) {
 
     init {
@@ -90,7 +94,8 @@ class TaskColumn(
         }
         left.add(titleLabel)
 
-        val countLabel = JBLabel(tasks.size.toString()).apply {
+        val countText = if (wipLimit != null) "${tasks.size} / $wipLimit" else tasks.size.toString()
+        val countLabel = JBLabel(countText).apply {
             isOpaque = true
             background = BoardStyles.statusTint(status)
             foreground = BoardStyles.textPrimary
@@ -117,6 +122,21 @@ class TaskColumn(
             right.add(createBtn)
         }
 
+        if (onClearColumn != null && tasks.isNotEmpty()) {
+            val clearBtn = JBLabel("\u2715").apply {
+                foreground = BoardStyles.textSecondary
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                toolTipText = "Clear Done"
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        onClearColumn.invoke()
+                    }
+                })
+            }
+            right.add(clearBtn)
+        }
+
         header.add(left, BorderLayout.WEST)
         header.add(right, BorderLayout.EAST)
 
@@ -139,7 +159,7 @@ class TaskColumn(
             val epicTasks = grouped[epicId].orEmpty().sortedBy { it.order }
             if (!isCollapsed) {
                 for (task in epicTasks) {
-                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete))
+                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext, onPrevious = onPrevious))
                 }
             }
         }
