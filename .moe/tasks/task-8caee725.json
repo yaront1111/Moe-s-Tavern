@@ -1,0 +1,74 @@
+{
+  "id": "task-8caee725",
+  "epicId": "epic-bugs",
+  "title": "Workers ignore QA rejection reason - claim_next_task missing rejection context",
+  "description": "## Problem\\nWhen QA rejects a task, the rejection reason and details are stored on the task but NOT returned by `claim_next_task`. Workers claim the reopened task and see it as a normal WORKING task with no indication it was rejected or why.\\n\\n## Root Cause\\n`claimNextTask.ts` returns basic task fields but omits: `reopenCount`, `reopenReason`, `rejectionDetails`. Workers would need to separately call `get_context` to discover the rejection, but nothing prompts them to do so.\\n\\n## Current State\\n- `qaReject.ts` correctly stores: reopenCount, reopenReason, rejectionDetails (failedDodItems, issues)\\n- `getContext.ts` correctly returns: reopenCount, reopenReason, rejectionDetails\\n- `claimNextTask.ts` OMITS all three fields from response\\n- Worker role docs say 'check reopenReason if reopened' but there's no signal at claim time\\n\\n## Fix Required\\n1. Add `reopenCount`, `reopenReason`, and `rejectionDetails` to `claimNextTask.ts` response\\n2. When reopenCount > 0, add a prominent message in the response telling the worker to address the rejection\\n3. Update worker role docs to reinforce checking rejection reasons\\n\\n## Key Files\\n- `packages/moe-daemon/src/tools/claimNextTask.ts` - missing fields\\n- `packages/moe-daemon/src/types/schema.ts` - has the types already\\n- `docs/roles/worker.md` - worker instructions\", \"definitionOfDone\">[\"claim_next_task response includes reopenCount, reopenReason, and rejectionDetails fields\", \"When a worker claims a reopened task (reopenCount > 0), the response includes a clear message about the rejection\", \"Worker role docs updated to reinforce rejection handling\", \"Existing tests pass and new test covers rejection fields in claim response\"]",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add reopenCount, reopenReason, and rejectionDetails to the claim_next_task response in claimNextTask.ts. In the task object returned at lines 159-170, add three fields after `implementationPlan`:\n- `reopenCount: task.reopenCount`\n- `reopenReason: task.reopenReason`\n- `rejectionDetails: task.rejectionDetails || null`\n\nAlso add a top-level `reopenWarning` string field to the response when `task.reopenCount > 0`. The warning should say: `\"WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.\"` This makes the rejection impossible to miss, providing immediate error handling context to the worker.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-02-10T22:09:57.450Z",
+      "completedAt": "2026-02-10T22:10:46.261Z",
+      "note": "Added reopenCount, reopenReason, rejectionDetails to task object in response. Added conditional reopenWarning at top level when reopenCount > 0. All existing tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update worker role documentation (docs/roles/worker.md) to strengthen the reopened-task workflow:\n1. In the 'Workflow' section (lines 1-5), add step 2.5: 'Check if task was reopened (reopenCount > 0) - if so, read rejection reasons before starting'\n2. In 'Prerequisites' section (line 17), change 'Check reopenReason if the task was reopened' to 'IMPORTANT: If reopenCount > 0, this task was QA-rejected. Read reopenReason and rejectionDetails.issues BEFORE starting any work. Fix rejection issues first.'\n3. In 'If Task is Reopened' section (lines 116-123), add note that claim_next_task now surfaces rejection info directly - no need to call get_context separately to see the rejection reason.\n4. Update the same content in .moe/roles/worker.md if that file exists (test both paths).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.md",
+        ".moe/roles/worker.md"
+      ],
+      "startedAt": "2026-02-10T22:10:46.655Z",
+      "completedAt": "2026-02-10T22:11:18.448Z",
+      "note": "Updated both docs/roles/worker.md and .moe/roles/worker.md with: (1) new workflow step 2 for checking reopened status, (2) stronger IMPORTANT note in Prerequisites, (3) updated 'If Task is Reopened' section noting claim_next_task now surfaces rejection info directly.",
+      "modifiedFiles": [
+        "docs/roles/worker.md",
+        ".moe/roles/worker.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add test coverage for rejection fields in claim_next_task response. In the existing test file (packages/moe-daemon/src/tools/tools.test.ts), add a test case that:\n1. Creates a task in WORKING status with reopenCount=1, reopenReason='Tests failing in auth module', and rejectionDetails containing a structured issue\n2. Calls claim_next_task for that task\n3. Asserts the response includes reopenCount, reopenReason, rejectionDetails, and the reopenWarning string\n4. Also test the normal case (reopenCount=0) to verify reopenWarning is absent and reopenReason is null\n\nUse vitest as the test runner (matching project conventions). Error handling: ensure test cleans up any created test data.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-02-10T22:11:18.730Z",
+      "completedAt": "2026-02-10T22:11:44.099Z",
+      "note": "Added 2 tests: (1) 'includes rejection fields when task was reopened' - verifies reopenCount, reopenReason, rejectionDetails, and reopenWarning are in the response. (2) 'omits reopenWarning when task was not reopened' - verifies normal tasks have reopenCount=0, null reopenReason/rejectionDetails, and no reopenWarning. All 102 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 60,
+  "createdAt": "2026-02-10T22:04:17.785Z",
+  "updatedAt": "2026-02-10T22:18:14.665Z",
+  "planSubmittedAt": "2026-02-10T22:04:52.753Z",
+  "planApprovedAt": "2026-02-10T22:06:24.399Z",
+  "workStartedAt": "2026-02-10T22:09:57.450Z",
+  "completedAt": "2026-02-10T22:11:53.443Z",
+  "reviewStartedAt": "2026-02-10T22:11:53.443Z",
+  "reviewCompletedAt": "2026-02-10T22:18:14.665Z"
+}
