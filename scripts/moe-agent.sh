@@ -636,7 +636,7 @@ if [ -n "$TEAM" ]; then
         fi
     fi
 
-    TEAM_CREATE_JSON="{\"name\":\"$TEAM\",\"role\":\"$ROLE\"}"
+    TEAM_CREATE_JSON="{\"name\":\"$TEAM\"}"
     TEAM_CREATE_RPC="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"moe.create_team\",\"arguments\":$TEAM_CREATE_JSON}}"
 
     TEAM_RESULT=""

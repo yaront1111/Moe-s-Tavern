@@ -14,6 +14,7 @@ import { listTasksTool } from './listTasks.js';
 import { getNextTaskTool } from './getNextTask.js';
 import { createTaskTool } from './createTask.js';
 import { createEpicTool } from './createEpic.js';
+import { createTeamTool } from './createTeam.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
 import { proposeRailTool } from './proposeRail.js';
@@ -531,6 +532,43 @@ describe('MCP Tools', () => {
       expect(result.counts.backlog).toBe(1);
       expect(result.counts.inProgress).toBe(1);
       expect(result.counts.done).toBe(1);
+    });
+  });
+
+  describe('moe.create_team', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      await state.load();
+    });
+
+    it('creates a team with role', async () => {
+      const tool = createTeamTool(state);
+      const result = await tool.handler({ name: 'Moe Team', role: 'worker' }, state) as {
+        team: { id: string; role: string | null };
+        created: boolean;
+      };
+
+      expect(result.created).toBe(true);
+      expect(result.team.role).toBe('worker');
+      expect(result.team.id).toBeTruthy();
+    });
+
+    it('creates a team without role and is idempotent by name', async () => {
+      const tool = createTeamTool(state);
+      const first = await tool.handler({ name: 'Moe Team' }, state) as {
+        team: { id: string; role: string | null };
+        created: boolean;
+      };
+      expect(first.created).toBe(true);
+      expect(first.team.role).toBeNull();
+
+      const second = await tool.handler({ name: 'Moe Team' }, state) as {
+        team: { id: string };
+        created: boolean;
+      };
+
+      expect(second.created).toBe(false);
+      expect(second.team.id).toBe(first.team.id);
     });
   });
 

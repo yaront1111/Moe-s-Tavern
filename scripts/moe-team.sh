@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT=""
 PROJECT_NAME=""
 DELAY_BETWEEN=1
-TEAM="Moe Team"
+TEAM=""
 NO_TEAM=false
 NO_WORKER=false
 NO_QA=false
@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -p, --project PATH       Project path"
             echo "  -n, --project-name NAME  Project name from registry"
             echo "  -d, --delay SECONDS      Delay between agent launches (default: 1)"
-            echo "  --team NAME              Team name for agents (default: Moe Team)"
+            echo "  --team NAME              Team name for agents (default: project folder name)"
             echo "  --no-team                Disable team mode"
             echo "  --no-worker              Don't start worker agent"
             echo "  --no-qa                  Don't start QA agent"
@@ -102,6 +102,53 @@ if [ -z "$PROJECT" ] && [ -z "$PROJECT_NAME" ]; then
     exit 1
 fi
 
+resolve_team_name() {
+    local team=""
+    if [ -n "$PROJECT" ]; then
+        local resolved=""
+        resolved=$(cd "$PROJECT" 2>/dev/null && pwd || true)
+        if [ -n "$resolved" ]; then
+            team=$(basename "$resolved")
+        else
+            team=$(basename "$PROJECT")
+        fi
+    elif [ -n "$PROJECT_NAME" ]; then
+        local registry_file="$HOME/.moe/projects.json"
+        if [ -f "$registry_file" ] && command -v python3 >/dev/null 2>&1; then
+            local path
+            path=$(PROJECT_NAME="$PROJECT_NAME" REGISTRY_FILE="$registry_file" python3 - <<'PY'
+import json
+import os
+
+name = os.environ.get("PROJECT_NAME", "")
+registry_file = os.environ.get("REGISTRY_FILE", "")
+path = ""
+try:
+    with open(registry_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    for entry in data:
+        if entry.get("name") == name:
+            path = entry.get("path", "")
+            break
+except Exception:
+    path = ""
+
+if path:
+    print(path)
+PY
+)
+            if [ -n "$path" ]; then
+                team=$(basename "$path")
+            fi
+        fi
+    fi
+
+    if [ -z "$team" ]; then
+        team="Moe Team"
+    fi
+    echo "$team"
+}
+
 # Build project argument for moe-agent.sh (shell-escaped to handle special chars)
 if [ -n "$PROJECT" ]; then
     PROJECT_ARG="--project $(printf '%q' "$PROJECT")"
@@ -111,6 +158,9 @@ fi
 if [ "$NO_TEAM" = true ]; then
     TEAM_ARG=""
 else
+    if [ -z "$TEAM" ]; then
+        TEAM=$(resolve_team_name)
+    fi
     TEAM_ARG="--team $(printf '%q' "$TEAM")"
 fi
 

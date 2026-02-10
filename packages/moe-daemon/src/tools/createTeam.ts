@@ -13,30 +13,35 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Team display name (e.g. "Coders")' },
-        role: { type: 'string', enum: VALID_ROLES, description: 'Team role: architect, worker, or qa' },
+        role: { type: 'string', enum: VALID_ROLES, description: 'Team role: architect, worker, or qa (optional)' },
         maxSize: { type: 'number', description: 'Maximum number of members (default 10)' }
       },
-      required: ['name', 'role'],
+      required: ['name'],
       additionalProperties: false
     },
     handler: async (args, state) => {
       const params = (args || {}) as { name?: string; role?: string; maxSize?: number };
 
       if (!params.name) throw missingRequired('name');
-      if (!params.role) throw missingRequired('role');
-      if (!VALID_ROLES.includes(params.role as TeamRole)) {
-        throw invalidInput('role', `must be one of: ${VALID_ROLES.join(', ')}`);
+      let role: TeamRole | null = null;
+      if (params.role !== undefined) {
+        if (!VALID_ROLES.includes(params.role as TeamRole)) {
+          throw invalidInput('role', `must be one of: ${VALID_ROLES.join(', ')}`);
+        }
+        role = params.role as TeamRole;
       }
 
       // Idempotent: return existing team if name+role matches
-      const existing = state.getTeamByNameAndRole(params.name, params.role as TeamRole);
+      const existing = role === null
+        ? state.getTeamByName(params.name)
+        : state.getTeamByNameAndRole(params.name, role);
       if (existing) {
         return { team: existing, created: false };
       }
 
       const team = await state.createTeam({
         name: params.name,
-        role: params.role as TeamRole,
+        role,
         maxSize: params.maxSize
       });
 

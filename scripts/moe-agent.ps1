@@ -154,6 +154,14 @@ if (-not $projectPath) {
     exit 1
 }
 
+if ($PSBoundParameters.ContainsKey('Team') -and [string]::IsNullOrWhiteSpace($Team)) {
+    $projectLeaf = Split-Path -Leaf $projectPath
+    if ([string]::IsNullOrWhiteSpace($projectLeaf)) {
+        $projectLeaf = "Moe Team"
+    }
+    $Team = $projectLeaf
+}
+
 $moeDir = Join-Path $projectPath ".moe"
 if (-not (Test-Path $moeDir)) {
     Write-Error "Project is not initialized for Moe: $projectPath"
@@ -372,7 +380,7 @@ $teamContext = ""
 if ($Team) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
     $nodeExe = "node"
-    $createTeamJson = ConvertTo-Json @{ name = $Team; role = $Role } -Compress
+    $createTeamJson = ConvertTo-Json @{ name = $Team } -Compress
     $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
     try {
         $createResult = $createRpc | & $nodeExe $proxyScript 2>$null | ConvertFrom-Json
