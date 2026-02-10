@@ -162,7 +162,8 @@ object TerminalAgentLauncher {
 
     private fun launchRole(project: Project, ctx: AgentContext, role: String) {
         val tabName = roleTabNames[role] ?: "Moe $role"
-        val teamName = if (isTeamModeEnabled(project)) "Moe Team" else null
+        val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
+        val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
         val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName)
         try {
             val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)

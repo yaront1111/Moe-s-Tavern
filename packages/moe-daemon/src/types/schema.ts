@@ -63,7 +63,7 @@ export interface Team {
   id: string;
   projectId: string;
   name: string;
-  role: TeamRole;
+  role: TeamRole | null;
   memberIds: string[];
   maxSize: number;
   createdAt: string;

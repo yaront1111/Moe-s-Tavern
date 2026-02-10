@@ -1,0 +1,127 @@
+{
+  "id": "task-345aee8a",
+  "epicId": "epic-bugs",
+  "title": "Fix: All roles create separate teams instead of sharing one project team",
+  "description": "When launching agents with team mode from the plugin, each role (architect, worker, qa) creates a separate team because create_team idempotency is keyed on name+role. User sees different team IDs for what they expect to be one team.\n\nRoot cause: In moe-agent.ps1 line 375, team creation passes `role = $Role`, so \"Moe Team\" + \"worker\" creates team-xxx and \"Moe Team\" + \"architect\" creates team-yyy.\n\nTwo changes needed:\n1. Make `role` optional on Team schema and create_team tool. A team without a role is a \"project team\" that any role can join.\n2. In moe-agent.ps1/sh, don't pass role when creating team. Team name should default to project name.\n\nNote: The claim constraint logic (claimNextTask.ts:100-111) already works correctly - it only checks if a worker is on ANY team, not on a specific team. So this change won't break constraint relaxation.",
+  "definitionOfDone": [
+    "All 3 roles (architect, worker, qa) join the same team when launched together",
+    "Team name defaults to project name",
+    "create_team works with or without role parameter",
+    "Existing role-based teams still work (backward compatible)",
+    "moe-agent.ps1 and moe-agent.sh updated to not pass role",
+    "moe_list_teams shows one team with all 3 workers"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Make `role` optional in Team schema and StateManager. In `packages/moe-daemon/src/types/schema.ts` line 66, change `role: TeamRole` to `role: TeamRole | null`. In `packages/moe-daemon/src/state/StateManager.ts`, update `getTeamByNameAndRole` to also support name-only lookup: add a new method `getTeamByName(name: string): Team | null` that matches by name only (ignoring role). Update `createTeam` to accept `role` as optional (default null). Error handling: existing teams with a role still work - null role means 'any role can join'. Test: add unit test in tools.test.ts verifying create_team works with and without role parameter.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-08T22:37:43.755Z",
+      "completedAt": "2026-02-08T22:39:37.209Z",
+      "note": "Made Team.role nullable, added getTeamByName, and allowed StateManager.createTeam to accept optional role. Added create_team tests for role and role-less creation/idempotency.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update `create_team` tool to make `role` optional. In `packages/moe-daemon/src/tools/createTeam.ts`: remove `role` from `required` array (line 19). When role is not provided, use `getTeamByName()` for idempotency check instead of `getTeamByNameAndRole()`. When role IS provided, keep existing behavior (backward compatible). Error handling: validate role enum only when provided. Test: add test cases for creating teams without role and verifying idempotency by name-only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ],
+      "startedAt": "2026-02-08T22:39:39.902Z",
+      "completedAt": "2026-02-08T22:40:03.149Z",
+      "note": "Made create_team role optional with name-only idempotency and conditional role validation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update moe-agent.ps1 to not pass role when creating team, and default team name to project folder name. Line 375: change `@{ name = $Team; role = $Role }` to `@{ name = $Team }` (remove role). Line 26: change default `$Team` from empty to use project folder name as default when -Team is passed without a value. In TerminalAgentLauncher.kt line 165: change hardcoded 'Moe Team' to use `project.name` so each project gets its own team name. Error handling: fall back to 'Moe Team' if project name is unavailable. Test: verify in script output that all 3 roles show the same team ID.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-08T22:40:05.155Z",
+      "completedAt": "2026-02-08T22:40:51.544Z",
+      "note": "PowerShell agent now defaults -Team to project folder name when provided without value and removes role from create_team payload. JetBrains launcher uses project.name (fallback Moe Team) for team mode.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update moe-agent.sh to not pass role when creating team. Line 639: change `TEAM_CREATE_JSON` from `{\"name\":\"$TEAM\",\"role\":\"$ROLE\"}` to `{\"name\":\"$TEAM\"}`. Scripts must have cross-platform alternatives - this is the Unix counterpart to the ps1 fix. Error handling: no change needed, existing error handling around team creation is sufficient. Test: verify script constructs correct JSON without role field.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-08T22:40:54.836Z",
+      "completedAt": "2026-02-08T22:41:08.065Z",
+      "note": "Removed role from moe-agent.sh team creation JSON.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Update moe-team.ps1 and moe-team.sh team launcher scripts. In moe-team.ps1: the -Team parameter is already forwarded to moe-agent.ps1 which will handle the role removal. Default team name to project folder name instead of 'Moe Team'. In moe-team.sh: same change for the --team parameter default. All docs and scripts must work for Windows, Mac, and Linux users. Error handling: if project path extraction fails, fall back to 'Moe Team'. Test: run moe-team.ps1 and verify single team ID in output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.ps1",
+        "scripts/moe-team.sh"
+      ],
+      "startedAt": "2026-02-08T22:41:10.582Z",
+      "completedAt": "2026-02-08T22:42:53.386Z",
+      "note": "Team launcher defaults now derive team name from project folder (with registry lookup for project-name), falling back to 'Moe Team' when path resolution fails.",
+      "modifiedFiles": [
+        "scripts/moe-team.ps1",
+        "scripts/moe-team.sh"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update docs/SCHEMA.md Team section to document that role is now optional. Note that teams without a role are 'project teams' where any role can join. Update the example JSON. Update MCP_SERVER.md create_team documentation to show role as optional. Error handling: N/A (docs only). Test: verify docs are consistent with code changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-02-08T22:42:57.433Z",
+      "completedAt": "2026-02-08T22:43:47.502Z",
+      "note": "Documented optional team role in schema and MCP create_team docs, including project-team semantics.",
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 59,
+  "createdAt": "2026-02-08T22:28:44.552Z",
+  "updatedAt": "2026-02-09T12:30:59.318Z",
+  "planSubmittedAt": "2026-02-08T22:29:34.970Z",
+  "planApprovedAt": "2026-02-08T22:29:40.142Z",
+  "workStartedAt": "2026-02-08T22:37:43.755Z",
+  "completedAt": "2026-02-08T22:44:15.829Z",
+  "reviewStartedAt": "2026-02-08T22:44:15.829Z"
+}
