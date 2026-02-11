@@ -160,11 +160,11 @@ object TerminalAgentLauncher {
         return AgentContext(basePath, script, manager, envOverrides, resolvedCommand)
     }
 
-    private fun launchRole(project: Project, ctx: AgentContext, role: String) {
+    private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false) {
         val tabName = roleTabNames[role] ?: "Moe $role"
         val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
         val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
-        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName)
+        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec)
         try {
             val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
             if (widget != null) {
@@ -227,11 +227,12 @@ object TerminalAgentLauncher {
         script: ResolvedScript,
         envOverrides: Map<String, String>,
         agentCommand: String,
-        teamName: String? = null
+        teamName: String? = null,
+        codexExec: Boolean = false
     ): String {
         return when (script.kind) {
-            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName)
-            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand, teamName)
+            ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec)
         }
     }
 
@@ -241,7 +242,8 @@ object TerminalAgentLauncher {
         script: File,
         envOverrides: Map<String, String>,
         agentCommand: String,
-        teamName: String? = null
+        teamName: String? = null,
+        codexExec: Boolean = false
     ): String {
         val projectArg = psQuote(basePath)
         val scriptArg = psQuote(script.absolutePath)
@@ -256,7 +258,8 @@ object TerminalAgentLauncher {
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = psQuote(workerId)
         val teamArg = if (teamName != null) " -Team ${psQuote(teamName)}" else ""
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg"
+        val codexExecArg = if (codexExec) " -CodexExec" else ""
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$codexExecArg"
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
@@ -267,7 +270,8 @@ object TerminalAgentLauncher {
         script: File,
         envOverrides: Map<String, String>,
         agentCommand: String,
-        teamName: String? = null
+        teamName: String? = null,
+        codexExec: Boolean = false
     ): String {
         val projectArg = shQuote(basePath)
         val scriptArg = shQuote(script.absolutePath)
@@ -282,7 +286,8 @@ object TerminalAgentLauncher {
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = shQuote(workerId)
         val teamArg = if (teamName != null) " --team ${shQuote(teamName)}" else ""
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg"
+        val codexExecArg = if (codexExec) " --codex-exec" else ""
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$codexExecArg"
     }
 
     private fun psQuote(value: String): String {

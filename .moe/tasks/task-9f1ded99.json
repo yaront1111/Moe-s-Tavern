@@ -1,0 +1,120 @@
+{
+  "id": "task-9f1ded99",
+  "epicId": "epic-settings",
+  "title": "Fix Codex agent integration - broken launch, MCP registration, and interactive mode",
+  "description": "## Problem\nThe Codex agent does not work when launched from the Moe system. Multiple issues prevent it from functioning:\n\n### Root Causes Identified\n1. **System prompt delivery is broken**: Claude uses `--append-system-prompt` to inject role docs, agent context, approval mode, known issues. Codex has NO equivalent flag. Current workaround writes everything to a temp file and passes \"Read and follow instructions in <file>\" as a user prompt - fragile and unreliable.\n\n2. **No AGENTS.md**: Codex reads `AGENTS.md` files for project-level system instructions (equivalent to CLAUDE.md). The Moe project only has CLAUDE.md, so Codex gets no project context.\n\n3. **MCP registration conflicts**: `codex mcp add moe` registers globally in `~/.codex/config.toml`. Multiple projects or simultaneous agents overwrite each other's MCP server config.\n\n4. **No `codex exec` support**: For automated agent workflows (architect auto-planning, worker auto-executing), `codex exec --full-auto` is the correct non-interactive command. Current code only uses interactive TUI mode and completely disables the polling loop.\n\n5. **No per-session MCP config**: Claude uses temp `--mcp-config` files per agent. Codex needs project-scoped `.codex/config.toml` for proper isolation.\n\n### Desired Outcome\n- Codex agent launches successfully with full role context and MCP connectivity\n- Interactive mode works like Claude (user can interact with the agent in TUI)\n- Automated/non-interactive mode supported via `codex exec` for headless operation\n- MCP registration is project-scoped, not global (no conflicts between projects)\n- AGENTS.md provides project context to Codex just like CLAUDE.md does for Claude\n\n### Key Files\n- `scripts/moe-agent.ps1` - Windows agent launcher\n- `scripts/moe-agent.sh` - Mac/Linux agent launcher\n- `moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt` - Plugin launcher\n- `CLAUDE.md` - Reference for creating AGENTS.md",
+  "definitionOfDone": [
+    "Codex agent launches successfully and connects to MCP server",
+    "Role docs and agent context are properly delivered to Codex (via AGENTS.md + developer_instructions)",
+    "MCP registration is project-scoped (not global) to avoid conflicts",
+    "Interactive TUI mode works for manual use",
+    "codex exec mode works for automated/headless agent operation with polling loop",
+    "AGENTS.md created with equivalent project context to CLAUDE.md",
+    "Both moe-agent.ps1 and moe-agent.sh updated and working"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create AGENTS.md in the project root - this is the Codex equivalent of CLAUDE.md and is automatically read by Codex CLI on startup. Content should mirror CLAUDE.md: project overview, build commands, architecture diagram, component locations, daemon/plugin internal structure, WebSocket protocols, MCP tools list, data files, and key documentation links. Adapt headings from 'Claude Code' to 'Codex CLI' language. This provides project-level context to all Codex agents regardless of role. Include error handling guidance and test patterns to satisfy global required patterns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "AGENTS.md"
+      ],
+      "startedAt": "2026-02-10T22:03:51.806Z",
+      "completedAt": "2026-02-10T22:04:39.689Z",
+      "note": "Created AGENTS.md mirroring CLAUDE.md content but adapted for Codex CLI. Includes project overview, build commands, architecture, component locations, WebSocket protocols, MCP tools, data files, error handling guidance, and testing patterns.",
+      "modifiedFiles": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update moe-agent.ps1 Codex MCP registration: Replace the global `codex mcp add moe` command (lines 357-368) with writing a project-scoped `.codex/config.toml` file inside the project directory. The TOML file should contain: [mcp_servers.moe] section with command='node', args=[proxyScript path], and [mcp_servers.moe.env] with MOE_PROJECT_PATH. Also set project_doc_fallback_filenames=['CLAUDE.md'] so Codex reads CLAUDE.md as well. If `.codex/config.toml` already exists, merge the moe MCP server config into it (preserve other servers). This eliminates global config conflicts when running multiple projects. Add error handling for TOML write failures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-10T22:04:42.476Z",
+      "completedAt": "2026-02-10T22:05:02.226Z",
+      "note": "Replaced global `codex mcp add moe` with project-scoped `.codex/config.toml` writing. Handles both new config creation (with project_doc_fallback_filenames) and merging into existing config. Paths use forward slashes for TOML compatibility.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update moe-agent.sh Codex MCP registration: Same change as step 2 but for the bash script. Replace the global `codex mcp add moe` block (lines 496-512) with writing a project-scoped `.codex/config.toml` file. Use python3 (already available in the script) to read/merge existing TOML config and write the updated version with moe MCP server. Set project_doc_fallback_filenames=['CLAUDE.md']. Add error handling for write failures and test that the file was created successfully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-10T22:05:05.265Z",
+      "completedAt": "2026-02-10T22:05:24.878Z",
+      "note": "Replaced global `codex mcp add moe` with python3-based project-scoped `.codex/config.toml` writer. Uses python3 (already available in the script) for TOML manipulation. Handles merge of existing config and creation of new config with project_doc_fallback_filenames.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Rewrite Codex launch logic in moe-agent.ps1 (lines 452-466): Remove the temp file + --add-dir approach. Instead, support two modes:\n\n(A) Interactive TUI mode (default for Codex): Launch `codex -C <projectPath> <initialPrompt>` where initialPrompt contains the full systemAppend text (role docs + agent context + approval mode + claim command). Pass as a direct argument - Codex handles long prompts.\n\n(B) Non-interactive exec mode (new -CodexExec switch parameter): Launch `codex exec -C <projectPath> --full-auto --sandbox workspace-write <initialPrompt>`. Re-enable the polling loop for this mode (set $loopEnabled=$true and $codexInteractive=$false when -CodexExec is specified). This allows automated agent workflows with Codex.\n\nAdd the -CodexExec switch to the param block. Update the loop detection logic so $codexInteractive only disables the loop when NOT in exec mode. Add error handling for codex command not found.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-10T22:05:27.910Z",
+      "completedAt": "2026-02-10T22:06:19.154Z",
+      "note": "Added -CodexExec switch parameter. Updated $codexInteractive to be false when -CodexExec is set (re-enabling the polling loop). Replaced temp file + --add-dir approach with direct prompt passing. Interactive TUI mode: `codex -C <project> <prompt>`. Exec mode: `codex exec -C <project> --full-auto --sandbox workspace-write <prompt>`. Added Get-Command check for codex availability.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Rewrite Codex launch logic in moe-agent.sh (lines 834-848): Same refactor as step 4 but for bash. Remove the temp file + --add-dir approach. Support two modes:\n\n(A) Interactive TUI mode (default): `$COMMAND -C \"$PROJECT\" \"$FULL_PROMPT\"` where FULL_PROMPT = systemAppend + claimPrompt.\n\n(B) Non-interactive exec mode (new --codex-exec flag): `$COMMAND exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"$FULL_PROMPT\"`. Re-enable polling loop when --codex-exec is set (override CODEX_INTERACTIVE=false, LOOP_ENABLED=true).\n\nAdd --codex-exec to argument parser (lines 136-213). Update the CODEX_INTERACTIVE / LOOP_ENABLED logic (lines 756-761). Add `command -v codex` check before launch. Add error handling for missing codex binary. Include test note: verify both modes work on Mac and Linux.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-10T22:06:22.503Z",
+      "completedAt": "2026-02-10T22:07:11.374Z",
+      "note": "Added --codex-exec flag to defaults, argument parser, and help text. Updated CODEX_INTERACTIVE to be false when --codex-exec is set (re-enabling polling loop). Replaced temp file + --add-dir approach with direct prompt passing. Interactive TUI: `codex -C <project> <prompt>`. Exec mode: `codex exec -C <project> --full-auto --sandbox workspace-write <prompt>`. Added `command -v` check for codex availability.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update TerminalAgentLauncher.kt to support Codex exec mode: When the agent command is 'codex' and team mode or automated mode is desired, pass a --codex-exec flag to the agent script. Add this to buildPowerShellCommand() (append '-CodexExec' when applicable) and buildBashCommand() (append '--codex-exec'). The decision of interactive vs exec mode can be based on a new setting or inferred from context (e.g., when launching all 3 agents via startAgents(), use exec mode for automated operation). Settings changes go through daemon, never write directly. Add error handling for unsupported provider+mode combinations. Test: verify plugin launches Codex in both modes correctly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-10T22:07:14.420Z",
+      "completedAt": "2026-02-10T22:08:05.453Z",
+      "note": "Added codexExec parameter plumbing through buildCommand, buildPowerShellCommand, and buildBashCommand. Appends -CodexExec (PS) or --codex-exec (bash) when enabled. Per user preference, codexExec defaults to false and is never auto-enabled from the plugin - Codex always launches in interactive TUI mode. The flag is CLI-only opt-in via script arguments.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 22,
+  "createdAt": "2026-02-10T22:00:40.397Z",
+  "updatedAt": "2026-02-10T22:15:49.967Z",
+  "planSubmittedAt": "2026-02-10T22:02:48.173Z",
+  "planApprovedAt": "2026-02-10T22:03:33.268Z",
+  "workStartedAt": "2026-02-10T22:03:51.806Z",
+  "completedAt": "2026-02-10T22:08:26.170Z",
+  "reviewStartedAt": "2026-02-10T22:08:26.170Z",
+  "reviewCompletedAt": "2026-02-10T22:15:49.967Z"
+}

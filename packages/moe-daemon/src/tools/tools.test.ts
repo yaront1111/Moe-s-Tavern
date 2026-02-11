@@ -763,6 +763,59 @@ describe('MCP Tools', () => {
       const result = await tool.handler({ statuses: ['DONE'] }, state) as { hasNext: boolean };
       expect(result.hasNext).toBe(false);
     });
+
+    it('includes rejection fields when task was reopened', async () => {
+      createTask({
+        id: 'task-reopened',
+        status: 'WORKING',
+        order: 0,
+        reopenCount: 1,
+        reopenReason: 'Tests failing in auth module',
+        rejectionDetails: {
+          failedDodItems: ['Tests pass'],
+          issues: [{ type: 'test_failure', description: 'AuthService test fails', file: 'src/auth.test.ts', line: 42 }],
+        },
+      });
+      await state.load();
+
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['WORKING'],
+        workerId: 'worker-reopen',
+      }, state) as {
+        hasNext: boolean;
+        task: { reopenCount: number; reopenReason: string; rejectionDetails: { failedDodItems: string[]; issues: Array<{ type: string }> } };
+        reopenWarning: string;
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.reopenCount).toBe(1);
+      expect(result.task.reopenReason).toBe('Tests failing in auth module');
+      expect(result.task.rejectionDetails).not.toBeNull();
+      expect(result.task.rejectionDetails.failedDodItems).toEqual(['Tests pass']);
+      expect(result.task.rejectionDetails.issues).toHaveLength(1);
+      expect(result.task.rejectionDetails.issues[0].type).toBe('test_failure');
+      expect(result.reopenWarning).toContain('WARNING');
+      expect(result.reopenWarning).toContain('1 time(s)');
+    });
+
+    it('omits reopenWarning when task was not reopened', async () => {
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        workerId: 'worker-normal',
+      }, state) as {
+        hasNext: boolean;
+        task: { reopenCount: number; reopenReason: string | null; rejectionDetails: null };
+        reopenWarning?: string;
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.reopenCount).toBe(0);
+      expect(result.task.reopenReason).toBeNull();
+      expect(result.task.rejectionDetails).toBeNull();
+      expect(result.reopenWarning).toBeUndefined();
+    });
   });
 
   describe('moe.propose_rail', () => {
