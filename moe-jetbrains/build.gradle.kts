@@ -3,7 +3,7 @@ import org.jetbrains.intellij.tasks.PrepareSandboxTask
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.3.0"
+    id("org.jetbrains.kotlin.jvm") version "2.3.10"
     id("org.jetbrains.intellij") version "1.17.2"
 }
 
