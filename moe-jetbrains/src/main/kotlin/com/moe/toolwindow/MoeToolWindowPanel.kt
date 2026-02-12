@@ -1,10 +1,12 @@
 package com.moe.toolwindow
 
 import com.moe.model.MoeState
+import com.moe.model.Task
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.toolwindow.board.TaskColumn
 import com.moe.toolwindow.board.BoardStyles
+import com.moe.toolwindow.board.WrapLayout
 import com.moe.util.MoeBundle
 import com.moe.util.MoeProjectInitializer
 import com.moe.util.MoeProjectRegistry
@@ -39,6 +41,11 @@ import javax.swing.Box
 import javax.swing.JPanel
 import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
+import java.time.Instant
+import java.time.Duration
+import javax.swing.JTextField
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPanel>(BorderLayout()), Disposable {
     private val service = project.service<MoeProjectService>()
@@ -54,30 +61,42 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private val workerPanel = WorkerPanel()
     private var stateListener: MoeStateListener? = null
     private lateinit var agentsButton: JBLabel
+    private var searchQuery: String = ""
 
     init {
-        val header = JPanel(BorderLayout())
+        val header = JPanel(WrapLayout(FlowLayout.RIGHT, 8, 4))
         header.border = com.intellij.util.ui.JBUI.Borders.empty(8, 12)
         header.isOpaque = false
 
-        val title = JBLabel(MoeBundle.message("moe.panel.title")).apply {
-            font = com.intellij.util.ui.JBUI.Fonts.label().deriveFont(java.awt.Font.BOLD, 15f)
-            foreground = BoardStyles.textPrimary
-        }
-
         styleStatusLabel(false, MoeBundle.message("moe.panel.disconnected"))
 
-        val right = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
-            isOpaque = false
+        val searchField = JTextField().apply {
+            preferredSize = Dimension(160, preferredSize.height)
+            toolTipText = MoeBundle.message("moe.panel.searchPlaceholder")
+            document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent) = onSearchChanged()
+                override fun removeUpdate(e: DocumentEvent) = onSearchChanged()
+                override fun changedUpdate(e: DocumentEvent) = onSearchChanged()
+                private fun onSearchChanged() {
+                    searchQuery = text.trim()
+                    lastState?.let { updateBoard(it) }
+                }
+            })
         }
-        right.add(JBLabel(MoeBundle.message("moe.panel.epicFilter")))
-        epicFilter.preferredSize = Dimension(180, epicFilter.preferredSize.height)
-        right.add(epicFilter)
+        header.add(JBLabel(MoeBundle.message("moe.panel.searchLabel")))
+        header.add(searchField)
+        header.add(Box.createHorizontalStrut(8))
 
-        right.add(Box.createHorizontalStrut(8))
-        right.add(JBLabel(MoeBundle.message("moe.panel.project")))
-        projectSelector.preferredSize = Dimension(280, projectSelector.preferredSize.height)
-        right.add(projectSelector)
+        header.add(JBLabel(MoeBundle.message("moe.panel.epicFilter")))
+        epicFilter.preferredSize = Dimension(140, epicFilter.preferredSize.height)
+        epicFilter.minimumSize = Dimension(100, epicFilter.preferredSize.height)
+        header.add(epicFilter)
+
+        header.add(Box.createHorizontalStrut(8))
+        header.add(JBLabel(MoeBundle.message("moe.panel.project")))
+        projectSelector.preferredSize = Dimension(200, projectSelector.preferredSize.height)
+        projectSelector.minimumSize = Dimension(120, projectSelector.preferredSize.height)
+        header.add(projectSelector)
 
         val addEpicButton = JBLabel(MoeBundle.message("moe.panel.addEpic")).apply {
             isOpaque = true
@@ -91,7 +110,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 }
             })
         }
-        right.add(addEpicButton)
+        header.add(addEpicButton)
 
         agentsButton = JBLabel(agentButtonLabel()).apply {
             isOpaque = true
@@ -164,7 +183,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 }
             })
         }
-        right.add(agentsButton)
+        header.add(agentsButton)
 
         val settingsButton = JBLabel("\u2699").apply {
             isOpaque = true
@@ -181,12 +200,16 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 }
             })
         }
-        right.add(settingsButton)
+        header.add(settingsButton)
 
-        right.add(statusLabel)
-
-        header.add(title, BorderLayout.WEST)
-        header.add(right, BorderLayout.EAST)
+        statusLabel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        statusLabel.toolTipText = "Click for daemon status"
+        statusLabel.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                showDaemonStatusPopup(e)
+            }
+        })
+        header.add(statusLabel)
 
         val topPanel = JPanel(BorderLayout()).apply {
             isOpaque = false
@@ -267,6 +290,38 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         agentsButton.text = agentButtonLabel()
     }
 
+    private fun showDaemonStatusPopup(e: MouseEvent) {
+        val popup = JPopupMenu()
+        val info = service.getDaemonInfo()
+        val isConnected = service.isConnected()
+
+        // Connection state
+        val stateText = if (isConnected) "Connected" else "Disconnected"
+        popup.add(JMenuItem("Status: $stateText").apply { isEnabled = false })
+
+        if (info != null) {
+            popup.add(JMenuItem("PID: ${info.pid}").apply { isEnabled = false })
+            popup.add(JMenuItem("Port: ${info.port}").apply { isEnabled = false })
+            val uptime = try {
+                val started = Instant.parse(info.startedAt)
+                val duration = Duration.between(started, Instant.now())
+                val hours = duration.toHours()
+                val minutes = duration.toMinutesPart()
+                if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+            } catch (_: Exception) { info.startedAt }
+            popup.add(JMenuItem("Uptime: $uptime").apply { isEnabled = false })
+        } else {
+            popup.add(JMenuItem("No daemon.json found").apply { isEnabled = false })
+        }
+
+        popup.add(JSeparator())
+        popup.add(JMenuItem("Restart Daemon").apply {
+            addActionListener { service.restartDaemon() }
+        })
+
+        popup.show(e.component, e.x, e.y)
+    }
+
     private fun styleStatusLabel(connected: Boolean, message: String) {
         statusLabel.text = if (connected) MoeBundle.message("moe.panel.connected") else message
         statusLabel.isOpaque = true
@@ -292,10 +347,16 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             // Filter tasks by selected epic
             val allTasks = state.tasks.sortedBy { it.order }
-            val tasks = if (selectedEpicId != null) {
+            val epicFiltered = if (selectedEpicId != null) {
                 allTasks.filter { it.epicId == selectedEpicId }
             } else {
                 allTasks
+            }
+            val tasks = if (searchQuery.isNotBlank()) {
+                val q = searchQuery.lowercase()
+                epicFiltered.filter { it.title.lowercase().contains(q) || it.description.lowercase().contains(q) }
+            } else {
+                epicFiltered
             }
             val epicMeta = state.epics.associateBy { it.id }
 
@@ -307,7 +368,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 return when (taskStatus) {
                     "BACKLOG", "PLANNING" -> "PLANNED"
                     "WORKING" -> "ACTIVE"
-                    "REVIEW", "DONE" -> "COMPLETED"
+                    "REVIEW", "DEPLOYING", "DONE" -> "COMPLETED"
                     else -> "PLANNED"
                 }
             }
@@ -321,12 +382,51 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 lastState?.let { updateBoard(it) }
             }
 
-            fun buildTaskColumn(board: JBPanel<JBPanel<*>>, title: String, status: String, isBacklog: Boolean = false) {
+            val columnOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DEPLOYING", "DONE")
+            fun getNextStatus(current: String): String? {
+                val idx = columnOrder.indexOf(current)
+                return if (idx >= 0 && idx < columnOrder.size - 1) columnOrder[idx + 1] else null
+            }
+            fun getPreviousStatus(current: String): String? {
+                val idx = columnOrder.indexOf(current)
+                return if (idx > 0) columnOrder[idx - 1] else null
+            }
+
+            fun handleNext(task: Task) {
+                val nextStatus = getNextStatus(task.status) ?: return
+                if (task.status == "AWAITING_APPROVAL") {
+                    service.approveTask(task.id)
+                } else {
+                    service.updateTaskStatus(task.id, nextStatus, task.order)
+                }
+            }
+
+            fun handlePrevious(task: Task) {
+                val prevStatus = getPreviousStatus(task.status) ?: return
+                val reason = Messages.showInputDialog(
+                    project,
+                    MoeBundle.message("moe.message.previousReason"),
+                    MoeBundle.message("moe.message.previousReasonTitle"),
+                    Messages.getQuestionIcon()
+                )
+                if (reason.isNullOrBlank()) return
+                if (task.status == "DONE" || task.status == "REVIEW" || task.status == "DEPLOYING") {
+                    service.reopenTask(task.id, reason)
+                } else {
+                    service.updateTaskStatus(task.id, prevStatus, task.order)
+                }
+            }
+
+            val columnLimits = state.project.settings?.columnLimits ?: emptyMap()
+
+            fun buildTaskColumn(board: JBPanel<JBPanel<*>>, title: String, status: String, isBacklog: Boolean = false, isDone: Boolean = false) {
                 val columnTasks = tasks.filter { displayStatus(it.status) == status }
+                val wipLimit = columnLimits[status]
                 val column = TaskColumn(
                     title = title,
                     status = status,
                     tasks = columnTasks,
+                    wipLimit = wipLimit,
                     epicMeta = epicMeta,
                     collapsedEpics = collapsedEpics,
                     onToggleEpic = { epicId -> toggleEpic(epicId) },
@@ -334,7 +434,12 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         EpicDetailDialog(project, epic, service).show()
                     },
                     onDrop = { taskId, newStatus, order ->
-                        service.updateTaskStatus(taskId, newStatus, order)
+                        val currentTask = allTasks.find { it.id == taskId }
+                        if (currentTask?.status == "AWAITING_APPROVAL" && newStatus == "WORKING") {
+                            service.approveTask(taskId)
+                        } else {
+                            service.updateTaskStatus(taskId, newStatus, order)
+                        }
                     },
                     onEpicDrop = { epicId, newStatus ->
                         val epic = epicMeta[epicId] ?: return@TaskColumn
@@ -353,7 +458,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         if (task.status == "AWAITING_APPROVAL") {
                             PlanReviewDialog(project, task, service).show()
                         } else {
-                            TaskDetailDialog(project, task, service).show()
+                            val nextCb = if (getNextStatus(task.status) != null) { t: Task -> handleNext(t) } else null
+                            val prevCb = if (getPreviousStatus(task.status) != null) { t: Task -> handlePrevious(t) } else null
+                            TaskDetailDialog(project, task, service, onNext = nextCb, onPrevious = prevCb).show()
                         }
                     },
                     onDelete = { task ->
@@ -369,8 +476,26 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     },
                     onCreateTask = if (isBacklog) {
                         { CreateTaskDialog(project, state.epics, service).show() }
-                    } else null
+                    } else null,
+                    onClearColumn = if (isDone) {
+                        {
+                            val doneCount = columnTasks.size
+                            val result = Messages.showYesNoDialog(
+                                project,
+                                MoeBundle.message("moe.message.archiveDone", doneCount),
+                                MoeBundle.message("moe.message.archiveDoneTitle"),
+                                Messages.getQuestionIcon()
+                            )
+                            if (result == Messages.YES) {
+                                service.archiveDoneTasks(selectedEpicId)
+                            }
+                        }
+                    } else null,
+                    onNext = if (!isDone) { task -> handleNext(task) } else null,
+                    onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null
                 )
+                val colPref = column.preferredSize
+                column.preferredSize = Dimension(BoardStyles.columnWidth, colPref.height)
                 column.minimumSize = Dimension(BoardStyles.columnWidth, 0)
                 column.maximumSize = Dimension(BoardStyles.columnWidth, Int.MAX_VALUE)
                 board.add(column)
@@ -386,19 +511,15 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.planning"), "PLANNING")
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.working"), "WORKING")
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.review"), "REVIEW")
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.done"), "DONE")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.deploying"), "DEPLOYING")
+            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.done"), "DONE", isDone = true)
 
             if (taskBoard.componentCount > 0) {
                 taskBoard.remove(taskBoard.componentCount - 1)
             }
 
-            val board = JBPanel<JBPanel<*>>(com.intellij.ui.components.panels.VerticalLayout(12)).apply {
-                isOpaque = false
-            }
-            board.add(taskBoard)
-
             contentPanel.removeAll()
-            contentPanel.add(board, BorderLayout.CENTER)
+            contentPanel.add(taskBoard, BorderLayout.CENTER)
             contentPanel.revalidate()
             contentPanel.repaint()
         }

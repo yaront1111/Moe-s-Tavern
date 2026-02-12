@@ -7,6 +7,8 @@ import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
 import type { McpAdapter } from './McpAdapter.js';
 import { logger } from '../util/logger.js';
+import { generateId } from '../util/ids.js';
+import { activeWaiters } from '../tools/waitForTask.js';
 
 export type PluginMessage =
   | { type: 'PING' }
@@ -29,7 +31,9 @@ export type PluginMessage =
   | { type: 'UPDATE_TEAM'; payload: { teamId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_TEAM'; payload: { teamId: string } }
   | { type: 'ADD_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
-  | { type: 'REMOVE_TEAM_MEMBER'; payload: { teamId: string; workerId: string } };
+  | { type: 'REMOVE_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
+  | { type: 'ARCHIVE_DONE_TASKS'; payload?: { epicId?: string } }
+  | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } };
 
 export class MoeWebSocketServer {
   private wss: WSS;
@@ -115,7 +119,8 @@ export class MoeWebSocketServer {
 
   sendStateSnapshot(ws: WebSocket): void {
     const snapshot = this.state.getSnapshot();
-    this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: snapshot }));
+    const filtered = { ...snapshot, tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED') };
+    this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: filtered }));
   }
 
   private async handlePluginMessage(ws: WebSocket, raw: string): Promise<void> {
@@ -159,6 +164,48 @@ export class MoeWebSocketServer {
           if (!taskId || typeof taskId !== 'string') {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
+          }
+          // Validate status transitions when status is being changed
+          if (updates && typeof updates === 'object' && 'status' in updates) {
+            const existing = this.state.getTask(taskId);
+            if (existing) {
+              const VALID_TRANSITIONS: Record<string, string[]> = {
+                BACKLOG: ['PLANNING', 'WORKING'],
+                PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+                AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
+                WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
+                REVIEW: ['DONE', 'DEPLOYING', 'WORKING', 'BACKLOG'],
+                DEPLOYING: ['DONE', 'WORKING', 'BACKLOG'],
+                DONE: ['BACKLOG', 'WORKING', 'DEPLOYING', 'ARCHIVED'],
+                ARCHIVED: ['BACKLOG', 'WORKING']
+              };
+              const newStatus = (updates as { status: string }).status;
+              if (newStatus !== existing.status) {
+                const allowed = VALID_TRANSITIONS[existing.status];
+                if (!allowed || !allowed.includes(newStatus)) {
+                  this.safeSend(ws, JSON.stringify({
+                    type: 'ERROR',
+                    message: `Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`,
+                    operation: 'UPDATE_TASK'
+                  }));
+                  return;
+                }
+                // Enforce WIP column limits
+                const columnLimits = this.state.project?.settings?.columnLimits;
+                if (columnLimits && typeof columnLimits[newStatus] === 'number') {
+                  const limit = columnLimits[newStatus];
+                  const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
+                  if (currentCount >= limit) {
+                    this.safeSend(ws, JSON.stringify({
+                      type: 'ERROR',
+                      message: `Column ${newStatus} is at its WIP limit of ${limit}`,
+                      operation: 'UPDATE_TASK'
+                    }));
+                    return;
+                  }
+                }
+              }
+            }
           }
           const task = await this.state.updateTask(taskId, updates as Record<string, unknown>);
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
@@ -363,6 +410,62 @@ export class MoeWebSocketServer {
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
+        case 'ARCHIVE_DONE_TASKS': {
+          const epicFilter = (message as { payload?: { epicId?: string } }).payload?.epicId;
+          const snapshot = this.state.getSnapshot();
+          const doneTasks = snapshot.tasks.filter(t =>
+            t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
+          );
+          if (doneTasks.length === 0) {
+            this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived: 0 } }));
+            return;
+          }
+          let archived = 0;
+          for (const task of doneTasks) {
+            try {
+              await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+              archived++;
+            } catch (err) {
+              logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+            }
+          }
+          this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived } }));
+          return;
+        }
+        case 'ADD_TASK_COMMENT': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { taskId, content, author } = message.payload as { taskId: string; content: string; author?: string };
+          if (!taskId || typeof taskId !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
+            return;
+          }
+          if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Comment content cannot be empty' }));
+            return;
+          }
+          const existing = this.state.getTask(taskId);
+          if (!existing) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Task not found: ${taskId}` }));
+            return;
+          }
+          const comment = {
+            id: generateId('comment'),
+            author: author || 'human',
+            content: content.trim(),
+            timestamp: new Date().toISOString()
+          };
+          const comments = [...(existing.comments || []), comment];
+          const updates: Partial<import('../types/schema.js').Task> = { comments };
+          if (comment.author === 'human') {
+            updates.hasPendingQuestion = true;
+          }
+          const task = await this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          return;
+        }
         default:
           this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Unknown message type: ${(message as { type?: string }).type}` }));
       }
@@ -437,6 +540,16 @@ export class MoeWebSocketServer {
 
     let deletedCount = 0;
     for (const workerId of workerIds) {
+      // Cancel any active wait_for_task waiter before deleting the worker
+      const waiter = activeWaiters.get(workerId);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        waiter.unsubscribe();
+        waiter.resolve({ hasNext: false, cancelled: true });
+        activeWaiters.delete(workerId);
+        logger.info({ workerId }, 'Cancelled active waiter for disconnected MCP client');
+      }
+
       const worker = this.state.getWorker(workerId);
       if (worker) {
         logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
@@ -448,7 +561,8 @@ export class MoeWebSocketServer {
     this.mcpWorkerMap.delete(ws);
 
     if (deletedCount > 0) {
-      this.broadcast({ type: 'STATE_SNAPSHOT', payload: this.state.getSnapshot() });
+      const snap = this.state.getSnapshot();
+      this.broadcast({ type: 'STATE_SNAPSHOT', payload: { ...snap, tasks: snap.tasks.filter(t => t.status !== 'ARCHIVED') } });
     }
   }
 

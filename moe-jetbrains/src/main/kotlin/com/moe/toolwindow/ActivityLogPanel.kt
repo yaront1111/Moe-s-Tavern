@@ -72,7 +72,9 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
-                // Not used here
+                if (allEvents.isEmpty()) {
+                    service.requestActivityLog(200)
+                }
             }
 
             override fun onStatus(connected: Boolean, message: String) {

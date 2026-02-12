@@ -5,13 +5,15 @@
 import type { Migration, MigrationResult } from './types.js';
 import { v1ToV2 } from './v1_to_v2.js';
 import { v2ToV3 } from './v2_to_v3.js';
+import { v3ToV4 } from './v3_to_v4.js';
 import { logger } from '../util/logger.js';
 import { CURRENT_SCHEMA_VERSION } from '../types/schema.js';
 
 // Register all migrations in order
 const migrations: Migration[] = [
   v1ToV2,
-  v2ToV3
+  v2ToV3,
+  v3ToV4
 ];
 
 /**

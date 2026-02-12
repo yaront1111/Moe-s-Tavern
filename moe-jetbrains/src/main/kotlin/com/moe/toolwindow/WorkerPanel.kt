@@ -15,8 +15,9 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import javax.swing.BorderFactory
+import com.moe.toolwindow.board.WrapLayout
 
-class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
+class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
     init {
         border = JBUI.Borders.empty(4, 12)
         isOpaque = false
@@ -25,11 +26,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(FlowLayout(FlowLayout.LEFT, 8, 4)) {
     fun updateWorkers(workers: List<Worker>, tasks: Map<String, Task>, teams: List<Team> = emptyList()) {
         removeAll()
 
-        if (workers.isEmpty()) {
-            add(JBLabel(MoeBundle.message("moe.message.noActiveWorkers")).apply {
-                foreground = JBColor.GRAY
-            })
-        } else {
+        if (workers.isNotEmpty()) {
             // Group workers by team
             val teamMap = teams.associateBy { it.id }
             val teamWorkers = mutableMapOf<String, MutableList<Worker>>() // teamId -> workers

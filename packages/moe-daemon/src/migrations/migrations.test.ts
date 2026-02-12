@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { runMigrations } from './index.js';
 import { v1ToV2 } from './v1_to_v2.js';
+import { v3ToV4 } from './v3_to_v4.js';
 import { CURRENT_SCHEMA_VERSION } from '../types/schema.js';
 
 describe('Schema Migrations', () => {
@@ -59,6 +60,56 @@ describe('Schema Migrations', () => {
     });
   });
 
+  describe('v3 to v4 migration', () => {
+    it('should add columnLimits with DEPLOYING: 1 default', () => {
+      const v3Project = {
+        id: 'proj-test',
+        name: 'Test Project',
+        schemaVersion: 3,
+        settings: {
+          approvalMode: 'CONTROL',
+          speedModeDelayMs: 2000,
+          autoCreateBranch: true,
+          branchPattern: '',
+          commitPattern: '',
+          agentCommand: 'claude'
+        }
+      };
+
+      const result = v3ToV4.migrate(v3Project);
+
+      expect(result.schemaVersion).toBe(4);
+      const settings = result.settings as Record<string, unknown>;
+      expect(settings.columnLimits).toEqual({ DEPLOYING: 1 });
+    });
+
+    it('should preserve all existing settings fields', () => {
+      const v3Project = {
+        id: 'proj-123',
+        name: 'My Project',
+        schemaVersion: 3,
+        settings: {
+          approvalMode: 'SPEED',
+          speedModeDelayMs: 5000,
+          autoCreateBranch: false,
+          branchPattern: 'feature/{taskId}',
+          commitPattern: 'fix: {title}',
+          agentCommand: 'codex'
+        }
+      };
+
+      const result = v3ToV4.migrate(v3Project);
+
+      expect(result.schemaVersion).toBe(4);
+      const settings = result.settings as Record<string, unknown>;
+      expect(settings.approvalMode).toBe('SPEED');
+      expect(settings.speedModeDelayMs).toBe(5000);
+      expect(settings.autoCreateBranch).toBe(false);
+      expect(settings.agentCommand).toBe('codex');
+      expect(settings.columnLimits).toEqual({ DEPLOYING: 1 });
+    });
+  });
+
   describe('runMigrations', () => {
     it('should migrate v1 project to current version', () => {
       const v1Project = {
@@ -73,6 +124,7 @@ describe('Schema Migrations', () => {
       expect(result.toVersion).toBe(CURRENT_SCHEMA_VERSION);
       expect(result.migrationsApplied).toContain('Add schemaVersion field to project.json');
       expect(result.migrationsApplied).toContain('Add teams support');
+      expect(result.migrationsApplied).toContain('Add DEPLOYING column and columnLimits');
       expect(data.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     });
 

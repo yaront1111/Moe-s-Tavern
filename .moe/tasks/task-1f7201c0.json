@@ -1,0 +1,150 @@
+{
+  "id": "task-1f7201c0",
+  "epicId": "epic-93811519",
+  "title": "add \"more info\" button on a task",
+  "description": "sometimes i dont understand what is the task about, add \"more info\" or i button and let me type a question for an agent to answer",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add TaskComment type and comments field to Task schema. In schema.ts add: interface TaskComment { id: string; author: string; content: string; timestamp: string; }. Add comments: TaskComment[] to the Task interface (default empty array). In StateManager, ensure comments array is initialized when creating tasks and preserved during updates. Include error handling: validate comment fields before saving (non-empty content, valid author).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-08T23:03:18.726Z",
+      "completedAt": "2026-02-08T23:04:45.586Z",
+      "note": "Added TaskComment interface, comments to Task, TASK_COMMENT_ADDED event, backfill for existing tasks.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add ADD_TASK_COMMENT WebSocket message handler. In WebSocketServer.ts: add ADD_TASK_COMMENT to PluginMessage union type with payload { taskId: string, content: string, author?: string }. Handler generates a unique comment ID, creates a TaskComment with author defaulting to 'human' and current timestamp, appends it to the task's comments array via state.updateTask(), emits TASK_UPDATED to all plugin clients, and logs a TASK_COMMENT_ADDED activity event. Include error handling: validate taskId exists and content is not empty.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-08T23:04:50.800Z",
+      "completedAt": "2026-02-08T23:05:49.697Z",
+      "note": "Added ADD_TASK_COMMENT handler with validation, generates comment ID, appends to comments array.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add moe.add_comment MCP tool for agents to respond. Create a new tool file addComment.ts that accepts { taskId, content } arguments. The handler reads the current task, appends a new TaskComment with author set to the current workerId (from worker context) or 'agent', and saves via state.updateTask(). Register the tool in tools/index.ts. Include error handling: validate task exists and content is non-empty. Test with vitest.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-02-08T23:05:53.812Z",
+      "completedAt": "2026-02-08T23:07:24.933Z",
+      "note": "Created moe.add_comment tool. 4 tests added, 230 total passing.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Include comments in moe.get_context response. Verify that the getContext tool already returns the full task object which will include comments. If comments are stripped or filtered, ensure they are included so agents can see human questions. No changes may be needed if getContext returns the full task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "startedAt": "2026-02-08T23:07:29.602Z",
+      "completedAt": "2026-02-08T23:07:51.654Z",
+      "note": "getContext was manually constructing task response and omitting comments. Added comments field to the task output.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add comments section to TaskDetailDialog. Add a scrollable comments panel at the bottom of the dialog showing existing comments (author, timestamp, content) in chronological order. Add a text input field and 'Ask' button that calls service.addTaskComment(taskId, content). Style human comments and agent comments differently (e.g., alignment or background color). Include error handling: empty input validation, guard against null comments array.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "startedAt": "2026-02-08T23:07:56.777Z",
+      "completedAt": "2026-02-08T23:10:48.733Z",
+      "note": "Added comments section with scrollable panel, input field + Ask button. Added TaskComment data class and comments field to Models.kt (pulled forward from step 6). Bundle messages and service method needed from steps 6-7 for compilation.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add addTaskComment method to MoeProjectService. Send ADD_TASK_COMMENT WebSocket message with taskId and content. Include error handling via ensureConnected() check. Add Kotlin model update: add comments field to Task data class in Models.kt (default to emptyList).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "startedAt": "2026-02-08T23:10:52.059Z",
+      "completedAt": "2026-02-08T23:11:02.459Z",
+      "note": "Added addTaskComment method. Models.kt already updated in step 5 (TaskComment data class + comments field).",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Add info button to TaskCard context menu. Add an 'Ask Question' or 'More Info' menu item to the right-click context menu that opens the TaskDetailDialog. Alternatively, add a small (i) icon button on the card itself. The button triggers onOpen callback which already opens TaskDetailDialog. Add bundle messages: moe.button.askQuestion, moe.label.comments, moe.message.typeQuestion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T23:11:06.073Z",
+      "completedAt": "2026-02-08T23:11:20.079Z",
+      "note": "Added 4 bundle messages for comments UI. Added Ask Question context menu item to TaskCard.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Test the more info feature. Build daemon (npm run build), run daemon tests (npx vitest run) to verify addComment tool and comment storage. Build plugin (gradlew buildPlugin). Verify: (1) comments section appears in TaskDetailDialog, (2) typing and submitting a question saves it, (3) comment appears after refresh, (4) agents can see comments via moe.get_context, (5) agents can respond via moe.add_comment, (6) agent responses appear in the dialog. Test error handling: empty comment submission, missing task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "startedAt": "2026-02-08T23:11:23.396Z",
+      "completedAt": "2026-02-08T23:14:06.451Z",
+      "note": "All verified"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "createdAt": "2026-02-08T22:40:24.877Z",
+  "updatedAt": "2026-02-08T23:39:36.671Z",
+  "planSubmittedAt": "2026-02-08T22:53:07.020Z",
+  "planApprovedAt": "2026-02-08T23:02:38.546Z",
+  "workStartedAt": "2026-02-08T23:03:18.726Z",
+  "completedAt": "2026-02-08T23:14:12.636Z",
+  "reviewStartedAt": "2026-02-08T23:14:12.636Z",
+  "reviewCompletedAt": "2026-02-08T23:17:46.344Z",
+  "comments": []
+}

@@ -29,13 +29,16 @@ import javax.swing.JScrollPane
 class TaskDetailDialog(
     private val project: Project,
     private val task: Task,
-    private val service: MoeProjectService
+    private val service: MoeProjectService,
+    private val onNext: ((Task) -> Unit)? = null,
+    private val onPrevious: ((Task) -> Unit)? = null
 ) : DialogWrapper(project) {
 
     private val titleField = JBTextField(task.title)
     private val priorityCombo = ComboBox(arrayOf("CRITICAL", "HIGH", "MEDIUM", "LOW"))
     private val descriptionField = JBTextArea(task.description)
     private val dodField = JBTextArea(task.definitionOfDone.joinToString("\n"))
+    private val reopenReasonField = JBTextArea(task.reopenReason ?: "")
 
     init {
         title = MoeBundle.message("moe.dialog.taskDetail", task.title)
@@ -93,7 +96,86 @@ class TaskDetailDialog(
         }
 
         task.prLink?.let { panel.add(JBLabel(MoeBundle.message("moe.message.prLink", it))) }
-        task.reopenReason?.let { panel.add(JBLabel(MoeBundle.message("moe.message.reopenReasonLabel", it))) }
+
+        if (task.status == "REVIEW" || task.status == "DONE") {
+            panel.add(JBLabel(MoeBundle.message("moe.label.reopenReason")))
+            reopenReasonField.lineWrap = true
+            reopenReasonField.wrapStyleWord = true
+            val reopenScroll = JScrollPane(reopenReasonField)
+            reopenScroll.preferredSize = Dimension(520, 100)
+            panel.add(reopenScroll)
+        } else if (!task.reopenReason.isNullOrBlank()) {
+            panel.add(JBLabel(MoeBundle.message("moe.label.reopenReason")))
+            val readOnlyArea = JBTextArea(task.reopenReason).apply {
+                lineWrap = true
+                wrapStyleWord = true
+                isEditable = false
+            }
+            val reopenScroll = JScrollPane(readOnlyArea)
+            reopenScroll.preferredSize = Dimension(520, 80)
+            panel.add(reopenScroll)
+        }
+
+        // Comments section
+        val comments = task.comments ?: emptyList()
+        panel.add(JBLabel(MoeBundle.message("moe.label.comments")).apply {
+            border = JBUI.Borders.emptyTop(8)
+        })
+
+        val commentsPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+
+        if (comments.isEmpty()) {
+            commentsPanel.add(JBLabel(MoeBundle.message("moe.message.noComments")).apply {
+                foreground = JBColor.GRAY
+                font = JBUI.Fonts.smallFont()
+            })
+        } else {
+            for (comment in comments) {
+                val isHuman = comment.author == "human"
+                val commentRow = JPanel(BorderLayout()).apply {
+                    isOpaque = true
+                    background = if (isHuman) {
+                        JBColor(Color(230, 240, 255), Color(40, 50, 70))
+                    } else {
+                        JBColor(Color(240, 255, 240), Color(40, 60, 40))
+                    }
+                    border = JBUI.Borders.empty(4, 8)
+                }
+                val header = JBLabel("${comment.author} - ${comment.timestamp.take(19)}").apply {
+                    foreground = JBColor.GRAY
+                    font = JBUI.Fonts.smallFont()
+                }
+                val body = JBLabel("<html>${comment.content.replace("\n", "<br>")}</html>")
+                commentRow.add(header, BorderLayout.NORTH)
+                commentRow.add(body, BorderLayout.CENTER)
+                commentsPanel.add(commentRow)
+            }
+        }
+
+        val commentsScroll = JScrollPane(commentsPanel)
+        commentsScroll.preferredSize = Dimension(520, 120)
+        commentsScroll.border = JBUI.Borders.empty()
+        panel.add(commentsScroll)
+
+        // Ask question input
+        val askPanel = JPanel(BorderLayout()).apply { isOpaque = false }
+        val questionField = JBTextField().apply {
+            toolTipText = MoeBundle.message("moe.message.typeQuestion")
+        }
+        val askButton = javax.swing.JButton(MoeBundle.message("moe.button.askQuestion"))
+        askButton.addActionListener {
+            val text = questionField.text.trim()
+            if (text.isNotEmpty()) {
+                service.addTaskComment(task.id, text)
+                questionField.text = ""
+            }
+        }
+        askPanel.add(questionField, BorderLayout.CENTER)
+        askPanel.add(askButton, BorderLayout.EAST)
+        panel.add(askPanel)
 
         return panel
     }
@@ -186,7 +268,26 @@ class TaskDetailDialog(
         if (task.status == "REVIEW" || task.status == "DONE") {
             actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.reopen")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {
-                    service.reopenTask(task.id, MoeBundle.message("moe.message.reopenedInUI"))
+                    val reason = reopenReasonField.text.trim().ifEmpty { MoeBundle.message("moe.message.reopenedInUI") }
+                    service.reopenTask(task.id, reason)
+                    close(OK_EXIT_CODE)
+                }
+            })
+        }
+
+        if (onPrevious != null) {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.previous")) {
+                override fun doAction(e: java.awt.event.ActionEvent) {
+                    onPrevious.invoke(task)
+                    close(OK_EXIT_CODE)
+                }
+            })
+        }
+
+        if (onNext != null) {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.next")) {
+                override fun doAction(e: java.awt.event.ActionEvent) {
+                    onNext.invoke(task)
                     close(OK_EXIT_CODE)
                 }
             })

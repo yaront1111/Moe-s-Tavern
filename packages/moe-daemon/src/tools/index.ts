@@ -30,6 +30,9 @@ import { createTeamTool } from './createTeam.js';
 import { joinTeamTool } from './joinTeam.js';
 import { leaveTeamTool } from './leaveTeam.js';
 import { listTeamsTool } from './listTeams.js';
+import { waitForTaskTool } from './waitForTask.js';
+import { addCommentTool } from './addComment.js';
+import { getPendingQuestionsTool } from './getPendingQuestions.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -68,6 +71,9 @@ export function getTools(state: StateManager): ToolDefinition[] {
     createTeamTool(state),
     joinTeamTool(state),
     leaveTeamTool(state),
-    listTeamsTool(state)
+    listTeamsTool(state),
+    waitForTaskTool(state),
+    addCommentTool(state),
+    getPendingQuestionsTool(state)
   ];
 }

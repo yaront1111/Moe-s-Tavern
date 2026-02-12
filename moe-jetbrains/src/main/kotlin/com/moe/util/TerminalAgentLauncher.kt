@@ -329,20 +329,12 @@ object TerminalAgentLauncher {
     }
 
     private fun sendCommand(widget: Any, command: String) {
+        // Try direct PTY write first - works regardless of shell integration or tab focus
+        if (writeToTtyConnector(widget, command)) return
+
         val widgetClass = widget.javaClass
 
-        // Try cached sendCommandToExecute first
-        val send = sendCommandMethodCache.getOrPut(widgetClass) {
-            widgetClass.methods.firstOrNull {
-                it.name == "sendCommandToExecute" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
-            }
-        }
-        if (send != null) {
-            send.invoke(widget, command)
-            return
-        }
-
-        // Fall back to executeCommand
+        // Prefer executeCommand - writes directly to terminal input, more reliable for unfocused tabs
         val exec = executeCommandMethodCache.getOrPut(widgetClass) {
             widgetClass.methods.firstOrNull {
                 it.name == "executeCommand" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
@@ -350,9 +342,47 @@ object TerminalAgentLauncher {
         }
         if (exec != null) {
             exec.invoke(widget, command)
+            return
+        }
+
+        // Last resort: sendCommandToExecute (requires shell integration, may not work in unfocused tabs)
+        val send = sendCommandMethodCache.getOrPut(widgetClass) {
+            widgetClass.methods.firstOrNull {
+                it.name == "sendCommandToExecute" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+            }
+        }
+        if (send != null) {
+            send.invoke(widget, command)
         } else {
             LOG.warn("Failed to send command to terminal: no matching method found on ${widgetClass.name}")
         }
+    }
+
+    private fun writeToTtyConnector(widget: Any, command: String): Boolean {
+        return try {
+            val tty = findTtyConnector(widget) ?: return false
+            val writeMethod = tty.javaClass.methods.firstOrNull {
+                it.name == "write" && it.parameterTypes.size == 1 && it.parameterTypes[0] == ByteArray::class.java
+            } ?: return false
+            writeMethod.invoke(tty, (command + "\n").toByteArray(Charsets.UTF_8))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun findTtyConnector(widget: Any): Any? {
+        for (methodName in listOf("getTtyConnector", "getProcessTtyConnector")) {
+            try {
+                val method = widget.javaClass.methods.firstOrNull {
+                    it.name == methodName && it.parameterTypes.isEmpty()
+                } ?: continue
+                return method.invoke(widget)
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        return null
     }
 
     private fun resolveAgentScript(basePath: String): ResolvedScript? {

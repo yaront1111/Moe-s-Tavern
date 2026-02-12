@@ -85,8 +85,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             return
         }
         if (!isProcessAlive(daemonInfo.pid) || !isPortOpen(daemonInfo.port)) {
+            // Clean up stale daemon.json so next reconnect can spawn a fresh daemon
+            val base = project.basePath
+            if (base != null) {
+                try {
+                    File(base, ".moe/daemon.json").delete()
+                    log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable)")
+                } catch (_: Exception) {}
+            }
             connecting = false
-            publishStatus(false, "Daemon not running. Start with: moe-daemon start")
+            publishStatus(false, "Daemon not running, restarting...")
             scheduleReconnect()
             return
         }
@@ -448,6 +456,26 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("REOPEN_TASK", payload)
     }
 
+    fun addTaskComment(taskId: String, content: String) {
+        if (!ensureConnected()) return
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return
+        val payload = JsonObject().apply {
+            addProperty("taskId", taskId)
+            addProperty("content", trimmed)
+        }
+        sendMessage("ADD_TASK_COMMENT", payload)
+    }
+
+    fun archiveDoneTasks(epicId: String? = null) {
+        if (!ensureConnected()) return
+        val payload = JsonObject()
+        if (epicId != null) {
+            payload.addProperty("epicId", epicId)
+        }
+        sendMessage("ARCHIVE_DONE_TASKS", payload)
+    }
+
     fun createTask(epicId: String, title: String, description: String, definitionOfDone: List<String>, priority: String = "MEDIUM") {
         if (!ensureConnected()) return
         val payload = JsonObject().apply {
@@ -725,21 +753,42 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         if (!env.isNullOrBlank()) {
             return env.trim('"')
         }
-        if (!isWindows()) return null
-        val programFiles = System.getenv("ProgramFiles")
-        val programFilesX86 = System.getenv("ProgramFiles(x86)")
-        val localAppData = System.getenv("LOCALAPPDATA")
-        val appData = System.getenv("APPDATA")
-        val candidates = listOfNotNull(
-            programFiles?.let { File(it, "nodejs\\node.exe") },
-            programFilesX86?.let { File(it, "nodejs\\node.exe") },
-            localAppData?.let { File(it, "Programs\\nodejs\\node.exe") },
-            localAppData?.let { File(it, "nvm\\current\\node.exe") },
-            appData?.let { File(it, "nvm\\node.exe") }
+        if (isWindows()) {
+            val programFiles = System.getenv("ProgramFiles")
+            val programFilesX86 = System.getenv("ProgramFiles(x86)")
+            val localAppData = System.getenv("LOCALAPPDATA")
+            val appData = System.getenv("APPDATA")
+            val candidates = listOfNotNull(
+                programFiles?.let { File(it, "nodejs\\node.exe") },
+                programFilesX86?.let { File(it, "nodejs\\node.exe") },
+                localAppData?.let { File(it, "Programs\\nodejs\\node.exe") },
+                localAppData?.let { File(it, "nvm\\current\\node.exe") },
+                appData?.let { File(it, "nvm\\node.exe") }
+            )
+            val found = candidates.firstOrNull { it.exists() }?.absolutePath
+            if (found != null) return found
+            return findNodeFromWhere()
+        }
+        // macOS / Linux: check common node locations since ProcessBuilder
+        // does not inherit the user's shell PATH when launched from the IDE
+        val home = System.getProperty("user.home")
+        val macLinuxCandidates = listOfNotNull(
+            File("/opt/homebrew/bin/node"),         // Homebrew ARM (Apple Silicon)
+            File("/usr/local/bin/node"),             // Homebrew Intel / system
+            home?.let { File(it, ".nvm/current/bin/node") },
+            home?.let { File(it, ".nvm/versions/node").listFiles()
+                ?.filter { d -> d.isDirectory }
+                ?.maxByOrNull { d -> d.name }
+                ?.let { d -> File(d, "bin/node") }
+            },
+            File("/usr/bin/node")
         )
-        val found = candidates.firstOrNull { it.exists() }?.absolutePath
-        if (found != null) return found
-        return findNodeFromWhere()
+        val found = macLinuxCandidates.firstOrNull { it.exists() }?.absolutePath
+        if (found != null) {
+            log.debug("Resolved node on macOS/Linux: $found")
+            return found
+        }
+        return findNodeViaWhich()
     }
 
     private fun findNodeFromWhere(): String? {
@@ -759,6 +808,29 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             if (!line.isNullOrBlank()) line else null
         } catch (ex: Exception) {
             log.debug("Failed to find node via 'where' command", ex)
+            null
+        } finally {
+            process?.destroyForcibly()
+        }
+    }
+
+    private fun findNodeViaWhich(): String? {
+        var process: Process? = null
+        return try {
+            process = ProcessBuilder("which", "node")
+                .redirectErrorStream(true)
+                .start()
+            val completed = process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                return null
+            }
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            val line = reader.readLine()?.trim()
+            reader.close()
+            if (!line.isNullOrBlank()) line else null
+        } catch (ex: Exception) {
+            log.debug("Failed to find node via 'which' command", ex)
             null
         } finally {
             process?.destroyForcibly()
@@ -903,6 +975,32 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun getState(): MoeState? = state
+
+    fun getDaemonInfo(): DaemonInfo? = readDaemonInfo()
+
+    fun isConnected(): Boolean = connected
+
+    fun restartDaemon() {
+        disconnect()
+        val base = project.basePath
+        if (base != null) {
+            val info = readDaemonInfo()
+            if (info != null) {
+                // Kill existing daemon if alive
+                if (isProcessAlive(info.pid)) {
+                    try {
+                        ProcessHandle.of(info.pid.toLong()).ifPresent { it.destroy() }
+                    } catch (_: Exception) {}
+                }
+                try {
+                    File(base, ".moe/daemon.json").delete()
+                } catch (_: Exception) {}
+            }
+        }
+        lastDaemonStartAttemptAt = 0  // Reset cooldown
+        reconnectAttempts = 0
+        connect()
+    }
 
     companion object {
         // Configurable timeout for port check (can be overridden via system property)

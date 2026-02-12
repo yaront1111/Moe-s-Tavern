@@ -12,7 +12,9 @@ const VALID_STATUSES: TaskStatus[] = [
   'AWAITING_APPROVAL',
   'WORKING',
   'REVIEW',
-  'DONE'
+  'DEPLOYING',
+  'DONE',
+  'ARCHIVED'
 ];
 
 /**
@@ -24,8 +26,10 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-  REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
-  DONE: ['BACKLOG', 'WORKING']
+  REVIEW: ['DONE', 'DEPLOYING', 'WORKING', 'BACKLOG'],
+  DEPLOYING: ['DONE', 'WORKING', 'BACKLOG'],
+  DONE: ['BACKLOG', 'WORKING', 'DEPLOYING', 'ARCHIVED'],
+  ARCHIVED: ['BACKLOG', 'WORKING']
 };
 
 /**
@@ -79,12 +83,27 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         );
       }
 
+      // Enforce WIP column limits
+      if (newStatus !== task.status) {
+        const columnLimits = state.project?.settings?.columnLimits;
+        if (columnLimits && typeof columnLimits[newStatus] === 'number') {
+          const limit = columnLimits[newStatus];
+          const currentCount = Array.from(state.tasks.values()).filter(t => t.status === newStatus).length;
+          if (currentCount >= limit) {
+            throw notAllowed(
+              'status transition',
+              `Column ${newStatus} is at its WIP limit of ${limit}`
+            );
+          }
+        }
+      }
+
       const updates: Partial<typeof task> = {
         status: newStatus
       };
 
-      // Determine if this is a reopen (transitioning from REVIEW or DONE back to work)
-      const isReopening = (task.status === 'REVIEW' || task.status === 'DONE') &&
+      // Determine if this is a reopen (transitioning from REVIEW, DEPLOYING, or DONE back to work)
+      const isReopening = (task.status === 'REVIEW' || task.status === 'DEPLOYING' || task.status === 'DONE') &&
         (newStatus === 'WORKING' || newStatus === 'BACKLOG' || newStatus === 'PLANNING');
 
       if (params.reason) {
