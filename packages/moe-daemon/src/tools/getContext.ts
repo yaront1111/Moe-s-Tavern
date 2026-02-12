@@ -71,7 +71,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               workStartedAt: task.workStartedAt || null,
               completedAt: task.completedAt || null,
               reviewStartedAt: task.reviewStartedAt || null,
-              reviewCompletedAt: task.reviewCompletedAt || null
+              reviewCompletedAt: task.reviewCompletedAt || null,
+              comments: task.comments || []
             }
           : null,
         worker: task?.assignedWorkerId ? state.getWorker(task.assignedWorkerId) ?? null : null,

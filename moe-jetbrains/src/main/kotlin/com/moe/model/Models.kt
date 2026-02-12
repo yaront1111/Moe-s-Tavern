@@ -21,7 +21,8 @@ data class ProjectSettings(
     val autoCreateBranch: Boolean = true,
     val branchPattern: String = "moe/{epicId}/{taskId}",
     val commitPattern: String = "feat({epicId}): {taskTitle}",
-    val agentCommand: String = "claude"
+    val agentCommand: String = "claude",
+    val columnLimits: Map<String, Int>? = null
 )
 
 data class Epic(
@@ -32,6 +33,13 @@ data class Epic(
     val epicRails: List<String>,
     val status: String,
     val order: Double
+)
+
+data class TaskComment(
+    val id: String,
+    val author: String,
+    val content: String,
+    val timestamp: String
 )
 
 data class ImplementationStep(
@@ -53,7 +61,9 @@ data class Task(
     val implementationPlan: List<ImplementationStep>,
     val prLink: String?,
     val reopenReason: String?,
-    val assignedWorkerId: String?
+    val assignedWorkerId: String?,
+    val comments: List<TaskComment>? = null,
+    val hasPendingQuestion: Boolean = false
 )
 
 data class DaemonInfo(

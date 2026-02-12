@@ -8,7 +8,9 @@ export type TaskStatus =
   | 'AWAITING_APPROVAL'
   | 'WORKING'
   | 'REVIEW'
-  | 'DONE';
+  | 'DEPLOYING'
+  | 'DONE'
+  | 'ARCHIVED';
 
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
@@ -42,6 +44,7 @@ export interface ProjectSettings {
   branchPattern: string;
   commitPattern: string;
   agentCommand: string;
+  columnLimits?: Record<string, number>;
 }
 
 export interface Project {
@@ -55,7 +58,7 @@ export interface Project {
   updatedAt: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export type TeamRole = 'architect' | 'worker' | 'qa';
 
@@ -103,6 +106,13 @@ export interface QAIssue {
   line?: number;
 }
 
+export interface TaskComment {
+  id: string;
+  author: string;
+  content: string;
+  timestamp: string;
+}
+
 export interface RejectionDetails {
   failedDodItems?: string[];
   issues?: QAIssue[];
@@ -135,6 +145,8 @@ export interface Task {
   completedAt?: string;
   reviewStartedAt?: string;
   reviewCompletedAt?: string;
+  comments: TaskComment[];
+  hasPendingQuestion?: boolean;
 }
 
 export interface Worker {
@@ -211,7 +223,9 @@ export const ACTIVITY_EVENT_TYPES = [
   'TEAM_UPDATED',
   'TEAM_DELETED',
   'TEAM_MEMBER_ADDED',
-  'TEAM_MEMBER_REMOVED'
+  'TEAM_MEMBER_REMOVED',
+  'TASK_ARCHIVED',
+  'TASK_COMMENT_ADDED'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];

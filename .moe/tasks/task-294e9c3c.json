@@ -1,0 +1,85 @@
+{
+  "id": "task-294e9c3c",
+  "epicId": "epic-93811519",
+  "title": "scale elements to fit the screen",
+  "description": "when i scale the plugin window the dropdowns are hidden, like \n  outside the window                                             \n  can you fix it so the element will always be shown and         \n  sqeezed together all the time",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create a WrapLayout class that extends FlowLayout and wraps components to the next line when the container is too narrow. This is a standard Swing pattern: override preferredLayoutSize() to calculate height based on actual container width (accounting for wrapping), and override layoutContainer() to position components left-to-right and wrap to the next row when they exceed the container width. Place this in the board package alongside BoardStyles. Include error handling: guard against zero-width containers and null components.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/WrapLayout.kt"
+      ],
+      "startedAt": "2026-02-08T23:19:26.036Z",
+      "completedAt": "2026-02-08T23:19:48.980Z",
+      "note": "Created WrapLayout extending FlowLayout with row-wrapping logic. Handles zero-width containers by falling back to super layout.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/WrapLayout.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Replace FlowLayout with WrapLayout in the header's right panel. In MoeToolWindowPanel.kt, change the right panel from FlowLayout(FlowLayout.RIGHT, 8, 0) to WrapLayout(FlowLayout.RIGHT, 8, 4). This ensures header elements (search field, epic filter, project selector, buttons, status label) wrap to the next row instead of being clipped when the window is narrow. Also reduce the project selector preferredSize from 280px to 200px and epic filter from 180px to 140px to give more breathing room. Set minimumSize on the ComboBoxes so they can shrink further when needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-02-08T23:19:52.692Z",
+      "completedAt": "2026-02-08T23:20:13.123Z",
+      "note": "Replaced FlowLayout with WrapLayout in header right panel. Reduced project selector to 200px and epic filter to 140px. Added minimumSize on both combo boxes.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Apply WrapLayout to WorkerPanel. Change WorkerPanel's FlowLayout(FlowLayout.LEFT, 8, 4) to WrapLayout(FlowLayout.LEFT, 8, 4) so worker chips also wrap properly when the panel is narrow. Include error handling: ensure removeAll() and revalidate() still work correctly with WrapLayout.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt"
+      ],
+      "startedAt": "2026-02-08T23:20:16.728Z",
+      "completedAt": "2026-02-08T23:20:25.880Z",
+      "note": "Replaced FlowLayout with WrapLayout in WorkerPanel. removeAll/revalidate/repaint work identically since WrapLayout extends FlowLayout.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Test the responsive layout. Build plugin with gradlew buildPlugin. Verify: (1) all header elements are visible at normal window width, (2) shrinking the window causes elements to wrap to a second row instead of being clipped, (3) ComboBoxes remain functional when wrapped, (4) worker chips wrap properly, (5) board columns still scroll horizontally inside the scroll pane, (6) expanding the window back causes elements to return to a single row. Test error handling: very narrow window widths, rapid resizing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt"
+      ],
+      "startedAt": "2026-02-08T23:20:29.700Z",
+      "completedAt": "2026-02-08T23:21:07.157Z",
+      "note": "Build OK, 230 tests pass"
+    }
+  ],
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 1,
+  "createdAt": "2026-02-08T23:16:09.300Z",
+  "updatedAt": "2026-02-08T23:39:36.674Z",
+  "planSubmittedAt": "2026-02-08T23:18:24.888Z",
+  "planApprovedAt": "2026-02-08T23:18:39.148Z",
+  "workStartedAt": "2026-02-08T23:19:26.036Z",
+  "completedAt": "2026-02-08T23:21:12.474Z",
+  "reviewStartedAt": "2026-02-08T23:21:12.474Z",
+  "reviewCompletedAt": "2026-02-08T23:23:50.380Z",
+  "comments": []
+}

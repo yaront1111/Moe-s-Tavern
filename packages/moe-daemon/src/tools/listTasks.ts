@@ -35,7 +35,9 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
         awaitingApproval: tasks.filter((t) => t.status === 'AWAITING_APPROVAL').length,
         inProgress: tasks.filter((t) => t.status === 'WORKING').length,
         review: tasks.filter((t) => t.status === 'REVIEW').length,
-        done: tasks.filter((t) => t.status === 'DONE').length
+        deploying: tasks.filter((t) => t.status === 'DEPLOYING').length,
+        done: tasks.filter((t) => t.status === 'DONE').length,
+        archived: tasks.filter((t) => t.status === 'ARCHIVED').length
       };
 
       // Build response with explicit null handling

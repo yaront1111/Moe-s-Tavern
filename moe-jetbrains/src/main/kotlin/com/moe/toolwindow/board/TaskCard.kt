@@ -28,7 +28,9 @@ class TaskCard(
     private val epicTitle: String?,
     private val columnStatus: String,
     private val onOpen: (Task) -> Unit,
-    private val onDelete: (Task) -> Unit
+    private val onDelete: (Task) -> Unit,
+    private val onNext: ((Task) -> Unit)? = null,
+    private val onPrevious: ((Task) -> Unit)? = null
 ) : RoundedPanel(10, BoardStyles.borderColor, BorderLayout()) {
 
     init {
@@ -102,6 +104,41 @@ class TaskCard(
 
         content.add(body, BorderLayout.CENTER)
 
+        val arrows = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
+            isOpaque = false
+        }
+        if (onPrevious != null) {
+            arrows.add(JBLabel("\u25C0").apply {
+                foreground = BoardStyles.textSecondary
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                font = JBUI.Fonts.smallFont()
+                toolTipText = MoeBundle.message("moe.button.previous")
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        e.consume()
+                        safeCallback("move task back") { onPrevious.invoke(task) }
+                    }
+                })
+            })
+        }
+        if (onNext != null) {
+            arrows.add(JBLabel("\u25B6").apply {
+                foreground = BoardStyles.textSecondary
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                font = JBUI.Fonts.smallFont()
+                toolTipText = MoeBundle.message("moe.button.next")
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        e.consume()
+                        safeCallback("move task forward") { onNext.invoke(task) }
+                    }
+                })
+            })
+        }
+        if (onPrevious != null || onNext != null) {
+            content.add(arrows, BorderLayout.EAST)
+        }
+
         add(stripe, BorderLayout.WEST)
         add(content, BorderLayout.CENTER)
 
@@ -146,6 +183,10 @@ class TaskCard(
         val openItem = JMenuItem(MoeBundle.message("moe.menu.open"))
         openItem.addActionListener { safeCallback("open task") { onOpen(task) } }
         menu.add(openItem)
+
+        val askItem = JMenuItem(MoeBundle.message("moe.button.askQuestion"))
+        askItem.addActionListener { safeCallback("ask question") { onOpen(task) } }
+        menu.add(askItem)
 
         menu.addSeparator()
 
