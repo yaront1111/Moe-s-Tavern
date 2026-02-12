@@ -410,13 +410,20 @@ export class StateManager {
     return null;
   }
 
+  getTeamByName(name: string): Team | null {
+    for (const team of this.teams.values()) {
+      if (team.name === name) return team;
+    }
+    return null;
+  }
+
   getTeamForWorker(workerId: string): Team | null {
     const worker = this.workers.get(workerId);
     if (!worker?.teamId) return null;
     return this.teams.get(worker.teamId) || null;
   }
 
-  async createTeam(input: { name: string; role: TeamRole; maxSize?: number }): Promise<Team> {
+  async createTeam(input: { name: string; role?: TeamRole | null; maxSize?: number }): Promise<Team> {
     if (!this.project) throw new Error('Project not loaded');
 
     const now = new Date().toISOString();
@@ -424,7 +431,7 @@ export class StateManager {
       id: generateId('team'),
       projectId: this.project.id,
       name: input.name,
-      role: input.role,
+      role: input.role ?? null,
       memberIds: [],
       maxSize: input.maxSize ?? 10,
       createdAt: now,

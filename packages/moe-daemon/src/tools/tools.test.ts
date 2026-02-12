@@ -14,6 +14,7 @@ import { listTasksTool } from './listTasks.js';
 import { getNextTaskTool } from './getNextTask.js';
 import { createTaskTool } from './createTask.js';
 import { createEpicTool } from './createEpic.js';
+import { createTeamTool } from './createTeam.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
 import { proposeRailTool } from './proposeRail.js';
@@ -536,6 +537,43 @@ describe('MCP Tools', () => {
     });
   });
 
+  describe('moe.create_team', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      await state.load();
+    });
+
+    it('creates a team with role', async () => {
+      const tool = createTeamTool(state);
+      const result = await tool.handler({ name: 'Moe Team', role: 'worker' }, state) as {
+        team: { id: string; role: string | null };
+        created: boolean;
+      };
+
+      expect(result.created).toBe(true);
+      expect(result.team.role).toBe('worker');
+      expect(result.team.id).toBeTruthy();
+    });
+
+    it('creates a team without role and is idempotent by name', async () => {
+      const tool = createTeamTool(state);
+      const first = await tool.handler({ name: 'Moe Team' }, state) as {
+        team: { id: string; role: string | null };
+        created: boolean;
+      };
+      expect(first.created).toBe(true);
+      expect(first.team.role).toBeNull();
+
+      const second = await tool.handler({ name: 'Moe Team' }, state) as {
+        team: { id: string };
+        created: boolean;
+      };
+
+      expect(second.created).toBe(false);
+      expect(second.team.id).toBe(first.team.id);
+    });
+  });
+
   describe('moe.get_next_task', () => {
     beforeEach(async () => {
       setupMoeFolder();
@@ -726,6 +764,59 @@ describe('MCP Tools', () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({ statuses: ['DONE'] }, state) as { hasNext: boolean };
       expect(result.hasNext).toBe(false);
+    });
+
+    it('includes rejection fields when task was reopened', async () => {
+      createTask({
+        id: 'task-reopened',
+        status: 'WORKING',
+        order: 0,
+        reopenCount: 1,
+        reopenReason: 'Tests failing in auth module',
+        rejectionDetails: {
+          failedDodItems: ['Tests pass'],
+          issues: [{ type: 'test_failure', description: 'AuthService test fails', file: 'src/auth.test.ts', line: 42 }],
+        },
+      });
+      await state.load();
+
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['WORKING'],
+        workerId: 'worker-reopen',
+      }, state) as {
+        hasNext: boolean;
+        task: { reopenCount: number; reopenReason: string; rejectionDetails: { failedDodItems: string[]; issues: Array<{ type: string }> } };
+        reopenWarning: string;
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.reopenCount).toBe(1);
+      expect(result.task.reopenReason).toBe('Tests failing in auth module');
+      expect(result.task.rejectionDetails).not.toBeNull();
+      expect(result.task.rejectionDetails.failedDodItems).toEqual(['Tests pass']);
+      expect(result.task.rejectionDetails.issues).toHaveLength(1);
+      expect(result.task.rejectionDetails.issues[0].type).toBe('test_failure');
+      expect(result.reopenWarning).toContain('WARNING');
+      expect(result.reopenWarning).toContain('1 time(s)');
+    });
+
+    it('omits reopenWarning when task was not reopened', async () => {
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        workerId: 'worker-normal',
+      }, state) as {
+        hasNext: boolean;
+        task: { reopenCount: number; reopenReason: string | null; rejectionDetails: null };
+        reopenWarning?: string;
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.reopenCount).toBe(0);
+      expect(result.task.reopenReason).toBeNull();
+      expect(result.task.rejectionDetails).toBeNull();
+      expect(result.reopenWarning).toBeUndefined();
     });
   });
 

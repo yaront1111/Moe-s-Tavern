@@ -1,0 +1,109 @@
+{
+  "id": "task-7f10d10c",
+  "epicId": "epic-3416e860",
+  "title": "Fix: Team Mode Not Working When Launching Agents from Plugin",
+  "description": "When launching Claude agents via the plugin's \"Start Agents\" button with team mode enabled, agents don't join a team. Five issues combine to cause this failure: (1) popup closes on checkbox click, (2) no delay between terminal launches, (3) silent failures in widget creation/command send, (4) moe-team.ps1 doesn't pass -Team, (5) moe-team.sh same problem.",
+  "definitionOfDone": [
+    "Popup checkbox stays open when toggling team mode",
+    "Button label shows '(Team)' when team mode is enabled",
+    "3 terminals open with ~1.5s spacing between each",
+    "Terminal output shows 'Setting up team' when team mode is on",
+    "moe.list_teams returns the team after launch",
+    "moe-team.ps1 passes -Team parameter to moe-agent.ps1",
+    "moe-team.sh passes --team parameter to moe-agent.sh",
+    "Error logging added for widget creation and command send failures"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix popup checkbox to stay open on click. In MoeToolWindowPanel.kt lines 105-111, replace the plain JCheckBoxMenuItem with an anonymous subclass that overrides doClick() to toggle isSelected without calling super.doClick() (which triggers MenuSelectionManager.clearSelectedPath() and closes the popup). The replacement:\n\n```kotlin\nval teamCheckbox = object : JCheckBoxMenuItem(\n    MoeBundle.message(\"moe.panel.agentsMenu.teamMode\"),\n    TerminalAgentLauncher.isTeamModeEnabled(project)\n) {\n    override fun doClick(pressTime: Int) {\n        isSelected = !isSelected\n        TerminalAgentLauncher.setTeamModeEnabled(project, isSelected)\n    }\n}\n```\n\nAlso update the agentsButton label dynamically: store a reference to agentsButton at class scope, and after the teamCheckbox click toggle, update the button text to include '(Team)' suffix when enabled. Add a new bundle key 'moe.panel.startAgentsTeam=Start Agents (Team)' in MoeBundle.properties. On initial render, check isTeamModeEnabled to set the correct label.\n\nError handling: The doClick override is safe - no exceptions possible from boolean toggle and property set. Test: Manual verification - open popup, click Team Mode, verify popup stays open and checkbox toggles. Close popup, verify button label shows '(Team)'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-02-08T21:04:57.705Z",
+      "completedAt": "2026-02-08T21:09:22.038Z",
+      "note": "Implemented non-closing team checkbox with label updates and added Start Agents (Team) bundle key.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add delay between terminal launches in startAgents(). In TerminalAgentLauncher.kt, modify startAgents() (lines 175-180) to launch each role with a 1.5-second delay between them. Use ApplicationManager.getApplication().executeOnPooledThread to move off the EDT, then SwingUtilities.invokeAndWait for each launchRole call (since terminal widget creation requires EDT), with Thread.sleep(1500) between launches.\n\n```kotlin\nfun startAgents(project: Project, agentCommand: String? = null) {\n    val ctx = resolveContext(project, agentCommand) ?: return\n    val roles = listOf(\"architect\", \"worker\", \"qa\")\n    ApplicationManager.getApplication().executeOnPooledThread {\n        for ((index, role) in roles.withIndex()) {\n            SwingUtilities.invokeAndWait {\n                launchRole(project, ctx, role)\n            }\n            if (index < roles.size - 1) {\n                Thread.sleep(1500)\n            }\n        }\n    }\n}\n```\n\nAdd import for com.intellij.openapi.application.ApplicationManager. Error handling: SwingUtilities.invokeAndWait can throw InvocationTargetException - wrap in try-catch and log. Test: Launch all 3 agents, verify ~1.5s gap between each terminal tab appearing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-08T21:09:24.435Z",
+      "completedAt": "2026-02-08T21:11:50.872Z",
+      "note": "Moved startAgents off EDT with 1.5s delay between roles and added logging for invoke failures/interruption.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add error logging for silent failures in TerminalAgentLauncher.kt. Add a Logger instance to the TerminalAgentLauncher object:\n\n```kotlin\nprivate val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(TerminalAgentLauncher::class.java)\n```\n\nIn launchRole() (line 162-165): add an else branch when widget is null to show a warning notification via LOG.warn and Messages.showWarningDialog.\n\nIn createTerminalWidget() (line 267-286): after the for loop falls through with no successful method, add LOG.warn(\"Failed to create terminal widget: no matching createLocalShellWidget overload found for ${clazz.name}\").\n\nIn sendCommand() (line 288-309): after exec?.invoke falls through (when both send and exec are null), add LOG.warn(\"Failed to send command to terminal: no matching method found on ${widgetClass.name}\").\n\nError handling: All logging calls are wrapped in the existing try-catch or are non-throwing. Test: Temporarily disable terminal plugin, verify warning appears in IDE log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-08T21:11:54.039Z",
+      "completedAt": "2026-02-08T21:35:57.642Z",
+      "note": "Logged missing terminal widget/methods and surfaced warning dialog when widget creation fails.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Fix moe-team.ps1 to pass -Team parameter. Add a new parameter [string]$Team = 'Moe Team' to the param block (line 1). Build $teamArg = '-Team ' + (Quote-ForCommand $Team). Append $teamArg to each agent launch command at lines 59, 72, and 85 (the $workerCmd, $qaCmd, and $archCmd strings). Also add a display line: Write-Host \"Team: $Team\".\n\nThis ensures moe-team.ps1 (the team launcher) actually uses the team feature it's named after. Scripts must have cross-platform alternatives - this is the Windows counterpart.\n\nError handling: Quote-ForCommand already handles special characters. Test: Run `moe-team.ps1 -Project <path>` and verify agent output shows 'Setting up team Moe Team'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "startedAt": "2026-02-08T21:35:59.520Z",
+      "completedAt": "2026-02-08T21:40:11.381Z",
+      "note": "Added Team parameter to moe-team.ps1, displayed it in output, and forwarded -Team to agent launches.",
+      "modifiedFiles": [
+        "scripts/moe-team.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Fix moe-team.sh to pass --team parameter. Add TEAM='Moe Team' default variable. Add --team parsing in the argument while loop (between existing options). Build TEAM_ARG='--team $(printf \\'%q\\' \"$TEAM\")'. Append $TEAM_ARG to the cmd variable in launch_agent() at line 140. Also add --no-team flag to disable team mode. Update the help text to document --team and --no-team options.\n\nAll docs and scripts must work for Windows, Mac, and Linux users - this is the Unix counterpart.\n\nError handling: printf '%q' safely escapes the team name to prevent injection. Test: Run `moe-team.sh --project <path>` and verify agent output shows 'Setting up team Moe Team'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.sh"
+      ],
+      "startedAt": "2026-02-08T21:40:13.791Z",
+      "completedAt": "2026-02-08T21:41:36.282Z",
+      "note": "Added --team/--no-team support and forwarded team arg to moe-agent.sh in the Unix team launcher.",
+      "modifiedFiles": [
+        "scripts/moe-team.sh"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 52,
+  "createdAt": "2026-02-08T20:57:13.782Z",
+  "updatedAt": "2026-02-08T22:45:36.242Z",
+  "planSubmittedAt": "2026-02-08T20:57:52.715Z",
+  "planApprovedAt": "2026-02-08T20:59:59.205Z",
+  "workStartedAt": "2026-02-08T21:04:57.705Z",
+  "completedAt": "2026-02-08T21:42:06.777Z",
+  "reviewStartedAt": "2026-02-08T21:42:06.777Z",
+  "reviewCompletedAt": "2026-02-08T22:45:36.242Z"
+}

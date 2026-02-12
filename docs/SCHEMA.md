@@ -443,7 +443,7 @@ type WorkerStatus =
 
 **File:** `.moe/teams/{team-id}.json`
 
-Teams are logical groupings of workers by role. Team members bypass the per-epic per-status constraint, allowing multiple workers of the same role to work on different tasks in the same epic simultaneously.
+Teams are logical groupings of workers. Teams can be role-based (architect/worker/qa) or project-wide (no role). Team members bypass the per-epic per-status constraint, allowing multiple workers to work on different tasks in the same epic simultaneously.
 
 ```typescript
 type TeamRole = 'architect' | 'worker' | 'qa';
@@ -455,7 +455,7 @@ interface Team {
 
   // Configuration
   name: string;                  // "Coders"
-  role: TeamRole;                // Team role type
+  role: TeamRole | null;         // Optional team role (null = project team)
   memberIds: string[];           // Worker IDs belonging to this team
   maxSize: number;               // Maximum members (default 10)
 
@@ -472,7 +472,7 @@ interface Team {
   "id": "team-a1b2c3d4",
   "projectId": "proj-a1b2c3d4",
   "name": "Coders",
-  "role": "worker",
+  "role": null,
   "memberIds": ["worker-w1x2y3z4", "worker-w5x6y7z8"],
   "maxSize": 10,
   "createdAt": "2025-02-03T10:00:00Z",

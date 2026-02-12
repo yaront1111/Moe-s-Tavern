@@ -632,17 +632,17 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes.
 
 ## Team Management Tools
 
-Teams allow multiple agents of the same role to work in parallel within an epic. Team members bypass the per-epic per-status constraint.
+Teams allow multiple agents to work in parallel within an epic. Teams can be role-based or project-wide (role omitted), and team members bypass the per-epic per-status constraint.
 
 ### moe.create_team
 
-Create a team or return an existing team with the same name+role (idempotent).
+Create a team or return an existing team with the same name+role (idempotent). If `role` is omitted, idempotency is name-only and the team is project-wide.
 
 **Parameters:**
 ```typescript
 {
   name: string,          // Required: team display name (e.g. "Coders")
-  role: 'architect' | 'worker' | 'qa',  // Required: team role
+  role?: 'architect' | 'worker' | 'qa', // Optional: team role (omit for project team)
   maxSize?: number       // Maximum members (default 10)
 }
 ```
