@@ -166,8 +166,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           status: task.status,
           priority: task.priority,
           assignedWorkerId: task.assignedWorkerId,
-          implementationPlan: task.implementationPlan
+          implementationPlan: task.implementationPlan,
+          reopenCount: task.reopenCount,
+          reopenReason: task.reopenReason,
+          rejectionDetails: task.rejectionDetails || null
         },
+        ...(task.reopenCount > 0
+          ? {
+              reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`
+            }
+          : {}),
         allRails: {
           global: state.project.globalRails.requiredPatterns,
           epic: epic?.epicRails || [],
