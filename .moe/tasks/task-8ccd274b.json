@@ -1,0 +1,68 @@
+{
+  "id": "task-8ccd274b",
+  "epicId": "epic-d1c2cce9",
+  "title": "Enhance AGENTS.md with MCP workflow and role-awareness section",
+  "description": "AGENTS.md is the one file Codex reliably loads (it's the primary project doc). Currently it's a generic project description. Add sections that reinforce:\n1. MCP tool usage patterns and examples\n2. The Moe workflow (claim → context → execute → complete)\n3. A note that role-specific instructions are in the model instructions\n4. Common mistakes to avoid (e.g., editing .moe/ files directly, skipping get_context)\n\nDon't duplicate the full role docs - just add workflow awareness.\n\nFiles:\n- AGENTS.md",
+  "definitionOfDone": [
+    "AGENTS.md includes MCP workflow section with tool call examples",
+    "AGENTS.md includes note about role-specific instructions being loaded separately",
+    "AGENTS.md includes common mistakes section",
+    "Content is concise (under 32KB total per Codex project_doc_max_bytes limit)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a \"Moe Agent Workflow\" section to AGENTS.md after the existing \"Error Handling\" section.\n\nThis section teaches Codex the Moe task lifecycle with concrete tool call examples. Content:\n\n```markdown\n## Moe Agent Workflow\n\nYou are a Moe agent. Your role-specific instructions are loaded separately via model instructions. This section covers the shared workflow all roles follow.\n\n### Task Lifecycle\n```\nBACKLOG → PLANNING → AWAITING_APPROVAL → WORKING → REVIEW → DONE\n```\n\n### Core Tool Patterns\n\n**Always start with context:**\n```\nmoe.get_context { taskId: \"task-xxx\" }\n```\nReturns project rails, epic details, task description, Definition of Done, and implementation plan.\n\n**Claim your next task:**\n```\nmoe.claim_next_task { statuses: [\"WORKING\"], workerId: \"worker-abc\" }\n```\nEach role claims different statuses: architects claim PLANNING, workers claim WORKING, QA claims REVIEW.\n\n**Track progress (workers):**\n```\nmoe.start_step { taskId: \"task-xxx\", stepId: \"step-0\" }\n// ... implement ...\nmoe.complete_step { taskId: \"task-xxx\", stepId: \"step-0\", modifiedFiles: [\"src/foo.ts\"], note: \"Added validation\" }\n```\n\n**Submit work:**\n```\nmoe.complete_task { taskId: \"task-xxx\", summary: \"Implemented feature X\" }\n```\n```\n\nKeep examples concise - show the tool name and key arguments only. Total addition should be under 2KB.\n\nError handling: Mention that tool calls return structured JSON with error messages.\nTest: Verify AGENTS.md is still valid markdown and under 32KB total.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "AGENTS.md"
+      ],
+      "startedAt": "2026-02-14T12:15:07.022Z",
+      "completedAt": "2026-02-14T12:15:46.223Z",
+      "note": "Added Moe Agent Workflow section with task lifecycle diagram and core tool patterns (get_context, claim_next_task, start_step/complete_step, complete_task) with concrete examples.",
+      "modifiedFiles": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a \"Common Mistakes\" section to AGENTS.md after the workflow section.\n\nThis addresses the most common failures observed with Codex agents:\n\n```markdown\n## Common Mistakes (Avoid These)\n\n- **Never edit `.moe/` files directly** - The daemon is the sole writer. Use MCP tools to modify state.\n- **Never skip `get_context`** - Always call it after claiming a task. It loads rails, DoD, and the implementation plan.\n- **Never skip steps** - Workers must call `start_step` before working and `complete_step` when done.\n- **Never use the wrong tools for your role** - Architects use `submit_plan`, workers use `start_step`/`complete_step`, QA uses `qa_approve`/`qa_reject`.\n- **Never complete a task without satisfying all DoD items** - Check `definitionOfDone` in the task context.\n- **Never ignore reopenReason** - If `reopenCount > 0`, read `rejectionDetails` and fix those specific issues first.\n```\n\nThis is the highest-impact addition - it directly prevents the behaviors we've seen from non-compliant agents.\n\nTest: Verify total file size is under 32KB.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "AGENTS.md"
+      ],
+      "startedAt": "2026-02-14T12:15:54.301Z",
+      "completedAt": "2026-02-14T12:16:04.153Z",
+      "note": "Common Mistakes section was added together with step-1 in a single edit. Includes 6 items covering: no direct .moe/ editing, mandatory get_context, step tracking, role-specific tools, DoD compliance, and reopenReason handling."
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add a \"Role Reference\" quick-reference table to AGENTS.md.\n\nThis gives Codex a quick lookup for which tools belong to which role:\n\n```markdown\n## Role Quick Reference\n\n| Role | Claims Status | Key Tools | Output |\n|------|---------------|-----------|--------|\n| architect | PLANNING | `get_context`, `submit_plan`, `check_approval`, `report_blocked` | Implementation plan |\n| worker | WORKING | `get_context`, `start_step`, `complete_step`, `complete_task`, `report_blocked` | Code changes |\n| qa | REVIEW | `get_context`, `qa_approve`, `qa_reject` | Approval/rejection |\n\nYour specific role and detailed instructions are provided in your model instructions file. Follow them precisely.\n```\n\nThis reinforces role boundaries even before the detailed role doc loads.\n\nTest: Verify AGENTS.md is valid markdown, under 32KB, and that the CLAUDE.md is NOT modified (it has its own context delivery).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "AGENTS.md"
+      ],
+      "startedAt": "2026-02-14T12:16:04.592Z",
+      "completedAt": "2026-02-14T12:16:13.947Z",
+      "note": "Role Quick Reference table was added together with step-1 in a single edit. Contains role/status/tools/output mapping for all 3 roles. Total file size: 7.4KB (well under 32KB limit). CLAUDE.md was not modified."
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "createdAt": "2026-02-14T11:41:18.718Z",
+  "updatedAt": "2026-02-14T12:16:23.957Z",
+  "planSubmittedAt": "2026-02-14T11:43:37.232Z",
+  "planApprovedAt": "2026-02-14T11:54:37.892Z",
+  "workStartedAt": "2026-02-14T12:15:07.022Z",
+  "completedAt": "2026-02-14T12:16:23.957Z",
+  "reviewStartedAt": "2026-02-14T12:16:23.957Z"
+}
