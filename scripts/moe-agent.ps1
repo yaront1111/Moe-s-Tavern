@@ -371,7 +371,7 @@ if ($cliType -eq "codex") {
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         $topLevelConfig = @"
-model_instructions_file = ".codex/agent-instructions.md"
+model_instructions_file = "agent-instructions.md"
 developer_instructions = """`nYou are a $Role agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
 "@
 

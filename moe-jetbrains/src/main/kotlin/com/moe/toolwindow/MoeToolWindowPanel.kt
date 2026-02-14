@@ -368,7 +368,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 return when (taskStatus) {
                     "BACKLOG", "PLANNING" -> "PLANNED"
                     "WORKING" -> "ACTIVE"
-                    "REVIEW", "DEPLOYING", "DONE" -> "COMPLETED"
+                    "REVIEW", "DONE" -> "COMPLETED"
                     else -> "PLANNED"
                 }
             }
@@ -382,7 +382,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 lastState?.let { updateBoard(it) }
             }
 
-            val columnOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DEPLOYING", "DONE")
+            val columnOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
             fun getNextStatus(current: String): String? {
                 val idx = columnOrder.indexOf(current)
                 return if (idx >= 0 && idx < columnOrder.size - 1) columnOrder[idx + 1] else null
@@ -410,7 +410,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     Messages.getQuestionIcon()
                 )
                 if (reason.isNullOrBlank()) return
-                if (task.status == "DONE" || task.status == "REVIEW" || task.status == "DEPLOYING") {
+                if (task.status == "DONE" || task.status == "REVIEW") {
                     service.reopenTask(task.id, reason)
                 } else {
                     service.updateTaskStatus(task.id, prevStatus, task.order)
@@ -511,7 +511,6 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.planning"), "PLANNING")
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.working"), "WORKING")
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.review"), "REVIEW")
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.deploying"), "DEPLOYING")
             buildTaskColumn(taskBoard, MoeBundle.message("moe.column.done"), "DONE", isDone = true)
 
             if (taskBoard.componentCount > 0) {

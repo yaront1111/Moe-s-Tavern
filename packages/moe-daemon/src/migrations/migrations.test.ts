@@ -61,7 +61,7 @@ describe('Schema Migrations', () => {
   });
 
   describe('v3 to v4 migration', () => {
-    it('should add columnLimits with DEPLOYING: 1 default', () => {
+    it('should add empty columnLimits', () => {
       const v3Project = {
         id: 'proj-test',
         name: 'Test Project',
@@ -80,7 +80,7 @@ describe('Schema Migrations', () => {
 
       expect(result.schemaVersion).toBe(4);
       const settings = result.settings as Record<string, unknown>;
-      expect(settings.columnLimits).toEqual({ DEPLOYING: 1 });
+      expect(settings.columnLimits).toEqual({});
     });
 
     it('should preserve all existing settings fields', () => {
@@ -106,7 +106,7 @@ describe('Schema Migrations', () => {
       expect(settings.speedModeDelayMs).toBe(5000);
       expect(settings.autoCreateBranch).toBe(false);
       expect(settings.agentCommand).toBe('codex');
-      expect(settings.columnLimits).toEqual({ DEPLOYING: 1 });
+      expect(settings.columnLimits).toEqual({});
     });
   });
 
@@ -124,7 +124,7 @@ describe('Schema Migrations', () => {
       expect(result.toVersion).toBe(CURRENT_SCHEMA_VERSION);
       expect(result.migrationsApplied).toContain('Add schemaVersion field to project.json');
       expect(result.migrationsApplied).toContain('Add teams support');
-      expect(result.migrationsApplied).toContain('Add DEPLOYING column and columnLimits');
+      expect(result.migrationsApplied).toContain('Add columnLimits to project settings');
       expect(data.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
     });
 

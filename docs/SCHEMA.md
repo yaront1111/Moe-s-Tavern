@@ -98,7 +98,7 @@ interface ProjectSettings {
 
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
-  // Example: { "DEPLOYING": 1 } limits deploying to 1 task at a time
+  // Example: { "REVIEW": 2 } limits review to 2 tasks at a time
   columnLimits?: Record<string, number>;
 }
 ```
@@ -267,7 +267,6 @@ type TaskStatus =
   | 'AWAITING_APPROVAL' // Plan ready for human review
   | 'WORKING'           // Worker executing plan
   | 'REVIEW'            // Work done, PR ready
-  | 'DEPLOYING'         // Being deployed (WIP-limited)
   | 'DONE';             // Merged, complete
 
 interface ImplementationStep {
@@ -770,14 +769,7 @@ function generateId(prefix: string): string {
              └──────│    REVIEW    │──────────────────────┐
                     │              │      reopen          │
                     └──────┬───────┘                      │
-                           │ merge or deploy              │
-                           ▼                              │
-                    ┌──────────────┐                      │
-                    │  DEPLOYING   │──────────────────────┤
-                    │  (optional,  │      reopen          │
-                    │  WIP-limited)│                      │
-                    └──────┬───────┘                      │
-                           │ deploy done                  │
+                           │ done                         │
                            ▼                              │
                     ┌──────────────┐                      │
                     │              │                      │
@@ -786,9 +778,7 @@ function generateId(prefix: string): string {
                     └──────────────┘
 ```
 
-**Note:** REVIEW can transition directly to DONE (skipping DEPLOYING) or to DEPLOYING.
-DONE can also transition to DEPLOYING for re-deployment.
-The DEPLOYING column is WIP-limited (default: 1) via `columnLimits` in project settings.
+**Note:** Any column can have a WIP limit via `columnLimits` in project settings.
 
 ### Worker Status Transitions
 
