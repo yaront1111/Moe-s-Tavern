@@ -78,6 +78,43 @@ Use when you cannot proceed without human help. Include the current step ID.
 - **Commit per step**: Make a descriptive commit after completing each step (e.g., `feat: add validation to user input`)
 - **PR**: Create a pull request when all steps are done; pass the URL via `prLink` in `complete_task`
 
+## Production-Readiness Standards
+
+**All code you write must be production-ready.** No TODOs, no shortcuts, no "good enough for now". Every line you commit should be deployable to production.
+
+### Security (Enforce in Every Step)
+- **Validate all inputs** - Never trust data from users, APIs, or external sources. Sanitize before use.
+- **No hardcoded secrets** - Credentials, tokens, API keys must come from env vars or secret stores. If you spot one, flag it.
+- **Prevent injection** - Use parameterized queries, escape outputs, avoid `eval`/dynamic code execution
+- **Authorization checks** - Verify the caller has permission before performing actions. Don't rely on UI hiding alone.
+- **CSRF/XSS protection** - Use framework-provided protections. Escape all user-rendered content.
+- **Least privilege** - Request only the permissions needed. Don't use admin/root when a scoped role works.
+- **Audit trail** - Log security-relevant actions (auth events, permission changes, data mutations) with structured logging
+
+### Dashboard & UI (When Implementing Frontend)
+- **Handle all states** - Every component must cover: loading, empty, success, error, and disabled states
+- **User feedback** - Actions must show progress indicators, success confirmations, and meaningful error messages
+- **Accessibility** - Include ARIA labels, keyboard navigation, focus management, and sufficient color contrast
+- **Responsive** - Test across expected viewport sizes. Use relative units and flexible layouts.
+- **Real-time sync** - Dashboard data must stay current via WebSocket updates or polling with stale indicators
+- **Performance** - Virtualize long lists, debounce inputs, lazy-load heavy components, avoid layout thrashing
+
+### Documentation (Always Update)
+- **Update API docs** - If you change an endpoint's contract (params, response, errors), update its documentation
+- **Update READMEs** - If setup, configuration, or usage changes, update the relevant README
+- **Comment the *why*** - Add inline comments only for non-obvious decisions and workarounds, explaining rationale
+- **Cross-platform** - All docs and scripts must work for Windows, Mac, and Linux users
+- **Breaking changes** - Document migration steps for any breaking change in commit messages and docs
+
+### Backend (Enforce in Every Step)
+- **Error handling** - Catch and handle errors at every external boundary (DB, API, file I/O). Use meaningful error messages with context.
+- **Data integrity** - Use transactions for multi-step mutations. Validate data shapes at system boundaries.
+- **Idempotency** - Operations that may be retried must produce the same result. Use idempotency keys where needed.
+- **Structured logging** - Log with correlation IDs, timestamps, and context. Never log secrets or PII.
+- **Performance** - Use connection pooling, batch operations, pagination for large datasets, and appropriate indexes
+- **Graceful degradation** - Handle dependency failures with timeouts, retries with backoff, and meaningful fallbacks
+- **Configuration over code** - Environment-specific behavior must be driven by config, not if/else branches
+
 ## Code Quality
 
 - Handle errors explicitly - don't let exceptions propagate silently
@@ -95,6 +132,7 @@ Self-check before calling `complete_task`:
 4. `modifiedFiles` lists are accurate and complete
 5. No forbidden patterns introduced
 6. Code follows existing conventions
+7. Production-readiness standards met (security, UI states, docs updated, backend hardened)
 
 ## Error Recovery
 

@@ -1,0 +1,74 @@
+{
+  "id": "task-0cf4af27",
+  "epicId": "epic-d1c2cce9",
+  "title": "Strengthen Codex short prompt with role-aware directives",
+  "description": "Currently the short prompt passed to Codex CLI is just:\n\"Call moe.claim_next_task {...}. If hasNext is false, say: 'No tasks in {role} queue' and wait.\"\n\nThis is far weaker than what Claude gets. Strengthen it to include:\n1. Role identity reminder\n2. MCP tool requirement\n3. Workflow steps (claim → get_context → execute → complete)\n4. First action directive\n\nThe prompt should be concise (Codex arg parser has limits) but authoritative.\n\nFiles:\n- scripts/moe-agent.sh (line 922 SHORT_PROMPT)\n- scripts/moe-agent.ps1 (line 527 $shortPrompt)",
+  "definitionOfDone": [
+    "Short prompt includes role identity (You are a {role})",
+    "Short prompt includes MCP tool mandate",
+    "Short prompt includes workflow overview for the role",
+    "Prompt is under 500 chars to avoid arg parser issues",
+    "Both bash and PowerShell updated consistently"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create role-specific short prompt templates in both scripts.\n\nThe current SHORT_PROMPT for Codex (line 922 in bash, line 527 in PS1) is either the generic claim command or a bland fallback. Replace with a role-aware prompt that fits under 500 chars.\n\nFor AUTO_CLAIM mode, change the prompt from:\n```\nCall moe.claim_next_task {statuses, workerId}. If hasNext is false, say: 'No tasks in {role} queue' and wait.\n```\nTo a role-aware version:\n```\nYou are a {role} agent. Use ONLY Moe MCP tools (moe.*) for task operations.\n{role-specific workflow}.\nFirst action: Call moe.claim_next_task {statuses, workerId}. If hasNext is false, say 'No tasks in {role} queue' and stop.\n```\n\nRole-specific workflow snippets (keep short):\n- **architect**: \"Workflow: claim → get_context → explore codebase → submit_plan\"\n- **worker**: \"Workflow: claim → get_context → start_step → implement → complete_step → complete_task\"\n- **qa**: \"Workflow: claim → get_context → review code + run tests → qa_approve or qa_reject\"\n\nFor NON-AUTO-CLAIM fallback, change from:\n```\nStart working on your {role} tasks using Moe MCP tools.\n```\nTo:\n```\nYou are a {role} agent. Use Moe MCP tools (moe.*) for all task operations. {role-specific workflow}. Start by calling moe.claim_next_task to get your next task.\n```\n\nIn bash: Build SHORT_PROMPT using a case statement on $ROLE to select the workflow snippet, then compose the final prompt string.\nIn PowerShell: Use a switch statement on $Role for the same.\n\nError handling: If $ROLE doesn't match known roles, fall back to a generic workflow description.\nTest: Verify the generated prompt for each role is under 500 chars by echoing its length.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-14T12:10:07.381Z",
+      "completedAt": "2026-02-14T12:11:29.740Z",
+      "note": "Built role-aware SHORT_PROMPT using case/switch on role. Each role gets a specific workflow snippet. Auto-claim includes claim_next_task directive; manual mode directs to call claim_next_task. All prompts under 500 chars (max 274 for worker auto-claim). Also included delivery chain documentation comments (step 3) in the same edit.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update the Codex-specific PROMPT variable (not just SHORT_PROMPT) for parity.\n\nCurrently the PROMPT variable (line 898-900 in bash, line 513-514 in PS1) is shared between Claude and Codex. For Claude, SYSTEM_APPEND carries the role context so the prompt can be minimal. For Codex, the prompt is the ONLY thing the model sees as a direct user message.\n\nChange: When CLI_TYPE is codex, build a separate CODEX_PROMPT that includes the role-aware content. Keep the existing PROMPT for Claude unchanged.\n\nIn bash (after line 905, before the codex block):\n```bash\nif [ \"$CLI_TYPE\" = \"codex\" ]; then\n    ROLE_WORKFLOW=\"\"\n    case $ROLE in\n        architect) ROLE_WORKFLOW=\"Workflow: claim task → get_context → explore codebase → submit_plan for approval\" ;;\n        worker) ROLE_WORKFLOW=\"Workflow: claim task → get_context → start_step → implement → complete_step → complete_task\" ;;\n        qa) ROLE_WORKFLOW=\"Workflow: claim task → get_context → review code and tests → qa_approve or qa_reject\" ;;\n        *) ROLE_WORKFLOW=\"Workflow: claim task → get_context → complete task\" ;;\n    esac\n    if [ \"$AUTO_CLAIM\" = true ]; then\n        SHORT_PROMPT=\"You are a $ROLE agent. Use ONLY Moe MCP tools. $ROLE_WORKFLOW. First: call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop.\"\n    else\n        SHORT_PROMPT=\"You are a $ROLE agent. Use ONLY Moe MCP tools. $ROLE_WORKFLOW. Start by calling moe.claim_next_task.\"\n    fi\nfi\n```\n\nIn PowerShell (similar logic before the codex block at line 517).\n\nError handling: Verify prompt string is not empty before passing to codex.\nTest: Echo the generated SHORT_PROMPT for each role and verify it's under 500 chars and includes role identity + workflow.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-14T12:11:33.860Z",
+      "completedAt": "2026-02-14T12:11:39.444Z",
+      "note": "Already implemented in step-1. The SHORT_PROMPT is built inside the codex block using case/switch on role, completely separate from the Claude PROMPT variable. Claude's PROMPT remains unchanged (it relies on --append-system-prompt for context)."
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add comment documentation explaining the Codex prompt delivery architecture.\n\nAdd comments in both scripts near the Codex launch section explaining how instructions reach Codex:\n\n```\n# Codex instruction delivery chain:\n# 1. AGENTS.md → loaded automatically as project docs (generic project context)\n# 2. .codex/agent-instructions.md → loaded via model_instructions_file (full role doc + agent context)\n# 3. developer_instructions in config.toml → injected into session (role identity reinforcement)\n# 4. SHORT_PROMPT below → the user message prompt (role-aware first action)\n#\n# Claude equivalent: --append-system-prompt carries all context in a single system message\n```\n\nThis helps future maintainers understand why the delivery is multi-layered.\n\nTest: Verify comments don't break script execution by running with --help or a dry-run.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-14T12:11:39.896Z",
+      "completedAt": "2026-02-14T12:12:07.006Z",
+      "note": "Already implemented in step-1. Delivery chain comments present in both scripts (bash line 944, PS1 line 550). Bash syntax check passes."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "createdAt": "2026-02-14T11:41:12.849Z",
+  "updatedAt": "2026-02-14T12:13:41.882Z",
+  "planSubmittedAt": "2026-02-14T11:43:03.068Z",
+  "planApprovedAt": "2026-02-14T11:54:36.191Z",
+  "workStartedAt": "2026-02-14T12:10:07.381Z",
+  "completedAt": "2026-02-14T12:12:18.645Z",
+  "reviewStartedAt": "2026-02-14T12:12:18.645Z",
+  "reviewCompletedAt": "2026-02-14T12:13:41.882Z"
+}

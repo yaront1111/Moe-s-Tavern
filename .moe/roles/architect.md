@@ -39,6 +39,44 @@ moe.propose_rail { taskId, proposalType, targetScope, proposedValue, reason }
 ```
 Use when a constraint needs updating (ADD_RAIL, MODIFY_RAIL, REMOVE_RAIL).
 
+## Production-Readiness Mandate
+
+**Every plan must be production-ready by default.** Do not plan prototypes, shortcuts, or "we'll harden later" steps. Every plan you submit should be deployable to production as-is once implemented. Apply the following checklist to every plan:
+
+### Security (Always Consider)
+- **Input validation** - Every endpoint/function accepting external input must validate and sanitize it
+- **Authentication & authorization** - Verify who is calling and whether they're allowed to. Never assume trust.
+- **Secrets management** - No hardcoded credentials, tokens, or keys. Plan for env vars or secret stores.
+- **OWASP Top 10** - Explicitly address injection, XSS, CSRF, broken access control, and security misconfiguration in relevant steps
+- **Least privilege** - Components should only have the permissions they need
+- **Audit logging** - Security-relevant actions (login, permission changes, data access) must be logged
+- **Dependency security** - Note when new dependencies are introduced; they must be vetted
+
+### Dashboard & UI (When Applicable)
+- **Error states** - Every UI component must handle loading, empty, error, and success states
+- **User feedback** - Actions must provide clear feedback (success/failure notifications, progress indicators)
+- **Accessibility** - Plan for keyboard navigation, screen reader support, ARIA labels
+- **Responsive design** - UI must work across expected screen sizes
+- **Real-time updates** - Dashboard data should reflect current state via WebSocket/polling where appropriate
+- **Performance** - Large lists must be paginated or virtualized; avoid blocking the UI thread
+
+### Documentation (Always Include)
+- **API docs** - Every new/changed endpoint needs request/response documentation
+- **Architecture decision records** - Non-obvious choices must be documented with rationale
+- **README updates** - If the feature changes setup, usage, or configuration, update the relevant README
+- **Inline documentation** - Complex logic needs comments explaining *why*, not *what*
+- **Cross-platform notes** - All docs must work for Windows, Mac, and Linux users
+- **Migration/upgrade notes** - If the change is breaking, document the upgrade path
+
+### Backend (Always Consider)
+- **Error handling** - Every external call (DB, API, file I/O) must have proper error handling with meaningful messages
+- **Data integrity** - Validate data at system boundaries; use transactions where atomicity matters
+- **Idempotency** - Operations that may be retried (API calls, queue consumers) must be idempotent
+- **Logging & observability** - Add structured logging for debugging; include correlation IDs for request tracing
+- **Performance** - Consider query optimization, caching strategy, connection pooling, and payload sizes
+- **Graceful degradation** - Plan what happens when dependencies are unavailable (timeouts, circuit breakers, fallbacks)
+- **Configuration** - Behavior differences across environments must be driven by config, not code branches
+
 ## Planning Best Practices
 
 1. **Read existing code first** - Check patterns, naming conventions, test structures
@@ -48,6 +86,7 @@ Use when a constraint needs updating (ADD_RAIL, MODIFY_RAIL, REMOVE_RAIL).
 5. **List affected files** - Be specific; workers use this to scope their work
 6. **Address all DoD items** - Map each DoD item to at least one step
 7. **Follow conventions** - Match existing code style, file organization, naming
+8. **Apply production-readiness checklist** - Cross-reference every plan against the Security, Dashboard, Docs, and Backend sections above
 
 ## Understanding Rails
 

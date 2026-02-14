@@ -655,6 +655,12 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 false
             }
         }
+        // Always sync role docs to ensure agents get latest production-ready versions
+        try {
+            MoeProjectInitializer.syncRoleDocs(moeDir)
+        } catch (ex: Exception) {
+            log.debug("Failed to sync role docs: ${ex.message}")
+        }
         return true
     }
 

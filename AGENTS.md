@@ -122,6 +122,62 @@ MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approv
 - Run specific test: `cd packages/moe-daemon && npx vitest run <test-file>`
 - Always run tests before and after making changes to verify no regressions
 
+## Moe Agent Workflow
+
+You are a Moe agent. Your role-specific instructions are loaded separately via model instructions. This section covers the shared workflow all roles follow.
+
+### Task Lifecycle
+```
+BACKLOG → PLANNING → AWAITING_APPROVAL → WORKING → REVIEW → DONE
+```
+
+### Core Tool Patterns
+
+**Always start with context:**
+```
+moe.get_context { taskId: "task-xxx" }
+```
+Returns project rails, epic details, task description, Definition of Done, and implementation plan.
+
+**Claim your next task:**
+```
+moe.claim_next_task { statuses: ["WORKING"], workerId: "worker-abc" }
+```
+Each role claims different statuses: architects claim PLANNING, workers claim WORKING, QA claims REVIEW.
+
+**Track progress (workers):**
+```
+moe.start_step { taskId: "task-xxx", stepId: "step-1" }
+// ... implement ...
+moe.complete_step { taskId: "task-xxx", stepId: "step-1", modifiedFiles: ["src/foo.ts"], note: "Added validation" }
+```
+
+**Submit work:**
+```
+moe.complete_task { taskId: "task-xxx", summary: "Implemented feature X" }
+```
+
+Tool calls return structured JSON with success/error fields. Always check response before proceeding.
+
+## Common Mistakes (Avoid These)
+
+- **Never edit `.moe/` files directly** - The daemon is the sole writer. Use MCP tools to modify state.
+- **Never skip `get_context`** - Always call it after claiming a task. It loads rails, DoD, and the implementation plan.
+- **Never skip steps** - Workers must call `start_step` before working and `complete_step` when done.
+- **Never use the wrong tools for your role** - Architects use `submit_plan`, workers use `start_step`/`complete_step`, QA uses `qa_approve`/`qa_reject`.
+- **Never complete a task without satisfying all DoD items** - Check `definitionOfDone` in the task context.
+- **Never ignore reopenReason** - If `reopenCount > 0`, read `rejectionDetails` and fix those specific issues first.
+
+## Role Quick Reference
+
+| Role | Claims Status | Key Tools | Output |
+|------|---------------|-----------|--------|
+| architect | PLANNING | `get_context`, `submit_plan`, `check_approval` | Implementation plan |
+| worker | WORKING | `get_context`, `start_step`, `complete_step`, `complete_task` | Code changes |
+| qa | REVIEW | `get_context`, `qa_approve`, `qa_reject` | Approval/rejection |
+
+Your specific role and detailed instructions are provided in your model instructions file. Follow them precisely.
+
 ## Key Documentation
 
 | Document | Purpose |
