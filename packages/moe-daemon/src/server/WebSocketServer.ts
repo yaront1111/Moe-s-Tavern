@@ -174,9 +174,8 @@ export class MoeWebSocketServer {
                 PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
                 AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
                 WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                REVIEW: ['DONE', 'DEPLOYING', 'WORKING', 'BACKLOG'],
-                DEPLOYING: ['DONE', 'WORKING', 'BACKLOG'],
-                DONE: ['BACKLOG', 'WORKING', 'DEPLOYING', 'ARCHIVED'],
+                REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
+                DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                 ARCHIVED: ['BACKLOG', 'WORKING']
               };
               const newStatus = (updates as { status: string }).status;

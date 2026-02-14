@@ -1422,7 +1422,7 @@ describe('MCP Tools', () => {
     });
   });
 
-  describe('DEPLOYING status and WIP limits', () => {
+  describe('WIP limits', () => {
     beforeEach(async () => {
       setupMoeFolder({
         settings: {
@@ -1432,142 +1432,37 @@ describe('MCP Tools', () => {
           branchPattern: 'moe/{epicId}/{taskId}',
           commitPattern: 'feat({epicId}): {taskTitle}',
           agentCommand: 'claude',
-          columnLimits: { DEPLOYING: 1 }
+          columnLimits: { REVIEW: 1 }
         }
       } as Partial<Project>);
       createEpic();
-      createTask({ id: 'task-1', status: 'REVIEW' });
+      createTask({ id: 'task-1', status: 'WORKING' });
       await state.load();
     });
 
-    it('allows REVIEW -> DEPLOYING transition', async () => {
-      const tool = setTaskStatusTool(state);
-      const result = await tool.handler({
-        taskId: 'task-1',
-        status: 'DEPLOYING',
-      }, state) as { success: boolean; status: string };
-
-      expect(result.success).toBe(true);
-      expect(result.status).toBe('DEPLOYING');
-    });
-
-    it('allows DEPLOYING -> DONE transition', async () => {
-      await state.updateTask('task-1', { status: 'DEPLOYING' });
-      const tool = setTaskStatusTool(state);
-      const result = await tool.handler({
-        taskId: 'task-1',
-        status: 'DONE',
-      }, state) as { success: boolean; status: string };
-
-      expect(result.success).toBe(true);
-      expect(result.status).toBe('DONE');
-    });
-
-    it('allows DEPLOYING -> WORKING reopen transition', async () => {
-      await state.updateTask('task-1', { status: 'DEPLOYING' });
-      const tool = setTaskStatusTool(state);
-      const result = await tool.handler({
-        taskId: 'task-1',
-        status: 'WORKING',
-        reason: 'Deploy failed',
-      }, state) as { success: boolean; status: string };
-
-      expect(result.success).toBe(true);
-      expect(result.status).toBe('WORKING');
-
-      const task = state.getTask('task-1');
-      expect(task?.reopenCount).toBe(1);
-      expect(task?.reopenReason).toBe('Deploy failed');
-    });
-
-    it('allows DONE -> DEPLOYING transition', async () => {
-      await state.updateTask('task-1', { status: 'DONE' });
-      const tool = setTaskStatusTool(state);
-      const result = await tool.handler({
-        taskId: 'task-1',
-        status: 'DEPLOYING',
-      }, state) as { success: boolean; status: string };
-
-      expect(result.success).toBe(true);
-      expect(result.status).toBe('DEPLOYING');
-    });
-
     it('blocks transition when WIP limit reached', async () => {
-      // Move task-1 to DEPLOYING first (occupying the 1 slot)
-      await state.updateTask('task-1', { status: 'DEPLOYING' });
+      // Move task-1 to REVIEW first (occupying the 1 slot)
+      await state.updateTask('task-1', { status: 'REVIEW' });
 
-      // Create a second task in REVIEW
-      createTask({ id: 'task-2', status: 'REVIEW', order: 2 });
+      // Create a second task in WORKING
+      createTask({ id: 'task-2', status: 'WORKING', order: 2 });
       await state.load();
 
       const tool = setTaskStatusTool(state);
       await expect(
-        tool.handler({ taskId: 'task-2', status: 'DEPLOYING' }, state)
+        tool.handler({ taskId: 'task-2', status: 'REVIEW' }, state)
       ).rejects.toThrow('WIP limit of 1');
     });
 
     it('allows transition when under WIP limit', async () => {
-      // task-1 is in REVIEW, DEPLOYING column is empty
+      // task-1 is in WORKING, REVIEW column is empty
       const tool = setTaskStatusTool(state);
       const result = await tool.handler({
         taskId: 'task-1',
-        status: 'DEPLOYING',
+        status: 'REVIEW',
       }, state) as { success: boolean };
 
       expect(result.success).toBe(true);
-    });
-
-    it('treats missing columnLimits as no limit', async () => {
-      // Create a state without columnLimits
-      const noLimitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-nolimit-'));
-      const noLimitMoePath = path.join(noLimitDir, '.moe');
-      fs.mkdirSync(noLimitMoePath, { recursive: true });
-      fs.mkdirSync(path.join(noLimitMoePath, 'epics'));
-      fs.mkdirSync(path.join(noLimitMoePath, 'tasks'));
-      fs.mkdirSync(path.join(noLimitMoePath, 'workers'));
-      fs.mkdirSync(path.join(noLimitMoePath, 'proposals'));
-      fs.writeFileSync(path.join(noLimitMoePath, 'project.json'), JSON.stringify({
-        id: 'proj-nolimit',
-        name: 'No Limit Project',
-        rootPath: noLimitDir,
-        schemaVersion: 4,
-        globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
-        settings: { approvalMode: 'CONTROL', speedModeDelayMs: 2000, autoCreateBranch: true, branchPattern: '', commitPattern: '', agentCommand: 'claude' }
-      }, null, 2));
-      const epic: Epic = { id: 'epic-nl', projectId: 'proj-nolimit', title: 'E', description: '', architectureNotes: '', epicRails: [], status: 'ACTIVE', order: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-      fs.writeFileSync(path.join(noLimitMoePath, 'epics', 'epic-nl.json'), JSON.stringify(epic, null, 2));
-      const task: Task = { id: 'task-nl', epicId: 'epic-nl', title: 'T', description: '', definitionOfDone: ['done'], taskRails: [], implementationPlan: [], status: 'REVIEW', assignedWorkerId: null, branch: null, prLink: null, reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null, priority: 'MEDIUM', order: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-      fs.writeFileSync(path.join(noLimitMoePath, 'tasks', 'task-nl.json'), JSON.stringify(task, null, 2));
-
-      const nlState = new StateManager({ projectPath: noLimitDir });
-      await nlState.load();
-
-      const tool = setTaskStatusTool(nlState);
-      const result = await tool.handler({
-        taskId: 'task-nl',
-        status: 'DEPLOYING',
-      }, nlState) as { success: boolean };
-
-      expect(result.success).toBe(true);
-      fs.rmSync(noLimitDir, { recursive: true, force: true });
-    });
-
-    it('listTasks includes deploying count', async () => {
-      await state.updateTask('task-1', { status: 'DEPLOYING' });
-      const tool = listTasksTool(state);
-      const result = await tool.handler({}, state) as { counts: { deploying: number } };
-      expect(result.counts.deploying).toBe(1);
-    });
-
-    it('searchTasks can filter by DEPLOYING status', async () => {
-      await state.updateTask('task-1', { status: 'DEPLOYING' });
-      const tool = searchTasksTool(state);
-      const result = await tool.handler({
-        filters: { status: 'DEPLOYING' },
-      }, state) as { tasks: Task[] };
-
-      expect(result.tasks.length).toBe(1);
-      expect(result.tasks[0].id).toBe('task-1');
     });
   });
 

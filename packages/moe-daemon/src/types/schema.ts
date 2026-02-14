@@ -8,7 +8,6 @@ export type TaskStatus =
   | 'AWAITING_APPROVAL'
   | 'WORKING'
   | 'REVIEW'
-  | 'DEPLOYING'
   | 'DONE'
   | 'ARCHIVED';
 

@@ -558,7 +558,7 @@ role = sys.argv[5] if len(sys.argv) > 5 else "worker"
 
 # Top-level config lines (role instructions + model instructions)
 top_level_lines = [
-    'model_instructions_file = ".codex/agent-instructions.md"',
+    'model_instructions_file = "agent-instructions.md"',
     'developer_instructions = """You are a ' + role + ' agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly."""',
 ]
 top_level_block = "\n".join(top_level_lines)
