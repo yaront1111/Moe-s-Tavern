@@ -3,9 +3,17 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { StateManager } from './StateManager.js';
-import type { Task, Epic, Project } from '../types/schema.js';
+import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
+import type { Task, Epic, Project, RailProposal } from '../types/schema.js';
+
+vi.mock('../tools/submitPlan.js', () => ({
+  cancelSpeedModeTimeout: vi.fn(),
+}));
 
 describe('StateManager', () => {
+  const DAY_IN_MS = 24 * 60 * 60 * 1000;
+  const PROPOSAL_PURGE_AGE_MS = 7 * DAY_IN_MS;
+
   let testDir: string;
   let moePath: string;
   let stateManager: StateManager;
@@ -91,13 +99,33 @@ describe('StateManager', () => {
     return task;
   }
 
+  function createTestProposal(overrides: Partial<RailProposal> = {}): RailProposal {
+    return {
+      id: 'proposal-test123',
+      workerId: 'worker-test123',
+      taskId: 'task-test123',
+      proposalType: 'ADD_RAIL',
+      targetScope: 'GLOBAL',
+      currentValue: null,
+      proposedValue: 'Always add regression tests',
+      reason: 'Test proposal',
+      status: 'PENDING',
+      resolvedAt: null,
+      resolvedBy: null,
+      createdAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
   beforeEach(() => {
+    vi.clearAllMocks();
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-test-'));
     moePath = path.join(testDir, '.moe');
     stateManager = new StateManager({ projectPath: testDir });
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -143,6 +171,35 @@ describe('StateManager', () => {
       expect(stateManager.tasks.size).toBe(1);
       expect(stateManager.getTask(task.id)?.title).toBe('Test Task');
     });
+
+    it('purges stale resolved proposals on load and starts purge interval', async () => {
+      setupMoeFolder();
+
+      const staleProposal = createTestProposal({
+        id: 'proposal-stale-on-load',
+        status: 'APPROVED',
+        resolvedAt: new Date(Date.now() - PROPOSAL_PURGE_AGE_MS - DAY_IN_MS).toISOString(),
+        resolvedBy: 'HUMAN',
+      });
+
+      fs.writeFileSync(
+        path.join(moePath, 'proposals', `${staleProposal.id}.json`),
+        JSON.stringify(staleProposal, null, 2),
+      );
+
+      await stateManager.load();
+
+      expect(stateManager.proposals.has(staleProposal.id)).toBe(false);
+      expect(fs.existsSync(path.join(moePath, 'proposals', `${staleProposal.id}.json`))).toBe(false);
+      expect(
+        (stateManager as unknown as { proposalPurgeInterval?: NodeJS.Timeout }).proposalPurgeInterval,
+      ).toBeDefined();
+
+      stateManager.clearEmitter();
+      expect(
+        (stateManager as unknown as { proposalPurgeInterval?: NodeJS.Timeout }).proposalPurgeInterval,
+      ).toBeUndefined();
+    });
   });
 
   describe('getSnapshot', () => {
@@ -163,6 +220,45 @@ describe('StateManager', () => {
       expect(snapshot.epics[1].id).toBe('epic-1');
       expect(snapshot.tasks[0].id).toBe('task-2');
       expect(snapshot.tasks[1].id).toBe('task-1');
+    });
+
+    it('filters stale resolved proposals from snapshot but keeps pending and recent resolved', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask();
+      await stateManager.load();
+
+      const staleResolved = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-stale-snapshot',
+          status: 'APPROVED',
+          resolvedAt: new Date(Date.now() - (2 * DAY_IN_MS)).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+      const recentResolved = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-recent-snapshot',
+          status: 'REJECTED',
+          resolvedAt: new Date(Date.now() - (6 * 60 * 60 * 1000)).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+      const pendingProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-pending-snapshot',
+          status: 'PENDING',
+          resolvedAt: null,
+          resolvedBy: null,
+        }),
+      );
+
+      const snapshot = stateManager.getSnapshot();
+      const proposalIds = snapshot.proposals.map((proposal) => proposal.id);
+
+      expect(proposalIds).not.toContain(staleResolved.id);
+      expect(proposalIds).toContain(recentResolved.id);
+      expect(proposalIds).toContain(pendingProposal.id);
     });
   });
 
@@ -217,6 +313,15 @@ describe('StateManager', () => {
       expect(events).toContain('TASK_CREATED');
     });
 
+    it('does not change memory when writeEntity fails', async () => {
+      const initialTaskCount = stateManager.tasks.size;
+      vi.spyOn(stateManager as unknown as { writeEntity: () => Promise<void> }, 'writeEntity')
+        .mockRejectedValueOnce(new Error('disk write failed'));
+
+      await expect(stateManager.createTask({ epicId: 'epic-test123' })).rejects.toThrow('disk write failed');
+      expect(stateManager.tasks.size).toBe(initialTaskCount);
+    });
+
     it('auto-increments order for tasks in same epic', async () => {
       const task1 = await stateManager.createTask({ epicId: 'epic-test123' });
       const task2 = await stateManager.createTask({ epicId: 'epic-test123' });
@@ -266,6 +371,15 @@ describe('StateManager', () => {
       await stateManager.updateTask('task-test123', { title: 'Trigger Event' });
       expect(events).toContain('TASK_UPDATED');
     });
+
+    it('does not change memory when writeEntity fails', async () => {
+      const originalTask = stateManager.getTask('task-test123');
+      vi.spyOn(stateManager as unknown as { writeEntity: () => Promise<void> }, 'writeEntity')
+        .mockRejectedValueOnce(new Error('disk write failed'));
+
+      await expect(stateManager.updateTask('task-test123', { title: 'Should Fail' })).rejects.toThrow('disk write failed');
+      expect(stateManager.getTask('task-test123')).toEqual(originalTask);
+    });
   });
 
   describe('deleteTask', () => {
@@ -285,6 +399,11 @@ describe('StateManager', () => {
       expect(stateManager.getTask('task-test123')).toBeNull();
     });
 
+    it('cancels speed mode timeout on task deletion', async () => {
+      await stateManager.deleteTask('task-test123');
+      expect(vi.mocked(cancelSpeedModeTimeout)).toHaveBeenCalledWith('task-test123');
+    });
+
     it('removes task file from disk', async () => {
       const filePath = path.join(moePath, 'tasks', 'task-test123.json');
       expect(fs.existsSync(filePath)).toBe(true);
@@ -297,6 +416,72 @@ describe('StateManager', () => {
       stateManager.setEmitter((e) => events.push(e.type));
       await stateManager.deleteTask('task-test123');
       expect(events).toContain('TASK_DELETED');
+    });
+
+    it('keeps task in memory when task file deletion fails', async () => {
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
+        const error = new Error('unlink failed') as NodeJS.ErrnoException;
+        error.code = 'EACCES';
+        throw error;
+      });
+
+      await expect(stateManager.deleteTask('task-test123')).rejects.toThrow('unlink failed');
+      expect(stateManager.getTask('task-test123')).not.toBeNull();
+    });
+  });
+
+  describe('deleteTeam rollback semantics', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      await stateManager.load();
+    });
+
+    it('keeps team in memory when team file deletion fails', async () => {
+      const team = await stateManager.createTeam({ name: 'Ops Team' });
+
+      vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => {
+        const error = new Error('team unlink failed') as NodeJS.ErrnoException;
+        error.code = 'EACCES';
+        throw error;
+      });
+
+      await expect(stateManager.deleteTeam(team.id)).rejects.toThrow('team unlink failed');
+      expect(stateManager.getTeam(team.id)).not.toBeNull();
+    });
+  });
+
+  describe('updateSettings rollback semantics', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      await stateManager.load();
+    });
+
+    it('does not update in-memory project when project write fails', async () => {
+      const originalProject = JSON.parse(JSON.stringify(stateManager.project)) as Project;
+
+      vi.spyOn(fs.promises, 'writeFile').mockRejectedValueOnce(new Error('settings write failed'));
+
+      await expect(stateManager.updateSettings({ agentCommand: 'codex' })).rejects.toThrow('settings write failed');
+      expect(stateManager.project).toEqual(originalProject);
+    });
+  });
+
+  describe('deleteEpic rollback semantics', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+    });
+
+    it('keeps epic in memory when epic file deletion fails', async () => {
+      vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => {
+        const error = new Error('epic unlink failed') as NodeJS.ErrnoException;
+        error.code = 'EACCES';
+        throw error;
+      });
+
+      await expect(stateManager.deleteEpic('epic-test123')).rejects.toThrow('epic unlink failed');
+      expect(stateManager.getEpic('epic-test123')).not.toBeNull();
     });
   });
 
@@ -391,6 +576,157 @@ describe('StateManager', () => {
     });
   });
 
+  describe('approveProposal', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask();
+      await stateManager.load();
+    });
+
+    it('writes APPROVED status before applying rail changes', async () => {
+      const proposal = await stateManager.createProposal(createTestProposal());
+
+      const applyRailChangeSpy = vi
+        .spyOn(stateManager as unknown as { applyRailChange: (proposal: RailProposal) => Promise<void> }, 'applyRailChange')
+        .mockImplementation(async () => {
+          const inMemoryProposal = stateManager.proposals.get(proposal.id);
+          expect(inMemoryProposal?.status).toBe('APPROVED');
+
+          const proposalFile = path.join(moePath, 'proposals', `${proposal.id}.json`);
+          const savedProposal = JSON.parse(fs.readFileSync(proposalFile, 'utf-8')) as RailProposal;
+          expect(savedProposal.status).toBe('APPROVED');
+
+          throw new Error('rail apply failed');
+        });
+
+      const approved = await stateManager.approveProposal(proposal.id);
+
+      expect(applyRailChangeSpy).toHaveBeenCalledOnce();
+      expect(approved.status).toBe('APPROVED');
+      expect(stateManager.proposals.get(proposal.id)?.status).toBe('APPROVED');
+    });
+  });
+
+  describe('purgeResolvedProposals', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask();
+      await stateManager.load();
+    });
+
+    it('does not purge pending proposals', async () => {
+      const pendingProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-pending-keep',
+          status: 'PENDING',
+          resolvedAt: new Date(Date.now() - (30 * DAY_IN_MS)).toISOString(),
+          resolvedBy: null,
+        }),
+      );
+
+      const purgedCount = await stateManager.purgeResolvedProposals();
+
+      expect(purgedCount).toBe(0);
+      expect(stateManager.proposals.has(pendingProposal.id)).toBe(true);
+    });
+
+    it('purges approved proposals older than 7 days from memory and disk', async () => {
+      const approvedProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-approved-stale',
+          status: 'APPROVED',
+          resolvedAt: new Date(Date.now() - PROPOSAL_PURGE_AGE_MS - DAY_IN_MS).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+
+      const proposalPath = path.join(moePath, 'proposals', `${approvedProposal.id}.json`);
+      expect(fs.existsSync(proposalPath)).toBe(true);
+
+      const purgedCount = await stateManager.purgeResolvedProposals();
+
+      expect(purgedCount).toBe(1);
+      expect(stateManager.proposals.has(approvedProposal.id)).toBe(false);
+      expect(fs.existsSync(proposalPath)).toBe(false);
+    });
+
+    it('purges rejected proposals older than 7 days', async () => {
+      const rejectedProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-rejected-stale',
+          status: 'REJECTED',
+          resolvedAt: new Date(Date.now() - PROPOSAL_PURGE_AGE_MS - DAY_IN_MS).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+
+      const purgedCount = await stateManager.purgeResolvedProposals();
+
+      expect(purgedCount).toBe(1);
+      expect(stateManager.proposals.has(rejectedProposal.id)).toBe(false);
+    });
+
+    it('does not purge recently resolved proposals', async () => {
+      const recentProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-recent-keep',
+          status: 'APPROVED',
+          resolvedAt: new Date(Date.now() - (2 * DAY_IN_MS)).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+
+      const purgedCount = await stateManager.purgeResolvedProposals();
+
+      expect(purgedCount).toBe(0);
+      expect(stateManager.proposals.has(recentProposal.id)).toBe(true);
+    });
+
+    it('handles file deletion errors gracefully without crashing', async () => {
+      const staleProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-stale-delete-fail',
+          status: 'APPROVED',
+          resolvedAt: new Date(Date.now() - PROPOSAL_PURGE_AGE_MS - DAY_IN_MS).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+
+      vi.spyOn(fs, 'unlinkSync').mockImplementation((filePath) => {
+        if (String(filePath).includes(staleProposal.id)) {
+          const error = new Error('cannot delete file') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          throw error;
+        }
+      });
+
+      await expect(stateManager.purgeResolvedProposals()).resolves.toBe(0);
+      expect(stateManager.proposals.has(staleProposal.id)).toBe(true);
+    });
+
+    it('logs PROPOSAL_PURGED activity events', async () => {
+      const staleProposal = await stateManager.createProposal(
+        createTestProposal({
+          id: 'proposal-stale-log',
+          status: 'APPROVED',
+          resolvedAt: new Date(Date.now() - PROPOSAL_PURGE_AGE_MS - DAY_IN_MS).toISOString(),
+          resolvedBy: 'HUMAN',
+        }),
+      );
+
+      const appendActivitySpy = vi.spyOn(stateManager, 'appendActivity');
+
+      await stateManager.purgeResolvedProposals();
+
+      expect(appendActivitySpy).toHaveBeenCalledWith(
+        'PROPOSAL_PURGED',
+        expect.objectContaining({ proposalId: staleProposal.id }),
+      );
+    });
+  });
+
   describe('reorderTask', () => {
     beforeEach(async () => {
       setupMoeFolder();
@@ -458,6 +794,28 @@ describe('StateManager', () => {
       expect(events.length).toBe(2);
       expect(events[0].type).toBe('TASK_CREATED');
       expect(events[1].type).toBe('TASK_UPDATED');
+    });
+
+    it('auto-removes subscribers after 3 consecutive errors', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      const failingSubscriber = vi.fn(() => {
+        throw new Error('subscriber boom');
+      });
+      stateManager.subscribe(failingSubscriber);
+
+      await stateManager.createTask({ epicId: 'epic-test123', title: 'task-1' });
+      await stateManager.createTask({ epicId: 'epic-test123', title: 'task-2' });
+      await stateManager.createTask({ epicId: 'epic-test123', title: 'task-3' });
+      await stateManager.createTask({ epicId: 'epic-test123', title: 'task-4' });
+
+      expect(failingSubscriber).toHaveBeenCalledTimes(3);
+      const errorCounts = (stateManager as unknown as {
+        subscriberErrorCounts: Map<unknown, number>;
+      }).subscriberErrorCounts;
+      expect(errorCounts.has(failingSubscriber)).toBe(false);
     });
   });
 });

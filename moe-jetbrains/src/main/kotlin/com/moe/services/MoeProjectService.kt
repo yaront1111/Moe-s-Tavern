@@ -32,6 +32,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Service(Service.Level.PROJECT)
 class MoeProjectService(private val project: IdeaProject) : Disposable {
@@ -43,7 +44,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     @Volatile private var state: MoeState? = null
     @Volatile private var lastDaemonStartAttemptAt = 0L
     @Volatile private var connecting = false
-    @Volatile private var disposed = false
+    private val disposed = AtomicBoolean(false)
     @Volatile private var isManualDisconnect = false
     @Volatile private var reconnectAttempts = 0
     @Volatile private var spawnedDaemonProcess: Process? = null
@@ -51,14 +52,15 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         Thread(runnable, "Moe-Refresh").apply { isDaemon = true }
     }
     private var refreshFuture: ScheduledFuture<*>? = null
-    private var reconnectFuture: ScheduledFuture<*>? = null
+    @Volatile private var reconnectFuture: ScheduledFuture<*>? = null
+    @Volatile private var retryFuture: ScheduledFuture<*>? = null
     private val refreshIntervalMs = 3000L
     private val reconnectDelayMs = 5000L
     private val maxReconnectAttempts = 10
     private val daemonStartCooldownMs = 10_000L
 
     fun connect() {
-        if (disposed || connecting || connected) return
+        if (disposed.get() || connecting || connected) return
         connecting = true
         if (!ensureMoeInitialized()) {
             connecting = false
@@ -71,10 +73,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         if (startAttempted) {
             reconnectAttempts = 0  // Reset counter for fresh spawn
             publishStatus(false, "Starting daemon...")
-            scheduler.schedule({
-                if (disposed) return@schedule
-                connectWithRetry(maxAttempts = 10, delayMs = 500)
-            }, 500, TimeUnit.MILLISECONDS)
+            scheduleRetryAttempt(maxAttempts = 10, delayMs = 500, attempt = 1)
             return
         }
 
@@ -104,8 +103,9 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     private fun connectWithRetry(maxAttempts: Int, delayMs: Long, attempt: Int = 1) {
-        if (disposed || connected) {
+        if (disposed.get() || connected) {
             connecting = false
+            retryFuture = null
             return
         }
 
@@ -113,12 +113,14 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         if (daemonInfo != null && isProcessAlive(daemonInfo.pid) && isPortOpen(daemonInfo.port)) {
             // Daemon is ready, proceed with connection
             connecting = false
+            retryFuture = null
             doConnect(daemonInfo)
             return
         }
 
         if (attempt >= maxAttempts) {
             connecting = false
+            retryFuture = null
             // Kill the daemon we spawned since we couldn't connect to it
             killSpawnedDaemon()
             publishStatus(false, "Daemon failed to start. Check logs.")
@@ -127,15 +129,40 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         }
 
         publishStatus(false, "Waiting for daemon... (${attempt}/${maxAttempts})")
-        scheduler.schedule({
-            if (disposed) return@schedule
-            connectWithRetry(maxAttempts, delayMs, attempt + 1)
-        }, delayMs, TimeUnit.MILLISECONDS)
+        scheduleRetryAttempt(maxAttempts, delayMs, attempt + 1)
+    }
+
+    private fun scheduleRetryAttempt(maxAttempts: Int, delayMs: Long, attempt: Int) {
+        try {
+            retryFuture?.cancel(false)
+        } catch (ex: Exception) {
+            log.debug("Failed to cancel existing retry future: ${ex.message}", ex)
+        } finally {
+            retryFuture = null
+        }
+
+        try {
+            retryFuture = scheduler.schedule({
+                retryFuture = null
+                if (disposed.get() || connected) return@schedule
+                connectWithRetry(maxAttempts, delayMs, attempt)
+            }, delayMs, TimeUnit.MILLISECONDS)
+        } catch (ex: Exception) {
+            connecting = false
+            log.warn("Failed to schedule retry attempt", ex)
+            publishStatus(false, "Failed to schedule reconnect retry")
+        }
     }
 
     private fun doConnect(daemonInfo: DaemonInfo) {
-        if (disposed || connected || connecting) return
+        if (disposed.get() || connected || connecting) return
         connecting = true
+
+        // Always close the previous client before replacing it to avoid leaking
+        // unreferenced WebSocketClient instances during reconnect cycles.
+        val oldClient = wsClient
+        wsClient = null
+        closeQuietly(oldClient)
 
         val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
         wsClient = object : WebSocketClient(uri) {
@@ -159,21 +186,29 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
 
             override fun onClose(code: Int, reason: String?, remote: Boolean) {
-                connecting = false
-                connected = false
-                wsClient = null
-                stopAutoRefresh()
-                publishStatus(false, reason ?: "Disconnected")
-                scheduleReconnect()
+                if (wsClient === this) {
+                    connecting = false
+                    connected = false
+                    wsClient = null
+                    stopAutoRefresh()
+                    publishStatus(false, reason ?: "Disconnected")
+                    scheduleReconnect()
+                } else {
+                    log.debug("Ignoring onClose from stale WebSocket client")
+                }
             }
 
             override fun onError(ex: Exception?) {
-                connecting = false
-                connected = false
-                wsClient = null
-                stopAutoRefresh()
-                publishStatus(false, ex?.message ?: "WebSocket error")
-                scheduleReconnect()
+                if (wsClient === this) {
+                    connecting = false
+                    connected = false
+                    wsClient = null
+                    stopAutoRefresh()
+                    publishStatus(false, ex?.message ?: "WebSocket error")
+                    scheduleReconnect()
+                } else {
+                    log.debug("Ignoring onError from stale WebSocket client")
+                }
             }
         }
 
@@ -183,6 +218,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             log.warn("WebSocket connect() failed", ex)
             connecting = false
             connected = false
+            closeQuietly(wsClient)
             wsClient = null
             publishStatus(false, ex.message ?: "Failed to connect")
             scheduleReconnect()
@@ -195,14 +231,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         stopAutoRefresh()
         reconnectFuture?.cancel(false)
         reconnectFuture = null
-        wsClient?.close()
+        retryFuture?.cancel(false)
+        retryFuture = null
+        val currentClient = wsClient
         wsClient = null
+        closeQuietly(currentClient)
         connected = false
         connecting = false
     }
 
     fun addListener(listener: MoeStateListener) {
-        if (disposed) {
+        if (disposed.get()) {
             log.warn("Attempted to add listener to disposed service")
             return
         }
@@ -222,6 +261,21 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
      */
     fun getListenerCount(): Int = listeners.size
 
+    private fun applyMessageOnEdt(messageType: String, action: () -> Unit) {
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                if (disposed.get()) {
+                    log.debug("Ignoring $messageType because service is disposed")
+                    return@invokeLater
+                }
+                action()
+            } catch (ex: Exception) {
+                log.warn("Failed to apply $messageType on EDT: ${ex.message}", ex)
+                publishError(messageType, ex.message ?: "Failed to apply message")
+            }
+        }
+    }
+
     private fun handleMessage(message: String) {
         val json = gson.fromJson(message, JsonObject::class.java)
         val type = json.get("type")?.asString ?: return
@@ -230,23 +284,29 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             "STATE_SNAPSHOT" -> {
                 val payload = json.getAsJsonObject("payload")
                 val newState = MoeJson.parseState(payload)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    state = newState
+                    publishState(newState)
+                }
             }
             "TASK_UPDATED", "TASK_CREATED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val task = MoeJson.parseTask(payload)
-                val current = state ?: return
-                val oldTask = current.tasks.find { it.id == task.id }
-                val tasks = current.tasks.filter { it.id != task.id } + task
-                val newState = current.copy(tasks = tasks)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
 
-                // Send notifications for status changes (must run on EDT)
-                if (oldTask?.status != task.status) {
-                    val newStatus = task.status
-                    ApplicationManager.getApplication().invokeLater {
+                    val oldTask = current.tasks.find { it.id == task.id }
+                    val tasks = current.tasks.filter { it.id != task.id } + task
+                    val newState = current.copy(tasks = tasks)
+                    state = newState
+                    publishState(newState)
+
+                    if (oldTask?.status != task.status) {
+                        val newStatus = task.status
                         val notificationService = MoeNotificationService.getInstance(project)
                         when (newStatus) {
                             "AWAITING_APPROVAL" -> notificationService.notifyAwaitingApproval(task)
@@ -260,30 +320,48 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             "TASK_DELETED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val task = MoeJson.parseTask(payload)
-                val current = state ?: return
-                val tasks = current.tasks.filter { it.id != task.id }
-                val newState = current.copy(tasks = tasks)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val tasks = current.tasks.filter { it.id != task.id }
+                    val newState = current.copy(tasks = tasks)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "EPIC_UPDATED", "EPIC_CREATED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val epic = MoeJson.parseEpic(payload)
-                val current = state ?: return
-                val epics = current.epics.filter { it.id != epic.id } + epic
-                val newState = current.copy(epics = epics)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val epics = current.epics.filter { it.id != epic.id } + epic
+                    val newState = current.copy(epics = epics)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "EPIC_DELETED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val epic = MoeJson.parseEpic(payload)
-                val current = state ?: return
-                val epics = current.epics.filter { it.id != epic.id }
-                val tasks = current.tasks.filter { it.epicId != epic.id }
-                val newState = current.copy(epics = epics, tasks = tasks)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val epics = current.epics.filter { it.id != epic.id }
+                    val tasks = current.tasks.filter { it.epicId != epic.id }
+                    val newState = current.copy(epics = epics, tasks = tasks)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "ERROR" -> {
                 val errorMessage = json.get("message")?.asString ?: "Unknown error"
@@ -301,38 +379,68 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             "PROPOSAL_UPDATED", "PROPOSAL_CREATED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val proposal = MoeJson.parseProposal(payload)
-                val current = state ?: return
-                val proposals = current.proposals.filter { it.id != proposal.id } + proposal
-                val newState = current.copy(proposals = proposals)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val proposals = current.proposals.filter { it.id != proposal.id } + proposal
+                    val newState = current.copy(proposals = proposals)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "WORKER_UPDATED", "WORKER_CREATED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val worker = MoeJson.parseWorker(payload)
-                val current = state ?: return
-                val workers = current.workers.filter { it.id != worker.id } + worker
-                val newState = current.copy(workers = workers)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val workers = current.workers.filter { it.id != worker.id } + worker
+                    val newState = current.copy(workers = workers)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "TEAM_CREATED", "TEAM_UPDATED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val team = MoeJson.parseTeam(payload)
-                val current = state ?: return
-                val teams = current.teams.filter { it.id != team.id } + team
-                val newState = current.copy(teams = teams)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val teams = current.teams.filter { it.id != team.id } + team
+                    val newState = current.copy(teams = teams)
+                    state = newState
+                    publishState(newState)
+                }
             }
             "TEAM_DELETED" -> {
                 val payload = json.getAsJsonObject("payload")
                 val team = MoeJson.parseTeam(payload)
-                val current = state ?: return
-                val teams = current.teams.filter { it.id != team.id }
-                val newState = current.copy(teams = teams)
-                state = newState
-                publishState(newState)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val teams = current.teams.filter { it.id != team.id }
+                    val newState = current.copy(teams = teams)
+                    state = newState
+                    publishState(newState)
+                }
+            }
+            "DAEMON_SHUTTING_DOWN" -> {
+                if (disposed.get()) return
+                isManualDisconnect = true
+                stopAutoRefresh()
+                publishStatus(false, "Daemon shutting down...")
             }
         }
     }
@@ -521,6 +629,15 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         }
     }
 
+    private fun closeQuietly(client: WebSocketClient?) {
+        if (client == null) return
+        try {
+            client.close()
+        } catch (ex: Exception) {
+            log.debug("Failed to close old WebSocket client", ex)
+        }
+    }
+
     private fun publishState(state: MoeState) {
         ApplicationManager.getApplication().invokeLater {
             listeners.forEach { it.onState(state) }
@@ -626,6 +743,19 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 env["PATH"] = "${nodeDir.absolutePath}${File.pathSeparator}$current"
             }
             val process = pb.start()
+            val oldProcess = spawnedDaemonProcess
+            if (oldProcess != null) {
+                try {
+                    if (oldProcess.isAlive) {
+                        oldProcess.destroyForcibly()
+                        log.info("Destroyed previous daemon process before spawning new one")
+                    }
+                } catch (ex: Exception) {
+                    log.debug("Failed to destroy previous daemon process before respawn: ${ex.message}", ex)
+                } finally {
+                    spawnedDaemonProcess = null
+                }
+            }
             spawnedDaemonProcess = process
             // Drain stdout/stderr to prevent Windows pipe deadlock (buffer is ~4KB)
             Thread({
@@ -887,18 +1017,19 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     override fun dispose() {
-        if (disposed) return
-        disposed = true
+        if (!disposed.compareAndSet(false, true)) return
         log.info("Disposing MoeProjectService")
 
         // Cancel any pending reconnect
         reconnectFuture?.cancel(true)
         reconnectFuture = null
+        retryFuture?.cancel(false)
+        retryFuture = null
 
         // Stop auto-refresh
         stopAutoRefresh()
 
-        // Disconnect WebSocket
+        // Disconnect WebSocket (disconnect uses closeQuietly for safe cleanup)
         disconnect()
 
         // Clear all listeners to prevent memory leaks
@@ -931,6 +1062,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
      */
     private fun killSpawnedDaemon() {
         val process = spawnedDaemonProcess ?: return
+        // Intentionally clear the shared reference before kill attempts to prevent double-kill races.
         spawnedDaemonProcess = null
         try {
             if (process.isAlive) {
@@ -943,13 +1075,18 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
         } catch (ex: Exception) {
             log.warn("Error killing spawned daemon: ${ex.message}")
+        } finally {
+            // Keep stale references cleared; preserve any newer process assigned concurrently.
+            if (spawnedDaemonProcess === process) {
+                spawnedDaemonProcess = null
+            }
         }
     }
 
     private fun startAutoRefresh() {
-        if (disposed || refreshFuture != null) return
+        if (disposed.get() || refreshFuture != null) return
         refreshFuture = scheduler.scheduleAtFixedRate({
-            if (disposed || !connected) return@scheduleAtFixedRate
+            if (disposed.get() || !connected) return@scheduleAtFixedRate
             try {
                 sendMessage("GET_STATE", JsonObject())
             } catch (ex: Exception) {
@@ -964,18 +1101,23 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     private fun scheduleReconnect() {
-        if (disposed || connected || connecting) return
+        if (disposed.get() || connected || connecting) return
         if (isManualDisconnect) return
         if (reconnectAttempts >= maxReconnectAttempts) {
             publishStatus(false, "Reconnect failed after $maxReconnectAttempts attempts")
             return
         }
-        val existing = reconnectFuture
-        if (existing != null && !existing.isDone) return
+        try {
+            reconnectFuture?.cancel(false)
+        } catch (ex: Exception) {
+            log.debug("Failed to cancel existing reconnect future: ${ex.message}", ex)
+        } finally {
+            reconnectFuture = null
+        }
         reconnectAttempts++
         publishStatus(false, "Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})")
         reconnectFuture = scheduler.schedule({
-            if (disposed || connected || connecting || isManualDisconnect) return@schedule
+            if (disposed.get() || connected || connecting || isManualDisconnect) return@schedule
             connect()
         }, reconnectDelayMs, TimeUnit.MILLISECONDS)
     }

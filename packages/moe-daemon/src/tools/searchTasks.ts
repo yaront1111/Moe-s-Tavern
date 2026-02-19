@@ -1,6 +1,12 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
+import { invalidInput } from '../util/errors.js';
+
+const DEFAULT_SEARCH_LIMIT = 20;
+const MIN_SEARCH_LIMIT = 1;
+const MAX_SEARCH_LIMIT = 200;
+const MAX_QUERY_LENGTH = 500;
 
 export function searchTasksTool(_state: StateManager): ToolDefinition {
   return {
@@ -51,8 +57,26 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
         limit?: number;
       };
 
-      const limit = params.limit ?? 20;
-      const query = params.query?.toLowerCase() ?? '';
+      if (params.query !== undefined && typeof params.query !== 'string') {
+        throw invalidInput('query', 'must be a string');
+      }
+
+      if (
+        params.limit !== undefined &&
+        (typeof params.limit !== 'number' || !Number.isFinite(params.limit))
+      ) {
+        throw invalidInput('limit', 'must be a finite number');
+      }
+
+      const limitInput = params.limit === undefined
+        ? DEFAULT_SEARCH_LIMIT
+        : Math.trunc(params.limit);
+      const limit = Math.max(MIN_SEARCH_LIMIT, Math.min(MAX_SEARCH_LIMIT, limitInput));
+
+      const queryValue = params.query === undefined
+        ? null
+        : params.query.slice(0, MAX_QUERY_LENGTH);
+      const query = queryValue?.toLowerCase() ?? '';
       const filters = params.filters ?? {};
 
       const snapshot = state.getSnapshot();
@@ -93,7 +117,7 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
       return {
         tasks: results,
         totalMatches,
-        query: params.query || null,
+        query: queryValue,
         filters
       };
     }

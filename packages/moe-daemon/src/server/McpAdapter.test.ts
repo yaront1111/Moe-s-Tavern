@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { McpAdapter, type JsonRpcRequest, type JsonRpcResponse } from './McpAdapter.js';
+import { McpAdapter, RateLimiter, type JsonRpcRequest, type JsonRpcResponse } from './McpAdapter.js';
 import type { StateManager } from '../state/StateManager.js';
 
 // Mock the tools module
@@ -29,6 +29,39 @@ vi.mock('../tools/index.js', () => ({
     },
   ],
 }));
+
+describe('RateLimiter', () => {
+  it('keeps bounded O(1) memory and enforces max requests', () => {
+    const limiter = new RateLimiter(1000, 60_000);
+
+    for (let i = 0; i < 1000; i++) {
+      expect(limiter.checkLimit()).toBe(true);
+    }
+    expect(limiter.checkLimit()).toBe(false);
+
+    const stats = limiter.getStats();
+    expect(stats).toEqual({ current: 1000, max: 1000, windowMs: 60_000 });
+
+    const internal = limiter as unknown as Record<string, unknown>;
+    expect(Array.isArray(internal.timestamps)).toBe(false);
+    expect(typeof internal.requestCount).toBe('number');
+    expect(typeof internal.windowStartMs).toBe('number');
+  });
+
+  it('resets request count when window expires', () => {
+    let now = 1_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const limiter = new RateLimiter(2, 100);
+    expect(limiter.checkLimit()).toBe(true);
+    expect(limiter.checkLimit()).toBe(true);
+    expect(limiter.checkLimit()).toBe(false);
+
+    now = 1_101;
+    expect(limiter.checkLimit()).toBe(true);
+    expect(limiter.getStats().current).toBe(1);
+  });
+});
 
 describe('McpAdapter', () => {
   let adapter: McpAdapter;

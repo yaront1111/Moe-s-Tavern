@@ -23,6 +23,43 @@ interface ActiveWaiter {
 /** Map of workerId -> active waiter. Exported for disconnect cleanup. */
 export const activeWaiters = new Map<string, ActiveWaiter>();
 
+/**
+ * Remove stale waiters for workers that no longer exist in memory.
+ * Returns number of removed waiters.
+ */
+export function cleanupStaleWaiters(state: StateManager): number {
+  let cleaned = 0;
+
+  for (const [workerId, waiter] of activeWaiters.entries()) {
+    if (state.workers.has(workerId)) {
+      continue;
+    }
+
+    try {
+      clearTimeout(waiter.timer);
+    } catch (error) {
+      logger.warn({ workerId, error }, 'Failed to clear stale waiter timeout');
+    }
+
+    try {
+      waiter.unsubscribe();
+    } catch (error) {
+      logger.warn({ workerId, error }, 'Failed to unsubscribe stale waiter');
+    }
+
+    try {
+      waiter.resolve({ hasNext: false, cancelled: true });
+    } catch (error) {
+      logger.warn({ workerId, error }, 'Failed to resolve stale waiter');
+    }
+
+    activeWaiters.delete(workerId);
+    cleaned += 1;
+  }
+
+  return cleaned;
+}
+
 function findPendingQuestion(
   state: StateManager,
   epicId?: string

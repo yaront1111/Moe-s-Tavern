@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { StateManager } from '../state/StateManager.js';
+import { StateManager, MAX_COMMENTS_PER_TASK } from '../state/StateManager.js';
 import { getContextTool } from './getContext.js';
 import { submitPlanTool } from './submitPlan.js';
 import { checkApprovalTool } from './checkApproval.js';
@@ -1524,6 +1524,14 @@ describe('MCP Tools', () => {
   });
 
   describe('Task comments', () => {
+    const makeComments = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: `comment-${i}`,
+        author: i % 2 === 0 ? 'human' : 'worker-1',
+        content: `Comment ${i}`,
+        timestamp: new Date(Date.now() + i).toISOString(),
+      }));
+
     beforeEach(async () => {
       setupMoeFolder();
       createEpic();
@@ -1554,6 +1562,100 @@ describe('MCP Tools', () => {
       }, state);
       const task = state.getTask('task-1');
       expect(task?.comments[0].author).toBe('worker-123');
+    });
+
+    it('preserves all comments when under limit', async () => {
+      await state.updateTask('task-1', { comments: makeComments(MAX_COMMENTS_PER_TASK - 1) });
+      const tool = addCommentTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        content: 'Newest under limit',
+      }, state) as { totalComments: number };
+
+      expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+      const task = state.getTask('task-1');
+      expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+      expect(task?.comments[0].content).toBe('Comment 0');
+      expect(task?.comments.at(-1)?.content).toBe('Newest under limit');
+    });
+
+    it('trims oldest comment when adding at limit', async () => {
+      await state.updateTask('task-1', { comments: makeComments(MAX_COMMENTS_PER_TASK) });
+      const tool = addCommentTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        content: 'Newest at limit',
+      }, state) as { totalComments: number };
+
+      expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+      const task = state.getTask('task-1');
+      expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+      expect(task?.comments.some((c) => c.content === 'Comment 0')).toBe(false);
+      expect(task?.comments[0].content).toBe('Comment 1');
+      expect(task?.comments.at(-1)?.content).toBe('Newest at limit');
+    });
+
+    it('trims task with 300 existing comments down to max preserving newest', async () => {
+      const task = state.getTask('task-1');
+      expect(task).toBeTruthy();
+      state.tasks.set('task-1', {
+        ...task!,
+        comments: makeComments(300),
+      });
+
+      const tool = addCommentTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        content: 'Newest with 300 existing',
+      }, state) as { totalComments: number };
+
+      expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+      const updatedTask = state.getTask('task-1');
+      expect(updatedTask?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+      expect(updatedTask?.comments[0].content).toBe('Comment 101');
+      expect(updatedTask?.comments.at(-1)?.content).toBe('Newest with 300 existing');
+    });
+
+    it('handles null/undefined comments array gracefully', async () => {
+      const existing = state.getTask('task-1');
+      expect(existing).toBeTruthy();
+      state.tasks.set('task-1', {
+        ...existing!,
+        comments: null as unknown as Task['comments'],
+      });
+
+      const tool = addCommentTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        content: 'Comment on null comments',
+      }, state) as { totalComments: number };
+
+      expect(result.totalComments).toBe(1);
+      const task = state.getTask('task-1');
+      expect(task?.comments.length).toBe(1);
+      expect(task?.comments[0].content).toBe('Comment on null comments');
+    });
+
+    it('always preserves newest comments including newly added one', async () => {
+      const baseline = makeComments(MAX_COMMENTS_PER_TASK + 25);
+      const existing = state.getTask('task-1');
+      expect(existing).toBeTruthy();
+      state.tasks.set('task-1', {
+        ...existing!,
+        comments: baseline,
+      });
+
+      const tool = addCommentTool(state);
+      await tool.handler({
+        taskId: 'task-1',
+        content: 'Newest preserved',
+      }, state);
+
+      const task = state.getTask('task-1');
+      expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+      expect(task?.comments.some((c) => c.content === 'Comment 0')).toBe(false);
+      expect(task?.comments.some((c) => c.content === `Comment ${baseline.length - 1}`)).toBe(true);
+      expect(task?.comments.at(-1)?.content).toBe('Newest preserved');
     });
 
     it('rejects empty content', async () => {

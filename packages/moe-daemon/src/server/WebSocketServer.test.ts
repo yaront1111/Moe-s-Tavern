@@ -120,8 +120,8 @@ describe('MoeWebSocketServer Integration', () => {
 
   afterEach(async () => {
     // Close all WebSocket connections first, then the HTTP server
-    if (wsServer) {
-      wsServer.close();
+    if (wsServer && !wsServer.closed) {
+      await wsServer.close();
     }
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());
@@ -210,6 +210,51 @@ describe('MoeWebSocketServer Integration', () => {
 
       ws.close();
     });
+
+    it('rejects ADD_TASK_COMMENT payloads over 10K characters', async () => {
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+
+      // Skip initial STATE_SNAPSHOT
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'ADD_TASK_COMMENT',
+        payload: {
+          taskId: 'task-1',
+          content: 'x'.repeat(10_001),
+          author: 'human',
+        },
+      }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ERROR');
+      expect(parsed.message).toContain('10000');
+
+      ws.close();
+    });
+
+    it('sends DAEMON_SHUTTING_DOWN before closing plugin connections', async () => {
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+
+      // Skip initial STATE_SNAPSHOT
+      await nextMessage();
+
+      const socketClosed = new Promise<void>((resolve) => {
+        ws.on('close', () => resolve());
+      });
+
+      const closePromise = wsServer.close();
+      const shutdownMessage = await nextMessage();
+      const parsed = JSON.parse(shutdownMessage);
+
+      expect(parsed.type).toBe('DAEMON_SHUTTING_DOWN');
+
+      await closePromise;
+      await socketClosed;
+    });
   });
 
   describe('MCP endpoint (/mcp)', () => {
@@ -279,6 +324,11 @@ describe('MoeWebSocketServer Integration', () => {
   });
 
   describe('Error handling', () => {
+    it('allows repeated close calls without throwing', async () => {
+      await wsServer.close();
+      await expect(wsServer.close()).resolves.toBeUndefined();
+    });
+
     it('survives rapid client connect/disconnect cycles', async () => {
       // Simulate multiple rapid connections and disconnections
       // This exercises the error handlers for abrupt disconnects

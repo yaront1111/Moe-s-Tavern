@@ -10,6 +10,15 @@ import { logger } from './logger.js';
 // Configuration from environment variables with defaults
 const DEFAULT_MAX_SIZE_MB = 10;
 const DEFAULT_RETENTION_COUNT = 5;
+const DEFAULT_COMPRESSION_TIMEOUT_MS = 30_000;
+const COMPRESSION_TIMEOUT_MS_ENV = parseInt(
+  process.env.LOG_COMPRESSION_TIMEOUT_MS || `${DEFAULT_COMPRESSION_TIMEOUT_MS}`,
+  10
+);
+const COMPRESSION_TIMEOUT_MS =
+  Number.isFinite(COMPRESSION_TIMEOUT_MS_ENV) && COMPRESSION_TIMEOUT_MS_ENV > 0
+    ? COMPRESSION_TIMEOUT_MS_ENV
+    : DEFAULT_COMPRESSION_TIMEOUT_MS;
 
 export interface LogRotatorOptions {
   maxSizeMB?: number;
@@ -107,30 +116,70 @@ export class LogRotator {
       const source = fs.createReadStream(sourcePath);
       const destination = fs.createWriteStream(destPath);
       const gzip = zlib.createGzip();
+      let settled = false;
+
+      const unpipeStreams = (): void => {
+        source.unpipe(gzip);
+        gzip.unpipe(destination);
+      };
+
+      const resolveOnce = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+
+      const rejectOnce = (
+        error: unknown,
+        cleanup: { destroySource: boolean; destroyGzip: boolean; destroyDestination: boolean }
+      ): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        unpipeStreams();
+        if (cleanup.destroySource) {
+          source.destroy();
+        }
+        if (cleanup.destroyGzip) {
+          gzip.destroy();
+        }
+        if (cleanup.destroyDestination) {
+          destination.destroy();
+        }
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+
+      const timeout = setTimeout(() => {
+        rejectOnce(
+          new Error(`Compression timed out after ${COMPRESSION_TIMEOUT_MS}ms`),
+          { destroySource: true, destroyGzip: true, destroyDestination: true }
+        );
+      }, COMPRESSION_TIMEOUT_MS);
+      timeout.unref?.();
 
       // Add error handlers to all streams to prevent hanging
       source.on('error', (error) => {
-        gzip.destroy();
-        destination.destroy();
-        reject(error);
+        rejectOnce(error, { destroySource: false, destroyGzip: true, destroyDestination: true });
       });
 
       gzip.on('error', (error) => {
-        source.destroy();
-        destination.destroy();
-        reject(error);
+        rejectOnce(error, { destroySource: true, destroyGzip: false, destroyDestination: true });
       });
 
       destination.on('error', (error) => {
-        source.destroy();
-        gzip.destroy();
-        reject(error);
+        rejectOnce(error, { destroySource: true, destroyGzip: true, destroyDestination: false });
       });
 
       source
         .pipe(gzip)
-        .pipe(destination)
-        .on('finish', () => resolve());
+        .pipe(destination);
+
+      destination.on('finish', () => resolveOnce());
     });
   }
 
