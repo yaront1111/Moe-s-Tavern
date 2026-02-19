@@ -29,6 +29,7 @@ const PORT_CHECK_INTERVAL_MS = parseInt(process.env.MOE_PORT_CHECK_INTERVAL_MS |
 const PORT_READY_TIMEOUT_MS = parseInt(process.env.MOE_PORT_READY_TIMEOUT_MS || '5000', 10);
 const LOCK_RETRY_DELAY_MS = parseInt(process.env.MOE_LOCK_RETRY_DELAY_MS || '2000', 10);
 const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.MOE_SHUTDOWN_TIMEOUT_MS || '10000', 10);
+const HTTP_CLOSE_TIMEOUT_MS = parseInt(process.env.MOE_HTTP_CLOSE_TIMEOUT_MS || '5000', 10);
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -118,6 +119,46 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
       socket.connect(port, '127.0.0.1');
     };
     check();
+  });
+}
+
+async function closeHttpServer(server: http.Server, timeoutMs: number = HTTP_CLOSE_TIMEOUT_MS): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`HTTP server close timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    if (timeout.unref) {
+      timeout.unref();
+    }
+
+    try {
+      server.close((error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+
+        const closeError = error as NodeJS.ErrnoException | undefined;
+        if (closeError?.code === 'ERR_SERVER_NOT_RUNNING') {
+          resolve();
+          return;
+        }
+
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    }
   });
 }
 
@@ -349,6 +390,16 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     // Set a hard timeout in case cleanup hangs
     const forceExitTimeout = setTimeout(() => {
       logger.error('Shutdown timed out, forcing exit');
+      try {
+        releaseLock(projectPath);
+      } catch (error) {
+        logger.error({ error }, 'Error releasing lock during forced shutdown exit');
+      }
+      try {
+        removeDaemonInfo(projectPath);
+      } catch (error) {
+        logger.error({ error }, 'Error removing daemon info during forced shutdown exit');
+      }
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
 
@@ -365,7 +416,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     }
 
     try {
-      httpServer.close();
+      await closeHttpServer(httpServer);
     } catch (error) {
       logger.error({ error }, 'Error closing HTTP server');
     }
@@ -399,6 +450,11 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   // Handle uncaught errors gracefully
   process.on('uncaughtException', (error) => {
     logger.fatal({ error }, 'Uncaught exception');
+    try {
+      releaseLock(projectPath);
+    } catch (lockError) {
+      logger.error({ error: lockError }, 'Failed to release lock in uncaughtException handler');
+    }
     shutdown();
   });
 

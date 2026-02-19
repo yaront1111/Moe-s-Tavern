@@ -5,10 +5,12 @@
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
+import { MAX_COMMENTS_PER_TASK } from '../state/StateManager.js';
 import type { McpAdapter } from './McpAdapter.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
+import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 
 export type PluginMessage =
   | { type: 'PING' }
@@ -41,6 +43,7 @@ export class MoeWebSocketServer {
   private mcpClients = new Set<WebSocket>();
   private mcpWorkerMap = new Map<WebSocket, Set<string>>();
   private isClosed = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(
     httpServer: HttpServer,
@@ -441,8 +444,21 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          if (!content || typeof content !== 'string' || content.trim().length === 0) {
+          if (typeof content !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Comment content must be a string' }));
+            return;
+          }
+
+          const trimmedContent = content.trim();
+          if (trimmedContent.length === 0) {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Comment content cannot be empty' }));
+            return;
+          }
+          if (trimmedContent.length > MAX_TASK_COMMENT_LENGTH) {
+            this.safeSend(ws, JSON.stringify({
+              type: 'ERROR',
+              message: `Comment content must be ${MAX_TASK_COMMENT_LENGTH} characters or fewer`
+            }));
             return;
           }
           const existing = this.state.getTask(taskId);
@@ -453,11 +469,15 @@ export class MoeWebSocketServer {
           const comment = {
             id: generateId('comment'),
             author: author || 'human',
-            content: content.trim(),
+            content: trimmedContent,
             timestamp: new Date().toISOString()
           };
-          const comments = [...(existing.comments || []), comment];
-          const updates: Partial<import('../types/schema.js').Task> = { comments };
+          const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
+          const comments = [...existingComments, comment];
+          const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
+            ? comments.slice(-MAX_COMMENTS_PER_TASK)
+            : comments;
+          const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
           if (comment.author === 'human') {
             updates.hasPendingQuestion = true;
           }
@@ -569,37 +589,70 @@ export class MoeWebSocketServer {
    * Gracefully close the WebSocket server.
    * Returns a Promise that resolves when all connections are closed.
    */
-  close(): Promise<void> {
+  async close(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+    if (this.isClosed) {
+      return;
+    }
+
     // Mark as closed immediately to prevent new operations
     this.isClosed = true;
 
-    return new Promise((resolve, reject) => {
+    this.closePromise = (async () => {
+      if (this.pluginClients.size > 0) {
+        const shuttingDownMessage = JSON.stringify({ type: 'DAEMON_SHUTTING_DOWN' });
+        for (const client of this.pluginClients) {
+          this.safeSend(client, shuttingDownMessage);
+        }
+
+        await new Promise<void>((resolve) => {
+          const delay = setTimeout(resolve, 100);
+          if (delay.unref) {
+            delay.unref();
+          }
+        });
+      }
+
       // Close all client connections first
+      let closeErrors = 0;
       for (const client of this.pluginClients) {
         try {
           client.close(1000, 'Server shutting down');
-        } catch {
-          // Ignore errors during shutdown
+        } catch (error) {
+          closeErrors += 1;
+          logger.debug({ error }, 'Error closing plugin client during shutdown');
         }
       }
       for (const client of this.mcpClients) {
         try {
           client.close(1000, 'Server shutting down');
-        } catch {
-          // Ignore errors during shutdown
+        } catch (error) {
+          closeErrors += 1;
+          logger.debug({ error }, 'Error closing MCP client during shutdown');
         }
+      }
+      if (closeErrors > 0) {
+        logger.debug({ closeErrors }, 'WebSocket close errors during shutdown');
       }
       this.pluginClients.clear();
       this.mcpClients.clear();
       this.mcpWorkerMap.clear();
 
-      this.wss.close((err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
+      await new Promise<void>((resolve, reject) => {
+        this.wss.close((err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
       });
+    })().finally(() => {
+      this.closePromise = null;
     });
+
+    await this.closePromise;
   }
 }

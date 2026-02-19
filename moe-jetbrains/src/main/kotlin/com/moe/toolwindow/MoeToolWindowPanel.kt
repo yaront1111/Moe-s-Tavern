@@ -13,6 +13,7 @@ import com.moe.util.MoeProjectRegistry
 import com.moe.util.TerminalAgentLauncher
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.components.service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
@@ -62,6 +63,17 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var stateListener: MoeStateListener? = null
     private lateinit var agentsButton: JBLabel
     private var searchQuery: String = ""
+    private var lastStateFingerprint: String = ""
+    private val columnOrder = listOf("BACKLOG", "PLANNING", "WORKING", "REVIEW", "DONE")
+    private val columnPanels = mutableMapOf<String, TaskColumn>()
+    private val columnContainers = mutableMapOf<String, JBPanel<JBPanel<*>>>()
+    private val columnFingerprints = mutableMapOf<String, String>()
+    private val logger = Logger.getInstance(MoeToolWindowPanel::class.java)
+    private val taskBoard = JBPanel<JBPanel<*>>().apply {
+        layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.X_AXIS)
+        isOpaque = false
+        border = com.intellij.util.ui.JBUI.Borders.empty(8, 12, 12, 12)
+    }
 
     init {
         val header = JPanel(WrapLayout(FlowLayout.RIGHT, 8, 4))
@@ -219,6 +231,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         add(topPanel, BorderLayout.NORTH)
         background = BoardStyles.boardBackground
         contentPanel.background = BoardStyles.boardBackground
+        contentPanel.add(taskBoard, BorderLayout.CENTER)
 
         val scroll = JBScrollPane(contentPanel).apply {
             border = com.intellij.util.ui.JBUI.Borders.empty()
@@ -345,6 +358,28 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             val taskMap = state.tasks.associateBy { it.id }
             workerPanel.updateWorkers(state.workers, taskMap, state.teams)
 
+            val boardFingerprint = runCatching {
+                val taskFingerprint = state.tasks.joinToString(",") {
+                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}"
+                }
+                val epicFingerprint = state.epics.joinToString(",") {
+                    "${it.id}:${it.title}:${it.status}:${it.order}"
+                }
+                val collapsedFingerprint = collapsedEpics.toList().sorted().joinToString(",")
+                "$taskFingerprint|$epicFingerprint|epic=${selectedEpicId ?: "ALL"}|search=${searchQuery.lowercase()}|collapsed=$collapsedFingerprint"
+            }.getOrElse { error ->
+                logger.warn("Failed to compute board fingerprint; proceeding with rebuild", error)
+                ""
+            }
+
+            if (boardFingerprint.isNotEmpty() && boardFingerprint == lastStateFingerprint) {
+                logger.debug("Skipping board update; state fingerprint unchanged")
+                return@invokeLater
+            }
+            if (boardFingerprint.isNotEmpty()) {
+                lastStateFingerprint = boardFingerprint
+            }
+
             // Filter tasks by selected epic
             val allTasks = state.tasks.sortedBy { it.order }
             val epicFiltered = if (selectedEpicId != null) {
@@ -359,6 +394,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 epicFiltered
             }
             val epicMeta = state.epics.associateBy { it.id }
+            val epicMetaFingerprint = state.epics.joinToString(",") {
+                "${it.id}:${it.title}:${it.status}:${it.order}"
+            }
 
             fun displayStatus(taskStatus: String): String {
                 return if (taskStatus == "AWAITING_APPROVAL") "PLANNING" else taskStatus
@@ -382,14 +420,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 lastState?.let { updateBoard(it) }
             }
 
-            val columnOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
+            val workflowOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
             fun getNextStatus(current: String): String? {
-                val idx = columnOrder.indexOf(current)
-                return if (idx >= 0 && idx < columnOrder.size - 1) columnOrder[idx + 1] else null
+                val idx = workflowOrder.indexOf(current)
+                return if (idx >= 0 && idx < workflowOrder.size - 1) workflowOrder[idx + 1] else null
             }
             fun getPreviousStatus(current: String): String? {
-                val idx = columnOrder.indexOf(current)
-                return if (idx > 0) columnOrder[idx - 1] else null
+                val idx = workflowOrder.indexOf(current)
+                return if (idx > 0) workflowOrder[idx - 1] else null
             }
 
             fun handleNext(task: Task) {
@@ -419,8 +457,13 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             val columnLimits = state.project.settings?.columnLimits ?: emptyMap()
 
-            fun buildTaskColumn(board: JBPanel<JBPanel<*>>, title: String, status: String, isBacklog: Boolean = false, isDone: Boolean = false) {
-                val columnTasks = tasks.filter { displayStatus(it.status) == status }
+            fun createTaskColumn(
+                title: String,
+                status: String,
+                columnTasks: List<Task>,
+                isBacklog: Boolean = false,
+                isDone: Boolean = false
+            ): TaskColumn {
                 val wipLimit = columnLimits[status]
                 val column = TaskColumn(
                     title = title,
@@ -498,29 +541,80 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 column.preferredSize = Dimension(BoardStyles.columnWidth, colPref.height)
                 column.minimumSize = Dimension(BoardStyles.columnWidth, 0)
                 column.maximumSize = Dimension(BoardStyles.columnWidth, Int.MAX_VALUE)
-                board.add(column)
-                board.add(Box.createHorizontalStrut(12))
+                return column
             }
 
-            val taskBoard = JBPanel<JBPanel<*>>().apply {
-                layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.X_AXIS)
-                isOpaque = false
-                border = com.intellij.util.ui.JBUI.Borders.empty(8, 12, 12, 12)
+            if (columnContainers.isEmpty()) {
+                taskBoard.removeAll()
+                columnOrder.forEachIndexed { index, status ->
+                    val container = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                        isOpaque = false
+                    }
+                    columnContainers[status] = container
+                    taskBoard.add(container)
+                    if (index < columnOrder.lastIndex) {
+                        taskBoard.add(Box.createHorizontalStrut(12))
+                    }
+                }
             }
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.backlog"), "BACKLOG", isBacklog = true)
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.planning"), "PLANNING")
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.working"), "WORKING")
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.review"), "REVIEW")
-            buildTaskColumn(taskBoard, MoeBundle.message("moe.column.done"), "DONE", isDone = true)
 
-            if (taskBoard.componentCount > 0) {
-                taskBoard.remove(taskBoard.componentCount - 1)
+            data class ColumnConfig(
+                val title: String,
+                val status: String,
+                val isBacklog: Boolean = false,
+                val isDone: Boolean = false
+            )
+
+            val columnConfigs = listOf(
+                ColumnConfig(MoeBundle.message("moe.column.backlog"), "BACKLOG", isBacklog = true),
+                ColumnConfig(MoeBundle.message("moe.column.planning"), "PLANNING"),
+                ColumnConfig(MoeBundle.message("moe.column.working"), "WORKING"),
+                ColumnConfig(MoeBundle.message("moe.column.review"), "REVIEW"),
+                ColumnConfig(MoeBundle.message("moe.column.done"), "DONE", isDone = true)
+            )
+
+            var updatedColumns = false
+
+            fun updateColumn(config: ColumnConfig, force: Boolean = false) {
+                val container = columnContainers[config.status] ?: return
+                val columnTasks = tasks.filter { displayStatus(it.status) == config.status }
+                val taskFingerprint = columnTasks.joinToString(",") {
+                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}"
+                }
+                val fingerprint = "$taskFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}"
+
+                if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
+                    return
+                }
+
+                val column = createTaskColumn(
+                    title = config.title,
+                    status = config.status,
+                    columnTasks = columnTasks,
+                    isBacklog = config.isBacklog,
+                    isDone = config.isDone
+                )
+
+                container.removeAll()
+                container.add(column, BorderLayout.CENTER)
+                columnPanels[config.status] = column
+                columnFingerprints[config.status] = fingerprint
+                updatedColumns = true
             }
 
-            contentPanel.removeAll()
-            contentPanel.add(taskBoard, BorderLayout.CENTER)
-            contentPanel.revalidate()
-            contentPanel.repaint()
+            try {
+                columnConfigs.forEach { updateColumn(it) }
+            } catch (error: Exception) {
+                logger.warn("Column diff update failed; forcing full column rebuild", error)
+                columnFingerprints.clear()
+                columnConfigs.forEach { updateColumn(it, force = true) }
+            }
+
+            if (updatedColumns) {
+                logger.debug("Updated board columns incrementally")
+                contentPanel.revalidate()
+                contentPanel.repaint()
+            }
         }
     }
 

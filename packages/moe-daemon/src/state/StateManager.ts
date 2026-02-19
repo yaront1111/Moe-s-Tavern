@@ -13,6 +13,7 @@ import type {
   ProjectSettings,
   RailProposal,
   Task,
+  TaskComment,
   TaskPriority,
   Team,
   TeamRole,
@@ -25,6 +26,7 @@ import { logger, createContextLogger } from '../util/logger.js';
 import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
+import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import {
   sanitizeString,
   sanitizeNumber,
@@ -35,9 +37,19 @@ import {
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
+import { readLastLines } from '../util/reverseReader.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const PROPOSAL_PURGE_AGE_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_AGE_MS || `${7 * DAY_IN_MS}`, 10);
+const PROPOSAL_PURGE_INTERVAL_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_INTERVAL_MS || `${DAY_IN_MS}`, 10);
+const PROPOSAL_SNAPSHOT_RETENTION_MS = parseInt(process.env.MOE_PROPOSAL_SNAPSHOT_RETENTION_MS || `${DAY_IN_MS}`, 10);
+const MAX_COMMENTS_PER_TASK_DEFAULT = 200;
+const MAX_COMMENTS_PER_TASK_ENV = parseInt(process.env.MOE_MAX_COMMENTS_PER_TASK || `${MAX_COMMENTS_PER_TASK_DEFAULT}`, 10);
+export const MAX_COMMENTS_PER_TASK = Number.isFinite(MAX_COMMENTS_PER_TASK_ENV) && MAX_COMMENTS_PER_TASK_ENV > 0
+  ? MAX_COMMENTS_PER_TASK_ENV
+  : MAX_COMMENTS_PER_TASK_DEFAULT;
 
 /**
  * Wraps a promise with a timeout.
@@ -120,6 +132,8 @@ export type StateChangeEvent =
   | { type: 'TEAM_UPDATED'; payload: Team }
   | { type: 'TEAM_DELETED'; payload: Team };
 
+type StateSubscriber = (event: StateChangeEvent) => void;
+
 export interface StateManagerOptions {
   projectPath: string;
   blockedTimeoutMs?: number;
@@ -138,13 +152,15 @@ export class StateManager {
   teams = new Map<string, Team>();
 
   private emitter?: (event: StateChangeEvent) => void;
-  private subscribers = new Set<(event: StateChangeEvent) => void>();
+  private subscribers = new Set<StateSubscriber>();
+  private subscriberErrorCounts = new Map<StateSubscriber, number>();
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
   private logRotator?: LogRotator;
   private pendingActivityWrites = 0;
   private activityFlushResolvers: Array<() => void> = [];
   private blockedTimeoutInterval?: NodeJS.Timeout;
+  private proposalPurgeInterval?: NodeJS.Timeout;
   private readonly blockedTimeoutMs: number;
   private readonly staleWorkerTimeoutMs: number;
 
@@ -163,15 +179,22 @@ export class StateManager {
    * Clear the event emitter to prevent memory leaks during shutdown.
    */
   clearEmitter(): void {
+    this.stopBlockedTimeoutCheck();
+    this.stopProposalPurgeInterval();
+    this.subscribers.clear();
+    this.subscriberErrorCounts.clear();
     this.emitter = undefined;
   }
 
   /**
    * Subscribe to state change events. Returns an unsubscribe function.
    */
-  subscribe(fn: (event: StateChangeEvent) => void): () => void {
+  subscribe(fn: StateSubscriber): () => void {
     this.subscribers.add(fn);
-    return () => { this.subscribers.delete(fn); };
+    return () => {
+      this.subscribers.delete(fn);
+      this.subscriberErrorCounts.delete(fn);
+    };
   }
 
   /**
@@ -206,6 +229,40 @@ export class StateManager {
     if (this.blockedTimeoutInterval) {
       clearInterval(this.blockedTimeoutInterval);
       this.blockedTimeoutInterval = undefined;
+    }
+  }
+
+  /**
+   * Start periodic purge of resolved proposals.
+   * Runs every 24 hours by default.
+   */
+  startProposalPurgeInterval(intervalMs = PROPOSAL_PURGE_INTERVAL_MS): void {
+    this.stopProposalPurgeInterval();
+    this.proposalPurgeInterval = setInterval(() => {
+      this.purgeResolvedProposals()
+        .then((purgedCount) => {
+          if (purgedCount > 0) {
+            this.emit({ type: 'STATE_SNAPSHOT', payload: this.getSnapshot() });
+          }
+        })
+        .catch((error) => {
+          logger.error({ error }, 'Error purging resolved proposals');
+        });
+    }, intervalMs);
+
+    // Don't prevent process exit
+    if (this.proposalPurgeInterval.unref) {
+      this.proposalPurgeInterval.unref();
+    }
+  }
+
+  /**
+   * Stop periodic resolved proposal purge.
+   */
+  stopProposalPurgeInterval(): void {
+    if (this.proposalPurgeInterval) {
+      clearInterval(this.proposalPurgeInterval);
+      this.proposalPurgeInterval = undefined;
     }
   }
 
@@ -246,6 +303,66 @@ export class StateManager {
     if (deletedCount > 0) {
       this.emit({ type: 'STATE_SNAPSHOT', payload: this.getSnapshot() });
     }
+
+    try {
+      const staleWaitersCleaned = cleanupStaleWaiters(this);
+      if (staleWaitersCleaned > 0) {
+        logger.info({ staleWaitersCleaned }, 'Cleaned stale wait_for_task waiters');
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
+    }
+  }
+
+  private isStaleResolvedProposal(proposal: RailProposal, ageMs: number, nowMs: number): boolean {
+    if (proposal.status !== 'APPROVED' && proposal.status !== 'REJECTED') {
+      return false;
+    }
+
+    if (!proposal.resolvedAt) {
+      return false;
+    }
+
+    const resolvedAtMs = Date.parse(proposal.resolvedAt);
+    if (Number.isNaN(resolvedAtMs)) {
+      return false;
+    }
+
+    return nowMs - resolvedAtMs > ageMs;
+  }
+
+  async purgeResolvedProposals(nowMs = Date.now()): Promise<number> {
+    let purgedCount = 0;
+    const proposalEntries = Array.from(this.proposals.entries());
+
+    for (const [proposalId, proposal] of proposalEntries) {
+      if (!this.isStaleResolvedProposal(proposal, PROPOSAL_PURGE_AGE_MS, nowMs)) {
+        continue;
+      }
+
+      const filePath = path.join(this.moePath, 'proposals', `${proposalId}.json`);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (error) {
+        const fsError = error as NodeJS.ErrnoException;
+        if (fsError.code !== 'ENOENT') {
+          logger.warn({ error, proposalId }, 'Failed to delete stale proposal file');
+          continue;
+        }
+      }
+
+      this.proposals.delete(proposalId);
+      this.appendActivity('PROPOSAL_PURGED', {
+        proposalId,
+        status: proposal.status,
+        resolvedAt: proposal.resolvedAt
+      });
+      purgedCount++;
+    }
+
+    return purgedCount;
   }
 
   /**
@@ -280,8 +397,37 @@ export class StateManager {
       }
     }
     for (const sub of this.subscribers) {
-      try { sub(event); } catch (error) { logger.error({ error }, 'Error in subscriber'); }
+      try {
+        sub(event);
+        this.subscriberErrorCounts.delete(sub);
+      } catch (error) {
+        const consecutiveErrors = (this.subscriberErrorCounts.get(sub) ?? 0) + 1;
+        this.subscriberErrorCounts.set(sub, consecutiveErrors);
+        logger.error({ error, consecutiveErrors }, 'Error in subscriber');
+
+        if (consecutiveErrors >= 3) {
+          try {
+            this.subscribers.delete(sub);
+            this.subscriberErrorCounts.delete(sub);
+            logger.warn({ consecutiveErrors }, 'Removed subscriber after repeated errors');
+          } catch (removalError) {
+            logger.error({ error: removalError }, 'Failed to remove broken subscriber');
+          }
+        }
+      }
     }
+  }
+
+  private trimComments(comments: TaskComment[] | null | undefined): TaskComment[] {
+    if (!Array.isArray(comments) || comments.length === 0) {
+      return [];
+    }
+
+    if (comments.length <= MAX_COMMENTS_PER_TASK) {
+      return comments;
+    }
+
+    return comments.slice(-MAX_COMMENTS_PER_TASK);
   }
 
   async load(): Promise<void> {
@@ -334,6 +480,11 @@ export class StateManager {
       }
       this.teams = this.loadEntities<Team>(path.join(this.moePath, 'teams'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
+      try {
+        await this.purgeResolvedProposals();
+      } catch (error) {
+        logger.error({ error }, 'Failed to purge resolved proposals during load');
+      }
 
       // Initialize log rotator
       const activityLogPath = path.join(this.moePath, 'activity.log');
@@ -341,6 +492,7 @@ export class StateManager {
 
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
+      this.startProposalPurgeInterval();
     });
 
     return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
@@ -351,12 +503,15 @@ export class StateManager {
       throw new Error('Project not loaded');
     }
 
+    const nowMs = Date.now();
     return {
       project: this.project,
       epics: sortByOrder(Array.from(this.epics.values())),
       tasks: sortByOrder(Array.from(this.tasks.values())),
       workers: Array.from(this.workers.values()),
-      proposals: Array.from(this.proposals.values()),
+      proposals: Array.from(this.proposals.values()).filter(
+        (proposal) => !this.isStaleResolvedProposal(proposal, PROPOSAL_SNAPSHOT_RETENTION_MS, nowMs)
+      ),
       teams: Array.from(this.teams.values())
     };
   }
@@ -438,8 +593,8 @@ export class StateManager {
       updatedAt: now
     };
 
-    this.teams.set(team.id, team);
     await this.writeEntity('teams', team.id, team);
+    this.teams.set(team.id, team);
     this.appendActivity('TEAM_CREATED', { name: team.name, role: team.role });
     this.emit({ type: 'TEAM_CREATED', payload: team });
     return team;
@@ -455,8 +610,8 @@ export class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    this.teams.set(teamId, updated);
     await this.writeEntity('teams', teamId, updated);
+    this.teams.set(teamId, updated);
     this.appendActivity('TEAM_UPDATED', updates as Record<string, unknown>);
     this.emit({ type: 'TEAM_UPDATED', payload: updated });
     return updated;
@@ -474,11 +629,18 @@ export class StateManager {
       }
     }
 
-    this.teams.delete(teamId);
     const filePath = path.join(this.moePath, 'teams', `${teamId}.json`);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (error) {
+      const fsError = error as NodeJS.ErrnoException;
+      if (fsError.code !== 'ENOENT') {
+        throw error;
+      }
     }
+    this.teams.delete(teamId);
 
     this.appendActivity('TEAM_DELETED', { name: team.name });
     this.emit({ type: 'TEAM_DELETED', payload: team });
@@ -563,8 +725,8 @@ export class StateManager {
       teamId: null
     };
 
-    this.workers.set(worker.id, worker);
     await this.writeEntity('workers', worker.id, worker);
+    this.workers.set(worker.id, worker);
     this.appendActivity('WORKER_CREATED', { workerId: worker.id, type: worker.type }, undefined, worker);
     this.emit({ type: 'WORKER_CREATED', payload: worker });
     return worker;
@@ -613,14 +775,14 @@ export class StateManager {
       parentTaskId: input.parentTaskId || null,
       priority: (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(input.priority as string) ? input.priority : 'MEDIUM') as TaskPriority,
       order: input.order ?? this.nextTaskOrder(input.epicId),
-      comments: Array.isArray(input.comments) ? input.comments : [],
+      comments: this.trimComments(Array.isArray(input.comments) ? input.comments : []),
       hasPendingQuestion: false,
       createdAt: now,
       updatedAt: now
     };
 
-    this.tasks.set(task.id, task);
     await this.writeEntity('tasks', task.id, task);
+    this.tasks.set(task.id, task);
     this.appendActivity('TASK_CREATED', { title: task.title }, task);
     this.emit({ type: 'TASK_CREATED', payload: task });
     return task;
@@ -653,8 +815,8 @@ export class StateManager {
       updatedAt: now
     };
 
-    this.epics.set(epic.id, epic);
     await this.writeEntity('epics', epic.id, epic);
+    this.epics.set(epic.id, epic);
     this.emit({ type: 'EPIC_CREATED', payload: epic });
     return epic;
   }
@@ -665,11 +827,32 @@ export class StateManager {
       throw new Error(`Task not found: ${taskId}`);
     }
 
+    const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(updates, 'comments');
+    let normalizedUpdates: Partial<Task> = updates;
+    if (hasCommentsUpdate) {
+      const rawComments = (updates as Partial<Task> & { comments?: TaskComment[] | null }).comments;
+      const rawCommentCount = Array.isArray(rawComments) ? rawComments.length : 0;
+      const trimmedComments = this.trimComments(rawComments);
+      if (rawCommentCount > trimmedComments.length) {
+        logger.info(
+          {
+            taskId,
+            rawCommentCount,
+            trimmedCommentCount: trimmedComments.length,
+            droppedCommentCount: rawCommentCount - trimmedComments.length,
+            maxCommentsPerTask: MAX_COMMENTS_PER_TASK,
+          },
+          'Trimmed task comments to configured maximum'
+        );
+      }
+      normalizedUpdates = { ...updates, comments: trimmedComments };
+    }
+
     // Clear assignedWorkerId on any status change so the appropriate role can claim it
-    const statusChanged = updates.status !== undefined && updates.status !== task.status;
-    const finalUpdates = statusChanged && updates.assignedWorkerId === undefined
-      ? { ...updates, assignedWorkerId: null }
-      : updates;
+    const statusChanged = normalizedUpdates.status !== undefined && normalizedUpdates.status !== task.status;
+    const finalUpdates = statusChanged && normalizedUpdates.assignedWorkerId === undefined
+      ? { ...normalizedUpdates, assignedWorkerId: null }
+      : normalizedUpdates;
 
     const updated: Task = {
       ...task,
@@ -677,8 +860,8 @@ export class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    this.tasks.set(taskId, updated);
     await this.writeEntity('tasks', taskId, updated);
+    this.tasks.set(taskId, updated);
     if (event) {
       this.appendActivity(event, updates, updated);
     } else {
@@ -694,11 +877,25 @@ export class StateManager {
       throw new Error(`Task not found: ${taskId}`);
     }
 
-    this.tasks.delete(taskId);
-    const filePath = path.join(this.moePath, 'tasks', `${taskId}.json`);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    try {
+      cancelSpeedModeTimeout(taskId);
+    } catch (error) {
+      logger.warn({ taskId, error }, 'Failed to cancel speed mode timeout while deleting task');
     }
+
+    const filePath = path.join(this.moePath, 'tasks', `${taskId}.json`);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (error) {
+      const fsError = error as NodeJS.ErrnoException;
+      if (fsError.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+
+    this.tasks.delete(taskId);
 
     for (const worker of this.workers.values()) {
       if (worker.currentTaskId === taskId) {
@@ -723,8 +920,8 @@ export class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    this.epics.set(epicId, updated);
     await this.writeEntity('epics', epicId, updated);
+    this.epics.set(epicId, updated);
     this.emit({ type: 'EPIC_UPDATED', payload: updated });
     return updated;
   }
@@ -760,11 +957,11 @@ export class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    this.project = updatedProject;
     await fs.promises.writeFile(
       path.join(this.moePath, 'project.json'),
       JSON.stringify(updatedProject, null, 2)
     );
+    this.project = updatedProject;
     this.emit({ type: 'SETTINGS_UPDATED', payload: updatedProject });
     return updatedProject;
   }
@@ -781,14 +978,19 @@ export class StateManager {
       await this.deleteTask(task.id);
     }
 
-    // Remove epic from memory
-    this.epics.delete(epicId);
-
     // Delete epic file
     const filePath = path.join(this.moePath, 'epics', `${epicId}.json`);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (error) {
+      const fsError = error as NodeJS.ErrnoException;
+      if (fsError.code !== 'ENOENT') {
+        throw error;
+      }
     }
+    this.epics.delete(epicId);
 
     this.appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title });
     this.emit({ type: 'EPIC_DELETED', payload: epic });
@@ -851,8 +1053,8 @@ export class StateManager {
       lastActivityAt: new Date().toISOString()
     };
 
-    this.workers.set(workerId, updated);
     await this.writeEntity('workers', workerId, updated);
+    this.workers.set(workerId, updated);
     if (event) {
       this.appendActivity(event, updates, undefined, updated);
     }
@@ -990,8 +1192,8 @@ export class StateManager {
   }
 
   async createProposal(input: RailProposal): Promise<RailProposal> {
-    this.proposals.set(input.id, input);
     await this.writeEntity('proposals', input.id, input);
+    this.proposals.set(input.id, input);
     const task = this.tasks.get(input.taskId);
     this.appendActivity(
       'PROPOSAL_CREATED',
@@ -1010,9 +1212,6 @@ export class StateManager {
       throw new Error(`Proposal not found: ${proposalId}`);
     }
 
-    // Apply the rail change
-    await this.applyRailChange(proposal);
-
     const updated: RailProposal = {
       ...proposal,
       status: 'APPROVED',
@@ -1020,9 +1219,16 @@ export class StateManager {
       resolvedBy: 'HUMAN'
     };
 
-    this.proposals.set(proposalId, updated);
     await this.writeEntity('proposals', proposalId, updated);
+    this.proposals.set(proposalId, updated);
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
+
+    try {
+      await this.applyRailChange(updated);
+    } catch (error) {
+      logger.error({ error, proposalId }, 'Failed to apply rail change for approved proposal');
+    }
+
     return updated;
   }
 
@@ -1104,8 +1310,8 @@ export class StateManager {
       resolvedBy: 'HUMAN'
     };
 
-    this.proposals.set(proposalId, updated);
     await this.writeEntity('proposals', proposalId, updated);
+    this.proposals.set(proposalId, updated);
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
     return updated;
   }
@@ -1119,8 +1325,8 @@ export class StateManager {
     const order = computeOrderBetween(prev, next);
     const updated = { ...task, order, updatedAt: new Date().toISOString() };
 
-    this.tasks.set(taskId, updated);
     await this.writeEntity('tasks', taskId, updated);
+    this.tasks.set(taskId, updated);
     this.appendActivity('TASK_UPDATED', { order }, updated);
     this.emit({ type: 'TASK_UPDATED', payload: updated });
     return updated;
@@ -1278,8 +1484,12 @@ export class StateManager {
     }
 
     try {
-      const content = fs.readFileSync(logPath, 'utf-8');
-      const lines = content.trim().split('\n').filter((line) => line.trim());
+      const safeLimit = Math.max(0, Math.trunc(limit));
+      if (safeLimit === 0) {
+        return [];
+      }
+
+      const lines = readLastLines(logPath, safeLimit);
       const events: ActivityEvent[] = [];
       let skippedCount = 0;
 
@@ -1307,8 +1517,9 @@ export class StateManager {
         logger.info({ skippedCount, totalLines: lines.length }, 'Activity log parsing completed with skipped entries');
       }
 
-      // Return in reverse chronological order, limited
-      return events.reverse().slice(0, limit);
+      // readLastLines returns chronological order within the tail window.
+      // Convert to reverse chronological order for API compatibility.
+      return events.reverse().slice(0, safeLimit);
     } catch (error) {
       logger.error({ error }, 'Failed to read activity log');
       return [];

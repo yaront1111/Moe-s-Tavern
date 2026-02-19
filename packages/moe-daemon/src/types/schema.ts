@@ -224,7 +224,8 @@ export const ACTIVITY_EVENT_TYPES = [
   'TEAM_MEMBER_ADDED',
   'TEAM_MEMBER_REMOVED',
   'TASK_ARCHIVED',
-  'TASK_COMMENT_ADDED'
+  'TASK_COMMENT_ADDED',
+  'PROPOSAL_PURGED'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];

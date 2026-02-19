@@ -6,6 +6,7 @@ import com.moe.model.TaskComment
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -29,12 +30,17 @@ import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTextArea
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 
 class PlanReviewDialog(
     private val ideaProject: Project,
     private var task: Task,
     private val service: MoeProjectService
 ) : DialogWrapper(ideaProject), MoeStateListener {
+
+    private val log = Logger.getInstance(PlanReviewDialog::class.java)
+    private var pendingUpdate: Runnable? = null
+    private var debounceTimer: Timer? = null
 
     private lateinit var commentsPanel: JPanel
     private lateinit var commentsScroll: JScrollPane
@@ -155,17 +161,47 @@ class PlanReviewDialog(
 
     override fun onState(state: MoeState) {
         val updated = state.tasks.find { it.id == task.id } ?: return
-        val oldCommentCount = task.comments?.size ?: 0
-        val newCommentCount = updated.comments?.size ?: 0
+        val oldComments = task.comments ?: emptyList()
+        val newComments = updated.comments ?: emptyList()
         task = updated
-        if (newCommentCount != oldCommentCount) {
-            renderComments(updated.comments ?: emptyList())
+        if (oldComments == newComments) {
+            return
+        }
+
+        pendingUpdate = Runnable {
+            if (isDisposed) return@Runnable
+            try {
+                renderComments(task.comments ?: emptyList())
+            } catch (ex: Exception) {
+                log.warn("Failed to render plan review comments", ex)
+            }
+        }
+
+        SwingUtilities.invokeLater {
+            if (isDisposed) return@invokeLater
+            try {
+                debounceTimer?.stop()
+                debounceTimer = Timer(DEBOUNCE_MS) {
+                    val update = pendingUpdate ?: return@Timer
+                    pendingUpdate = null
+                    if (isDisposed) return@Timer
+                    update.run()
+                }.apply {
+                    isRepeats = false
+                    start()
+                }
+            } catch (ex: Exception) {
+                log.warn("Failed to schedule debounced comment update", ex)
+            }
         }
     }
 
     override fun onStatus(connected: Boolean, message: String) {}
 
     override fun dispose() {
+        debounceTimer?.stop()
+        debounceTimer = null
+        pendingUpdate = null
         service.removeListener(this)
         super.dispose()
     }
@@ -289,5 +325,9 @@ class PlanReviewDialog(
         }
 
         return arrayOf(approveAction, rejectAction, cancelAction)
+    }
+
+    companion object {
+        private const val DEBOUNCE_MS = 200
     }
 }

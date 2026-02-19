@@ -13,16 +13,48 @@ const RATE_LIMIT_WINDOW_MS = parseInt(process.env.MOE_RATE_LIMIT_WINDOW_MS || '1
 
 /**
  * Simple sliding window rate limiter.
- * Tracks request timestamps and rejects requests exceeding the limit.
+ * Uses O(1) memory by tracking only current window start and request count.
  */
-class RateLimiter {
-  private readonly timestamps: number[] = [];
+export class RateLimiter {
+  private windowStartMs: number;
+  private requestCount = 0;
   private readonly maxRequests: number;
   private readonly windowMs: number;
 
   constructor(maxRequests: number, windowMs: number) {
-    this.maxRequests = maxRequests;
-    this.windowMs = windowMs;
+    const normalizedMaxRequests =
+      Number.isFinite(maxRequests) && maxRequests > 0 ? Math.floor(maxRequests) : 1;
+    const normalizedWindowMs =
+      Number.isFinite(windowMs) && windowMs > 0 ? Math.floor(windowMs) : 1000;
+
+    if (normalizedMaxRequests !== maxRequests || normalizedWindowMs !== windowMs) {
+      logger.warn(
+        { maxRequests, windowMs, normalizedMaxRequests, normalizedWindowMs },
+        'Invalid rate limiter configuration; using safe defaults'
+      );
+    }
+
+    this.maxRequests = normalizedMaxRequests;
+    this.windowMs = normalizedWindowMs;
+
+    const now = Date.now();
+    this.windowStartMs = Number.isFinite(now) ? now : 0;
+  }
+
+  private getCurrentTimeMs(): number {
+    const now = Date.now();
+    if (!Number.isFinite(now) || Number.isNaN(now)) {
+      logger.warn({ now }, 'Received invalid current time for rate limiter');
+      return this.windowStartMs;
+    }
+    return now;
+  }
+
+  private resetWindowIfNeeded(now: number): void {
+    if (now < this.windowStartMs || now - this.windowStartMs >= this.windowMs) {
+      this.windowStartMs = now;
+      this.requestCount = 0;
+    }
   }
 
   /**
@@ -30,19 +62,14 @@ class RateLimiter {
    * @returns true if allowed, false if rate limited
    */
   checkLimit(): boolean {
-    const now = Date.now();
-    const windowStart = now - this.windowMs;
+    const now = this.getCurrentTimeMs();
+    this.resetWindowIfNeeded(now);
 
-    // Remove timestamps outside the window
-    while (this.timestamps.length > 0 && this.timestamps[0] < windowStart) {
-      this.timestamps.shift();
-    }
-
-    if (this.timestamps.length >= this.maxRequests) {
+    if (this.requestCount >= this.maxRequests) {
       return false;
     }
 
-    this.timestamps.push(now);
+    this.requestCount += 1;
     return true;
   }
 
@@ -50,10 +77,9 @@ class RateLimiter {
    * Get current usage stats for monitoring.
    */
   getStats(): { current: number; max: number; windowMs: number } {
-    const now = Date.now();
-    const windowStart = now - this.windowMs;
-    const current = this.timestamps.filter(t => t >= windowStart).length;
-    return { current, max: this.maxRequests, windowMs: this.windowMs };
+    const now = this.getCurrentTimeMs();
+    this.resetWindowIfNeeded(now);
+    return { current: this.requestCount, max: this.maxRequests, windowMs: this.windowMs };
   }
 }
 

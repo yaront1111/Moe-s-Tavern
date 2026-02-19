@@ -73,12 +73,23 @@ function writeError(message: string, code = -32000) {
     id: null,
     error: { code, message }
   });
-  process.stdout.write(payload + '\n');
+  safeStdoutWrite(payload + '\n');
 }
 
 function writeLog(message: string) {
   // Log to stderr so it doesn't interfere with JSON-RPC on stdout
   process.stderr.write(`[moe-proxy] ${message}\n`);
+}
+
+function safeStdoutWrite(data: string): boolean {
+  try {
+    process.stdout.write(data);
+    return true;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown stdout write error';
+    writeLog(`stdout write failed: ${errorMessage}`);
+    return false;
+  }
 }
 
 /**
@@ -107,7 +118,7 @@ function safeSend(ws: WebSocket, data: string): boolean {
           id: parsed.id,
           error: { code: -32000, message: `Failed to send to daemon: ${errorMsg}` }
         });
-        process.stdout.write(errorResponse + '\n');
+        safeStdoutWrite(errorResponse + '\n');
       }
     } catch { /* message wasn't valid JSON or had no ID */ }
 
@@ -160,7 +171,7 @@ function checkMessageTimeouts(): void {
       id,
       error: { code: -32000, message: `Request timed out after ${timeoutMs}ms` }
     });
-    process.stdout.write(errorResponse + '\n');
+    safeStdoutWrite(errorResponse + '\n');
     writeLog(`Request ${id} timed out`);
   }
 }
@@ -243,6 +254,9 @@ function connect(projectPath: string): void {
     return;
   }
 
+  // Ensure any lingering socket and handlers are torn down before reconnecting.
+  closeWebSocket();
+
   const ws = new WebSocket(`ws://127.0.0.1:${info.port}/mcp`);
   currentWebSocket = ws;
 
@@ -280,13 +294,18 @@ function connect(projectPath: string): void {
         pendingRequestIds.delete(parsed.id);
         pendingRequestTimes.delete(parsed.id);
       }
-      process.stdout.write(message + '\n');
+      safeStdoutWrite(message + '\n');
     } catch {
       writeError('Received invalid JSON from daemon');
     }
   });
 
   ws.on('close', (code, reason) => {
+    if (currentWebSocket !== ws) {
+      writeLog(`Ignoring close event from stale socket: ${code} ${reason}`);
+      return;
+    }
+
     isConnected = false;
     currentWebSocket = null;
     writeLog(`Connection closed: ${code} ${reason}`);
@@ -315,7 +334,7 @@ function connect(projectPath: string): void {
           id: reqId,
           error: { code: -32000, message: 'Lost connection to daemon after max retries' }
         });
-        process.stdout.write(errorResponse + '\n');
+        safeStdoutWrite(errorResponse + '\n');
       }
       pendingRequestIds.clear();
       pendingRequestTimes.clear();
@@ -330,7 +349,7 @@ function connect(projectPath: string): void {
               id: parsed.id,
               error: { code: -32000, message: 'Lost connection to daemon after max retries' }
             });
-            process.stdout.write(errorResponse + '\n');
+            safeStdoutWrite(errorResponse + '\n');
           }
         } catch { /* ignore parse errors */ }
       }
@@ -342,6 +361,10 @@ function connect(projectPath: string): void {
   });
 
   ws.on('error', (error) => {
+    if (currentWebSocket !== ws) {
+      writeLog(`Ignoring error event from stale socket: ${error.message}`);
+      return;
+    }
     writeLog(`WebSocket error: ${error.message}`);
     // Don't exit immediately - let the close handler manage reconnection
   });
@@ -393,7 +416,7 @@ function connect(projectPath: string): void {
                     id: droppedParsed.id,
                     error: { code: -32000, message: 'Message dropped: queue overflow while disconnected' }
                   });
-                  process.stdout.write(errorResponse + '\n');
+                  safeStdoutWrite(errorResponse + '\n');
                 }
               } catch { /* ignore parse errors for dropped messages */ }
               writeLog('Message queue overflow, dropped oldest message');
@@ -409,6 +432,11 @@ function connect(projectPath: string): void {
       writeLog('stdin closed, shutting down');
       gracefulShutdown();
     });
+
+    process.stdin.on('error', (err) => {
+      writeLog(`stdin error: ${err.message || 'unknown'}`);
+      gracefulShutdown();
+    });
   }
 }
 
@@ -418,18 +446,12 @@ async function main() {
   // Handle graceful shutdown
   process.on('SIGTERM', () => {
     writeLog('Received SIGTERM, shutting down');
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    stopTimeoutChecker();
-    closeWebSocket();
-    process.exit(0);
+    gracefulShutdown();
   });
 
   process.on('SIGINT', () => {
     writeLog('Received SIGINT, shutting down');
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    stopTimeoutChecker();
-    closeWebSocket();
-    process.exit(0);
+    gracefulShutdown();
   });
 
   connect(projectPath);

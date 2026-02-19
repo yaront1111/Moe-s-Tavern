@@ -29,12 +29,17 @@ object TerminalAgentLauncher {
         terminalManagerClass?.getMethod("getInstance", Project::class.java)
     }
 
+    private fun <K, V> boundedCache(maxSize: Int = 20): MutableMap<K, V> =
+        object : LinkedHashMap<K, V>(maxSize, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > maxSize
+        }
+
     // Cache for createLocalShellWidget methods per class (manager class may vary)
-    private val shellWidgetMethodsCache = mutableMapOf<Class<*>, List<Method>>()
+    private val shellWidgetMethodsCache = boundedCache<Class<*>, List<Method>>()
 
     // Cache for send command methods per widget class
-    private val sendCommandMethodCache = mutableMapOf<Class<*>, Method?>()
-    private val executeCommandMethodCache = mutableMapOf<Class<*>, Method?>()
+    private val sendCommandMethodCache = boundedCache<Class<*>, Method?>()
+    private val executeCommandMethodCache = boundedCache<Class<*>, Method?>()
 
     private enum class ScriptSource {
         PROJECT,
