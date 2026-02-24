@@ -163,6 +163,17 @@ moe.complete_task {
 }
 \`\`\`
 
+## Claude Code Agent Teams (Optional)
+
+When Agent Teams is enabled in project settings, Claude Code workers can spawn
+teammate instances for parallel work within a single Moe step.
+
+**Rules:**
+- Only use for steps with independent, parallelizable work across different files
+- Always call \`moe.start_step\` / \`moe.complete_step\` around team work
+- Report ALL modified files from ALL teammates in \`complete_step\`
+- Only the lead worker calls Moe MCP tools - teammates do not interact with Moe directly
+
 ## If Task is Reopened (QA Rejected)
 
 1. Task returns to \`WORKING\` status
@@ -242,6 +253,48 @@ moe.qa_reject {
 };
 
 /**
+ * Content for .moe/agent-context.md, matching docs/agent-context.md exactly.
+ * Embedded so all init paths produce consistent agent context.
+ */
+export const AGENT_CONTEXT_CONTENT = `# Moe Project Context
+
+## Architecture
+Moe is an AI Workforce Command Center. Components:
+- **Daemon** (Node.js): Manages \`.moe/\` state files, serves WebSocket endpoints
+- **Proxy** (Node.js): Bridges MCP stdio to daemon WebSocket (\`/mcp\`)
+- **Plugin** (Kotlin): JetBrains IDE UI for task board and agent management
+- **Agents**: AI workers that interact via MCP tools through the proxy
+
+The \`.moe/\` folder is the **source of truth**. The daemon is the sole writer.
+
+## Data Access
+- **Always call \`moe.get_context\` first** to load task details, rails, and plan
+- Use \`moe.list_tasks\` to see epic progress and find related tasks
+- Use \`moe.get_activity_log\` to see what happened before (especially after reopens)
+- Step notes from previous workers are in \`implementationPlan[].note\`
+
+## Workflow
+\`\`\`
+BACKLOG -> PLANNING -> AWAITING_APPROVAL -> WORKING -> REVIEW -> DONE
+\`\`\`
+- Architects create plans (PLANNING -> AWAITING_APPROVAL)
+- Humans approve/reject plans
+- Workers execute approved plans (WORKING -> REVIEW)
+- QA verifies and approves/rejects (REVIEW -> DONE or back to WORKING)
+
+## Constraints
+- **Global rails**: Forbidden patterns are enforced (no eval, innerHTML, etc.)
+- **Required patterns**: Plans must address error handling and testing
+- **Epic/task rails**: Guidance specific to the current work
+
+## Quality Standards
+- Run tests before and after changes
+- Handle errors explicitly
+- Follow existing code conventions
+- Track all modified files
+`;
+
+/**
  * Content for .moe/.gitignore
  */
 export const GITIGNORE_CONTENT = `# Moe runtime files (not shared)
@@ -268,6 +321,12 @@ export function writeInitFiles(moePath: string): void {
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, content);
     }
+  }
+
+  // Write agent-context.md (skip if already exists)
+  const agentContextPath = path.join(moePath, 'agent-context.md');
+  if (!fs.existsSync(agentContextPath)) {
+    fs.writeFileSync(agentContextPath, AGENT_CONTEXT_CONTENT);
   }
 
   // Write .gitignore (skip if already exists)

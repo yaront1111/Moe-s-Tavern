@@ -1,0 +1,91 @@
+{
+  "id": "task-5750ff47",
+  "epicId": "epic-be924fb8",
+  "title": "LogRotator stream cleanup + WS close logging",
+  "description": "compressFile() pipe chain not unpiped on error (LogRotator.ts line 105) - write after destroy risk. WebSocket client.close() errors silently ignored (WebSocketServer.ts line 578) - no debug visibility.",
+  "definitionOfDone": [
+    "Streams unpiped before destroy in compressFile() error path",
+    "Compression has 30s timeout to prevent hanging",
+    "WebSocket close errors logged at debug level with summary count",
+    "npm test passes with no regressions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix stream unpipe in compressFile() error handlers. In LogRotator.ts lines 111-128, the error handlers call destroy() on sibling streams but don't unpipe first. When a source emits an error after piping, calling destroy() on the destination without unpiping can cause 'write after destroy' errors. Fix: in each error handler, call `source.unpipe(gzip); gzip.unpipe(destination)` before calling destroy(). Specifically: (1) source error handler: `source.unpipe(gzip); gzip.unpipe(destination); gzip.destroy(); destination.destroy(); reject(error)`. (2) gzip error handler: `source.unpipe(gzip); gzip.unpipe(destination); source.destroy(); destination.destroy(); reject(error)`. (3) destination error handler: `source.unpipe(gzip); gzip.unpipe(destination); source.destroy(); gzip.destroy(); reject(error)`. Error handling: unpipe() is safe to call even if not piped.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "startedAt": "2026-02-18T23:27:07.946Z",
+      "completedAt": "2026-02-18T23:27:20.745Z",
+      "note": "Updated LogRotator stream error handlers to unpipe source→gzip and gzip→destination before destroying sibling streams, preventing write-after-destroy races during compression failure paths.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add 30-second timeout to compressFile(). Wrap the compression Promise with a timeout to prevent indefinite hanging. At the start of compressFile(), create a timeout: `const timeout = setTimeout(() => { source.unpipe(gzip); gzip.unpipe(destination); source.destroy(); gzip.destroy(); destination.destroy(); reject(new Error('Compression timed out after 30s')); }, 30000)`. Clear the timeout on both resolve and reject. Also add a guard `let settled = false` to prevent double-resolve/reject from timeout + normal completion. Error handling: timeout triggers the same cleanup as error handlers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "startedAt": "2026-02-18T23:27:25.501Z",
+      "completedAt": "2026-02-18T23:27:44.670Z",
+      "note": "Added compression timeout protection with default 30s (`LOG_COMPRESSION_TIMEOUT_MS` override), plus settled-guarded resolve/reject helpers to prevent double completion. Timeout now unpipes and destroys all streams before rejecting with a clear timeout error.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add debug logging for WebSocket close errors. In WebSocketServer.ts close() method (line ~572), the catch blocks at lines 581 and 589 are empty (`catch { // Ignore errors during shutdown }`). Replace with debug logging: `catch (err) { closeErrors++; logger.debug({ error: err }, 'Error closing plugin client during shutdown'); }`. Add a counter `let closeErrors = 0` before the loops, and after both loops log a summary: `if (closeErrors > 0) { logger.debug({ closeErrors }, 'WebSocket close errors during shutdown'); }`. This provides visibility without cluttering normal logs (debug level). Test that npm test passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-18T23:27:49.304Z",
+      "completedAt": "2026-02-18T23:28:08.662Z",
+      "note": "Added debug-level shutdown visibility in WebSocketServer.close(): close failures are now counted and logged per endpoint (plugin/MCP) with a summary `closeErrors` count, while preserving non-fatal shutdown behavior.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add unit tests for LogRotator stream cleanup. Test cases: (1) compressFile completes successfully for a valid file, (2) compressFile handles source read error gracefully (mock a read error), (3) compressFile times out after 30s for a stalled stream. Test that no 'write after destroy' warnings are emitted. Use vitest. Run npm test to verify no regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.test.ts"
+      ],
+      "startedAt": "2026-02-18T23:28:25.613Z",
+      "completedAt": "2026-02-18T23:29:26.604Z",
+      "note": "Added LogRotator regression tests covering successful compression, source-stream error cleanup/unpipe behavior, and 30s timeout cleanup for stalled streams. Tests assert cleanup actions and verify no 'write after destroy' warnings are emitted. Verified with targeted vitest run and full daemon `npm test` (267 tests passed).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:46.679Z",
+  "updatedAt": "2026-02-19T07:40:44.118Z",
+  "planSubmittedAt": "2026-02-18T22:31:17.417Z",
+  "planApprovedAt": "2026-02-18T22:31:59.859Z",
+  "workStartedAt": "2026-02-18T23:27:07.946Z",
+  "completedAt": "2026-02-18T23:29:33.489Z",
+  "reviewStartedAt": "2026-02-18T23:29:33.489Z",
+  "reviewCompletedAt": "2026-02-19T07:40:44.118Z"
+}

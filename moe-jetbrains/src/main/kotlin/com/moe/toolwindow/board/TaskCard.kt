@@ -86,6 +86,26 @@ class TaskCard(
             meta.add(chip(humanizeStatus(task.status), subtle = true))
         }
 
+        // Step progress chip (e.g. "3/7 steps")
+        if (task.implementationPlan.isNotEmpty()) {
+            val completed = task.implementationPlan.count { it.status == "COMPLETED" }
+            val total = task.implementationPlan.size
+            val inProgress = task.implementationPlan.count { it.status == "IN_PROGRESS" }
+            val progressText = "$completed/$total"
+            val progressColor = when {
+                completed == total -> JBColor(java.awt.Color(34, 139, 34), java.awt.Color(50, 205, 50))
+                inProgress > 0 -> JBColor(java.awt.Color(30, 144, 255), java.awt.Color(65, 105, 225))
+                else -> BoardStyles.textSecondary
+            }
+            meta.add(JBLabel(progressText).apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont()
+                foreground = java.awt.Color.WHITE
+                background = progressColor
+            })
+        }
+
         meta.add(chip(task.id.takeLast(4).uppercase(), subtle = true))
 
         val content = JBPanel<JBPanel<*>>(BorderLayout()).apply {

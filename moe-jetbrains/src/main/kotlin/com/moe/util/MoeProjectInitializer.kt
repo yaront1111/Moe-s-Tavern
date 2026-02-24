@@ -26,8 +26,9 @@ object MoeProjectInitializer {
         File(moeDir, "proposals").mkdirs()
         File(moeDir, "roles").mkdirs()
 
-        // Always sync role docs from bundled plugin resources
+        // Always sync role docs and agent context from bundled plugin resources
         syncRoleDocs(moeDir)
+        syncAgentContext(moeDir)
 
         val gitignore = File(moeDir, ".gitignore")
         if (!gitignore.exists()) {
@@ -57,6 +58,7 @@ object MoeProjectInitializer {
                 addProperty("branchPattern", "moe/{epicId}/{taskId}")
                 addProperty("commitPattern", "feat({epicId}): {taskTitle}")
                 addProperty("agentCommand", "claude")
+                addProperty("enableAgentTeams", false)
             })
 
             addProperty("createdAt", now)
@@ -98,26 +100,36 @@ object MoeProjectInitializer {
     }
 
     /**
-     * Loads a role doc from the bundled plugin directory (docs/roles/<role>.md).
+     * Syncs agent-context.md from bundled plugin resources to .moe/.
+     * Always overwrites to ensure agents get the latest shared context.
+     */
+    fun syncAgentContext(moeDir: File) {
+        val content = loadBundledFile("docs/agent-context.md")
+        if (content != null) {
+            File(moeDir, "agent-context.md").writeText(content)
+        }
+    }
+
+    /**
+     * Loads a file from the bundled plugin directory.
      * Returns null if the bundled file cannot be found.
      */
-    private fun loadBundledRoleDoc(role: String): String? {
+    private fun loadBundledFile(relativePath: String): String? {
         try {
             val plugin = PluginManagerCore.getPlugin(PluginId.getId("com.moe.jetbrains"))
             val pluginRoot = plugin?.pluginPath?.toFile()
             if (pluginRoot != null) {
-                val bundled = File(pluginRoot, "docs/roles/$role.md")
+                val bundled = File(pluginRoot, relativePath)
                 if (bundled.exists()) {
                     return bundled.readText()
                 }
             }
 
-            // Fallback: try resolving from JAR code source location
             val codeSource = MoeProjectInitializer::class.java.protectionDomain?.codeSource?.location?.toURI()
             val jarFile = codeSource?.let { File(it) }
             val inferredRoot = jarFile?.parentFile?.parentFile
             if (inferredRoot != null) {
-                val fromJar = File(inferredRoot, "docs/roles/$role.md")
+                val fromJar = File(inferredRoot, relativePath)
                 if (fromJar.exists()) {
                     return fromJar.readText()
                 }
@@ -126,5 +138,13 @@ object MoeProjectInitializer {
             // Fall through to return null
         }
         return null
+    }
+
+    /**
+     * Loads a role doc from the bundled plugin directory (docs/roles/<role>.md).
+     * Returns null if the bundled file cannot be found.
+     */
+    private fun loadBundledRoleDoc(role: String): String? {
+        return loadBundledFile("docs/roles/$role.md")
     }
 }

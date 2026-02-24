@@ -1,0 +1,72 @@
+{
+  "id": "task-c02148b9",
+  "epicId": "epic-5ab0929c",
+  "title": "Guard spawned daemon process overwrite",
+  "description": "ensureDaemonRunning() overwrites spawnedDaemonProcess without destroying previous. Could leave orphaned daemon processes consuming memory. Fix: Destroy existing process before overwriting reference.",
+  "definitionOfDone": [
+    "ensureDaemonRunning() destroys existing process before overwriting spawnedDaemonProcess",
+    "No orphaned daemon processes after repeated connect/disconnect cycles",
+    "Process destruction is logged",
+    "Error handling covers case where destroy() fails"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add destroyPreviousDaemon() guard before process assignment. In MoeProjectService.kt ensureDaemonRunning() method (line ~629), before `spawnedDaemonProcess = process`, add a guard that destroys the existing process if one exists: `val oldProcess = spawnedDaemonProcess; if (oldProcess != null && oldProcess.isAlive) { try { oldProcess.destroyForcibly(); log.info(\"Destroyed previous daemon process before spawning new one\") } catch (e: Exception) { log.debug(\"Failed to destroy previous daemon process\", e) } }; spawnedDaemonProcess = null`. Then assign the new process. Error handling: destroyForcibly() is used instead of destroy() because destroy() may not kill the process on all platforms. Wrap in try-catch so a destroy failure doesn't prevent starting the new daemon.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T23:32:20.149Z",
+      "completedAt": "2026-02-18T23:33:03.524Z",
+      "note": "Added a guard in ensureDaemonRunning() to destroy any previously tracked spawned daemon process before assigning a new one. Uses destroyForcibly() with try/catch and logs both successful cleanup and destroy failures; resets stale reference before assigning the new process.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Also guard in killSpawnedDaemon() for consistency. At line ~933 in killSpawnedDaemon(), verify the method properly nullifies the reference after killing: `spawnedDaemonProcess = null` should happen in a finally block to ensure it's always cleared, even if the kill throws. Currently it's at line 934 before the kill check which is fine, but add a comment explaining the intentional early-null pattern. This prevents double-kill attempts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T23:33:07.148Z",
+      "completedAt": "2026-02-18T23:33:17.943Z",
+      "note": "Updated killSpawnedDaemon() to document the intentional early-null pattern that prevents double-kill attempts, and added a finally guard to ensure stale references stay cleared while preserving any newer concurrently assigned process reference.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify fix with manual test. (1) Start plugin, let it spawn a daemon. (2) Disconnect and reconnect rapidly 5 times. (3) Check Task Manager/ps for orphaned node daemon processes. (4) Verify only one daemon process is running at any time. (5) Verify plugin log shows 'Destroyed previous daemon process' messages when applicable. (6) Verify ./gradlew compileKotlin passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T23:33:23.040Z",
+      "completedAt": "2026-02-18T23:33:43.681Z",
+      "note": "Verified build health with `./gradlew.bat compileKotlin` (pass). In this non-interactive environment I could not perform IDE reconnect/manual Task Manager process checks, so verification focused on compile validation plus code-path review: old process is force-destroyed before reassignment and killSpawnedDaemon retains early-null protection with logged cleanup/error paths."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:57.443Z",
+  "updatedAt": "2026-02-19T07:42:20.982Z",
+  "planSubmittedAt": "2026-02-18T22:32:26.735Z",
+  "planApprovedAt": "2026-02-18T22:34:44.467Z",
+  "workStartedAt": "2026-02-18T23:32:20.149Z",
+  "completedAt": "2026-02-18T23:33:47.152Z",
+  "reviewStartedAt": "2026-02-18T23:33:47.152Z",
+  "reviewCompletedAt": "2026-02-19T07:42:20.982Z"
+}

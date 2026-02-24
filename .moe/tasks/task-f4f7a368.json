@@ -1,0 +1,66 @@
+{
+  "id": "task-f4f7a368",
+  "epicId": "epic-ffe3ace6",
+  "title": "State diffing with fingerprint-based change detection",
+  "description": "Implement fingerprint-based state diffing to minimize unnecessary re-renders in the board webview, matching the JetBrains MoeToolWindowPanel.kt pattern. Currently the VS Code extension re-renders the entire board on every state update (every 3 seconds from auto-refresh plus on every TASK_UPDATED message).\n\n**Board-level fingerprint (matching MoeToolWindowPanel.kt lines 361-381):**\n- Compute a fingerprint string from all relevant state:\n  - Task fingerprint: join all tasks as \"{id}:{status}:{order}:{title}:{description}:{priority}:{assignedWorkerId}:{prLink}:{reopenReason}:{comments.length}:{hasPendingQuestion}:[stepId:stepStatus;...]\"\n  - Epic fingerprint: join all epics as \"{id}:{title}:{status}:{order}\"\n  - Filter state: \"epic={selectedEpicId}|search={searchQuery}\"\n  - Collapsed state: sorted collapsed epic IDs joined\n- Compare new fingerprint to lastStateFingerprint\n- Skip re-render entirely if fingerprint unchanged\n- Log \"Skipping board update; state fingerprint unchanged\" when skipped\n\n**Column-level diffing (matching MoeToolWindowPanel.kt lines 579-605):**\n- Compute per-column fingerprints including:\n  - Task fingerprint for tasks in that column\n  - Epic metadata fingerprint\n  - Collapsed state fingerprint\n  - WIP limit for that column\n- Only re-render columns whose fingerprint changed\n- Track columnFingerprints map (status -> fingerprint string)\n- When a column fingerprint matches and DOM content exists, skip that column\n\n**Implementation in the board webview JavaScript:**\n- Store lastBoardFingerprint as a JavaScript variable\n- Store columnFingerprints as a JavaScript Map\n- In renderBoard(), compute fingerprint first, compare, skip if unchanged\n- For column-level: compute per-column fingerprint, only update changed columns via innerHTML\n- Use DOM IDs for each column container so individual columns can be updated\n\n**Error handling (matching JetBrains):**\n- Wrap fingerprint computation in try/catch\n- On fingerprint computation error, fall through to full re-render\n- On column diff error, clear all fingerprints and force full rebuild\n\n**Performance benefit:**\n- The daemon sends GET_STATE responses every 3 seconds (auto-refresh)\n- Without diffing, the board flickers and loses scroll position on every update\n- With diffing, stable boards show zero re-renders; only changed columns update\n\nReference: JetBrains MoeToolWindowPanel.kt updateBoard() method, lines 351-620.",
+  "definitionOfDone": [
+    "Board-level fingerprint computed from tasks, epics, filters, and collapse state",
+    "Board re-render skipped when fingerprint is unchanged",
+    "Column-level fingerprints computed and compared independently",
+    "Only changed columns re-rendered on state update",
+    "Fingerprint computation wrapped in error handling with fallback to full re-render",
+    "Scroll position preserved when board update is skipped",
+    "No visible flicker during steady-state auto-refresh"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Implement board-level fingerprint computation and comparison in the webview JS of BoardViewProvider.ts:\n\n1. Add `let lastBoardFingerprint = '';` at top of webview script\n2. Add `function computeBoardFingerprint(state, searchQuery, selectedEpicFilter, collapsedEpics)` that:\n   - Builds task fingerprint: sort tasks by id, join each as `{id}:{status}:{order}:{updatedAt}:{priority}:{assignedWorkerId||''}:{comments?.length||0}:{hasPendingQuestion||false}:{implementationPlan?.map(s=>s.stepId+':'+s.status).join(';')||''}`\n   - Builds epic fingerprint: sort epics by id, join each as `{id}:{title}:{status}:{order}`\n   - Builds filter string: `epic=${selectedEpicFilter}|search=${searchQuery}`\n   - Builds collapse string: `[...collapsedEpics].sort().join(',')`\n   - Returns concatenated string\n3. At start of renderBoard(), compute fingerprint. If equal to `lastBoardFingerprint`, return early (skip render). Log skip to console.\n4. Update `lastBoardFingerprint = newFingerprint` after successful render.\n5. Reset `lastBoardFingerprint = ''` when filter/search/collapse changes (force re-render).\n\nError handling: Wrap computation in try/catch. On error, set fingerprint to '' (force re-render).\nTest: Board skips re-render when state unchanged. Board updates when tasks change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:38:50.492Z",
+      "completedAt": "2026-02-23T06:39:56.616Z",
+      "note": "Added computeBoardFingerprint() that builds a composite string from sorted tasks (id:status:order:title:priority:worker:comments:question:steps), sorted epics (id:title:status:order), filter state, collapsed epics, and workers. renderBoard skips re-render when fingerprint matches. Wrapped in try/catch - falls through to full render on error.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement column-level diffing for granular updates:\n\n1. Add `let columnFingerprints = new Map();` at top of webview script\n2. Add `function computeColumnFingerprint(columnTasks, epics, collapsedEpics)` that builds fingerprint from tasks in that specific column\n3. Ensure each column container has a stable DOM id: `id=\"column-{status}\"`\n4. In renderBoard(), after board-level fingerprint check passes:\n   a. For each column, compute column fingerprint\n   b. Compare to stored `columnFingerprints.get(status)`\n   c. If unchanged AND the DOM element exists with content, skip that column\n   d. If changed, re-render that column's task content, update stored fingerprint\n5. Preserve scroll positions: save `el.scrollTop` before update, restore after\n6. Worker panel and header are separate from columns - only re-render if worker/team data changed (use separate `lastWorkerFingerprint`)\n\nError handling: On column diff error, clear all fingerprints via `columnFingerprints.clear()` and force full rebuild. This ensures recovery from DOM inconsistencies.\nTest: Only changed columns re-render. Scroll position preserved. No flicker during steady-state polling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:39:57.259Z",
+      "completedAt": "2026-02-23T06:43:48.968Z",
+      "note": "Implemented column-level diffing with computeColumnFingerprint() function that builds per-column fingerprints from column tasks, relevant epics, and collapsed state. Refactored renderBoard() to: (1) detect first-render vs incremental via board.querySelector('.column'), (2) on first render, build all columns with stable DOM IDs (id='column-{status}'), (3) on incremental update, compare per-column fingerprints and only re-render changed columns using colEl.textContent=''/insertAdjacentHTML, (4) save/restore scrollTop on the .tasks container within each column. Error handling: catch block clears columnFingerprints={} and does full rebuild. Also reset columnFingerprints={} in the no-state early return path.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:06:39.256Z",
+  "updatedAt": "2026-02-23T12:08:57.440Z",
+  "planSubmittedAt": "2026-02-21T23:25:59.331Z",
+  "planApprovedAt": "2026-02-21T23:25:59.333Z",
+  "workStartedAt": "2026-02-23T06:38:50.492Z",
+  "completedAt": "2026-02-23T06:43:57.617Z",
+  "reviewStartedAt": "2026-02-23T06:43:57.617Z",
+  "reviewCompletedAt": "2026-02-23T12:08:57.440Z"
+}

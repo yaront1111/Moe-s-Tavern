@@ -1,0 +1,89 @@
+{
+  "id": "task-a6c5af0d",
+  "epicId": "epic-5ab0929c",
+  "title": "Stream activity log reading instead of full-file load",
+  "description": "getActivityLog() reads the ENTIRE activity.log file into memory, then filters by limit. A 10MB log file = 10MB heap allocation per query. Fix: Read file in reverse chunks (tail-like) to only load what's needed.",
+  "definitionOfDone": [
+    "getActivityLog() no longer reads entire file into memory",
+    "Uses streaming/reverse-chunk reading to only load needed entries",
+    "Memory usage for log queries is bounded regardless of log file size",
+    "All existing filter parameters still work (taskId, epicId, eventTypes, limit)",
+    "Performance is equal or better than current implementation for small files"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Implement reverse-chunk file reader utility. Create a new utility function `readLastLines(filePath: string, maxLines: number): string[]` in a new file `packages/moe-daemon/src/util/reverseReader.ts`. This function opens the file, seeks to the end, reads backwards in chunks (e.g., 8KB), splits by newline, and collects up to `maxLines` lines in reverse order. Uses `fs.openSync`/`fs.readSync` with a position parameter to avoid loading the full file. Returns lines in chronological order (oldest first within the window). Error handling: if file doesn't exist return empty array, if file is smaller than one chunk fall back to full read. This bounds memory usage to roughly `chunkSize * ceil(maxLines / linesPerChunk)` regardless of total file size.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/reverseReader.ts"
+      ],
+      "startedAt": "2026-02-18T23:19:16.481Z",
+      "completedAt": "2026-02-18T23:19:31.155Z",
+      "note": "Added `readLastLines(filePath, maxLines)` reverse-chunk utility that reads from file tail using fs.openSync/fs.readSync with an 8KB buffer, returns chronological tail lines, handles missing/empty files safely, and uses a small-file fast path.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/reverseReader.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Refactor getActivityLog() in StateManager to use the reverse reader. Replace the current implementation at lines ~1274-1316 that calls `fs.readFileSync()` and splits the entire file. Instead call `readLastLines(logPath, fetchLimit)` to get only the needed tail of the file. Then parse and validate each line (reusing existing JSON parsing and validateActivityEvent logic). The result is already in reverse-chronological order from the tail, so adjust the `.reverse()` call accordingly. Keep the same return type and contract. Error handling: wrap in try-catch consistent with existing pattern, return empty array on failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T23:19:45.490Z",
+      "completedAt": "2026-02-18T23:20:23.250Z",
+      "note": "Refactored StateManager.getActivityLog() to read only tail lines via readLastLines() instead of fs.readFileSync over the entire activity.log. Added safe limit normalization and preserved reverse-chronological return contract after parsing/validation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update getActivityLog MCP tool to pass correct fetch limits. In getActivityLog.ts, the tool already calculates a `fetchLimit` (line ~40-42) that multiplies the limit by 5 when filters are active. This over-fetch factor is still needed since filtering happens post-read. Verify the fetchLimit is passed through correctly to the new streaming reader. No functional change needed here - just verify the integration works correctly with the new reader. Error handling already present.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "startedAt": "2026-02-18T23:20:27.209Z",
+      "completedAt": "2026-02-18T23:20:31.010Z",
+      "note": "Verified `getActivityLog` MCP tool still computes an over-fetch `fetchLimit` for filtered queries and passes it directly to `state.getActivityLog(fetchLimit)`, so post-filter behavior remains compatible with the new tail-reader implementation."
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add unit tests for reverse reader and updated getActivityLog. Tests for reverseReader: (1) Small file (< 1 chunk) returns all lines correctly, (2) Large file returns only the last N lines, (3) Empty file returns empty array, (4) Non-existent file returns empty array, (5) File with no trailing newline is handled correctly, (6) Lines are returned in correct chronological order. Tests for getActivityLog: (7) Returns events filtered by taskId/epicId from tail of log, (8) Memory usage is bounded (verify by checking that only maxLines are read, not the full file). Use vitest framework.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/reverseReader.test.ts"
+      ],
+      "startedAt": "2026-02-18T23:20:57.397Z",
+      "completedAt": "2026-02-18T23:22:20.824Z",
+      "note": "Added reverseReader and activity-log integration tests: small/large file tail reading, empty/missing file handling, no-trailing-newline behavior, chronological ordering, filtered get_activity_log tail queries, and a guard that fails if full `activity.log` read is attempted for large files. Verified with targeted test and full daemon suite via `npm test` (264 tests passed).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/reverseReader.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:49.922Z",
+  "updatedAt": "2026-02-19T07:35:49.205Z",
+  "planSubmittedAt": "2026-02-18T22:26:31.368Z",
+  "planApprovedAt": "2026-02-18T22:28:11.787Z",
+  "workStartedAt": "2026-02-18T23:19:16.481Z",
+  "completedAt": "2026-02-18T23:22:30.598Z",
+  "reviewStartedAt": "2026-02-18T23:22:30.598Z",
+  "reviewCompletedAt": "2026-02-19T07:35:49.205Z"
+}

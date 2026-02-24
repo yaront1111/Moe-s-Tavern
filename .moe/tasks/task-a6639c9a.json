@@ -1,0 +1,92 @@
+{
+  "id": "task-a6639c9a",
+  "epicId": "epic-5ab0929c",
+  "title": "Add proposal cleanup/purging",
+  "description": "Proposals (APPROVED/REJECTED) are never deleted from the proposals Map. They're included in every state snapshot sent to all clients. Fix: Auto-purge APPROVED/REJECTED proposals older than N days, or add a moe.purge_proposals tool.",
+  "definitionOfDone": [
+    "Resolved proposals (APPROVED/REJECTED) are automatically purged after configurable age",
+    "Purge runs periodically (e.g., on daemon startup and daily)",
+    "State snapshots no longer include stale proposals",
+    "Backward-compatible with existing .moe/proposals/ files",
+    "Proposal purge is logged in activity log"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add proposal purge constants and method to StateManager. Add `PROPOSAL_PURGE_AGE_MS = 7 * 24 * 60 * 60 * 1000` (7 days) constant. Add `purgeResolvedProposals()` method that iterates `this.proposals` Map, finds entries with status APPROVED or REJECTED where `resolvedAt` is older than PROPOSAL_PURGE_AGE_MS, deletes their .json files from `proposals/` directory, removes from Map, and logs each purge via appendActivity with event type PROPOSAL_PURGED. Include error handling for file deletion failures (log warning, continue). Include test for purge logic verifying correct proposals are removed and PENDING ones are preserved.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:32:58.135Z",
+      "completedAt": "2026-02-18T22:52:15.329Z",
+      "note": "Implemented proposal purge foundation in StateManager: added configurable purge constants, stale-proposal age detection, and `purgeResolvedProposals()` to remove stale APPROVED/REJECTED proposals from disk+memory while preserving PENDING proposals. Added error handling for delete failures (warn and continue) and appendActivity logging via `PROPOSAL_PURGED`.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Call purgeResolvedProposals() on daemon startup. In the `load()` method of StateManager, after `this.proposals = this.loadEntities(...)` (line ~336), call `await this.purgeResolvedProposals()`. This ensures stale proposals are cleaned up every time the daemon starts. Add a periodic purge interval (every 24 hours) using setInterval, stored as `proposalPurgeInterval`, and clear it in the shutdown/dispose path alongside the existing `blockedTimeoutInterval`. Include error handling so purge failures don't crash the daemon.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:52:18.711Z",
+      "completedAt": "2026-02-18T22:52:24.312Z",
+      "note": "Integrated startup + periodic purging: `load()` now invokes `purgeResolvedProposals()` with guarded error handling; added `proposalPurgeInterval` timer with start/stop methods (24h cadence); and cleanup now clears both blocked timeout and proposal purge intervals in shutdown path (`clearEmitter`).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Filter resolved proposals from state snapshots sent to clients. In `getSnapshot()` (line ~349), filter the proposals array to exclude APPROVED/REJECTED proposals older than 24 hours (keep recent ones briefly for UI feedback, but exclude ancient ones). This reduces snapshot payload size immediately even before file purge runs. Test that snapshot excludes stale resolved proposals but includes PENDING and recently-resolved ones.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:52:27.963Z",
+      "completedAt": "2026-02-18T22:52:32.364Z",
+      "note": "Updated snapshot behavior to reduce payload bloat: `getSnapshot()` now filters out stale resolved proposals (APPROVED/REJECTED older than snapshot retention window) while keeping pending and recently-resolved proposals for short-lived UI feedback.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add unit tests for proposal purging. Create test cases: (1) PENDING proposals are never purged regardless of age, (2) APPROVED proposals older than 7 days are purged from Map and disk, (3) REJECTED proposals older than 7 days are purged, (4) Recently-resolved proposals (< 7 days) are NOT purged, (5) File deletion errors are handled gracefully without crashing, (6) Activity log records purge events. Use vitest framework consistent with existing test patterns in tools.test.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-02-18T22:52:35.674Z",
+      "completedAt": "2026-02-18T22:52:40.441Z",
+      "note": "Added purge-focused regression coverage: pending proposals retained, stale approved/rejected purged from map+disk, recent resolved retained, delete errors handled without crashing, and `PROPOSAL_PURGED` activity events recorded. Also added startup purge + interval lifecycle verification and snapshot filtering coverage. Validation: `npx vitest run src/state/StateManager.test.ts` and full `npx vitest run` pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:44.621Z",
+  "updatedAt": "2026-02-19T07:27:14.098Z",
+  "planSubmittedAt": "2026-02-18T22:24:28.052Z",
+  "planApprovedAt": "2026-02-18T22:28:08.757Z",
+  "workStartedAt": "2026-02-18T22:32:58.135Z",
+  "completedAt": "2026-02-18T22:52:50.412Z",
+  "reviewStartedAt": "2026-02-18T22:52:50.412Z",
+  "reviewCompletedAt": "2026-02-19T07:27:14.098Z"
+}

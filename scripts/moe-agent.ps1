@@ -26,7 +26,10 @@ param(
     [string]$Team,
 
     # Use codex exec mode (non-interactive, headless) instead of interactive TUI
-    [switch]$CodexExec
+    [switch]$CodexExec,
+
+    # Use gemini headless mode (non-interactive, --yolo) instead of interactive
+    [switch]$GeminiExec
 )
 
 function Load-Registry {
@@ -310,9 +313,12 @@ if (Test-Path $roleDocPath) {
     Write-Host "WARNING: Role documentation not found: $Role.md" -ForegroundColor Yellow
 }
 
-# Load shared agent context
+# Load shared agent context (.moe/ first, then fallback to install docs/)
 $agentContext = ""
-$agentContextPath = if ($pluginRoot) { Join-Path $pluginRoot "docs\agent-context.md" } else { $null }
+$agentContextPath = Join-Path $moeDir "agent-context.md"
+if (-not (Test-Path $agentContextPath)) {
+    $agentContextPath = if ($pluginRoot) { Join-Path $pluginRoot "docs\agent-context.md" } else { $null }
+}
 if ($agentContextPath -and (Test-Path $agentContextPath)) {
     $agentContext = Get-Content -Raw -Path $agentContextPath
     Write-Host "Loaded agent context from $agentContextPath"
@@ -331,6 +337,13 @@ if (Test-Path $projectJsonPath) {
     } catch {
         Write-Host "WARNING: Could not parse project.json" -ForegroundColor Yellow
     }
+}
+
+# Read enableAgentTeams from project.json
+$enableAgentTeams = $false
+if ($projConfig -and $projConfig.settings.enableAgentTeams -eq $true) {
+    $enableAgentTeams = $true
+    Write-Host "Agent Teams: enabled"
 }
 
 # Load known issues if present
@@ -354,8 +367,11 @@ if ($cmdForDetect) {
 }
 $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
+elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 # Codex is interactive by default, but -CodexExec enables non-interactive headless mode
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
+# Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
+$geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 if ($cliType -eq "codex") {
@@ -462,6 +478,46 @@ $moeTomlBlock
         Write-Error "Failed to write Codex MCP config: $_"
         exit 1
     }
+} elseif ($cliType -eq "gemini") {
+    # For gemini: write project-scoped .gemini/settings.json with MCP config
+    Write-Host "Writing project-scoped Gemini MCP config..."
+    $geminiConfigDir = Join-Path $projectPath ".gemini"
+    $geminiConfigFile = Join-Path $geminiConfigDir "settings.json"
+    try {
+        if (-not (Test-Path $geminiConfigDir)) {
+            New-Item -ItemType Directory -Force -Path $geminiConfigDir | Out-Null
+        }
+
+        # Build the moe MCP server entry
+        $moeEntry = @{
+            command = "node"
+            args = @($proxyScript)
+            env = @{
+                MOE_PROJECT_PATH = $projectPath.ToString()
+            }
+        }
+
+        # Merge with existing settings.json if present
+        $geminiConfig = @{}
+        if (Test-Path $geminiConfigFile) {
+            try {
+                $geminiConfig = Get-Content -Raw -Path $geminiConfigFile | ConvertFrom-Json -AsHashtable
+            } catch {
+                $geminiConfig = @{}
+            }
+        }
+        if (-not $geminiConfig.ContainsKey('mcpServers')) {
+            $geminiConfig['mcpServers'] = @{}
+        }
+        $geminiConfig['mcpServers']['moe'] = $moeEntry
+
+        $jsonText = $geminiConfig | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($geminiConfigFile, $jsonText, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Gemini MCP config written to: $geminiConfigFile"
+    } catch {
+        Write-Error "Failed to write Gemini MCP config: $_"
+        exit 1
+    }
 } else {
     Write-Host "MCP config written to: $mcpConfigFile"
 }
@@ -502,12 +558,19 @@ if ($cliType -eq "codex") {
         Write-Host "Codex mode: interactive TUI"
     }
 }
-if (-not $NoLoop -and -not $codexInteractive) {
+if ($cliType -eq "gemini") {
+    if ($GeminiExec) {
+        Write-Host "Gemini mode: headless (--yolo)"
+    } else {
+        Write-Host "Gemini mode: interactive"
+    }
+}
+if (-not $NoLoop -and -not $codexInteractive -and -not $geminiInteractive) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
 }
 
 $loopEnabled = (-not $NoLoop) -and ($PollInterval -gt 0)
-if ($codexInteractive) {
+if ($codexInteractive -or $geminiInteractive) {
     $loopEnabled = $false
     if (-not $NoLoop) {
         Write-Host "Interactive mode: polling disabled"
@@ -542,6 +605,17 @@ if ($cliType -eq "codex") {
     $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
     $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
     Write-Host "Agent instructions written to: $agentInstructionsPath"
+}
+
+# For gemini: write system/role context to .gemini/GEMINI.md (Gemini's native context file)
+if ($cliType -eq "gemini") {
+    $geminiInstructionsDir = Join-Path $projectPath ".gemini"
+    if (-not (Test-Path $geminiInstructionsDir)) {
+        New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
+    }
+    $geminiInstructionsPath = Join-Path $geminiInstructionsDir "GEMINI.md"
+    $systemAppend | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
+    Write-Host "Agent instructions written to: $geminiInstructionsPath"
 }
 
 do {
@@ -594,7 +668,55 @@ do {
             Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
             & $Command @CommandArgs -C "$projectPath" $shortPrompt
         }
+    } elseif ($cliType -eq "gemini") {
+        # Check gemini is available
+        $geminiCheck = Get-Command $Command -ErrorAction SilentlyContinue
+        if (-not $geminiCheck) {
+            Write-Error "Gemini command not found: $Command. Install Gemini CLI first (npm install -g @google/gemini-cli)."
+            exit 1
+        }
+
+        # Build role-aware short prompt for Gemini CLI argument
+        # Gemini instruction delivery chain:
+        # 1. AGENTS.md -> loaded via context settings (generic project context)
+        # 2. .gemini/GEMINI.md -> loaded as project-level context (full role doc + agent context)
+        # 3. $shortPrompt below -> the initial user message (role-aware first action)
+        $roleWorkflow = switch ($Role) {
+            "architect" { "Workflow: claim task -> get_context -> explore codebase -> submit_plan for approval" }
+            "worker"    { "Workflow: claim task -> get_context -> start_step -> implement -> complete_step -> complete_task" }
+            "qa"        { "Workflow: claim task -> get_context -> review code and tests -> qa_approve or qa_reject" }
+            default     { "Workflow: claim task -> get_context -> complete task" }
+        }
+        if ($claimPrompt) {
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+        } else {
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. Start by calling moe.claim_next_task to get your next task."
+        }
+
+        if ($GeminiExec) {
+            # Non-interactive headless mode
+            Write-Host "Command: $Command --prompt `"<prompt>`" --yolo"
+            Push-Location $projectPath
+            & $Command @CommandArgs --prompt $shortPrompt --yolo
+            Pop-Location
+        } else {
+            # Interactive mode
+            Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
+            Push-Location $projectPath
+            & $Command @CommandArgs --prompt-interactive $shortPrompt
+            Pop-Location
+        }
     } else {
+        # Clean slate for agent teams env var
+        if ($env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) {
+            Remove-Item Env:\CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS -ErrorAction SilentlyContinue
+        }
+        # Enable CC Agent Teams for Claude workers when setting is on
+        if ($Role -eq "worker" -and $enableAgentTeams) {
+            $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+            Write-Host "Agent Teams enabled for this worker session"
+        }
+
         # Claude Code: use --mcp-config and --append-system-prompt
         if ($claimPrompt) {
             Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$claimPrompt`""

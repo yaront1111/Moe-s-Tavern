@@ -7,8 +7,34 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix release.yml job-level secrets access that causes workflow file parse failure. Line 84 uses `if: secrets.JETBRAINS_MARKETPLACE_TOKEN != ''` at the JOB level, but `secrets` context is not resolvable at job-level `if` conditions during workflow parsing, causing the entire workflow to fail to load (0 jobs, 0s, 'workflow file issue'). Fix by removing the job-level `if` and instead adding `if: ${{ env.PUBLISH_TOKEN != '' }}` to the actual publish step (line 108-113), which already sets the env var. This way the job always runs but the publish step is skipped when the secret is missing. Also add proper error handling with `continue-on-error: true` on the step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/release.yml"
+      ],
+      "startedAt": "2026-02-18T23:34:01.976Z",
+      "completedAt": "2026-02-18T23:34:19.780Z",
+      "note": "Removed the job-level secret-based `if` from `publish-plugin` and moved conditional gating to the publish step via `if: ${{ env.PUBLISH_TOKEN != '' }}` while keeping `continue-on-error: true`. This avoids workflow parse-time context issues and allows the workflow/job to load even when the secret is unset.",
+      "modifiedFiles": [
+        ".github/workflows/release.yml"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Test the fix by validating the workflow YAML syntax locally using `actionlint` or by verifying GitHub Actions can parse the corrected file. Confirm the workflow name renders as 'Release' (not the raw file path) in the GitHub Actions UI, which indicates successful parsing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/release.yml"
+      ],
+      "startedAt": "2026-02-18T23:34:24.396Z",
+      "completedAt": "2026-02-18T23:35:07.785Z",
+      "note": "Validated workflow syntax locally by parsing `.github/workflows/release.yml` with Python/PyYAML (success: name=Release, jobs=build-and-release,publish-plugin). Also ran a structural check confirming no job-level `if` conditions reference `secrets.*`. `actionlint` was not installed in this environment, so validation used YAML parse + targeted semantic guard checks."
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -19,5 +45,12 @@
   "priority": "MEDIUM",
   "order": 58,
   "createdAt": "2026-02-08T10:58:42.476Z",
-  "updatedAt": "2026-02-14T12:21:24.250Z"
+  "updatedAt": "2026-02-19T07:42:46.939Z",
+  "comments": [],
+  "planSubmittedAt": "2026-02-18T22:39:01.756Z",
+  "planApprovedAt": "2026-02-18T22:39:13.534Z",
+  "workStartedAt": "2026-02-18T23:34:01.976Z",
+  "completedAt": "2026-02-18T23:35:11.882Z",
+  "reviewStartedAt": "2026-02-18T23:35:11.882Z",
+  "reviewCompletedAt": "2026-02-19T07:42:46.939Z"
 }

@@ -1,0 +1,84 @@
+{
+  "id": "task-010df94a",
+  "epicId": "epic-ffe3ace6",
+  "title": "Register all new commands and update package.json contributions",
+  "description": "Update extension.ts and package.json to register all new commands added by the previous tasks and wire them to the appropriate handlers. This is a consolidation task that ensures all new features are properly integrated into the VS Code extension manifest and activation flow.\n\n**New commands to register in package.json contributes.commands:**\n- moe.createTask - \"Moe: Create Task\"\n- moe.createEpic - \"Moe: Create Epic\"\n- moe.openEpicDetail - \"Moe: Open Epic Detail\"\n- moe.openSettings - \"Moe: Open Settings\"\n- moe.startAgents - \"Moe: Start All Agents\"\n- moe.startAgent - \"Moe: Start Agent\"\n- moe.showDaemonStatus - \"Moe: Show Daemon Status\"\n- moe.restartDaemon - \"Moe: Restart Daemon\"\n\n**Update extension.ts activate() function:**\n- Register all new commands with vscode.commands.registerCommand\n- Wire each command to the appropriate handler function or class method\n- Add all registrations to context.subscriptions for proper disposal\n\n**Update package.json configuration properties:**\n- Add any new configuration properties needed by the new features\n- Ensure existing properties are still correct\n\n**Menus contribution (optional but helpful):**\n- Add command palette entries for all commands\n- Consider adding editor/title menu entries for webview panels\n- Consider adding view/title menu entries for the Moe sidebar\n\n**Activation events update:**\n- Ensure the extension activates on all relevant events\n- Current: workspaceContains:.moe, onCommand:moe.connect, onView:moe.board\n- Add any new activation triggers if needed\n\n**Verify complete integration:**\n- All features from tasks 1-16 accessible through commands or UI buttons\n- No dead code or unused registrations\n- Extension activates and all features work together\n\nReference: Current extension.ts for the activation pattern and package.json for the manifest structure.",
+  "definitionOfDone": [
+    "All new commands registered in package.json contributes.commands",
+    "All commands wired in extension.ts activate() with proper handlers",
+    "All command registrations added to context.subscriptions",
+    "Extension compiles without errors",
+    "All commands appear in VS Code command palette",
+    "Extension activates correctly and all features are accessible",
+    "No console errors on extension activation"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update `moe-vscode/package.json` contributes.commands array with all new commands:\n\n```json\n{ \"command\": \"moe.createTask\", \"title\": \"Moe: Create Task\" },\n{ \"command\": \"moe.createEpic\", \"title\": \"Moe: Create Epic\" },\n{ \"command\": \"moe.openEpicDetail\", \"title\": \"Moe: Open Epic Detail\" },\n{ \"command\": \"moe.reviewPlan\", \"title\": \"Moe: Review Plan\" },\n{ \"command\": \"moe.openSettings\", \"title\": \"Moe: Open Settings\" },\n{ \"command\": \"moe.startAgent\", \"title\": \"Moe: Start Agent\" },\n{ \"command\": \"moe.startAllAgents\", \"title\": \"Moe: Start All Agents\" },\n{ \"command\": \"moe.showDaemonStatus\", \"title\": \"Moe: Show Daemon Status\" },\n{ \"command\": \"moe.restartDaemon\", \"title\": \"Moe: Restart Daemon\" },\n{ \"command\": \"moe.archiveDoneTasks\", \"title\": \"Moe: Archive Done Tasks\" },\n{ \"command\": \"moe.showActivityLog\", \"title\": \"Moe: Show Activity Log\" }\n```\n\nAlso add activation events for any new commands if not covered by existing `*` or `workspaceContains:.moe`.\n\nError handling: N/A (manifest only).\nTest: `npm run compile` succeeds. Commands appear in palette.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-22T00:52:30.513Z",
+      "completedAt": "2026-02-22T00:52:47.772Z",
+      "note": "Added new commands to package.json: moe.archiveDoneTasks, moe.showDaemonStatus, moe.startAgent. Added view/title menus for moe.createTask and moe.refresh in the board view navigation group. Only registered commands that can be backed by existing code.",
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update `moe-vscode/src/extension.ts` activate() to register all new commands with handlers.\n\nImport all panel classes: TaskCreatePanel, TaskDetailPanel, PlanReviewPanel, EpicDetailPanel, SettingsPanel, AgentLauncher.\n\nRegister each command:\n- `moe.createTask` -> `TaskCreatePanel.createOrShow(context.extensionUri, daemonClient, daemonClient.currentState)`\n- `moe.createEpic` -> `EpicDetailPanel.createOrShow(context.extensionUri, daemonClient, undefined, daemonClient.currentState)`\n- `moe.openEpicDetail` -> prompt for epicId via QuickPick of epics, then `EpicDetailPanel.createOrShow(..., epicId, ...)`\n- `moe.reviewPlan` -> prompt for taskId via QuickPick of AWAITING_APPROVAL tasks, then `PlanReviewPanel.createOrShow(...)`\n- `moe.openSettings` -> `SettingsPanel.createOrShow(context.extensionUri, daemonClient, daemonClient.currentState)`\n- `moe.startAgent` -> prompt role via QuickPick (architect/worker/qa), then `AgentLauncher.launch(role, ...)`\n- `moe.startAllAgents` -> `AgentLauncher.launchAll(...)`\n- `moe.showDaemonStatus` -> show information message with daemon info\n- `moe.restartDaemon` -> disconnect, stop, restart daemon\n- `moe.archiveDoneTasks` -> `daemonClient.archiveDoneTasks()`\n- `moe.showActivityLog` -> request and display activity log\n\nPush all disposables to `context.subscriptions`.\n\nError handling: Wrap each handler in try/catch. Check connection state before actions requiring daemon.\nTest: All commands execute from palette without errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "startedAt": "2026-02-22T00:52:50.084Z",
+      "completedAt": "2026-02-22T00:54:49.942Z",
+      "note": "Added imports for path/fs. Fixed startAgent script args to match actual moe-agent.ps1/sh params (-Project/-Command, --project/--command). Added 3 new commands: startAllAgents (launches architect+worker+qa in terminals), showActivityLog (fetches+displays last 50 events), restartDaemon (disconnect+reconnect). All registered in package.json and wired in extension.ts with error handling.",
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify complete integration across all files:\n\n1. Run `npm run compile` in moe-vscode - must pass with zero errors\n2. Check all imports resolve correctly (panels, util, types)\n3. Verify no duplicate command registrations\n4. Verify no unused imports or dead code from removed QuickPick flow\n5. Confirm package.json has correct `main` entry and activation events cover all commands\n6. If any panels were created by earlier tasks but not imported in extension.ts, add the imports\n\nError handling: Fix any compilation errors found during verification.\nTest: Full compile pass. Extension activates without console errors. All features accessible.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json",
+        "moe-vscode/tsconfig.json"
+      ],
+      "startedAt": "2026-02-22T00:54:52.983Z",
+      "completedAt": "2026-02-22T00:55:19.375Z",
+      "note": "Verified: TypeScript compiles clean. All 14 commands in package.json match 14 registerCommand calls in extension.ts. All imports resolve. No duplicates, no unused imports. Activation events and main entry correct. Agent script args match actual moe-agent.ps1/sh parameters.",
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:06:51.738Z",
+  "updatedAt": "2026-02-23T06:25:44.085Z",
+  "planSubmittedAt": "2026-02-21T23:21:42.215Z",
+  "planApprovedAt": "2026-02-21T23:21:42.217Z",
+  "workStartedAt": "2026-02-22T00:52:30.513Z",
+  "completedAt": "2026-02-22T00:55:24.665Z",
+  "reviewStartedAt": "2026-02-22T00:55:24.665Z",
+  "reviewCompletedAt": "2026-02-23T06:25:44.085Z"
+}

@@ -1,8 +1,10 @@
 package com.moe.toolwindow
 
+import com.moe.model.MoeState
 import com.moe.model.Task
 import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
+import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
@@ -39,10 +41,28 @@ class TaskDetailDialog(
     private val descriptionField = JBTextArea(task.description)
     private val dodField = JBTextArea(task.definitionOfDone.joinToString("\n"))
     private val reopenReasonField = JBTextArea(task.reopenReason ?: "")
+    private var planScrollPane: JScrollPane? = null
+    private var planContainer: JPanel? = null
+    private var stateListener: MoeStateListener? = null
 
     init {
         title = MoeBundle.message("moe.dialog.taskDetail", task.title)
         init()
+        // Subscribe to live state updates for step progress
+        stateListener = object : MoeStateListener {
+            override fun onState(state: MoeState) {
+                val updated = state.tasks.find { it.id == task.id } ?: return
+                refreshPlanPanel(updated)
+            }
+            override fun onStatus(connected: Boolean, message: String) {}
+        }
+        service.addListener(stateListener!!)
+    }
+
+    override fun dispose() {
+        stateListener?.let { service.removeListener(it) }
+        stateListener = null
+        super.dispose()
     }
 
     override fun createCenterPanel(): JComponent {
@@ -75,25 +95,19 @@ class TaskDetailDialog(
         dodScroll.preferredSize = Dimension(520, 120)
         panel.add(dodScroll)
 
-        // Implementation Plan section
+        // Implementation Plan section (live-updated via state listener)
+        val planWrapper = JPanel(BorderLayout())
+        planWrapper.isOpaque = false
+        planContainer = planWrapper
         if (task.implementationPlan.isNotEmpty()) {
-            val planPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                border = BorderFactory.createTitledBorder(
-                    JBUI.Borders.customLine(JBColor.border()),
-                    MoeBundle.message("moe.label.implementationPlan")
-                )
-            }
-
-            for ((index, step) in task.implementationPlan.withIndex()) {
-                planPanel.add(createStepRow(index + 1, step))
-            }
-
+            val planPanel = buildPlanPanel(task)
             val planScroll = JScrollPane(planPanel)
             planScroll.preferredSize = Dimension(520, 160)
             planScroll.border = JBUI.Borders.empty()
-            panel.add(planScroll)
+            planScrollPane = planScroll
+            planWrapper.add(planScroll, BorderLayout.CENTER)
         }
+        panel.add(planWrapper)
 
         task.prLink?.let { panel.add(JBLabel(MoeBundle.message("moe.message.prLink", it))) }
 
@@ -178,6 +192,36 @@ class TaskDetailDialog(
         panel.add(askPanel)
 
         return panel
+    }
+
+    private fun buildPlanPanel(t: Task): JPanel {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = BorderFactory.createTitledBorder(
+                JBUI.Borders.customLine(JBColor.border()),
+                MoeBundle.message("moe.label.implementationPlan")
+            )
+            for ((index, step) in t.implementationPlan.withIndex()) {
+                add(createStepRow(index + 1, step))
+            }
+        }
+    }
+
+    private fun refreshPlanPanel(updated: Task) {
+        val container = planContainer ?: return
+        javax.swing.SwingUtilities.invokeLater {
+            container.removeAll()
+            if (updated.implementationPlan.isNotEmpty()) {
+                val newPlan = buildPlanPanel(updated)
+                val newScroll = JScrollPane(newPlan)
+                newScroll.preferredSize = Dimension(520, 160)
+                newScroll.border = JBUI.Borders.empty()
+                planScrollPane = newScroll
+                container.add(newScroll, BorderLayout.CENTER)
+            }
+            container.revalidate()
+            container.repaint()
+        }
     }
 
     private fun createStepRow(stepNumber: Int, step: ImplementationStep): JPanel {

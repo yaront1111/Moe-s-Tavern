@@ -1,0 +1,74 @@
+{
+  "id": "task-1d7b29e9",
+  "epicId": "epic-ffe3ace6",
+  "title": "Project settings editor panel",
+  "description": "Implement a project settings editor matching JetBrains MoeSettingsDialog.kt. The VS Code extension currently has no way to view or modify project settings (approval mode, speed mode delay, git patterns, agent command).\n\n**Create src/panels/SettingsPanel.ts** - opens as an editor webview panel:\n\n**Settings fields (matching MoeSettingsDialog.kt):**\n\n1. **Approval Mode** dropdown: CONTROL / SPEED / TURBO\n   - Hint text explaining each mode\n\n2. **Speed Mode Delay** numeric input: range 500-30000, step 500, default 2000\n   - Hint: \"Delay in ms before auto-approving in SPEED mode\"\n\n3. **Agent Command** editable dropdown/input: preset options \"claude\", \"codex\", \"gemini\" plus free-text custom entry\n   - Hint: \"CLI command used to launch AI agents\"\n\n4. **Git Settings section:**\n   - Auto Create Branch checkbox (boolean)\n   - Branch Pattern text input (e.g., \"moe/{epicId}/{taskId}\")\n     - Hint: \"Pattern for auto-created branches. Available: {epicId}, {taskId}\"\n   - Commit Pattern text input (e.g., \"feat({epicId}): {taskTitle}\")\n     - Hint: \"Pattern for auto-generated commit messages\"\n\n**Visual separators** between sections (matching createSeparator() in JetBrains).\n\n**Action buttons:**\n- Save button: collects all field values into a ProjectSettings object and calls daemonClient.updateSettings(settings)\n- Cancel button: closes the panel without saving\n\n**Data flow:**\n- Settings loaded from state.project.settings when panel opens\n- If settings are null/undefined, use defaults (CONTROL, 2000, true, default patterns, \"claude\")\n\n**Board integration:**\n- Add a gear icon button in the board header (matching JetBrains settingsButton at MoeToolWindowPanel.kt lines 200-215)\n- Click opens the settings panel\n- Register command moe.openSettings in extension.ts and package.json\n\n**WebSocket:**\n- Save sends UPDATE_SETTINGS message via daemonClient.updateSettings()\n- Settings changes are reflected in the next STATE_SNAPSHOT from the daemon\n\nReference: JetBrains MoeSettingsDialog.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Settings panel opens as editor webview with all fields",
+    "Approval mode dropdown with CONTROL/SPEED/TURBO options",
+    "Speed mode delay numeric input with proper range",
+    "Agent command editable dropdown with preset and custom options",
+    "Git settings: auto-create branch checkbox, branch pattern, commit pattern",
+    "Save button sends UPDATE_SETTINGS via WebSocket",
+    "Fields pre-populated from current project settings",
+    "Gear icon button in board header opens settings",
+    "moe.openSettings command registered"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/panels/SettingsPanel.ts` with webview panel class:\n\n- `static instance: SettingsPanel | undefined` - singleton\n- `static createOrShow(extensionUri, client, state)` - reuse or create\n- Panel title: \"Moe Settings\", ViewColumn.One\n- `getWebviewContent(nonce, settings: ProjectSettings)` - returns form HTML\n\n**Form HTML layout with CSP nonce and --vscode-* variables:**\n\nSection 1 - Approval Mode:\n- `<label>Approval Mode</label>`\n- `<select id=\"approvalMode\">` with CONTROL/SPEED/TURBO options, pre-selected\n- `<small class=\"hint\">` explaining each mode\n\nSection 2 - Speed Mode:\n- `<label>Speed Mode Delay (ms)</label>`\n- `<input type=\"number\" id=\"speedDelay\" min=\"500\" max=\"30000\" step=\"500\">` pre-filled\n\nSection 3 - Agent:\n- `<label>Agent Command</label>`\n- `<input type=\"text\" id=\"agentCommand\" list=\"agentPresets\">`\n- `<datalist id=\"agentPresets\"><option>claude</option><option>codex</option><option>gemini</option></datalist>`\n\nSection 4 - Git:\n- `<label><input type=\"checkbox\" id=\"autoCreateBranch\"> Auto Create Branch</label>`\n- `<label>Branch Pattern</label> <input type=\"text\" id=\"branchPattern\">`\n- `<label>Commit Pattern</label> <input type=\"text\" id=\"commitPattern\">`\n\nButtons: Save + Cancel\n\nError handling: Default values if settings undefined.\nTest: Panel renders all fields with correct pre-filled values.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ],
+      "startedAt": "2026-02-23T06:31:38.967Z",
+      "completedAt": "2026-02-23T06:31:46.814Z",
+      "note": "SettingsPanel.ts created with singleton pattern, CSP nonce, --vscode-* CSS variables. Form sections: Workflow (approval mode dropdown with CONTROL/SPEED/TURBO, speed mode delay numeric input), Agent (agent command with datalist presets), Git (auto-create branch checkbox, branch pattern, commit pattern). Save/Cancel buttons. Pre-populates from state.project.settings with defaults.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add message handling and board integration for SettingsPanel:\n\n**Webview -> Extension messages:**\n- `save`: `{ approvalMode, speedModeDelayMs, agentCommand, autoCreateBranch, branchPattern, commitPattern }` -> call `client.updateSettings(settings)`, show info message \"Settings saved\", dispose panel\n- `cancel`: dispose panel\n\n**Board header integration in BoardViewProvider.ts:**\n- Add gear icon button: `<button id=\"settingsBtn\" title=\"Settings\">&#9881;</button>` in the header bar\n- Click handler posts `{ type: 'openSettings' }` to extension\n- In message handler: call `SettingsPanel.createOrShow(extensionUri, client, state)`\n\n**Command registration:**\n- `moe.openSettings` in extension.ts -> `SettingsPanel.createOrShow(...)`\n- Add to package.json contributes.commands\n\nError handling: Wrap updateSettings in try/catch, show error on failure. Validate speedModeDelayMs is in range.\nTest: Save sends UPDATE_SETTINGS. Gear button opens panel. Settings reflected after save.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-23T06:31:47.209Z",
+      "completedAt": "2026-02-23T06:31:53.258Z",
+      "note": "Save handler collects all field values, calls client.updateSettings() in try/catch, shows info, disposes. Cancel disposes. Gear icon button added to board header (visible when connected). moe.openSettings command registered in extension.ts. Command added to package.json.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:05:46.692Z",
+  "updatedAt": "2026-02-23T12:06:49.083Z",
+  "planSubmittedAt": "2026-02-21T23:24:19.315Z",
+  "planApprovedAt": "2026-02-21T23:24:19.317Z",
+  "workStartedAt": "2026-02-23T06:31:38.967Z",
+  "completedAt": "2026-02-23T06:31:55.077Z",
+  "reviewStartedAt": "2026-02-23T06:31:55.077Z",
+  "reviewCompletedAt": "2026-02-23T12:06:49.083Z"
+}

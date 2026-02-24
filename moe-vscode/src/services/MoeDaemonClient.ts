@@ -4,43 +4,28 @@ import * as path from 'path';
 import * as net from 'net';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
+import type {
+    Task,
+    ImplementationStep,
+    Epic,
+    MoeStateSnapshot,
+    ConnectionState,
+    Worker,
+    Team,
+    RailProposal,
+    ActivityEvent,
+    TaskPriority,
+    EpicStatus,
+    ProjectSettings,
+    Project,
+} from '../types/moe';
 
-// Type definitions for Moe daemon communication.
-// Canonical types are defined in packages/moe-daemon/src/types/schema.ts
-// These are simplified versions for the VSCode extension.
-// Future: Consider extracting to packages/moe-common/ for strict type sharing.
+// Re-export types for backward compatibility with existing importers.
+export type { Task, Epic, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings };
+export type { MoeStateSnapshot as StateSnapshot } from '../types/moe';
+export type { ImplementationStep as Step } from '../types/moe';
 
-export interface Task {
-    id: string;
-    epicId: string;
-    title: string;
-    description: string;
-    status: string;
-    assignedWorkerId?: string;
-    implementationPlan?: Step[];
-}
-
-export interface Step {
-    stepId: string;
-    description: string;
-    status: string;
-    affectedFiles?: string[];
-}
-
-export interface Epic {
-    id: string;
-    title: string;
-    description: string;
-}
-
-export interface StateSnapshot {
-    project: { id: string; name: string };
-    epics: Epic[];
-    tasks: Task[];
-    workers: unknown[];
-}
-
-type ConnectionState = 'disconnected' | 'connecting' | 'connected';
+type StateSnapshot = MoeStateSnapshot;
 
 // Output channel for logging
 let outputChannel: vscode.OutputChannel | undefined;
@@ -73,6 +58,20 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onTaskUpdated = new vscode.EventEmitter<Task>();
     public readonly onTaskUpdated = this._onTaskUpdated.event;
 
+    private readonly _onEpicUpdated = new vscode.EventEmitter<Epic>();
+    public readonly onEpicUpdated = this._onEpicUpdated.event;
+
+    private readonly _onTaskDeleted = new vscode.EventEmitter<Task>();
+    public readonly onTaskDeleted = this._onTaskDeleted.event;
+
+    private readonly _onActivityLog = new vscode.EventEmitter<ActivityEvent[]>();
+    public readonly onActivityLog = this._onActivityLog.event;
+
+    private readonly _onError = new vscode.EventEmitter<{ operation?: string; message: string }>();
+    public readonly onError = this._onError.event;
+
+    private daemonShuttingDown = false;
+
     private state: StateSnapshot | undefined;
 
     constructor(extensionPath: string) {
@@ -91,6 +90,8 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this._connectionState !== 'disconnected') {
             return;
         }
+
+        this.daemonShuttingDown = false;
 
         await this.ensureDaemonRunning();
         const daemonInfo = await this.getDaemonInfo();
@@ -155,8 +156,33 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
     }
 
+    // =========================================================================
+    // Outbound: Task operations
+    // =========================================================================
+
     updateTaskStatus(taskId: string, status: string): void {
-        this.sendMessage('UPDATE_TASK', { taskId, status });
+        this.sendMessage('UPDATE_TASK', { taskId, updates: { status } });
+    }
+
+    createTask(
+        epicId: string,
+        title: string,
+        description: string,
+        definitionOfDone: string[],
+        priority: TaskPriority
+    ): void {
+        this.sendMessage('CREATE_TASK', { epicId, title, description, definitionOfDone, priority });
+    }
+
+    updateTaskDetails(
+        taskId: string,
+        updates: { title?: string; description?: string; definitionOfDone?: string[]; priority?: TaskPriority }
+    ): void {
+        this.sendMessage('UPDATE_TASK', { taskId, updates });
+    }
+
+    deleteTask(taskId: string): void {
+        this.sendMessage('DELETE_TASK', { taskId });
     }
 
     approveTask(taskId: string): void {
@@ -169,6 +195,58 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     reopenTask(taskId: string, reason: string): void {
         this.sendMessage('REOPEN_TASK', { taskId, reason });
+    }
+
+    addTaskComment(taskId: string, content: string): void {
+        this.sendMessage('ADD_TASK_COMMENT', { taskId, content });
+    }
+
+    // =========================================================================
+    // Outbound: Epic operations
+    // =========================================================================
+
+    createEpic(
+        title: string,
+        description: string,
+        architectureNotes?: string,
+        epicRails?: string[]
+    ): void {
+        this.sendMessage('CREATE_EPIC', { title, description, architectureNotes, epicRails });
+    }
+
+    updateEpic(
+        epicId: string,
+        updates: { title?: string; description?: string; architectureNotes?: string; epicRails?: string[]; status?: EpicStatus }
+    ): void {
+        this.sendMessage('UPDATE_EPIC', { epicId, updates });
+    }
+
+    deleteEpic(epicId: string): void {
+        this.sendMessage('DELETE_EPIC', { epicId });
+    }
+
+    // =========================================================================
+    // Outbound: Settings, proposals, activity, archive
+    // =========================================================================
+
+    updateSettings(settings: Partial<ProjectSettings>): void {
+        this.sendMessage('UPDATE_SETTINGS', settings);
+    }
+
+    archiveDoneTasks(epicId?: string): void {
+        this.sendMessage('ARCHIVE_DONE_TASKS', epicId ? { epicId } : {});
+    }
+
+    requestActivityLog(limit?: number): void {
+        this.sendMessage('GET_ACTIVITY_LOG', limit ? { limit } : {});
+    }
+
+    approveProposal(proposalId: string): void {
+        this.sendMessage('APPROVE_PROPOSAL', { proposalId });
+    }
+
+    rejectProposal(proposalId: string): void {
+        this.sendMessage('REJECT_PROPOSAL', { proposalId });
     }
 
     private async getDaemonInfo(): Promise<{ host: string; port: number } | undefined> {
@@ -358,10 +436,10 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this.state = payload;
                     this._onStateChanged.fire(payload);
                     break;
+
                 case 'TASK_UPDATED':
                 case 'TASK_CREATED':
                     this._onTaskUpdated.fire(payload);
-                    // Update local state
                     if (this.state) {
                         const idx = this.state.tasks.findIndex(t => t.id === payload.id);
                         if (idx >= 0) {
@@ -372,9 +450,122 @@ export class MoeDaemonClient implements vscode.Disposable {
                         this._onStateChanged.fire(this.state);
                     }
                     break;
-                case 'PONG':
-                    // Heartbeat response
+
+                case 'TASK_DELETED':
+                    this._onTaskDeleted.fire(payload);
+                    if (this.state) {
+                        this.state.tasks = this.state.tasks.filter(t => t.id !== payload.id);
+                        this._onStateChanged.fire(this.state);
+                    }
                     break;
+
+                case 'EPIC_CREATED':
+                case 'EPIC_UPDATED':
+                    this._onEpicUpdated.fire(payload);
+                    if (this.state) {
+                        const idx = this.state.epics.findIndex(e => e.id === payload.id);
+                        if (idx >= 0) {
+                            this.state.epics[idx] = payload;
+                        } else {
+                            this.state.epics.push(payload);
+                        }
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'EPIC_DELETED':
+                    if (this.state) {
+                        this.state.epics = this.state.epics.filter(e => e.id !== payload.id);
+                        this.state.tasks = this.state.tasks.filter(t => t.epicId !== payload.id);
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'WORKER_CREATED':
+                case 'WORKER_UPDATED':
+                    if (this.state) {
+                        const idx = this.state.workers.findIndex(w => w.id === payload.id);
+                        if (idx >= 0) {
+                            this.state.workers[idx] = payload;
+                        } else {
+                            this.state.workers.push(payload);
+                        }
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'WORKER_DELETED':
+                    if (this.state) {
+                        this.state.workers = this.state.workers.filter(w => w.id !== payload.id);
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'TEAM_CREATED':
+                case 'TEAM_UPDATED':
+                    if (this.state) {
+                        const idx = this.state.teams.findIndex(tm => tm.id === payload.id);
+                        if (idx >= 0) {
+                            this.state.teams[idx] = payload;
+                        } else {
+                            this.state.teams.push(payload);
+                        }
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'TEAM_DELETED':
+                    if (this.state) {
+                        this.state.teams = this.state.teams.filter(tm => tm.id !== payload.id);
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'PROPOSAL_CREATED':
+                case 'PROPOSAL_UPDATED':
+                    if (this.state) {
+                        const idx = this.state.proposals.findIndex(p => p.id === payload.id);
+                        if (idx >= 0) {
+                            this.state.proposals[idx] = payload;
+                        } else {
+                            this.state.proposals.push(payload);
+                        }
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'SETTINGS_UPDATED':
+                    if (this.state) {
+                        this.state.project = payload;
+                        this._onStateChanged.fire(this.state);
+                    }
+                    break;
+
+                case 'ACTIVITY_LOG':
+                    this._onActivityLog.fire(payload);
+                    break;
+
+                case 'ARCHIVE_DONE_RESULT':
+                    log(`Archived ${payload?.archived ?? 0} done tasks`);
+                    break;
+
+                case 'ERROR':
+                    log(`Daemon error: ${message.message ?? payload?.message ?? 'unknown'}`);
+                    this._onError.fire({
+                        operation: payload?.operation,
+                        message: message.message ?? payload?.message ?? 'Unknown error',
+                    });
+                    break;
+
+                case 'DAEMON_SHUTTING_DOWN':
+                    log('Daemon is shutting down');
+                    this.daemonShuttingDown = true;
+                    this.disconnect();
+                    break;
+
+                case 'PONG':
+                    break;
+
                 default:
                     log(`Unknown message type: ${type}`);
             }
@@ -406,6 +597,10 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     private scheduleReconnect(): void {
+        if (this.daemonShuttingDown) {
+            return;
+        }
+
         const config = vscode.workspace.getConfiguration('moe');
         if (!config.get<boolean>('autoConnect', true)) {
             return;
@@ -430,5 +625,9 @@ export class MoeDaemonClient implements vscode.Disposable {
         this._onStateChanged.dispose();
         this._onConnectionChanged.dispose();
         this._onTaskUpdated.dispose();
+        this._onEpicUpdated.dispose();
+        this._onTaskDeleted.dispose();
+        this._onActivityLog.dispose();
+        this._onError.dispose();
     }
 }

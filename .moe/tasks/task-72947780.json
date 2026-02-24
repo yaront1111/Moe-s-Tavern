@@ -1,0 +1,89 @@
+{
+  "id": "task-72947780",
+  "epicId": "epic-ffe3ace6",
+  "title": "Extract comprehensive TypeScript types from daemon schema",
+  "description": "Create a dedicated types file at `moe-vscode/src/types/moe.ts` that mirrors the canonical daemon schema from `packages/moe-daemon/src/types/schema.ts`. The current VS Code extension has minimal inline types in MoeDaemonClient.ts (Task with 7 fields, Step with 4 fields, Epic with 3 fields, StateSnapshot with 4 fields). These need to be replaced with full types matching the daemon.\n\nTypes to define:\n- TaskStatus, StepStatus, TaskPriority, WorkerType, WorkerStatus, EpicStatus (union types)\n- ProjectSettings (approvalMode, speedModeDelayMs, autoCreateBranch, branchPattern, commitPattern, agentCommand, columnLimits)\n- Project (id, schemaVersion, name, rootPath, globalRails, settings, timestamps)\n- Epic (id, projectId, title, description, architectureNotes, epicRails, status, order, timestamps)\n- ImplementationStep (stepId, description, status, affectedFiles, startedAt, completedAt, note, modifiedFiles)\n- TaskComment (id, author, content, timestamp)\n- Task (all 25+ fields from schema.ts including definitionOfDone, taskRails, priority, order, comments, hasPendingQuestion, rejectionDetails, etc.)\n- Worker (id, type, projectId, epicId, currentTaskId, status, branch, modifiedFiles, lastError, errorCount, teamId)\n- Team (id, projectId, name, role, memberIds, maxSize, timestamps)\n- RailProposal (id, workerId, taskId, proposalType, targetScope, currentValue, proposedValue, reason, status, timestamps)\n- ActivityEvent (id, timestamp, projectId, epicId, taskId, workerId, event, payload)\n- DaemonInfo (port, pid, startedAt, projectPath)\n- MoeStateSnapshot (project, epics, tasks, workers, proposals, teams)\n\nAlso define WebSocket message type enums/unions for both inbound and outbound messages.\n\nAfter creating the types file, update MoeDaemonClient.ts to import from `../types/moe` instead of using inline types. Remove the inline type definitions. Ensure all existing functionality continues to work with the new types (the new types are supersets of the old ones).",
+  "definitionOfDone": [
+    "src/types/moe.ts exists with all types matching packages/moe-daemon/src/types/schema.ts",
+    "MoeDaemonClient.ts imports types from ../types/moe instead of defining them inline",
+    "All existing inline type definitions removed from MoeDaemonClient.ts",
+    "Extension compiles without errors (npm run compile)",
+    "Extension still connects and displays board correctly with new types"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/types/moe.ts` with all types mirroring `packages/moe-daemon/src/types/schema.ts`. Include:\n\n**Union types:** TaskStatus, StepStatus, TaskPriority, WorkerType, WorkerStatus, EpicStatus, TeamRole, ProposalType, ProposalStatus, QAIssueType, ActivityEventType, ConnectionState\n\n**Interfaces:** GlobalRails, ProjectSettings, Project, Team, Epic, ImplementationStep, QAIssue, TaskComment, RejectionDetails, Task (all 25+ fields), Worker, RailProposal, ActivityEvent, MoeStateSnapshot, DaemonInfo\n\n**WebSocket message types:**\n- `PluginOutboundMessage` union: PING, GET_STATE, GET_ACTIVITY_LOG, CREATE_TASK, UPDATE_TASK, DELETE_TASK, CREATE_EPIC, UPDATE_EPIC, DELETE_EPIC, REORDER_TASK, APPROVE_TASK, REJECT_TASK, REOPEN_TASK, APPROVE_PROPOSAL, REJECT_PROPOSAL, UPDATE_SETTINGS, CREATE_TEAM, UPDATE_TEAM, DELETE_TEAM, ADD_TEAM_MEMBER, REMOVE_TEAM_MEMBER, ARCHIVE_DONE_TASKS, ADD_TASK_COMMENT\n- `DaemonInboundMessage` union: PONG, STATE_SNAPSHOT, TASK_CREATED, TASK_UPDATED, TASK_DELETED, EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED, PROPOSAL_UPDATED, SETTINGS_UPDATED, TEAM_CREATED, TEAM_UPDATED, TEAM_DELETED, ARCHIVE_DONE_RESULT, ACTIVITY_LOG, ERROR, DAEMON_SHUTTING_DOWN\n\n**Constant:** CURRENT_SCHEMA_VERSION = 4, ACTIVITY_EVENT_TYPES array\n\nCopy types exactly from schema.ts — do NOT simplify optional fields or change nullability. Add JSDoc comments referencing the canonical source file.\n\nError handling: Export a type guard function `isDaemonMessage(msg: unknown): msg is DaemonInboundMessage` for safe message parsing.\n\nTest: The file must compile cleanly with `tsc --noEmit`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "startedAt": "2026-02-21T23:55:29.488Z",
+      "completedAt": "2026-02-22T00:03:03.708Z",
+      "note": "Created comprehensive types file mirroring daemon schema.ts exactly. Includes all union types, interfaces, WebSocket message types (PluginOutboundMessage/DaemonInboundMessage), activity event types, and isDaemonMessage type guard. Compiles cleanly with tsc --noEmit.",
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update `moe-vscode/src/services/MoeDaemonClient.ts` to import all types from `../types/moe` instead of defining them inline.\n\n1. Remove the inline type definitions (lines 8-43): the `Task`, `Step`, `Epic`, `StateSnapshot` interfaces and `ConnectionState` type.\n2. Add import: `import { Task, ImplementationStep as Step, Epic, MoeStateSnapshot as StateSnapshot, ConnectionState, DaemonInboundMessage } from '../types/moe';`\n3. Re-export the types for backward compatibility: `export type { Task, Epic, ConnectionState }; export { type MoeStateSnapshot as StateSnapshot } from '../types/moe';` — so BoardViewProvider.ts and any other importers continue to work without changes.\n4. The `state` field type changes from the old minimal `StateSnapshot` to `MoeStateSnapshot` (which is a superset — has `proposals` and `teams` arrays in addition to `project`, `epics`, `tasks`, `workers`). The `project` field now has full `Project` type (superset of `{ id, name }`). This is backward compatible.\n5. Fix the `updateTaskStatus` method bug: change `this.sendMessage('UPDATE_TASK', { taskId, status })` to `this.sendMessage('UPDATE_TASK', { taskId, updates: { status } })` — the daemon expects `{ taskId, updates: {...} }` format (see WebSocketServer.ts line 166).\n\nError handling: no functional changes beyond the bug fix — existing connect/disconnect/message handling stays the same.\n\nTest: Verify the extension compiles (`npm run compile` in moe-vscode). Verify the re-exports don't break BoardViewProvider.ts imports.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-02-22T00:03:06.295Z",
+      "completedAt": "2026-02-22T00:03:34.574Z",
+      "note": "Removed all inline type definitions (Task, Step, Epic, StateSnapshot, ConnectionState). Added imports from ../types/moe. Re-exported types with aliases (MoeStateSnapshot as StateSnapshot, ImplementationStep as Step) for backward compatibility. Fixed updateTaskStatus bug: payload now uses { taskId, updates: { status } } format matching daemon's expected format. Compiles cleanly.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update `moe-vscode/src/providers/BoardViewProvider.ts` import to use the new type path if needed. Currently it imports `{ Task, Epic, StateSnapshot, MoeDaemonClient }` from `../services/MoeDaemonClient`. Since step 2 re-exports these types, no import path changes should be needed — but verify and update if the re-export aliases differ. Also update `extension.ts` if it imports any types from MoeDaemonClient.\n\nTest: Run `npm run compile` in moe-vscode to confirm zero type errors across all files. Manually verify the extension activates correctly by checking `Extension Host` output for errors (or run `code --extensionDevelopmentPath=./moe-vscode` if available).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "startedAt": "2026-02-22T00:03:37.212Z",
+      "completedAt": "2026-02-22T00:03:48.321Z",
+      "note": "No changes needed to BoardViewProvider.ts or extension.ts — the re-exports in MoeDaemonClient.ts preserve backward compatibility. Full `npm run compile` passes with zero errors."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD item 1 not met: `moe-vscode/src/types/moe.ts` ProjectSettings interface is missing `enableAgentTeams: boolean` field that exists in the canonical `packages/moe-daemon/src/types/schema.ts` (line 46). Add `enableAgentTeams: boolean;` to the ProjectSettings interface in moe.ts between `agentCommand` and `columnLimits`.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:02:20.457Z",
+  "updatedAt": "2026-02-22T00:52:12.605Z",
+  "planSubmittedAt": "2026-02-21T23:14:20.836Z",
+  "planApprovedAt": "2026-02-21T23:16:27.413Z",
+  "workStartedAt": "2026-02-21T23:55:29.488Z",
+  "completedAt": "2026-02-22T00:50:52.093Z",
+  "reviewStartedAt": "2026-02-22T00:50:52.093Z",
+  "reviewCompletedAt": "2026-02-22T00:52:12.605Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "src/types/moe.ts exists with all types matching packages/moe-daemon/src/types/schema.ts"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "ProjectSettings interface in moe-vscode/src/types/moe.ts is missing enableAgentTeams: boolean field from canonical schema.ts",
+        "file": "moe-vscode/src/types/moe.ts",
+        "line": 69
+      }
+    ]
+  }
+}

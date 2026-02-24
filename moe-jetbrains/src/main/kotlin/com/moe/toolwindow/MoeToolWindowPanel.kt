@@ -360,7 +360,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             val boardFingerprint = runCatching {
                 val taskFingerprint = state.tasks.joinToString(",") {
-                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}"
+                    val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
+                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
                 }
                 val epicFingerprint = state.epics.joinToString(",") {
                     "${it.id}:${it.title}:${it.status}:${it.order}"
@@ -579,7 +580,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 val container = columnContainers[config.status] ?: return
                 val columnTasks = tasks.filter { displayStatus(it.status) == config.status }
                 val taskFingerprint = columnTasks.joinToString(",") {
-                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}"
+                    val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
+                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
                 }
                 val fingerprint = "$taskFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}"
 

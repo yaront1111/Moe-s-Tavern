@@ -132,6 +132,7 @@ POLL_INTERVAL=30
 NO_LOOP=false
 TEAM=""
 CODEX_EXEC=false
+GEMINI_EXEC=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -184,6 +185,10 @@ while [[ $# -gt 0 ]]; do
             CODEX_EXEC=true
             shift
             ;;
+        --gemini-exec)
+            GEMINI_EXEC=true
+            shift
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -202,6 +207,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-loop                Run once and exit (no polling)"
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
+            echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -230,10 +236,16 @@ CLI_TYPE="claude"
 CMD_BASE=$(basename "${COMMAND%% *}")
 if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
+elif [ "$CMD_BASE" = "gemini" ]; then
+    CLI_TYPE="gemini"
 fi
 CODEX_INTERACTIVE=false
 if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ]; then
     CODEX_INTERACTIVE=true
+fi
+GEMINI_INTERACTIVE=false
+if [ "$CLI_TYPE" = "gemini" ] && [ "$GEMINI_EXEC" = false ]; then
+    GEMINI_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -641,6 +653,68 @@ PYEOF
     fi
 fi
 
+# For gemini: write project-scoped .gemini/settings.json with MCP config
+if [ "$CLI_TYPE" = "gemini" ]; then
+    echo "Writing project-scoped Gemini MCP config..."
+    GEMINI_CONFIG_DIR="$PROJECT/.gemini"
+    GEMINI_CONFIG_FILE="$GEMINI_CONFIG_DIR/settings.json"
+    mkdir -p "$GEMINI_CONFIG_DIR"
+
+    if [ -z "$PROXY_CMD" ]; then
+        echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
+    else
+        $PYTHON_CMD << GEMINIEOF
+import json
+import sys
+
+config_file = "$GEMINI_CONFIG_FILE"
+project_path = "$PROJECT"
+proxy_cmd = "$PROXY_CMD"
+proxy_args = "$PROXY_ARGS"
+
+# Build the desired moe MCP server entry
+moe_entry = {
+    'command': proxy_cmd,
+    'env': {
+        'MOE_PROJECT_PATH': project_path
+    }
+}
+if proxy_args:
+    moe_entry['args'] = [proxy_args]
+
+# New config to merge in
+new_config = {
+    'mcpServers': {
+        'moe': moe_entry
+    }
+}
+
+# Merge with existing settings.json if present
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    config = {}
+
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+config['mcpServers']['moe'] = moe_entry
+
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+
+print(f"[OK] Gemini MCP config written to: {config_file}")
+GEMINIEOF
+
+        if [ $? -eq 0 ] && [ -f "$GEMINI_CONFIG_FILE" ]; then
+            echo -e "${GREEN}[OK]${NC} Gemini MCP config written to: $GEMINI_CONFIG_FILE"
+        else
+            echo -e "${RED}[ERROR]${NC} Failed to write Gemini MCP config"
+            exit 1
+        fi
+    fi
+fi
+
 # Start daemon if needed
 if [ "$NO_START_DAEMON" = false ]; then
     DAEMON_INFO="$MOE_DIR/daemon.json"
@@ -852,9 +926,12 @@ else
     echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
 fi
 
-# Load shared agent context
+# Load shared agent context (.moe/ first, then fallback to install docs/)
 AGENT_CONTEXT=""
-AGENT_CONTEXT_PATH="$ROOT_DIR/docs/agent-context.md"
+AGENT_CONTEXT_PATH="$MOE_DIR/agent-context.md"
+if [ ! -f "$AGENT_CONTEXT_PATH" ]; then
+    AGENT_CONTEXT_PATH="$ROOT_DIR/docs/agent-context.md"
+fi
 if [ -f "$AGENT_CONTEXT_PATH" ]; then
     AGENT_CONTEXT=$(cat "$AGENT_CONTEXT_PATH")
     echo -e "${GREEN}[OK]${NC} Loaded agent context from: $AGENT_CONTEXT_PATH"
@@ -867,6 +944,15 @@ if [ -f "$PROJECT_JSON" ]; then
     APPROVAL_MODE=$(grep -o '"approvalMode"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROJECT_JSON" 2>/dev/null | head -1 | sed 's/.*"approvalMode"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
     if [ -n "$APPROVAL_MODE" ]; then
         echo -e "${GREEN}[OK]${NC} Approval mode: $APPROVAL_MODE"
+    fi
+fi
+
+# Read enableAgentTeams from project.json
+ENABLE_AGENT_TEAMS=""
+if [ -f "$PROJECT_JSON" ]; then
+    ENABLE_AGENT_TEAMS=$(grep -o '"enableAgentTeams"[[:space:]]*:[[:space:]]*[a-z]*' "$PROJECT_JSON" 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*//' || true)
+    if [ "$ENABLE_AGENT_TEAMS" = "true" ]; then
+        echo -e "${GREEN}[OK]${NC} Agent Teams: enabled"
     fi
 fi
 
@@ -883,7 +969,7 @@ if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
     LOOP_ENABLED=false
 fi
 
-if [ "$CODEX_INTERACTIVE" = true ]; then
+if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ]; then
     LOOP_ENABLED=false
     if [ "$NO_LOOP" = false ]; then
         echo "Interactive mode: polling disabled"
@@ -1050,7 +1136,59 @@ Run: bash $moe_call --help for full list."
             echo "Command: $COMMAND -C \"$PROJECT\" \"<prompt>\""
             $COMMAND -C "$PROJECT" "$SHORT_PROMPT" || true
         fi
+    elif [ "$CLI_TYPE" = "gemini" ]; then
+        # Check gemini is available
+        if ! command -v "$COMMAND" &> /dev/null; then
+            echo -e "${RED}[ERROR]${NC} Gemini command not found: $COMMAND. Install Gemini CLI first (npm install -g @anthropic-ai/gemini-cli or see https://github.com/google-gemini/gemini-cli)."
+            exit 1
+        fi
+
+        # Write system/role context to .gemini/GEMINI.md (Gemini's native context file)
+        # Gemini CLI auto-discovers and loads this file on every prompt
+        GEMINI_INSTRUCTIONS_PATH="$PROJECT/.gemini/GEMINI.md"
+        mkdir -p "$(dirname "$GEMINI_INSTRUCTIONS_PATH")"
+        printf '%s' "$SYSTEM_APPEND" > "$GEMINI_INSTRUCTIONS_PATH"
+        echo -e "${GREEN}[OK]${NC} Agent instructions written to: $GEMINI_INSTRUCTIONS_PATH"
+
+        # Build role-aware short prompt for Gemini CLI argument
+        # Gemini instruction delivery chain:
+        # 1. AGENTS.md → loaded via context settings (generic project context)
+        # 2. .gemini/GEMINI.md → loaded as project-level context (full role doc + agent context)
+        # 3. SHORT_PROMPT below → the initial user message (role-aware first action)
+        ROLE_WORKFLOW=""
+        case $ROLE in
+            architect) ROLE_WORKFLOW="Workflow: claim task → get_context → explore codebase → submit_plan for approval" ;;
+            worker)    ROLE_WORKFLOW="Workflow: claim task → get_context → start_step → implement → complete_step → complete_task" ;;
+            qa)        ROLE_WORKFLOW="Workflow: claim task → get_context → review code and tests → qa_approve or qa_reject" ;;
+            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
+        esac
+        if [ "$AUTO_CLAIM" = true ]; then
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+        else
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. Start by calling moe.claim_next_task to get your next task."
+        fi
+
+        if [ "$GEMINI_EXEC" = true ]; then
+            # Non-interactive headless mode
+            echo -e "Starting Gemini (headless, --yolo)..."
+            echo ""
+            echo "Command: $COMMAND --prompt \"<prompt>\" --yolo"
+            (cd "$PROJECT" && $COMMAND --prompt "$SHORT_PROMPT" --yolo) || true
+        else
+            # Interactive mode
+            echo "Starting Gemini (interactive)..."
+            echo ""
+            echo "Command: $COMMAND --prompt-interactive \"<prompt>\""
+            (cd "$PROJECT" && $COMMAND --prompt-interactive "$SHORT_PROMPT") || true
+        fi
     else
+        # Enable CC Agent Teams for Claude workers when setting is on
+        unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+        if [ "$ROLE" = "worker" ] && [ "$ENABLE_AGENT_TEAMS" = "true" ]; then
+            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+            echo -e "${GREEN}[OK]${NC} Agent Teams enabled for this worker session"
+        fi
+
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""

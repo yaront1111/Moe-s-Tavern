@@ -1,0 +1,68 @@
+{
+  "id": "task-3e050268",
+  "epicId": "epic-ffe3ace6",
+  "title": "Enhanced status bar with task counts and daemon info popup",
+  "description": "Upgrade the ConnectionStatusBar.ts to match the JetBrains MoeStatusBarWidget.kt and the daemon status popup from MoeToolWindowPanel.kt. The current status bar only shows connection state (check/spin/slash icon with \"Moe\" text).\n\n**Enhanced status bar text (matching MoeStatusBarWidget.kt):**\n- Connecting: \"$(sync~spin) Moe: connecting...\"\n- Connected: \"$(check) Moe: {awaitingCount} awaiting | {workingCount} working\"\n- Disconnected: \"$(circle-slash) Moe: disconnected\"\n\n**Task count tracking:**\n- Subscribe to daemonClient.onStateChanged\n- Count tasks where status === \"AWAITING_APPROVAL\" for awaitingCount\n- Count tasks where status === \"WORKING\" for workingCount\n- Update status bar text whenever counts change\n\n**Tooltip (matching MoeStatusBarWidget.kt getTooltipText):**\n- Connecting: \"Moe: Connecting to daemon... Click to open board.\"\n- Connected: \"Moe: {awaitingCount} tasks awaiting approval, {workingCount} tasks in progress. Click to open board.\"\n- Disconnected: \"Moe: Not connected to daemon. Click to open board.\"\n\n**Click behavior:**\n- When connected: click opens the Moe board sidebar (instead of disconnect)\n- When disconnected: click connects (existing behavior)\n- Register a new command moe.showDaemonStatus for a secondary action\n\n**Daemon status popup (matching MoeToolWindowPanel.kt showDaemonStatusPopup lines 306-336):**\n- Create a command moe.showDaemonStatus that shows a quick pick with daemon info:\n  - Status: Connected/Disconnected\n  - PID: from daemon.json\n  - Port: from daemon.json\n  - Uptime: calculated from daemon.json startedAt to now (formatted as \"Xh Ym\" or \"Xm\")\n  - Separator\n  - \"Restart Daemon\" action item - calls daemonClient.disconnect(), deletes daemon.json, reconnects\n- The daemon info popup can also be triggered from the board header status label\n\n**Reading daemon info:**\n- Read .moe/daemon.json from workspace for PID, port, startedAt\n- Parse startedAt as ISO timestamp and compute duration\n\nReference: JetBrains MoeStatusBarWidget.kt and MoeToolWindowPanel.kt showDaemonStatusPopup().",
+  "definitionOfDone": [
+    "Status bar shows task counts when connected: awaiting and working counts",
+    "Task counts update in real-time as state changes",
+    "Tooltip shows contextual message with counts",
+    "Click on status bar opens the Moe board sidebar",
+    "moe.showDaemonStatus command shows daemon info quick pick",
+    "Daemon info includes PID, port, uptime, connection status",
+    "Restart Daemon option in daemon status quick pick is functional",
+    "Status bar text updates immediately on state changes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update `moe-vscode/src/statusbar/ConnectionStatusBar.ts` to add task count tracking and enhanced display:\n\n1. Add state subscription: accept `MoeDaemonClient` in constructor (currently only takes `onConnectionChanged`). Subscribe to `client.onStateChanged` in addition to `onConnectionChanged`.\n2. Add private fields: `private awaitingCount = 0;`, `private workingCount = 0;`\n3. In state change handler: count tasks by status from state.tasks array, update counts, call `updateDisplay()`\n4. Update `updateDisplay()` method to show counts when connected:\n   - Connected: `$(check) Moe: ${awaitingCount} awaiting | ${workingCount} working`\n   - Connecting: `$(sync~spin) Moe: connecting...`\n   - Disconnected: `$(circle-slash) Moe: disconnected`\n5. Update tooltip:\n   - Connected: `Moe: ${awaitingCount} tasks awaiting approval, ${workingCount} tasks in progress. Click to open board.`\n   - Connecting: `Moe: Connecting to daemon...`\n   - Disconnected: `Moe: Not connected. Click to connect.`\n6. Change click command from `moe.disconnect` (when connected) to `moe.board.focus` to open the board sidebar\n\nError handling: Guard against undefined state or tasks array.\nTest: Status bar updates with correct counts when tasks change status.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/statusbar/ConnectionStatusBar.ts"
+      ],
+      "startedAt": "2026-02-23T06:32:00.133Z",
+      "completedAt": "2026-02-23T06:32:07.813Z",
+      "note": "ConnectionStatusBar updated: constructor takes MoeDaemonClient, subscribes to both onConnectionChanged and onStateChanged. Tracks awaitingCount and workingCount. Connected shows '$(check) Moe: N awaiting | N working'. Connecting shows spin icon. Disconnected shows slash icon. Click opens board when connected, connects when disconnected. Tooltip contextual. Error handling for undefined state/tasks.",
+      "modifiedFiles": [
+        "moe-vscode/src/statusbar/ConnectionStatusBar.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add `moe.showDaemonStatus` command for daemon info popup:\n\n1. In extension.ts, register `moe.showDaemonStatus` command\n2. Handler reads `.moe/daemon.json` from workspace for PID, port, startedAt\n3. Computes uptime: `Date.now() - Date.parse(startedAt)`, format as hours/minutes\n4. Shows `vscode.window.showQuickPick` with items:\n   - `Status: Connected` or `Disconnected` (description only, not selectable)\n   - `PID: {pid}` (description only)\n   - `Port: {port}` (description only)\n   - `Uptime: {formatted}` (description only)\n   - separator\n   - `Restart Daemon` (selectable action)\n5. On \"Restart Daemon\" selection: disconnect, delete daemon.json, wait 1s, reconnect\n6. Add to package.json commands: `moe.showDaemonStatus` - \"Moe: Show Daemon Status\"\n\nAlso update extension.ts constructor call for ConnectionStatusBar to pass the full client.\n\nError handling: If daemon.json doesn't exist, show \"Daemon not running\" items. Try/catch around file read.\nTest: Quick pick shows daemon info. Restart action reconnects successfully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-23T06:32:07.971Z",
+      "completedAt": "2026-02-23T06:32:42.623Z",
+      "note": "Upgraded moe.showDaemonStatus to QuickPick with daemon.json info: PID, port, uptime (formatted hours/minutes), task/epic/worker counts. Restart Daemon option delegates to moe.restartDaemon. Error handling for missing daemon.json. moe.showDaemonStatus already in package.json.",
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 14,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:06:02.573Z",
+  "updatedAt": "2026-02-23T12:07:24.854Z",
+  "planSubmittedAt": "2026-02-21T23:24:51.698Z",
+  "planApprovedAt": "2026-02-21T23:24:51.700Z",
+  "workStartedAt": "2026-02-23T06:32:00.133Z",
+  "completedAt": "2026-02-23T06:32:44.406Z",
+  "reviewStartedAt": "2026-02-23T06:32:44.406Z",
+  "reviewCompletedAt": "2026-02-23T12:07:24.854Z"
+}

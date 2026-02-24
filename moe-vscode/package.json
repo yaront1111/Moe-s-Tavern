@@ -66,8 +66,66 @@
       {
         "command": "moe.openTaskDetail",
         "title": "Moe: Open Task Detail"
+      },
+      {
+        "command": "moe.reviewPlan",
+        "title": "Moe: Review Plan"
+      },
+      {
+        "command": "moe.createTask",
+        "title": "Moe: Create Task"
+      },
+      {
+        "command": "moe.createEpic",
+        "title": "Moe: Create Epic"
+      },
+      {
+        "command": "moe.openEpicDetail",
+        "title": "Moe: Open Epic Detail"
+      },
+      {
+        "command": "moe.archiveDoneTasks",
+        "title": "Moe: Archive Done Tasks"
+      },
+      {
+        "command": "moe.showDaemonStatus",
+        "title": "Moe: Show Daemon Status"
+      },
+      {
+        "command": "moe.startAgent",
+        "title": "Moe: Start Agent"
+      },
+      {
+        "command": "moe.startAllAgents",
+        "title": "Moe: Start All Agents"
+      },
+      {
+        "command": "moe.openSettings",
+        "title": "Moe: Open Settings"
+      },
+      {
+        "command": "moe.showActivityLog",
+        "title": "Moe: Show Activity Log"
+      },
+      {
+        "command": "moe.restartDaemon",
+        "title": "Moe: Restart Daemon"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "moe.createTask",
+          "when": "view == moe.board",
+          "group": "navigation"
+        },
+        {
+          "command": "moe.refresh",
+          "when": "view == moe.board",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Moe",
       "properties": {
@@ -100,9 +158,11 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run bundle && npm run compile",
+    "vscode:prepublish": "npm run bundle && npm run esbuild",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "esbuild": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "esbuild:watch": "npm run esbuild -- --watch",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
     "publish": "vsce publish",
@@ -114,9 +174,10 @@
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.27.3",
     "eslint": "^8.56.0",
-    "typescript": "^5.3.3",
-    "@vscode/vsce": "^2.22.0"
+    "typescript": "^5.3.3"
   },
   "dependencies": {
     "ws": "^8.16.0"

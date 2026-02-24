@@ -1,0 +1,113 @@
+{
+  "id": "task-06379b69",
+  "epicId": "epic-ffe3ace6",
+  "title": "Full task detail editor panel with editable fields and actions",
+  "description": "Replace the current read-only task detail webview panel and quick pick menu with a full-featured editor panel matching JetBrains TaskDetailDialog.kt. Currently, clicking a task shows a quick pick with View Details/Approve/Reject/Reopen options, and \"View Details\" opens a minimal read-only webview.\n\n**Create src/panels/TaskDetailPanel.ts** - a webview panel that opens as an editor tab:\n\n**Editable fields (matching JetBrains):**\n- Status display (read-only, shown as header info)\n- Priority dropdown (CRITICAL/HIGH/MEDIUM/LOW)\n- Title text input (editable)\n- Description textarea (editable, word wrap)\n- Definition of Done textarea (editable, one item per line)\n- Reopen reason textarea (editable when status is REVIEW/DONE, read-only display otherwise)\n\n**Implementation plan display:**\n- Show steps with status icons: checkmark for COMPLETED, play icon for IN_PROGRESS, circle for PENDING\n- Color-coded step text (green for completed, blue for in-progress, gray for pending)\n- Show affected files for each step\n- Live update: subscribe to state changes and re-render plan section when task updates arrive\n\n**Comments section (matching JetBrains TaskDetailDialog.kt lines 134-192):**\n- Display existing comments with author, timestamp, and content\n- Color-coded by author type (blue background for human, green for agent)\n- Text input + \"Ask Question\" button to add new comments\n- Comments added via daemonClient.addTaskComment(taskId, content)\n\n**Action buttons (matching JetBrains TaskDetailDialog.kt lines 278-357):**\n- Save button - calls updateTaskDetails with edited fields\n- Approve button (shown only when status=AWAITING_APPROVAL)\n- Reject button (shown only when status=AWAITING_APPROVAL) - prompts for reason\n- Reopen button (shown only when status=REVIEW or DONE) - uses reopenReason field\n- Previous button (move task back in workflow) - shown when not BACKLOG\n- Next button (move task forward in workflow) - shown when not DONE\n- Delete button - confirmation dialog, then deleteTask\n\n**PR Link display:**\n- If task.prLink is set, show it as a clickable link\n\n**Live updates:**\n- Subscribe to daemonClient.onStateChanged and update the panel when the displayed task changes\n- Debounce updates to avoid flicker\n\nReference: JetBrains TaskDetailDialog.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Task detail opens as editor webview panel when clicking a task card",
+    "All fields editable: title, description, DoD, priority",
+    "Save button persists edits via UPDATE_TASK WebSocket message",
+    "Implementation plan displayed with status icons and color coding",
+    "Plan section live-updates when task state changes",
+    "Comments section displays existing comments with color-coded author styling",
+    "Ask Question input adds comments via ADD_TASK_COMMENT message",
+    "Approve/Reject/Reopen/Delete/Previous/Next action buttons present and functional",
+    "PR link displayed as clickable link when present",
+    "Quick pick menu removed in favor of direct panel opening"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/panels/TaskDetailPanel.ts` with the panel class structure.\n\nClass `TaskDetailPanel`:\n- Static `currentPanels: Map<string, TaskDetailPanel>` for per-task singleton management\n- Constructor takes `extensionUri`, `panel: WebviewPanel`, `client: MoeDaemonClient`, `taskId: string`\n- `static createOrShow(extensionUri, client, taskId, state)` - reuses panel if open for same task, else creates new\n- `private getWebviewContent(nonce, task, epics)` - returns full HTML\n- `private stateListener` - subscription to `client.onStateChanged` for live updates\n- `dispose()` - cleanup listener + remove from currentPanels map\n\nPanel options: `{ enableScripts: true, localResourceRoots: [extensionUri] }`. Title: task title truncated to 40 chars.\n\nError handling: If task not found in state, show \"Task not found\" message in panel.\nTest: Panel creates and renders without errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:48:17.537Z",
+      "completedAt": "2026-02-22T00:50:22.141Z",
+      "note": "Created TaskDetailPanel class with static currentPanels Map for per-task singleton management, createOrShow static method, constructor with state listener subscription, findTask helper, debouncedUpdate for live updates, dispose cleanup. Panel title truncated to 40 chars.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the webview HTML content in `getWebviewContent()`. Layout:\n\n**Header section:** Status badge (colored chip) + Task ID on the right\n\n**Editable fields section:**\n- Priority: `<select>` with CRITICAL/HIGH/MEDIUM/LOW, pre-selected to task.priority\n- Title: `<input type=\"text\" value=\"...\">` with task.title pre-filled\n- Description: `<textarea rows=\"6\">` with task.description\n- Definition of Done: `<textarea rows=\"4\">` with task.definitionOfDone joined by newlines\n- Reopen Reason: `<textarea rows=\"3\">` shown if status is REVIEW/DONE (editable) or if reopenReason exists (read-only)\n\n**Implementation Plan section:** Bordered section with each step rendered as:\n- Status icon: circle/play/checkmark unicode characters\n- Step number + description\n- Affected files list below in muted text\n- Color: green=COMPLETED, blue=IN_PROGRESS, gray=PENDING\n\n**PR Link:** If task.prLink set, render as `<a>` tag\n\nAll user content escaped via escapeHtml helper. CSP nonce on script tag. --vscode-* CSS variables throughout.\n\nError handling: Guard all optional fields (implementationPlan, prLink, reopenReason may be null/undefined).\nTest: All fields render with correct pre-filled values.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:50:24.951Z",
+      "completedAt": "2026-02-22T00:50:30.798Z",
+      "note": "Implemented getWebviewContent() with: header showing status badge (colored by status) + task ID, editable fields (priority select, title input, description textarea, DoD textarea with one item per line), reopen reason textarea (editable when REVIEW/DONE, read-only otherwise), PR link as clickable anchor, implementation plan with step cards showing status icons (checkmark/play/circle), color-coded (green/blue/gray), affected files. All content escaped via escapeHtml(), CSP nonce on script tag, all --vscode-* CSS variables.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add comments section and ask-question functionality to the webview HTML:\n\n**Comments display:** Scrollable div below the plan section. For each comment in task.comments:\n- Header: `<div class=\"comment-header\">{author} - {formatted timestamp}</div>`\n- Body: `<div class=\"comment-body\">{escaped content}</div>`\n- Background color: blue-tinted for authors containing 'human' or no specific pattern, green-tinted for agent authors\n- \"No comments yet\" message if array is empty\n\n**Ask Question input:** Below comments list:\n- `<input type=\"text\" placeholder=\"Ask a question...\" id=\"commentInput\">`\n- `<button id=\"askBtn\">Ask Question</button>`\n- On click, post `{ type: 'addComment', taskId, content }` to extension\n- Clear input after sending\n\nCSS: `.comment-item` with border-left 3px, margin 4px 0, padding 6px 8px. `.comment-human` bg with slight blue tint, `.comment-agent` with slight green tint.\n\nError handling: Skip rendering if comments array is undefined. Disable ask button if input is empty.\nTest: Comments render with correct styling. Adding comment sends WS message.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:50:33.759Z",
+      "completedAt": "2026-02-22T00:50:40.242Z",
+      "note": "Comments section implemented: scrollable comments-list div with comment-item elements, blue-tinted for human authors (comment-human), green-tinted for agent authors (comment-agent) using isAgentAuthor() helper. Ask Question input with submitComment() that posts addComment message and clears input. Enter key support. renderComments() JS function for live updates via DOM API (textContent, not innerHTML). No comments state shows italic placeholder.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add action buttons and webview-to-extension message handling:\n\n**Action buttons bar** at bottom of form (flex row, gap 8px):\n- Save (always visible) - posts `{ type: 'save', taskId, title, description, definitionOfDone, priority }`\n- Approve (if AWAITING_APPROVAL) - posts `{ type: 'approve', taskId }`\n- Reject (if AWAITING_APPROVAL) - prompts reason via `window.prompt()`, posts `{ type: 'reject', taskId, reason }`\n- Reopen (if REVIEW/DONE) - posts `{ type: 'reopen', taskId, reason }` using reopenReason textarea value\n- Prev/Next (workflow navigation) - posts `{ type: 'prev/next', taskId, currentStatus }`\n- Delete (always) - confirm via `window.confirm()`, posts `{ type: 'delete', taskId }`\n\n**Extension-side handler** in TaskDetailPanel constructor, handle webview messages:\n- `save` -> `client.updateTaskDetails(taskId, updates)`\n- `approve` -> `client.approveTask(taskId)`\n- `reject` -> `client.rejectTask(taskId, reason)`\n- `reopen` -> `client.reopenTask(taskId, reason)`\n- `addComment` -> `client.addTaskComment(taskId, content)`\n- `delete` -> `client.deleteTask(taskId)`, then dispose panel\n- `prev/next` -> compute target status from workflow array, call `client.updateTaskStatus()`\n\n**Live updates:** Subscribe to `client.onStateChanged`, extract updated task, post `{ type: 'updateTask', task }` to webview. Webview JS re-renders plan + comments sections on `updateTask` message (don't replace editable fields to avoid losing user edits).\n\nError handling: Wrap all daemon calls in try/catch, show vscode.window.showErrorMessage on failure.\nTest: All buttons trigger correct WS messages. Live updates reflect in panel.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:50:44.287Z",
+      "completedAt": "2026-02-22T00:50:51.144Z",
+      "note": "Action buttons and message handling implemented: Save (reads all editable fields, posts to extension), Approve/Reject (conditional on AWAITING_APPROVAL), Reopen (conditional on REVIEW/DONE, uses reopenReason textarea or prompts via VS Code input box), Prev/Next (workflow navigation with status computation), Delete (confirmation via VS Code modal warning). Extension-side handleWebviewMessage() dispatches to daemon client methods with try/catch error handling and vscode.window.showErrorMessage. Live updates via onStateChanged subscription with 200ms debounce, posting updateTask messages that re-render plan + comments but preserve editable fields.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Integrate TaskDetailPanel into the board and replace the quick pick flow:\n\n1. In BoardViewProvider.ts, replace `openTaskDetail()` method: instead of showing QuickPick, directly call `TaskDetailPanel.createOrShow(extensionUri, client, taskId, state)`\n2. Remove the `showQuickPick` logic and `showTaskDetailPanel` method (the old read-only panel)\n3. Update the `openTaskDetail` webview message handler to call the new panel\n4. In extension.ts, update `moe.openTaskDetail` command to use TaskDetailPanel\n5. Import TaskDetailPanel in both files\n\nFor AWAITING_APPROVAL tasks, the TaskDetailPanel shows approve/reject buttons directly - no need for separate PlanReviewPanel routing here (task 7 will add the dedicated plan review panel as an alternative).\n\nError handling: If state is undefined (disconnected), show warning message.\nTest: Clicking task card opens new detail panel. Old quick pick flow removed. All actions work from panel.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "startedAt": "2026-02-22T00:51:01.152Z",
+      "completedAt": "2026-02-22T00:51:38.807Z",
+      "note": "Integration verified: BoardViewProvider.openTaskDetail() already calls TaskDetailPanel.createOrShow(). Import already in place. Old showQuickPick flow and showTaskDetailPanel method fully removed. extension.ts routes moe.openTaskDetail command through boardProvider. TypeScript compiles cleanly.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:03:45.725Z",
+  "updatedAt": "2026-02-22T00:55:00.856Z",
+  "planSubmittedAt": "2026-02-21T23:19:50.463Z",
+  "planApprovedAt": "2026-02-21T23:19:50.464Z",
+  "workStartedAt": "2026-02-22T00:48:17.537Z",
+  "completedAt": "2026-02-22T00:51:48.711Z",
+  "reviewStartedAt": "2026-02-22T00:51:48.711Z",
+  "reviewCompletedAt": "2026-02-22T00:55:00.856Z"
+}

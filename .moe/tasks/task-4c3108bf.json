@@ -1,0 +1,94 @@
+{
+  "id": "task-4c3108bf",
+  "epicId": "epic-ffe3ace6",
+  "title": "Expand WebSocket protocol support in MoeDaemonClient",
+  "description": "Extend MoeDaemonClient.ts to handle all WebSocket message types that the daemon sends and to support all outbound messages that the JetBrains plugin uses. Currently the client only handles STATE_SNAPSHOT, TASK_UPDATED, TASK_CREATED, and PONG inbound, and sends PING, GET_STATE, UPDATE_TASK, APPROVE_TASK, REJECT_TASK, REOPEN_TASK outbound.\n\n**New inbound message handlers to add in handleMessage():**\n- TASK_DELETED - Remove task from local state, fire onStateChanged\n- EPIC_CREATED, EPIC_UPDATED - Upsert epic in local state, fire onStateChanged\n- EPIC_DELETED - Remove epic and its tasks from local state, fire onStateChanged\n- WORKER_CREATED, WORKER_UPDATED - Upsert worker in local state, fire onStateChanged\n- TEAM_CREATED, TEAM_UPDATED - Upsert team in local state, fire onStateChanged\n- TEAM_DELETED - Remove team from local state, fire onStateChanged\n- PROPOSAL_CREATED, PROPOSAL_UPDATED - Upsert proposal in local state, fire onStateChanged\n- ACTIVITY_LOG - Fire new onActivityLog event emitter\n- ERROR - Fire new onError event emitter with operation and message\n- DAEMON_SHUTTING_DOWN - Log and handle graceful shutdown (don't reconnect)\n\n**New event emitters to add:**\n- onActivityLog: EventEmitter<ActivityEvent[]>\n- onError: EventEmitter<{operation: string, message: string}>\n- onEpicUpdated: EventEmitter<Epic> (optional, for targeted updates)\n\n**New outbound methods to add:**\n- createTask(epicId, title, description, definitionOfDone, priority) - sends CREATE_TASK\n- deleteTask(taskId) - sends DELETE_TASK\n- updateTaskDetails(taskId, updates: {title?, description?, definitionOfDone?, priority?}) - sends UPDATE_TASK with updates object\n- createEpic(title, description, architectureNotes, epicRails) - sends CREATE_EPIC\n- updateEpic(epicId, updates) - sends UPDATE_EPIC\n- deleteEpic(epicId) - sends DELETE_EPIC\n- updateSettings(settings: ProjectSettings) - sends UPDATE_SETTINGS\n- addTaskComment(taskId, content) - sends ADD_TASK_COMMENT\n- archiveDoneTasks(epicId?) - sends ARCHIVE_DONE_TASKS\n- requestActivityLog(limit?) - sends GET_ACTIVITY_LOG\n- approveProposal(proposalId) - sends APPROVE_PROPOSAL\n- rejectProposal(proposalId) - sends REJECT_PROPOSAL\n\n**Update local state structure:**\n- StateSnapshot must include workers, proposals, teams arrays (currently workers is unknown[])\n- Use the new types from src/types/moe.ts\n\nReference: JetBrains MoeProjectService.kt handleMessage() at lines 279-446 and outbound methods at lines 457-611.",
+  "definitionOfDone": [
+    "All inbound message types handled: TASK_DELETED, EPIC_CREATED/UPDATED/DELETED, WORKER_CREATED/UPDATED, TEAM_CREATED/UPDATED/DELETED, PROPOSAL_CREATED/UPDATED, ACTIVITY_LOG, ERROR, DAEMON_SHUTTING_DOWN",
+    "All outbound methods added: createTask, deleteTask, updateTaskDetails, createEpic, updateEpic, deleteEpic, updateSettings, addTaskComment, archiveDoneTasks, requestActivityLog, approveProposal, rejectProposal",
+    "New event emitters added: onActivityLog, onError",
+    "StateSnapshot includes workers, proposals, teams arrays with proper types",
+    "Local state correctly updated for all message types (upsert/delete patterns)",
+    "Extension compiles without errors"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add new event emitters to MoeDaemonClient for entity-specific events and error handling. Add these private/public emitter pairs after the existing ones:\n\n- `_onEpicUpdated / onEpicUpdated: Event<Epic>`\n- `_onTaskDeleted / onTaskDeleted: Event<Task>`\n- `_onActivityLog / onActivityLog: Event<ActivityEvent[]>`\n- `_onError / onError: Event<{operation?: string; message: string}>`\n\nAdd `private daemonShuttingDown = false;` flag to prevent reconnection on graceful shutdown.\n\nUpdate `dispose()` to dispose all new emitters.\n\nAll emitters use types from `../types/moe`.\n\nError handling: Proper typing on all emitters.\n\nTest: Extension compiles, existing events still fire correctly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-02-22T00:42:41.513Z",
+      "completedAt": "2026-02-22T00:43:59.398Z",
+      "note": "Added event emitters for onEpicUpdated, onTaskDeleted, onActivityLog, onError. Added daemonShuttingDown flag. Updated dispose() to clean up all new emitters. Added imports for Worker, Team, RailProposal, ActivityEvent, TaskPriority, ProjectSettings, Project.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Expand `handleMessage()` switch to handle all daemon-to-client messages. Add cases:\n\n- **TASK_DELETED**: Filter task from state by payload.id, fire onTaskDeleted + onStateChanged\n- **EPIC_CREATED/EPIC_UPDATED**: Upsert epic in state.epics by id, fire onEpicUpdated + onStateChanged\n- **EPIC_DELETED**: Filter epic from state.epics AND filter tasks with that epicId, fire onStateChanged\n- **WORKER_CREATED/WORKER_UPDATED**: Upsert in state.workers by id, fire onStateChanged\n- **TEAM_CREATED/TEAM_UPDATED**: Upsert in state.teams by id, fire onStateChanged\n- **TEAM_DELETED**: Filter from state.teams by id, fire onStateChanged\n- **PROPOSAL_CREATED/PROPOSAL_UPDATED**: Upsert in state.proposals by id, fire onStateChanged\n- **SETTINGS_UPDATED**: Replace state.project with payload, fire onStateChanged\n- **ACTIVITY_LOG**: Fire onActivityLog with payload array\n- **ARCHIVE_DONE_RESULT**: Log archived count\n- **ERROR**: Log error, fire onError with {operation, message}\n- **DAEMON_SHUTTING_DOWN**: Set daemonShuttingDown=true, disconnect\n\nUpdate `scheduleReconnect()` to skip if daemonShuttingDown. Reset flag at start of `connect()`.\n\nError handling: Each case checks `this.state` before mutating.\n\nTest: Compile succeeds. STATE_SNAPSHOT/TASK_UPDATED still work.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-02-22T00:44:02.445Z",
+      "completedAt": "2026-02-22T00:45:49.094Z",
+      "note": "All inbound message handlers implemented: TASK_DELETED, EPIC_CREATED/UPDATED/DELETED, WORKER_CREATED/UPDATED, TEAM_CREATED/UPDATED/DELETED, PROPOSAL_CREATED/UPDATED, SETTINGS_UPDATED, ACTIVITY_LOG, ARCHIVE_DONE_RESULT, ERROR, DAEMON_SHUTTING_DOWN. scheduleReconnect skips when daemonShuttingDown=true. connect() resets the flag.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add all outbound message methods to MoeDaemonClient after existing `reopenTask()`:\n\n- `createTask(epicId, title, description, definitionOfDone, priority)` -> CREATE_TASK\n- `updateTaskDetails(taskId, updates: {title?, description?, definitionOfDone?, priority?})` -> UPDATE_TASK with {taskId, updates}\n- `deleteTask(taskId)` -> DELETE_TASK\n- `createEpic(title, description, architectureNotes?, epicRails?)` -> CREATE_EPIC\n- `updateEpic(epicId, updates)` -> UPDATE_EPIC\n- `deleteEpic(epicId)` -> DELETE_EPIC\n- `updateSettings(settings: Partial<ProjectSettings>)` -> UPDATE_SETTINGS\n- `addTaskComment(taskId, content)` -> ADD_TASK_COMMENT\n- `archiveDoneTasks(epicId?)` -> ARCHIVE_DONE_TASKS\n- `requestActivityLog(limit?)` -> GET_ACTIVITY_LOG\n- `approveProposal(proposalId)` -> APPROVE_PROPOSAL\n- `rejectProposal(proposalId)` -> REJECT_PROPOSAL\n\n**Fix existing bug**: Change `updateTaskStatus` from `{taskId, status}` to `{taskId, updates: {status}}` to match daemon's expected format.\n\nImport TaskPriority, EpicStatus, ProjectSettings from ../types/moe.\n\nError handling: All use existing sendMessage() guard. Daemon validates.\n\nTest: Compiles. Existing methods unchanged. New methods additive.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-02-22T00:45:51.789Z",
+      "completedAt": "2026-02-22T00:45:56.026Z",
+      "note": "All outbound methods added: createTask, updateTaskDetails, deleteTask, createEpic, updateEpic, deleteEpic, updateSettings, addTaskComment, archiveDoneTasks, requestActivityLog, approveProposal, rejectProposal. updateTaskStatus fixed to use {taskId, updates: {status}} format. Types imported from ../types/moe.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update type re-exports from MoeDaemonClient.ts for downstream consumers:\n\n```typescript\nexport type { Task, Epic, MoeStateSnapshot, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings } from '../types/moe';\nexport type StateSnapshot = MoeStateSnapshot; // backward compat\n```\n\nUpdate BoardViewProvider.ts imports if needed for any new types.\n\nError handling: Type-only changes, no runtime impact.\n\nTest: Run `npm run compile`. Zero type errors across all files. Extension activates and shows board correctly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:45:58.966Z",
+      "completedAt": "2026-02-22T00:46:04.454Z",
+      "note": "Type re-exports already updated on line 24 with all types: Task, Epic, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings. StateSnapshot backward compat alias on line 28. Zero type errors on tsc --noEmit.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:02:35.625Z",
+  "updatedAt": "2026-02-22T00:50:30.097Z",
+  "planSubmittedAt": "2026-02-21T23:15:53.511Z",
+  "planApprovedAt": "2026-02-21T23:16:29.099Z",
+  "workStartedAt": "2026-02-22T00:42:41.513Z",
+  "completedAt": "2026-02-22T00:46:13.217Z",
+  "reviewStartedAt": "2026-02-22T00:46:13.217Z",
+  "reviewCompletedAt": "2026-02-22T00:50:30.097Z"
+}

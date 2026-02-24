@@ -78,6 +78,28 @@ Use when you cannot proceed without human help. Include the current step ID.
 - **Commit per step**: Make a descriptive commit after completing each step (e.g., `feat: add validation to user input`)
 - **PR**: Create a pull request when all steps are done; pass the URL via `prLink` in `complete_task`
 
+## Claude Code Agent Teams (Optional)
+
+When the project has **Agent Teams** enabled in settings, Claude Code worker agents
+can spawn teammate instances for parallel work within a single Moe step.
+
+### When to Use Teams
+- A step involves independent, parallelizable work (e.g., multiple unrelated files)
+- The step's affected files span distinct subsystems with no shared state
+- Each parallel unit can be verified independently
+
+### When NOT to Use Teams
+- Steps that modify the same files (merge conflicts)
+- Steps with ordering dependencies
+- Simple steps where coordination overhead exceeds benefit
+
+### Rules
+- Always call `moe.start_step` before and `moe.complete_step` after team work
+- CC team work happens WITHIN a Moe step - teams don't replace Moe's step tracking
+- Report ALL modified files from ALL teammates in your `complete_step` call
+- If a teammate fails, handle it yourself or use `moe.report_blocked`
+- Only the lead worker calls Moe MCP tools - teammates must not call them directly
+
 ## Production-Readiness Standards
 
 **All code you write must be production-ready.** No TODOs, no shortcuts, no "good enough for now". Every line you commit should be deployable to production.

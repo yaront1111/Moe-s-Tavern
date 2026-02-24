@@ -1,0 +1,81 @@
+{
+  "id": "task-12d97434",
+  "epicId": "epic-ffe3ace6",
+  "title": "Search and filtering for the task board",
+  "description": "Add task search/filtering to the board webview matching JetBrains MoeToolWindowPanel.kt search functionality. The VS Code extension currently has no search or filter capability.\n\n**Search input (matching MoeToolWindowPanel.kt lines 85-99):**\n- Add a text input field in the board header area with placeholder text \"Search tasks...\"\n- Search filters tasks by matching query against task.title and task.description (case-insensitive)\n- Search is applied in real-time as the user types (no submit button needed)\n- Empty search shows all tasks\n\n**Implementation in the board webview:**\n- Add a search input element in the board header HTML\n- Add an input event listener that updates a searchQuery variable\n- Modify renderBoard() to filter tasks before rendering:\n  1. First filter by selected epic (existing epic filter from task 8)\n  2. Then filter by search query (title or description contains query, case-insensitive)\n- Clear button (x) to reset search\n\n**Context menu on task cards (matching TaskCard.kt showContextMenu lines 200-218):**\n- Right-click on a task card shows a context menu with:\n  - \"Open\" - opens task detail panel\n  - \"Ask Question\" - opens task detail panel focused on comment input\n  - Separator\n  - \"Delete\" - confirmation dialog then deleteTask\n\n**Implementation for context menus in webview:**\n- Use the browser contextmenu event in the webview\n- Prevent default browser context menu on task cards\n- Render a custom CSS dropdown menu at click position\n- Menu items trigger postMessage to extension host\n- Close menu on click outside or Escape key\n\n**Archive done tasks (matching MoeToolWindowPanel.kt onClearColumn lines 524-537):**\n- Add a clear/archive button (X icon) in the Done column header\n- Click shows confirmation: \"Archive {count} done tasks?\"\n- On confirm, calls daemonClient.archiveDoneTasks(selectedEpicId)\n- Matches the JetBrains pattern where Done column has onClearColumn callback\n\nReference: JetBrains MoeToolWindowPanel.kt search logic and TaskCard.kt context menu.",
+  "definitionOfDone": [
+    "Search input in board header filters tasks by title and description",
+    "Search is case-insensitive and real-time (no submit button)",
+    "Search works in combination with epic filter",
+    "Clear button resets search query",
+    "Right-click context menu on task cards with Open, Ask Question, Delete options",
+    "Context menu actions are functional",
+    "Archive button in Done column header with confirmation dialog",
+    "Archive sends ARCHIVE_DONE_TASKS via WebSocket"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add search input to the board header in BoardViewProvider.ts webview HTML:\n\n1. Add `<input type=\"text\" id=\"searchInput\" placeholder=\"Search tasks...\" class=\"search-input\">` and a clear button `<button id=\"searchClear\" class=\"search-clear\">&times;</button>` in the board header div.\n2. CSS: `.search-input` - width 180px, padding 3px 8px, border 1px solid var(--vscode-input-border), background var(--vscode-input-background), color var(--vscode-input-foreground), border-radius 3px, font-size 12px. `.search-clear` - positioned after input, subtle X button.\n3. Add `let searchQuery = '';` JS variable.\n4. Input event listener on `#searchInput`: set `searchQuery = input.value.toLowerCase()`, call re-render.\n5. Clear button click: reset searchQuery to '', clear input value, re-render.\n6. Modify task filtering in renderBoard(): after epic filter, add `tasks = tasks.filter(t => !searchQuery || t.title.toLowerCase().includes(searchQuery) || (t.description || '').toLowerCase().includes(searchQuery))`\n\nError handling: Handle undefined description gracefully.\nTest: Typing in search filters tasks. Clear button resets. Works with epic filter.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:34:57.141Z",
+      "completedAt": "2026-02-23T06:36:20.584Z",
+      "note": "Added search input with clear button in board toolbar. CSS for .search-input and .search-clear. Input event updates searchQuery and re-renders. Clear button resets. Search filters tasks by title and description (case-insensitive). Applied after epic filter in renderBoard().",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add custom context menu for task cards in the webview JS:\n\n1. CSS for context menu: `.context-menu` - position fixed, background var(--vscode-menu-background), border 1px solid var(--vscode-menu-border), box-shadow, border-radius 4px, z-index 1000, min-width 150px. `.context-menu-item` - padding 4px 12px, cursor pointer, font-size 12px. `.context-menu-item:hover` - background var(--vscode-menu-selectionBackground).\n2. Add `contextmenu` event listener on task cards (use event delegation on board container).\n3. On right-click: prevent default, create and position `.context-menu` div at `e.clientX, e.clientY` with items:\n   - \"Open\" -> post `{ type: 'openTaskDetail', taskId }`\n   - \"Ask Question\" -> post `{ type: 'askQuestion', taskId }`\n   - separator (thin border div)\n   - \"Delete\" -> `window.confirm('Delete this task?')`, if yes post `{ type: 'deleteTask', taskId }`\n4. Close menu: click outside, Escape key, or scroll removes the menu.\n5. Extension-side handlers: `askQuestion` -> open TaskDetailPanel focused on comments (pass flag); `deleteTask` -> `client.deleteTask(taskId)`.\n\nAll menu text escaped. Build menu HTML safely.\n\nError handling: Guard against missing taskId. Ensure only one menu open at a time.\nTest: Right-click shows menu. Items trigger correct actions. Menu closes on click outside.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:36:21.223Z",
+      "completedAt": "2026-02-23T06:37:22.269Z",
+      "note": "Custom context menu: right-click on task card shows Open, Ask Question, separator, Delete. Menu positioned at click coordinates with viewport bounds checking. Click outside or Escape closes. Delete shows confirm dialog then sends deleteTask message. Extension-side deleteTask handler calls daemonClient.deleteTask(). All menu items built with DOM API (no innerHTML).",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add archive button to the DONE column header:\n\n1. In the board column rendering, for the DONE column, add a clear/archive button: `<button class=\"archive-btn\" title=\"Archive done tasks\">&times;</button>` in the column header.\n2. CSS: `.archive-btn` - float right, background transparent, color var(--vscode-descriptionForeground), border none, cursor pointer, font-size 14px. `.archive-btn:hover` - color var(--vscode-errorForeground).\n3. Click handler: count done tasks (optionally filtered by selected epic), show `window.confirm('Archive ${count} done tasks?')`. If confirmed, post `{ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined }` to extension.\n4. Extension-side handler: `archiveDoneTasks` -> `client.archiveDoneTasks(epicId)`.\n5. Daemon sends ARCHIVE_DONE_RESULT + updated STATE_SNAPSHOT which removes archived tasks from the board.\n\nError handling: If no done tasks, don't show confirmation. Handle WS call failure.\nTest: Archive button visible in DONE column. Confirmation dialog appears. Tasks archived on confirm.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:37:22.840Z",
+      "completedAt": "2026-02-23T06:38:38.978Z",
+      "note": "Archive button (x) added to DONE column header when tasks exist. Click shows confirm dialog with count. Sends archiveDoneTasks message with optional epicId filter. Extension-side handler calls daemonClient.archiveDoneTasks(). CSS for .archive-btn with hover color change.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 15,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:06:16.709Z",
+  "updatedAt": "2026-02-23T12:08:13.220Z",
+  "planSubmittedAt": "2026-02-21T23:25:28.091Z",
+  "planApprovedAt": "2026-02-21T23:25:28.092Z",
+  "workStartedAt": "2026-02-23T06:34:57.141Z",
+  "completedAt": "2026-02-23T06:38:42.132Z",
+  "reviewStartedAt": "2026-02-23T06:38:42.132Z",
+  "reviewCompletedAt": "2026-02-23T12:08:13.220Z"
+}

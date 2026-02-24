@@ -1,0 +1,93 @@
+{
+  "id": "task-5ef744e5",
+  "epicId": "epic-be924fb8",
+  "title": "Input validation and search safety",
+  "description": "Search query no length limit (searchTasks.ts line 54) - expensive ops on 1MB query. Comment content no length limit in WebSocket handler (line 459). Subscriber set never pruned on errors (WebSocketServer.ts line 274).",
+  "definitionOfDone": [
+    "Search query capped at 500 chars, limit capped at 200",
+    "Comment content capped at 10K chars",
+    "Broken subscribers auto-removed from subscriber set",
+    "Unit tests verify rejection of oversized query, limit, and comment",
+    "npm test passes with no regressions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add input validation to searchTasks.ts handler. Cap query length at 500 characters (truncate silently) and cap limit at 200 (clamp to range 1-200, default 20). This prevents expensive string matching operations on absurdly large inputs. Add error handling for malformed input types (non-string query, non-number limit).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.ts"
+      ],
+      "startedAt": "2026-02-18T23:15:12.255Z",
+      "completedAt": "2026-02-18T23:15:25.282Z",
+      "note": "Added defensive validation for search input types (query must be string, limit must be finite number), capped query length to 500 chars, and clamped limit into [1,200] with default 20 to bound expensive search operations.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add comment content length validation to both entry points. In WebSocketServer.ts ADD_TASK_COMMENT handler (line 444-456): after checking content is non-empty, add length check - reject with error if content exceeds 10,000 characters. In addComment.ts MCP tool (line 26-38): add same 10,000 character cap, throwing invalidInput error. Both paths must trim before length check to be consistent. Add error handling that returns clear error messages to the caller.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/addComment.ts"
+      ],
+      "startedAt": "2026-02-18T23:15:28.756Z",
+      "completedAt": "2026-02-18T23:16:02.578Z",
+      "note": "Added consistent 10,000-character trimmed comment length guard in both MCP and WebSocket comment entry points. addComment now validates content type and throws invalidInput for oversize content; WebSocket ADD_TASK_COMMENT now rejects non-string/empty/oversized comments with clear ERROR messages before persistence.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Note: The 'broken subscribers auto-removed' DoD item overlaps with task-40ddbd8a step 4 (subscriber error counting in StateManager.emit). Since the subscriber set is in StateManager.ts (not WebSocketServer.ts as the line reference suggested), the fix belongs in the other task. This task focuses on input validation. No additional subscriber code needed here - verify during testing that the StateManager subscriber fix from the other task handles this.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T23:16:13.389Z",
+      "completedAt": "2026-02-18T23:16:17.116Z",
+      "note": "Verified subscriber auto-removal is already implemented in StateManager.emit (consecutive error tracking and removal after threshold) from the related hardening task, so no additional subscriber changes were needed in this input-validation task."
+    },
+    {
+      "stepId": "step-4",
+      "description": "Write unit tests for input validation. (1) searchTasks test: verify query > 500 chars is truncated to 500 and search still works; verify limit > 200 is clamped to 200; verify limit < 1 defaults to 1 or 20. (2) addComment test: verify content > 10,000 chars is rejected with error. (3) WebSocketServer test: verify ADD_TASK_COMMENT with content > 10K chars returns error. Run npm test to verify all tests pass with no regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.test.ts",
+        "packages/moe-daemon/src/tools/addComment.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "startedAt": "2026-02-18T23:16:34.020Z",
+      "completedAt": "2026-02-18T23:18:14.466Z",
+      "note": "Added regression tests for bounded input handling: new searchTasks tests cover query truncation (500), limit clamping (1..200), and malformed types; new addComment test verifies >10,000 chars is rejected; WebSocketServer integration test verifies ADD_TASK_COMMENT >10K returns ERROR. Verified with targeted vitest run plus full daemon suite via `npm test` (258 tests passed).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/searchTasks.test.ts",
+        "packages/moe-daemon/src/tools/addComment.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:44.069Z",
+  "updatedAt": "2026-02-19T07:35:00.121Z",
+  "planSubmittedAt": "2026-02-18T22:30:57.432Z",
+  "planApprovedAt": "2026-02-18T22:31:06.737Z",
+  "workStartedAt": "2026-02-18T23:15:12.255Z",
+  "completedAt": "2026-02-18T23:18:19.075Z",
+  "reviewStartedAt": "2026-02-18T23:18:19.075Z",
+  "reviewCompletedAt": "2026-02-19T07:35:00.121Z"
+}

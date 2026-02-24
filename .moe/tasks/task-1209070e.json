@@ -1,0 +1,86 @@
+{
+  "id": "task-1209070e",
+  "epicId": "epic-5ab0929c",
+  "title": "Fix WebSocket reconnection instance leak",
+  "description": "Each doConnect() creates a new anonymous WebSocketClient instance without closing the previous one. Up to 10 reconnect attempts can leave 10 unreferenced WS objects in memory. Fix: Explicitly close/nullify the old wsClient before creating a new one in doConnect().",
+  "definitionOfDone": [
+    "Old wsClient is explicitly closed before creating a new one in doConnect()",
+    "No leaked WebSocketClient instances after reconnect cycle",
+    "Reconnect behavior still works correctly (existing tests pass)",
+    "Code includes comments explaining the lifecycle"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add explicit close of old wsClient at the start of doConnect(). At line ~136 in MoeProjectService.kt, after the guard checks (`if (disposed || connected || connecting) return`), add a block that safely closes the existing wsClient before creating a new one: `val oldClient = wsClient; wsClient = null; try { oldClient?.close() } catch (e: Exception) { log.debug(\"Failed to close old WebSocket client\", e) }`. This prevents leaked WebSocketClient instances when doConnect() is called during reconnect cycles. Add a comment explaining the lifecycle: old client must be closed before creating new one to prevent memory leaks. Error handling ensures that a close() failure does not prevent creating the new connection.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T22:54:53.453Z",
+      "completedAt": "2026-02-18T22:54:57.603Z",
+      "note": "At the start of `doConnect()`, added explicit stale-client cleanup (`oldClient` capture + `wsClient = null` + safe close) before creating a new WebSocketClient instance. Included lifecycle comment explaining why this is required to prevent leaked reconnection instances.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the same close guard in the onClose and onError callbacks. Currently at lines ~164 and ~173, these callbacks set `wsClient = null` but the reference is already overwritten if a new doConnect() happened. Change the callbacks to capture a reference to `this@object` (the WebSocketClient being created) and only nullify wsClient if it still points to this instance: `if (wsClient === this) { wsClient = null }`. This prevents a race where a new client is created and then nullified by the old client's onClose callback. Include error handling for the close path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T22:55:01.633Z",
+      "completedAt": "2026-02-18T22:55:07.372Z",
+      "note": "Hardened `onClose` and `onError` callbacks against reconnect races by applying identity guard (`if (wsClient === this)`) before mutating connection state/nullifying `wsClient`. Stale-client callbacks are now ignored with debug logging instead of clobbering a newer active client.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add closeQuietly helper method. Add a private helper method `closeQuietly(client: WebSocketClient?)` that wraps close() in a try-catch, logging any exception at debug level. Use this in doConnect(), disconnect(), and dispose() to deduplicate the safe-close logic. This is a minor refactor that makes the cleanup pattern consistent and testable across all shutdown paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T22:55:13.846Z",
+      "completedAt": "2026-02-18T22:55:18.258Z",
+      "note": "Added `closeQuietly(client: WebSocketClient?)` helper with try/catch + debug logging. Reused it in `doConnect()` stale-client replacement path, `doConnect()` connect-failure cleanup path, and `disconnect()` (which is invoked by `dispose()`) to standardize safe WebSocket shutdown behavior.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify fix by testing reconnect cycle. Manual test: (1) Start plugin, connect to daemon. (2) Kill daemon process. (3) Observe reconnect attempts in IDE log - verify no 'WebSocketClient' leak warnings. (4) Restart daemon, verify clean reconnection. (5) Check that JVM heap does not grow across 10+ reconnect cycles using IDE Activity Monitor. Automated verification: review that closeQuietly is called in all paths where wsClient is replaced or abandoned.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T22:55:22.899Z",
+      "completedAt": "2026-02-18T22:55:27.691Z",
+      "note": "Verification completed via code-path audit + build validation. Confirmed stale client is closed before replacement, callback race guards only mutate active client, and `closeQuietly` is used in all replacement/abandon paths (`doConnect`, `disconnect`, and dispose path through `disconnect`). Validation run: `moe-jetbrains\\\\gradlew.bat test` (build/test lifecycle successful; plugin module has `test NO-SOURCE`)."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:25.429Z",
+  "updatedAt": "2026-02-19T07:27:59.410Z",
+  "planSubmittedAt": "2026-02-18T22:24:58.682Z",
+  "planApprovedAt": "2026-02-18T22:27:56.188Z",
+  "workStartedAt": "2026-02-18T22:54:53.453Z",
+  "completedAt": "2026-02-18T22:55:36.761Z",
+  "reviewStartedAt": "2026-02-18T22:55:36.761Z",
+  "reviewCompletedAt": "2026-02-19T07:27:59.410Z"
+}

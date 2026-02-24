@@ -1,0 +1,145 @@
+{
+  "id": "task-70b5cf90",
+  "epicId": "epic-be924fb8",
+  "title": "Fix StateManager write-before-persist races",
+  "description": "updateTask() (line 680) sets in-memory state BEFORE awaiting disk write. If write fails, memory diverges from disk permanently. Same pattern in updateEpic(), updateWorker(), updateTeam(), createTask(), createEpic(), createWorker(). deleteTask() (line 697) removes from memory before worker cleanup succeeds. approveProposal() (line 1007) applies rail change before marking proposal APPROVED.",
+  "definitionOfDone": [
+    "All create/update/delete methods write to disk first, then update in-memory state",
+    "Disk write failure results in no memory change (rollback semantics)",
+    "approveProposal writes proposal status before applying rail changes",
+    "Tests cover write-failure rollback for at least updateTask, createTask, deleteTask",
+    "npm test passes with no regressions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix updateTask() write-before-persist race (line ~680). Reorder lines 680-681 so `await this.writeEntity('tasks', taskId, updated)` executes BEFORE `this.tasks.set(taskId, updated)`. If writeEntity throws, the in-memory Map is unchanged (rollback semantics). Move the `this.tasks.set(taskId, updated)` to after the successful write. Keep the appendActivity and emit calls after both succeed. Error handling: let writeEntity exceptions propagate naturally - caller gets an error and memory state remains consistent with disk.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:34:42.747Z",
+      "completedAt": "2026-02-18T22:35:38.552Z",
+      "note": "Fixed updateTask() and reorderTask() - both now write to disk before updating in-memory Map. If writeEntity throws, the Map remains unchanged.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix createTask() write-before-persist race (line ~622). Same pattern: move `this.tasks.set(task.id, task)` (line 622) to AFTER `await this.writeEntity('tasks', task.id, task)` (line 623). If the write fails, the task never enters the in-memory Map. Apply same fix to createEpic() (~line 650 area) and createProposal() (line 992-994): write to disk first, then set in Map.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:35:43.729Z",
+      "completedAt": "2026-02-18T22:36:06.546Z",
+      "note": "Fixed createTask(), createEpic(), and createProposal() - all now write to disk before setting in the in-memory Map.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Fix updateEpic() write-before-persist race (line ~726). Move `this.epics.set(epicId, updated)` to after `await this.writeEntity('epics', epicId, updated)`. Same for updateWorker() and updateTeam() methods - find all instances of `.set()` followed by `writeEntity()` and reverse the order. Search pattern: `this.(tasks|epics|workers|teams|proposals).set` followed by `writeEntity` on the next line.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:36:10.928Z",
+      "completedAt": "2026-02-18T22:45:57.343Z",
+      "note": "Verified and finalized write-before-memory ordering for update paths: updateEpic(), updateWorker(), and updateTeam() now persist to disk before mutating in-memory maps. Also confirmed related .set()/writeEntity ordering updates in this file remain consistent for rollback semantics.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Fix deleteTask() - delete from disk before removing from memory (line ~697). Currently line 697 does `this.tasks.delete(taskId)` before the disk unlink at line 700. Reverse: first unlink the file, then delete from Map. If unlink fails, task stays in memory. Also move the worker cleanup (lines 703-707) to after successful disk deletion since it calls updateWorker which also writes to disk. Error handling: wrap unlink in try-catch - if file doesn't exist, proceed with memory cleanup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:46:00.120Z",
+      "completedAt": "2026-02-18T22:46:04.454Z",
+      "note": "Refactored deleteTask() to perform disk deletion before in-memory removal. Added unlink try/catch handling: ENOENT is tolerated, but other filesystem errors are rethrown so the task remains in memory. Worker cleanup remains after successful file-delete phase.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Fix approveProposal() ordering (line ~1007). Currently line 1013 calls `applyRailChange(proposal)` (which modifies project rails) before updating the proposal to APPROVED status. Reverse: first update proposal status to APPROVED and write to disk (lines 1016-1024), then apply the rail change (line 1013). If applyRailChange fails after the proposal is marked APPROVED, the proposal can be retried. This is safer than applying rails for a non-approved proposal. Error handling: if applyRailChange fails, log the error but keep proposal as APPROVED (admin can retry).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T22:46:06.923Z",
+      "completedAt": "2026-02-18T22:46:10.337Z",
+      "note": "Updated approveProposal() ordering to persist APPROVED status first, then apply rail changes. Added guarded applyRailChange() call with error logging so proposal remains APPROVED on rail-application failure. Also aligned rejectProposal() with rollback semantics by writing to disk before updating in-memory map.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add unit tests for write-failure rollback semantics. Create tests using vitest that mock writeEntity to throw, then verify: (1) updateTask write failure leaves original task in memory Map unchanged, (2) createTask write failure results in task NOT being added to memory Map, (3) deleteTask file-unlink failure leaves task still in memory Map, (4) approveProposal marks APPROVED before applying rail change. Use vitest's vi.spyOn to mock the writeEntity method. Verify npm test passes with no regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-02-18T22:46:14.775Z",
+      "completedAt": "2026-02-18T22:46:19.519Z",
+      "note": "Added regression tests for rollback semantics: createTask write failure preserves in-memory map, updateTask write failure keeps original task unchanged, deleteTask unlink failure retains in-memory task, and approveProposal persists APPROVED status before applying rails (including rail-apply failure path). Validation run: `npx vitest run src/state/StateManager.test.ts` and full `npx vitest run` both pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD #1 requires \"All create/update/delete methods write to disk first, then update in-memory state\" but 3 methods still have memory-before-disk ordering:\n\n1. **deleteTeam()** (StateManager.ts line 632): `this.teams.delete(teamId)` executes before `fs.unlinkSync(filePath)` at line 634. If unlink fails, team is gone from memory but still on disk.\n\n2. **deleteEpic()** (StateManager.ts line 954): `this.epics.delete(epicId)` executes before `fs.unlinkSync(filePath)` at line 958. Same race condition.\n\n3. **updateSettings()** (StateManager.ts line 932): `this.project = updatedProject` executes before `await fs.promises.writeFile(...)` at line 933. If write fails, project settings in memory diverge from disk.\n\nFix: Apply the same disk-first pattern used in deleteTask() and updateTask() to these 3 methods. Add rollback/error handling so memory stays consistent with disk on failure.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:30.820Z",
+  "updatedAt": "2026-02-19T07:26:42.168Z",
+  "planSubmittedAt": "2026-02-18T22:28:15.985Z",
+  "planApprovedAt": "2026-02-18T22:28:49.152Z",
+  "workStartedAt": "2026-02-18T22:34:42.747Z",
+  "completedAt": "2026-02-19T07:24:16.957Z",
+  "reviewStartedAt": "2026-02-19T07:24:16.957Z",
+  "reviewCompletedAt": "2026-02-19T07:26:42.168Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "All create/update/delete methods write to disk first, then update in-memory state"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "deleteTeam() at line 632 still has memory-before-disk ordering (this.teams.delete before fs.unlinkSync)",
+        "file": "packages/moe-daemon/src/state/StateManager.ts",
+        "line": 632
+      },
+      {
+        "type": "missing_feature",
+        "description": "deleteEpic() at line 954 still has memory-before-disk ordering (this.epics.delete before fs.unlinkSync)",
+        "file": "packages/moe-daemon/src/state/StateManager.ts",
+        "line": 954
+      },
+      {
+        "type": "missing_feature",
+        "description": "updateSettings() at line 932 still has memory-before-disk ordering (this.project = updatedProject before fs.promises.writeFile)",
+        "file": "packages/moe-daemon/src/state/StateManager.ts",
+        "line": 932
+      }
+    ]
+  }
+}

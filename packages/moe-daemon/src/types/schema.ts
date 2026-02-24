@@ -43,6 +43,7 @@ export interface ProjectSettings {
   branchPattern: string;
   commitPattern: string;
   agentCommand: string;
+  enableAgentTeams: boolean;
   columnLimits?: Record<string, number>;
 }
 

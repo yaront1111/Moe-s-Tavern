@@ -263,8 +263,14 @@ object TerminalAgentLauncher {
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = psQuote(workerId)
         val teamArg = if (teamName != null) " -Team ${psQuote(teamName)}" else ""
-        val codexExecArg = if (codexExec) " -CodexExec" else ""
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$codexExecArg"
+        val execArg = if (codexExec) {
+            val provider = AgentProvider.fromCommand(agentCommand)
+            when (provider) {
+                AgentProvider.GEMINI -> " -GeminiExec"
+                else -> " -CodexExec"
+            }
+        } else ""
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg"
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
@@ -291,8 +297,14 @@ object TerminalAgentLauncher {
         val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
         val workerIdArg = shQuote(workerId)
         val teamArg = if (teamName != null) " --team ${shQuote(teamName)}" else ""
-        val codexExecArg = if (codexExec) " --codex-exec" else ""
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$codexExecArg"
+        val execArg = if (codexExec) {
+            val provider = AgentProvider.fromCommand(agentCommand)
+            when (provider) {
+                AgentProvider.GEMINI -> " --gemini-exec"
+                else -> " --codex-exec"
+            }
+        } else ""
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg"
     }
 
     private fun psQuote(value: String): String {

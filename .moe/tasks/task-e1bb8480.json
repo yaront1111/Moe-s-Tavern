@@ -1,0 +1,113 @@
+{
+  "id": "task-e1bb8480",
+  "epicId": "epic-ffe3ace6",
+  "title": "Plan review panel with DoD sidebar and step visualization",
+  "description": "Create a dedicated plan review panel for tasks in AWAITING_APPROVAL status, matching JetBrains PlanReviewDialog.kt. Currently the VS Code extension uses a quick pick for approve/reject. Tasks awaiting approval need a rich review experience.\n\n**Create src/panels/PlanReviewPanel.ts** - opens as an editor webview panel:\n\n**Layout: Split panel (matching JetBrains JSplitPane pattern):**\n- Left side (300px): Definition of Done / Acceptance Criteria\n- Right side (remaining): Implementation Plan steps\n- Bottom: Comments section with add-comment input\n\n**Left panel - Definition of Done:**\n- Header \"Definition of Done\" in bold\n- Bulleted list of DoD items from task.definitionOfDone\n- If empty, show \"No criteria defined\" in muted text\n\n**Right panel - Implementation Steps:**\n- Header \"Implementation Plan\" in bold\n- Each step rendered as a card with:\n  - Left color border (3px matte border): green for COMPLETED, blue for IN_PROGRESS, gray for PENDING\n  - Step number and status in bold small text (e.g., \"Step 1: PENDING\")\n  - Description as wrapped text\n  - Affected files list (if any) in muted small text with bullet points\n\n**Bottom - Comments section (matching PlanReviewDialog.kt lines 79-113):**\n- Display existing task comments color-coded by author\n- Human comments: blue-tinted background\n- Agent comments: green-tinted background  \n- Each comment shows: author, timestamp (truncated to 19 chars), content\n- Text input + \"Ask Question\" button for adding comments\n- Comments auto-scroll to bottom on update\n\n**Action buttons:**\n- Approve button (green-styled) - calls daemonClient.approveTask(taskId)\n- Reject button (red-styled) - prompts for reason via input, then calls daemonClient.rejectTask(taskId, reason)\n- Cancel/Close button\n\n**Live updates:**\n- Subscribe to state changes for the displayed task\n- When task comments change, re-render the comments section\n- Debounce comment re-renders (200ms, matching JetBrains DEBOUNCE_MS)\n\n**Task header:**\n- Show task title in bold 14px\n- Show task description in small text below\n\n**Integration:**\n- When a task card with status AWAITING_APPROVAL is clicked, open PlanReviewPanel instead of TaskDetailPanel\n- This matches the JetBrains pattern at MoeToolWindowPanel.kt line 502-503\n\nReference: JetBrains PlanReviewDialog.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Plan review panel opens for AWAITING_APPROVAL tasks instead of regular task detail",
+    "Split layout with DoD on left and steps on right",
+    "Steps show colored left border by status (green/blue/gray)",
+    "Each step displays number, status, description, and affected files",
+    "Comments section with color-coded display and add-comment input",
+    "Approve and Reject buttons functional",
+    "Reject prompts for reason before sending",
+    "Comments live-update when state changes with debounce",
+    "Panel uses VS Code theme variables throughout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/panels/PlanReviewPanel.ts` with class structure:\n\n- Static `currentPanels: Map<string, PlanReviewPanel>` for per-task singleton\n- `static createOrShow(extensionUri, client, taskId, state)` - creates/reuses panel\n- Constructor: `extensionUri, panel: WebviewPanel, client: MoeDaemonClient, taskId: string`\n- `getWebviewContent(nonce, task)` - returns split-layout HTML\n- State listener subscription for live comment updates\n- Debounce timer (200ms) for comment re-renders\n- `dispose()` - cleanup\n\nPanel title: `Review: {task title truncated to 30 chars}`. ViewColumn.One.\n\nError handling: If task not found, show \"Task not found\" in panel.\nTest: Panel class instantiates without errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:49:27.498Z",
+      "completedAt": "2026-02-22T00:49:31.489Z",
+      "note": "Panel class with per-task singleton, createOrShow, dispose, debounced live updates",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the split-layout webview HTML in `getWebviewContent()`:\n\n**CSS layout:** Use CSS grid or flexbox for the split. `.review-container { display: flex; height: 100vh; }` `.review-left { width: 300px; border-right: 1px solid var(--vscode-panel-border); padding: 12px; overflow-y: auto; }` `.review-right { flex: 1; padding: 12px; overflow-y: auto; }`\n\n**Header:** Task title (bold, 14px) + description (small, muted) above the split.\n\n**Left panel (DoD):** `<h3>Definition of Done</h3>` followed by `<ul>` with `<li>` per DoD item (escaped). If empty: `<p class=\"muted\">No criteria defined</p>`.\n\n**Right panel (Steps):** `<h3>Implementation Plan</h3>` followed by step cards. Each card: `<div class=\"step-card\" style=\"border-left: 3px solid {color}\">` containing step number + status label (bold), description (wrapped text), affected files (muted `<ul>` if present). Colors: COMPLETED=#4caf50, IN_PROGRESS=#2196f3, PENDING=#9e9e9e.\n\nAll content escaped via escapeHtml(). CSP nonce. --vscode-* variables.\n\nError handling: Guard empty implementationPlan and definitionOfDone arrays.\nTest: Split layout renders correctly with DoD on left, steps on right.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:49:34.396Z",
+      "completedAt": "2026-02-22T00:49:38.961Z",
+      "note": "Split-layout HTML: DoD sidebar left 300px, steps right panel with color-coded borders, escapeHtml, CSP nonce, --vscode-* vars",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add comments section and action buttons:\n\n**Comments section** below the split (or as a collapsible bottom panel):\n- `.comments-section { border-top: 1px solid var(--vscode-panel-border); padding: 12px; max-height: 200px; overflow-y: auto; }`\n- Each comment: `.comment-item` with left-border color (blue for human, green for agent)\n- Comment header: author + timestamp. Comment body: escaped content.\n- Auto-scroll div to bottom on render.\n- Input row: `<input id=\"commentInput\">` + `<button id=\"askBtn\">Ask Question</button>`\n\n**Action buttons** at the very bottom:\n- Approve (green background) - posts `{ type: 'approve', taskId }`\n- Reject (red/warning background) - on click, shows inline `<input>` for reason + Confirm button, posts `{ type: 'reject', taskId, reason }`\n\n**Webview message handlers in extension side:**\n- `approve` -> `client.approveTask(taskId)`, dispose panel\n- `reject` -> `client.rejectTask(taskId, reason)`, dispose panel\n- `addComment` -> `client.addTaskComment(taskId, content)`\n\n**Live updates:** On `client.onStateChanged`, find task by id, post `{ type: 'updateComments', comments }` to webview. Webview JS re-renders comments section with 200ms debounce.\n\nError handling: Wrap daemon calls in try/catch with showErrorMessage. Disable approve/reject after click to prevent double-send.\nTest: Approve/reject send correct WS messages. Comments update live.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:49:41.990Z",
+      "completedAt": "2026-02-22T00:49:46.933Z",
+      "note": "Comments section with color-coded authors, ask question input, approve/reject buttons with double-send prevention, live updates with 200ms debounce",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Integrate PlanReviewPanel into the board routing:\n\n1. In BoardViewProvider.ts (or TaskDetailPanel integration from task 6), when handling `openTaskDetail` message:\n   - Check if task.status === 'AWAITING_APPROVAL'\n   - If yes, open `PlanReviewPanel.createOrShow(...)` instead of `TaskDetailPanel.createOrShow(...)`\n   - If no, open TaskDetailPanel as before\n2. Import PlanReviewPanel in BoardViewProvider.ts\n3. Add `moe.reviewPlan` command in extension.ts that opens PlanReviewPanel for a given taskId\n4. Register command in package.json\n\nError handling: If state unavailable or task not found, show warning.\nTest: Clicking AWAITING_APPROVAL task opens plan review. Clicking other tasks opens detail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-22T00:49:50.202Z",
+      "completedAt": "2026-02-22T00:49:55.053Z",
+      "note": "Board routing: AWAITING_APPROVAL tasks open PlanReviewPanel, others open TaskDetailPanel. moe.reviewPlan command registered.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD item 1 not met: \"Plan review panel opens for AWAITING_APPROVAL tasks instead of regular task detail.\" BoardViewProvider.openTaskDetail() (line 114) always calls TaskDetailPanel.createOrShow() with no status check. The moe.reviewPlan command exists but is only accessible from the command palette, not from clicking task cards. Fix: In BoardViewProvider.openTaskDetail(), check if the task's status is 'AWAITING_APPROVAL' and if so call PlanReviewPanel.createOrShow() instead of TaskDetailPanel.createOrShow(). Add a task lookup via this.daemonClient.currentState?.tasks.find(t => t.id === taskId) and branch on task.status.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:04:06.854Z",
+  "updatedAt": "2026-02-23T12:02:04.495Z",
+  "planSubmittedAt": "2026-02-21T23:20:31.216Z",
+  "planApprovedAt": "2026-02-21T23:20:31.218Z",
+  "workStartedAt": "2026-02-22T00:49:27.498Z",
+  "completedAt": "2026-02-23T06:44:55.897Z",
+  "reviewStartedAt": "2026-02-23T06:44:55.897Z",
+  "reviewCompletedAt": "2026-02-23T12:02:04.495Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Plan review panel opens for AWAITING_APPROVAL tasks instead of regular task detail"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "BoardViewProvider.openTaskDetail() always opens TaskDetailPanel regardless of task status. No routing to PlanReviewPanel for AWAITING_APPROVAL tasks.",
+        "file": "moe-vscode/src/providers/BoardViewProvider.ts",
+        "line": 114
+      }
+    ]
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "id": "task-fd8f51ce",
+  "epicId": "epic-ffe3ace6",
+  "title": "Worker status panel with team grouping",
+  "description": "Add a worker status display area matching JetBrains WorkerPanel.kt. The VS Code extension currently shows no worker information. Workers are AI agents (architect, worker, qa) registered with the daemon.\n\n**Create worker display in the board sidebar webview:**\nThe worker panel should appear between the board header and the Kanban columns (matching the JetBrains layout where workerPanel is in BorderLayout.SOUTH of the top panel).\n\n**Worker card display (matching WorkerPanel.kt createWorkerCard):**\nEach worker rendered as a small card (200px wide, 60px tall) showing:\n- Worker type (e.g., \"architect\", \"worker\", \"qa\") in bold\n- Worker status (\"IDLE\", \"CODING\", \"PLANNING\", \"AWAITING_APPROVAL\", \"BLOCKED\") on the right\n- Current task title (truncated to 28 chars) or last error or \"Idle\" in muted text\n- Color-coded border by status:\n  - BLOCKED: red (#dc3545)\n  - CODING/PLANNING: blue (#007bff)\n  - AWAITING_APPROVAL: yellow (#ffc107)\n  - Default: subtle border\n- Status text color matches border color\n\n**Team grouping (matching WorkerPanel.kt lines 31-65):**\n- Group workers by teamId\n- For each team, show team name label \"[TeamName]\" in bold before its workers\n- Solo workers (no teamId or team not found) shown under \"[Solo]\" label\n- Team names looked up from state.teams by teamId\n\n**Data flow:**\n- Worker data comes from state.workers (populated by WORKER_CREATED/WORKER_UPDATED messages)\n- Team data comes from state.teams\n- Task map for current task title lookup: state.tasks keyed by task.id\n- Re-render worker panel whenever state changes\n\n**Implementation approach:**\n- Add a renderWorkerPanel() function to the board webview\n- Called from renderBoard() or separately when state updates\n- Render worker cards in a horizontal wrap layout (flex-wrap)\n- Only show the panel if there are workers (hide if empty)\n\n**CSS:**\n- Worker cards use VS Code theme variables\n- Responsive flex-wrap layout\n- Color-coded borders and status text\n\nReference: JetBrains WorkerPanel.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Worker cards displayed in board webview above the Kanban columns",
+    "Each card shows worker type, status, and current task title",
+    "Cards have color-coded borders by worker status",
+    "Workers grouped by team with team name labels",
+    "Solo workers shown separately when teams exist",
+    "Worker panel hidden when no workers are registered",
+    "Panel re-renders when worker state changes",
+    "Uses VS Code CSS variables for theme compatibility"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add CSS styles for worker panel in BoardViewProvider.ts `getWebviewContent()` style block:\n\n- `.worker-panel` - flex row, flex-wrap, gap 8px, padding 8px 12px, border-bottom 1px solid var(--vscode-panel-border). Hidden by default (`display: none`) when no workers.\n- `.worker-card` - width 200px, height 60px, border-radius 4px, padding 6px 8px, border 1px solid var(--vscode-panel-border), border-left 3px solid. Flex column.\n- `.worker-card[data-status=\"BLOCKED\"]` - border-left-color: #dc3545\n- `.worker-card[data-status=\"CODING\"]`, `[data-status=\"PLANNING\"]` - border-left-color: #007bff\n- `.worker-card[data-status=\"AWAITING_APPROVAL\"]` - border-left-color: #ffc107\n- `.worker-type` - font-weight bold, font-size 12px\n- `.worker-status` - font-size 10px, float right, color matching border\n- `.worker-task` - font-size 11px, color var(--vscode-descriptionForeground), overflow hidden, text-overflow ellipsis, white-space nowrap\n- `.team-label` - font-size 11px, font-weight bold, width 100%, margin-top 4px, color var(--vscode-descriptionForeground)\n\nError handling: N/A (CSS only).\nTest: Styles applied correctly in dark and light themes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:53:35.896Z",
+      "completedAt": "2026-02-22T00:54:53.618Z",
+      "note": "Added CSS styles for .worker-panel (flex row, flex-wrap, gap, border-bottom), .worker-card (200x60px, border-left color-coded by status), .worker-card-header, .worker-type (bold 12px), .worker-status (10px color-coded), .worker-task (11px ellipsis), .team-label (11px bold). Status colors: BLOCKED=#dc3545, CODING/PLANNING=#007bff, AWAITING_APPROVAL=#ffc107.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add `renderWorkerPanel(workers, teams, tasks)` function to the webview JS in BoardViewProvider.ts:\n\n1. If workers array empty, hide `.worker-panel` div and return\n2. Build task map: `Map<string, Task>` from tasks array for current task title lookup\n3. Build team map: `Map<string, Team>` from teams array\n4. Group workers by teamId. Workers with null/undefined teamId or unknown team go into 'solo' group\n5. For each team group:\n   - Render team label: `<span class=\"team-label\">[{teamName}]</span>`\n   - For each worker in group, render card:\n     - `<div class=\"worker-card\" data-status=\"{worker.status}\">`\n     - Header: `<span class=\"worker-type\">{worker.type}</span> <span class=\"worker-status\">{worker.status}</span>`\n     - Body: current task title (from taskMap.get(worker.currentTaskId)?.title, truncated to 28 chars) or worker.lastError or \"Idle\"\n6. For solo workers, render with label \"[Solo]\"\n7. Show the `.worker-panel` div\n\nAll text content escaped with escapeHtml().\n\nCall `renderWorkerPanel()` from the main render function, passing state.workers, state.teams, state.tasks.\n\nError handling: Guard against undefined workers/teams. Handle missing task lookups gracefully.\nTest: Worker cards appear. Team grouping displays correctly. Panel hides when no workers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:54:56.220Z",
+      "completedAt": "2026-02-22T00:55:01.198Z",
+      "note": "Added renderWorkerPanel(workers, teams, tasks) and renderWorkerCard(worker, taskMap) functions. renderWorkerPanel: hides panel if no workers, builds taskMap/teamMap objects, groups workers by teamId (known teams vs solo), renders team labels and worker cards. renderWorkerCard: renders card with data-status attribute, header row with type+status, body with current task title (truncated 28 chars) or lastError or 'Idle'. All text escaped with escapeHtml(). Called from renderBoard().",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the worker panel HTML container to the webview body in BoardViewProvider.ts.\n\nIn the webview HTML body, add `<div class=\"worker-panel\" id=\"workerPanel\"></div>` between the board header and the columns container.\n\nEnsure the state update handler calls `renderWorkerPanel()` whenever state changes, so worker status is always current.\n\nError handling: If state.workers is undefined (old state format), treat as empty array.\nTest: Worker panel appears in correct position. Updates when workers connect/disconnect.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:55:04.158Z",
+      "completedAt": "2026-02-22T00:55:26.073Z",
+      "note": "Added workerPanel div between board-toolbar and board. renderWorkerPanel() is called from renderBoard() with state.workers || [], state.teams || [], state.tasks || []. Worker panel is hidden and cleared in the empty state path. TypeScript compiles cleanly.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:04:36.153Z",
+  "updatedAt": "2026-02-23T06:26:23.851Z",
+  "planSubmittedAt": "2026-02-21T23:22:14.775Z",
+  "planApprovedAt": "2026-02-21T23:22:14.777Z",
+  "workStartedAt": "2026-02-22T00:53:35.896Z",
+  "completedAt": "2026-02-23T06:22:48.180Z",
+  "reviewStartedAt": "2026-02-23T06:22:48.180Z",
+  "reviewCompletedAt": "2026-02-23T06:26:23.851Z"
+}

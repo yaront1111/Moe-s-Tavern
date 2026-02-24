@@ -1,0 +1,102 @@
+{
+  "id": "task-798caae0",
+  "epicId": "epic-be924fb8",
+  "title": "Proxy reconnection and signal handling",
+  "description": "WebSocket event handlers accumulate on reconnection (index.ts line 246) - old WS not cleaned. SIGTERM/SIGINT (line 419) bypass gracefulShutdown() - pending requests abandoned. Missing stdin.on('error') handler - unhandled crash. Missing stdout.write() error handling - silent failures.",
+  "definitionOfDone": [
+    "Old WebSocket listeners removed/cleaned before reconnect attempt",
+    "SIGTERM and SIGINT call gracefulShutdown() instead of process.exit()",
+    "stdin error handler added to prevent unhandled crash",
+    "stdout.write() errors handled (logged, not silently swallowed)",
+    "No handler accumulation after 10 reconnects (verifiable by inspection)",
+    "npm run build passes with no errors"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix WebSocket close handler race on reconnect. In connect() at line ~289, the `ws.on('close')` handler unconditionally sets `currentWebSocket = null`. If a new WebSocket has already been created by a reconnect, this nullifies the new one. Fix: guard the nullification: `if (currentWebSocket === ws) { currentWebSocket = null; isConnected = false; }`. Apply same guard in the `on('error')` handler pattern. Also in connect() at line ~246, before creating a new WebSocket, call `closeWebSocket()` to cleanly close any lingering old connection first. This prevents handler accumulation on stale objects. Error handling: closeWebSocket() already wraps close() in try-catch.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-18T23:12:08.526Z",
+      "completedAt": "2026-02-18T23:12:33.706Z",
+      "note": "Hardened reconnect lifecycle by closing any lingering WebSocket before creating a new one and by ignoring close/error events from stale sockets so old handlers cannot nullify or interfere with the active connection.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Route SIGTERM/SIGINT through gracefulShutdown(). At lines 419-433, SIGTERM and SIGINT handlers manually close resources and call process.exit(0), bypassing gracefulShutdown() which properly waits for pending requests. Replace both handlers with: `gracefulShutdown()`. Remove the duplicated cleanup code. This ensures pending MCP requests get proper error responses before exit, preventing silent request abandonment. Error handling: gracefulShutdown already has a 2-second timeout to force exit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-18T23:12:36.408Z",
+      "completedAt": "2026-02-18T23:12:44.083Z",
+      "note": "Updated SIGTERM/SIGINT handlers to delegate to gracefulShutdown(), ensuring pending requests are drained with existing timeout-based shutdown path instead of exiting immediately.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add stdin.on('error') handler. After the existing `process.stdin.on('end')` handler at line ~408, add `process.stdin.on('error', (err) => { writeLog('stdin error: ' + (err.message || 'unknown')); gracefulShutdown(); })`. This prevents an unhandled crash if stdin encounters an error (e.g., broken pipe). Error handling: delegates to gracefulShutdown for proper cleanup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-18T23:12:46.284Z",
+      "completedAt": "2026-02-18T23:12:52.860Z",
+      "note": "Added process.stdin error handler to log broken-pipe/stream failures and trigger gracefulShutdown(), avoiding unhandled stdin errors terminating the proxy abruptly.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add stdout.write() error handling. Create a helper function `safeStdoutWrite(data: string): boolean` that wraps `process.stdout.write(data)` in a try-catch, logging errors to stderr via writeLog(). Replace all direct `process.stdout.write()` calls with `safeStdoutWrite()`. This covers lines ~76, 110, 163, 283, 318, 333, 396. Error handling: on write failure, log to stderr and continue (don't crash the proxy). Test that build passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-02-18T23:12:54.976Z",
+      "completedAt": "2026-02-18T23:13:23.308Z",
+      "note": "Added safeStdoutWrite() wrapper with try/catch logging and replaced all direct stdout writes for daemon responses, timeout errors, queue overflows, and disconnect failures so stdout failures are explicit and non-fatal.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add build verification test. Run `npm run build` in moe-proxy to verify no TypeScript compilation errors. Manually verify by inspection that after 3+ reconnect cycles, no duplicate event handlers exist on the WebSocket object. Verify SIGTERM triggers graceful shutdown with pending request drain.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T23:13:26.633Z",
+      "completedAt": "2026-02-18T23:13:40.132Z",
+      "note": "Verification complete: `npm run build` passes in packages/moe-proxy. Manual inspection confirms reconnect path now calls closeWebSocket() before each new connect and stale ws close/error events are ignored, preventing handler/state interference across repeated reconnect cycles. SIGTERM/SIGINT now route through gracefulShutdown() for pending-request drain before exit."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:41.522Z",
+  "updatedAt": "2026-02-19T07:31:53.581Z",
+  "planSubmittedAt": "2026-02-18T22:30:23.551Z",
+  "planApprovedAt": "2026-02-18T22:30:47.373Z",
+  "workStartedAt": "2026-02-18T23:12:08.526Z",
+  "completedAt": "2026-02-18T23:13:44.937Z",
+  "reviewStartedAt": "2026-02-18T23:13:44.937Z",
+  "reviewCompletedAt": "2026-02-19T07:31:53.581Z"
+}

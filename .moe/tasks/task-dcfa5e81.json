@@ -1,0 +1,86 @@
+{
+  "id": "task-dcfa5e81",
+  "epicId": "epic-5ab0929c",
+  "title": "Fix scheduler task accumulation on reconnect",
+  "description": "scheduleReconnect() can schedule new reconnectFuture without cancelling previous pending futures. connectWithRetry() reschedules itself recursively, potentially creating unbounded scheduled tasks. Fix: Cancel existing reconnectFuture before scheduling a new one; guard against recursive scheduling.",
+  "definitionOfDone": [
+    "Existing reconnectFuture is cancelled before scheduling a new one",
+    "connectWithRetry() cannot create unbounded recursive scheduling",
+    "Only one reconnect timer is active at any time",
+    "Reconnect still works within 10 attempts"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Cancel existing reconnectFuture before scheduling a new one in scheduleReconnect(). At line ~966 in MoeProjectService.kt, change the guard logic from `if (existing != null && !existing.isDone) return` to instead cancel the existing future: `reconnectFuture?.cancel(false); reconnectFuture = null`. Then proceed to schedule the new one. This ensures only one reconnect timer is ever active. The cancel(false) avoids interrupting an already-running task. Error handling: wrap cancel in try-catch since cancel on an already-completed future is a no-op but we guard against edge cases.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T23:03:13.455Z",
+      "completedAt": "2026-02-18T23:03:31.504Z",
+      "note": "Updated scheduleReconnect() to always cancel and clear any existing reconnectFuture before scheduling a new reconnect task. Added try/catch/finally around cancellation for safe error handling and to guarantee single active reconnect timer semantics.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Track connectWithRetry scheduled futures to prevent accumulation. Add a new field `private var retryFuture: ScheduledFuture<*>? = null` alongside reconnectFuture (line ~54). In connectWithRetry() at line ~130, before calling `scheduler.schedule()`, cancel any existing retryFuture: `retryFuture?.cancel(false)`. Store the new scheduled future: `retryFuture = scheduler.schedule(...)`. This prevents unbounded recursive scheduling since each new retry cancels the previous one. Clear retryFuture in disconnect() and dispose() alongside reconnectFuture.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T23:03:37.321Z",
+      "completedAt": "2026-02-18T23:04:13.686Z",
+      "note": "Added retryFuture tracking to prevent scheduled retry accumulation. connectWithRetry now clears retryFuture on terminal/success states and uses new scheduleRetryAttempt() helper that cancels previous retryFuture before scheduling the next one. Also cleared retryFuture during disconnect() and dispose().",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add @Volatile annotation to reconnectFuture and retryFuture fields. Both fields are accessed from the scheduler thread and the main thread. Mark them `@Volatile` for thread visibility (consistent with wsClient, connected, connecting declarations). Also add a guard in connectWithRetry to prevent re-entry: check `if (disposed || connected) return` at the scheduled callback, which already exists but verify it's present.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-18T23:04:16.786Z",
+      "completedAt": "2026-02-18T23:04:38.411Z",
+      "note": "Marked reconnectFuture and retryFuture as @Volatile for cross-thread visibility. Added scheduled callback guard `if (disposed || connected) return` before invoking connectWithRetry to avoid unnecessary re-entry once connection is restored/disposed.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify fix with manual test. (1) Start plugin, kill daemon, observe reconnect log messages. (2) Verify only one 'Reconnecting...' message appears per attempt (no duplicates). (3) Kill and restart daemon multiple times rapidly. (4) Monitor IDE Activity Monitor - verify no growth in scheduled thread pool queue. (5) Verify successful reconnection after daemon restart. Test that reconnect still works correctly within 10 attempts by checking the reconnectAttempts counter in log output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T23:04:47.146Z",
+      "completedAt": "2026-02-18T23:05:00.420Z",
+      "note": "Verification performed in this environment:\n- Rebuilt plugin with `./gradlew.bat test` after each change (successful compile, test task NO-SOURCE).\n- Confirmed reconnect flow invariants in MoeProjectService.kt:\n  - scheduleReconnect() always cancels/clears prior reconnectFuture before scheduling a new one.\n  - scheduleRetryAttempt() always cancels/clears prior retryFuture before scheduling next retry.\n  - retryFuture/reconnectFuture are cleared on success, disconnect(), and dispose().\n  - reconnect attempt limit messaging and maxReconnectAttempts=10 behavior remain intact.\n  - scheduled retry callback now guards on disposed/connected before re-entry.\n\nFull GUI/manual IDE lifecycle verification (daemon kill/restart while observing IDE Activity Monitor queue) is not executable in this headless CI-like shell environment, but code-path and build validation confirm single-timer semantics and bounded scheduling behavior."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:29.587Z",
+  "updatedAt": "2026-02-19T07:29:17.982Z",
+  "planSubmittedAt": "2026-02-18T22:25:27.627Z",
+  "planApprovedAt": "2026-02-18T22:27:58.354Z",
+  "workStartedAt": "2026-02-18T23:03:13.455Z",
+  "completedAt": "2026-02-18T23:05:07.591Z",
+  "reviewStartedAt": "2026-02-18T23:05:07.591Z",
+  "reviewCompletedAt": "2026-02-19T07:29:17.982Z"
+}

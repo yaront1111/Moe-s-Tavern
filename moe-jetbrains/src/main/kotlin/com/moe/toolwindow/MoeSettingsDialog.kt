@@ -30,6 +30,7 @@ class MoeSettingsDialog(
         isEditable = true
     }
     private val autoCreateBranchCheckbox = JBCheckBox(MoeBundle.message("moe.settings.autoCreateBranch"))
+    private val enableAgentTeamsCheckbox = JBCheckBox(MoeBundle.message("moe.settings.enableAgentTeams"))
     private val branchPatternField = JBTextField()
     private val commitPatternField = JBTextField()
 
@@ -44,6 +45,7 @@ class MoeSettingsDialog(
             autoCreateBranchCheckbox.isSelected = settings.autoCreateBranch
             branchPatternField.text = settings.branchPattern
             commitPatternField.text = settings.commitPattern
+            enableAgentTeamsCheckbox.isSelected = settings.enableAgentTeams
         }
 
         init()
@@ -72,6 +74,12 @@ class MoeSettingsDialog(
         panel.add(JBLabel(MoeBundle.message("moe.settings.agentCommandLabel")))
         panel.add(agentCommandCombo)
         panel.add(JBLabel(MoeBundle.message("moe.settings.agentCommandHint")))
+
+        panel.add(createSeparator())
+
+        // Agent Teams
+        panel.add(enableAgentTeamsCheckbox)
+        panel.add(JBLabel(MoeBundle.message("moe.settings.enableAgentTeamsHint")))
 
         panel.add(createSeparator())
 
@@ -107,7 +115,8 @@ class MoeSettingsDialog(
                     agentCommand = (agentCommandCombo.selectedItem as? String)?.trim()?.ifEmpty { "claude" } ?: "claude",
                     autoCreateBranch = autoCreateBranchCheckbox.isSelected,
                     branchPattern = branchPatternField.text.trim(),
-                    commitPattern = commitPatternField.text.trim()
+                    commitPattern = commitPatternField.text.trim(),
+                    enableAgentTeams = enableAgentTeamsCheckbox.isSelected
                 )
                 service.updateSettings(settings)
                 close(OK_EXIT_CODE)

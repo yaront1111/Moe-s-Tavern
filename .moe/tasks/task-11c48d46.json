@@ -1,0 +1,97 @@
+{
+  "id": "task-11c48d46",
+  "epicId": "epic-ffe3ace6",
+  "title": "Task creation dialog with epic selector, priority, and validation",
+  "description": "Implement task creation UI, matching the JetBrains CreateTaskDialog.kt. The VS Code extension currently has no way to create tasks. Users need to create tasks from the board.\n\n**Two implementation options (prefer option A):**\n\n**Option A - Webview panel approach:**\nCreate a new webview panel (moe.createTask) that opens as an editor tab with a form containing:\n- Epic selector dropdown (populated from state.epics, with a \"Create New Epic...\" option at the bottom)\n- Priority selector dropdown (CRITICAL, HIGH, MEDIUM, LOW) - default MEDIUM\n- Title text input (required, max 500 chars)\n- Description textarea\n- Definition of Done textarea (one item per line)\n- Create button and Cancel button\n- Inline validation: red border on empty title, error message for empty epic selection\n- Create button disabled until validation passes\n\n**Option B - Quick pick approach (simpler, less feature-rich):**\nUse VS Code quick picks and input boxes in sequence.\n\n**Board integration:**\n- Add a \"+\" button in the Backlog column header (matching JetBrains onCreateTask pattern)\n- Register command moe.createTask in extension.ts and package.json\n- The + button click opens the creation UI\n\n**WebSocket integration:**\n- On submit, call daemonClient.createTask(epicId, title, description, dod, priority)\n- This sends CREATE_TASK message to daemon\n- Daemon responds with TASK_CREATED which updates the board automatically\n\n**Epic selector with inline create:**\n- The epic dropdown should include all current epics from state\n- Last option should be \"Create New Epic...\" (italic/differentiated)\n- Selecting \"Create New Epic...\" opens the epic creation flow (task 8)\n- After epic creation, the new epic should be auto-selected\n\n**Validation (matching JetBrains):**\n- Epic must be selected (not the \"Create New...\" placeholder)\n- Title must not be empty\n- Title must be <= 500 characters\n- Show validation errors inline with red text\n\nReference: JetBrains CreateTaskDialog.kt for the full dialog implementation.",
+  "definitionOfDone": [
+    "Task creation UI accessible from + button in Backlog column header",
+    "Form includes epic selector, priority dropdown, title, description, and DoD fields",
+    "Inline validation: title required, epic required, title max length 500",
+    "Create button disabled until validation passes",
+    "Submitting sends CREATE_TASK via WebSocket and closes the form",
+    "moe.createTask command registered in extension.ts and package.json",
+    "New task appears on board after creation (via TASK_CREATED message)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/panels/TaskCreatePanel.ts` with a webview panel class for task creation. Pattern: `vscode.window.createWebviewPanel('moe.createTask', 'Create Task', vscode.ViewColumn.One, { enableScripts: true })`.\n\nThe class takes `MoeDaemonClient` and current `MoeStateSnapshot` as constructor args. Methods:\n- `static createOrShow(extensionUri, client, state)` - singleton pattern, reuses existing panel\n- `private getWebviewContent(nonce, epics)` - returns HTML with CSP nonce\n- `dispose()` - cleanup\n\nThe webview HTML form contains:\n- Epic selector `<select>` populated from `state.epics` with `<option>` per epic, plus disabled placeholder \"Select epic...\"\n- Priority selector `<select>` with CRITICAL/HIGH/MEDIUM/LOW options, default MEDIUM\n- Title `<input type=\"text\">` with maxlength=500, required\n- Description `<textarea>` rows=4\n- Definition of Done `<textarea>` rows=4, placeholder \"One item per line\"\n- Submit and Cancel buttons\n- Validation error `<div>` for inline messages\n\nAll text content escaped. CSP nonce on script tag. Uses --vscode-* CSS variables.\n\nError handling: Show inline validation error for empty title or unselected epic.\nTest: Panel opens without errors. Form renders all fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskCreatePanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:46:40.199Z",
+      "completedAt": "2026-02-22T00:46:46.852Z",
+      "note": "TaskCreatePanel.ts already created with full webview panel: singleton pattern, CSP nonce, form with epic selector, priority dropdown, title input (maxlength 500), description textarea, DoD textarea, submit/cancel buttons. All text content escaped via escapeHtml. Uses --vscode-* CSS variables for theme compatibility.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskCreatePanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add webview message handling in TaskCreatePanel.ts:\n\nWebview -> Extension messages:\n- `submit`: `{ epicId, title, description, definitionOfDone: string[], priority }` -> call `daemonClient.createTask(...)`, then dispose panel\n- `cancel`: dispose panel\n\nExtension -> Webview messages:\n- `init`: `{ epics: Epic[] }` - sent on panel creation to populate the epic dropdown\n\nWebview JS validation logic:\n- On submit button click, validate: title non-empty, epic selected (value !== '')\n- If invalid, show error text in red below the field, don't submit\n- Title input: show char count and red border if empty on blur\n- DoD textarea: split by newlines, filter empty lines to produce string array\n\nError handling: If createTask call fails (e.g., disconnected), show vscode.window.showErrorMessage. Wrap submit in try/catch.\nTest: Submit creates task via WebSocket. Cancel closes panel. Validation blocks submission.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskCreatePanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:46:49.781Z",
+      "completedAt": "2026-02-22T00:46:55.783Z",
+      "note": "Message handling already implemented: submit handler validates epicId/title/title.length, calls daemonClient.createTask() in try/catch with showErrorMessage on failure, disposes panel on success. Cancel handler disposes panel. Init message populates epic dropdown. Validation shows red border and error text inline. Char count updates on input. Enter key in title triggers submit.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskCreatePanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Integrate task creation into the board and extension:\n\n1. In BoardViewProvider.ts webview HTML, add a `+` button inside the BACKLOG column header: `<button class=\"create-task-btn\" title=\"Create Task\">+</button>`\n2. Add click handler that posts `{ type: 'createTask' }` message to extension\n3. In BoardViewProvider.ts `setWebviewMessageListener`, handle `createTask` message by calling `TaskCreatePanel.createOrShow()`\n4. In extension.ts, register command `moe.createTask` that opens TaskCreatePanel\n5. In package.json, add `moe.createTask` to commands array with title \"Moe: Create Task\"\n\nError handling: Check daemonClient.connectionState before opening panel; show warning if disconnected.\nTest: + button visible in BACKLOG column. Clicking opens creation panel. Command palette entry works.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-22T00:46:59.467Z",
+      "completedAt": "2026-02-22T00:50:07.631Z",
+      "note": "Added CSS for .create-task-btn and .column-header-right in BoardViewProvider.ts. The + button in BACKLOG column header, createTask JS function, BoardViewProvider message handler, extension.ts moe.createTask command registration, and package.json command entry were all added. Extension compiles without errors.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "DoD item 4 not met: \"Create button disabled until validation passes\" - the submit button (#submitBtn) is never disabled. CSS for `.btn-primary:disabled` exists (line 227) but there's no JS logic to toggle `submitBtn.disabled`. Fix: add a `updateButtonState()` function that sets `document.getElementById('submitBtn').disabled = !(epicEl.value && titleEl.value.trim())`, call it from the title input and epic change event listeners, and call it once at load to set initial disabled state.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:03:28.911Z",
+  "updatedAt": "2026-02-23T06:23:27.284Z",
+  "planSubmittedAt": "2026-02-21T23:18:58.391Z",
+  "planApprovedAt": "2026-02-21T23:18:58.393Z",
+  "workStartedAt": "2026-02-22T00:46:40.199Z",
+  "completedAt": "2026-02-22T10:56:24.584Z",
+  "reviewStartedAt": "2026-02-22T10:56:24.584Z",
+  "reviewCompletedAt": "2026-02-23T06:23:27.284Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Create button disabled until validation passes"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "Submit button is never dynamically disabled. No JS sets submitBtn.disabled based on form validation state. The .btn-primary:disabled CSS exists but is never triggered.",
+        "file": "moe-vscode/src/panels/TaskCreatePanel.ts",
+        "line": 290
+      }
+    ]
+  }
+}

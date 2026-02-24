@@ -1,0 +1,20 @@
+{
+  "id": "epic-ffe3ace6",
+  "projectId": "proj-3830fac7",
+  "title": "VS Code Extension Feature Parity with JetBrains Plugin",
+  "description": "Bring the VS Code extension (moe-vscode) to feature parity with the JetBrains plugin (moe-jetbrains). The VS Code extension currently has ~988 lines across 4 source files with basic Kanban board, read-only task detail, simple approve/reject/reopen via quick pick, and connection status bar. The JetBrains plugin has ~5,301 lines across 17+ files with full task/epic CRUD, plan review, comments, worker panel, proposals, activity log, agent launching, settings, and comprehensive WebSocket protocol support. This epic covers all work needed to reach parity.",
+  "architectureNotes": "Architecture approach for VS Code:\n- **Webview sidebar** (existing moe.board) for the Kanban board with enhanced cards, epic grouping, search/filter\n- **Editor webview panels** (vscode.window.createWebviewPanel) for task detail, epic detail, plan review, settings - these open as full editor tabs\n- **VS Code Terminal API** for agent launching (vscode.window.createTerminal)\n- **Quick picks / input boxes** for simple inputs (reject reason, reopen reason, comment text)\n- **Status bar items** for enhanced connection/task count display\n- **package.json commands** for all new actions (moe.createTask, moe.createEpic, moe.startAgent, etc.)\n\nFile structure guidance:\n- src/types/moe.ts - Shared TypeScript types matching daemon schema.ts (can later become packages/moe-common)\n- src/services/MoeDaemonClient.ts - Extended with all WebSocket message types\n- src/providers/BoardViewProvider.ts - Enhanced board webview with all features\n- src/panels/TaskDetailPanel.ts - Full task detail editor panel\n- src/panels/PlanReviewPanel.ts - Plan review with DoD sidebar\n- src/panels/EpicDetailPanel.ts - Epic create/edit panel\n- src/panels/SettingsPanel.ts - Project settings editor\n- src/panels/ActivityLogPanel.ts - Activity log viewer\n- src/panels/WorkerPanel.ts - Worker status display (could be sidebar webview)\n- src/statusbar/ConnectionStatusBar.ts - Enhanced with task counts\n- src/util/AgentLauncher.ts - Terminal-based agent launching\n\nWebSocket protocol: The daemon at /ws supports all message types needed. The VS Code extension currently only handles STATE_SNAPSHOT, TASK_UPDATED, TASK_CREATED, PONG. It needs to handle: TASK_DELETED, EPIC_CREATED/UPDATED/DELETED, WORKER_UPDATED/CREATED, TEAM_CREATED/UPDATED/DELETED, PROPOSAL_CREATED/UPDATED, ACTIVITY_LOG, ERROR, DAEMON_SHUTTING_DOWN. Outbound messages needed: CREATE_TASK, DELETE_TASK, CREATE_EPIC, UPDATE_EPIC, DELETE_EPIC, UPDATE_SETTINGS, ADD_TASK_COMMENT, ARCHIVE_DONE_TASKS, GET_ACTIVITY_LOG, APPROVE_PROPOSAL, REJECT_PROPOSAL.",
+  "epicRails": [
+    "All UI must use VS Code webview API with proper CSP (Content Security Policy) nonce-based script tags",
+    "Types must match the canonical daemon schema in packages/moe-daemon/src/types/schema.ts",
+    "All webview HTML must use VS Code CSS variables (--vscode-*) for theme compatibility",
+    "WebSocket message format must match existing {type, payload} protocol used by daemon WebSocketServer.ts",
+    "Each task must be independently testable - no task should leave the extension in a broken state",
+    "Follow existing VS Code extension patterns established in the current 4 source files",
+    "Agent launching must work cross-platform (Windows PowerShell + Unix bash) matching scripts/moe-agent.ps1 and moe-agent.sh"
+  ],
+  "status": "ACTIVE",
+  "order": 15,
+  "createdAt": "2026-02-21T23:02:00.996Z",
+  "updatedAt": "2026-02-21T23:02:00.996Z"
+}

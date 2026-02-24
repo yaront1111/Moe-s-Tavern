@@ -1,0 +1,67 @@
+{
+  "id": "task-3f3dfd2d",
+  "epicId": "epic-ffe3ace6",
+  "title": "Activity log panel with event type filtering",
+  "description": "Add an activity log view matching JetBrains ActivityLogPanel.kt. The VS Code extension currently has no activity log. This provides a chronological view of all daemon events.\n\n**Implementation - Activity Log tab in the sidebar webview:**\nUse the tab infrastructure from task 10 (Proposals panel). The Activity Log tab shows a filterable event table.\n\n**Activity log panel content (matching ActivityLogPanel.kt):**\n\n**Toolbar:**\n- Filter dropdown with event types: \"All\", \"TASK_CREATED\", \"TASK_UPDATED\", \"TASK_DELETED\", \"EPIC_CREATED\", \"EPIC_UPDATED\", \"PLAN_SUBMITTED\", \"PLAN_APPROVED\", \"PLAN_REJECTED\", \"STEP_STARTED\", \"STEP_COMPLETED\", \"TASK_COMPLETED\", \"TASK_BLOCKED\"\n- Default selection: \"All\"\n\n**Event table with columns:**\n1. Timestamp (formatted as \"YYYY-MM-DD HH:mm:ss\" in local timezone)\n2. Event type (raw event name)\n3. Details (formatted string combining taskId last 8, epicId last 8, workerId, and payload key-value pairs separated by \" | \")\n\n**Table styling:**\n- No grid lines (clean look)\n- Row height ~24px\n- Column widths: Timestamp 150px, Event 120px, Details remaining\n- Alternating row backgrounds for readability (optional)\n- Use VS Code table/list theme variables\n\n**Data flow:**\n- On connection established and on tab selection, request activity log via daemonClient.requestActivityLog(200)\n- Listen for onActivityLog events from the daemon client\n- Store all events in a JavaScript array\n- Apply filter to show only matching event types\n- Re-render table when filter changes or new events arrive\n\n**Timestamp formatting:**\n- Parse ISO timestamp string\n- Format to local timezone using Intl.DateTimeFormat or manual formatting\n- Fallback to raw timestamp on parse error\n\nReference: JetBrains ActivityLogPanel.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Activity Log tab functional in the sidebar webview tab bar",
+    "Event type filter dropdown with All + specific event types",
+    "Table displays timestamp, event type, and formatted details",
+    "Timestamps formatted in local timezone",
+    "Details column shows task/epic/worker IDs and payload data",
+    "Activity log data requested via GET_ACTIVITY_LOG on connection and tab selection",
+    "Filter selection re-renders table immediately",
+    "Table uses VS Code theme variables for styling"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add activity log data flow between extension and webview in BoardViewProvider.ts:\n\n1. Subscribe to `daemonClient.onActivityLog` event in the BoardViewProvider constructor. When events arrive, post `{ type: 'activityLog', events }` to the webview.\n2. When the activity tab becomes active (tab switch), post `{ type: 'requestActivityLog' }` from webview to extension.\n3. In `setWebviewMessageListener`, handle `requestActivityLog` by calling `daemonClient.requestActivityLog(200)`.\n4. Also request activity log on initial connection (when `connectionStatus` becomes 'connected').\n\nStore activity events in a webview JS variable: `let activityEvents = [];`. On receiving `activityLog` message, set `activityEvents = events` and re-render.\n\nError handling: Guard against undefined/null events array. If disconnected, show \"Connect to view activity log\".\nTest: Activity events flow from daemon through client to webview.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:32:49.248Z",
+      "completedAt": "2026-02-23T06:34:40.300Z",
+      "note": "Added onActivityLog subscriber in constructor that forwards events to webview. requestActivityLog handler sends request to daemon. Activity tab switch triggers requestActivityLog. activityLog message handler calls renderActivityLog().",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the activity log tab content. Add `renderActivityLog(events)` function to the webview JS:\n\n**Filter toolbar:**\n- `<select id=\"activityFilter\">` with options: \"All\", plus specific event types: TASK_CREATED, TASK_UPDATED, TASK_DELETED, EPIC_CREATED, EPIC_UPDATED, PLAN_SUBMITTED, PLAN_APPROVED, PLAN_REJECTED, STEP_STARTED, STEP_COMPLETED, TASK_COMPLETED, TASK_BLOCKED\n- `let activityFilter = '';` JS variable for current filter\n- On change: set filter, re-render\n\n**Table rendering:**\n- `<table class=\"activity-table\">` with `<thead>` (Timestamp, Event, Details) and `<tbody>`\n- Filter events: `activityFilter ? events.filter(e => e.event === activityFilter) : events`\n- For each event row:\n  - Timestamp: `formatTimestamp(event.timestamp)` -> format ISO string to local 'YYYY-MM-DD HH:mm:ss' using Date constructor + padded getters\n  - Event: `escapeHtml(event.event)`\n  - Details: build from payload - collect taskId (last 8), epicId (last 8), workerId, plus other payload key-values, join with ' | '\n\nAll content escaped with escapeHtml().\n\n**CSS for table:**\n- `.activity-table` - width 100%, border-collapse collapse, font-size 12px\n- `th` - text-align left, padding 4px 8px, border-bottom 1px solid var(--vscode-panel-border), font-weight bold\n- `td` - padding 3px 8px\n- `tr:nth-child(even)` - background var(--vscode-list-hoverBackground) for alternating rows\n\nError handling: Handle empty events with \"No activity recorded\" message. Handle malformed timestamps gracefully.\nTest: Table renders with correct columns. Filter dropdown works.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:34:40.833Z",
+      "completedAt": "2026-02-23T06:34:49.160Z",
+      "note": "renderActivityLog, filter dropdown, activity table, formatTimestamp, buildEventDetails all implemented in step-1. CSS for .activity-table, .activity-filter, .activity-toolbar added. Filter dropdown with 12 event types. Table with Timestamp/Event/Details columns. Alternating row backgrounds. Empty state handling. Malformed timestamp fallback.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 11,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:05:07.278Z",
+  "updatedAt": "2026-02-23T12:03:30.322Z",
+  "planSubmittedAt": "2026-02-21T23:23:11.262Z",
+  "planApprovedAt": "2026-02-21T23:23:11.264Z",
+  "workStartedAt": "2026-02-23T06:32:49.248Z",
+  "completedAt": "2026-02-23T06:34:52.124Z",
+  "reviewStartedAt": "2026-02-23T06:34:52.124Z",
+  "reviewCompletedAt": "2026-02-23T12:03:30.322Z"
+}

@@ -507,6 +507,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             addProperty("branchPattern", settings.branchPattern)
             addProperty("commitPattern", settings.commitPattern)
             addProperty("agentCommand", settings.agentCommand)
+            addProperty("enableAgentTeams", settings.enableAgentTeams)
         }
         sendMessage("UPDATE_SETTINGS", payload)
     }

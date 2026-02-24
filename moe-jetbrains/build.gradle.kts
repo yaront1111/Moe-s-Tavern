@@ -26,6 +26,7 @@ val bundledProxyMarker = bundledProxyModules.resolve("ws")
 val bundledAgentScript = repoRoot.resolve("scripts/moe-agent.ps1")
 val bundledAgentScriptSh = repoRoot.resolve("scripts/moe-agent.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
+val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
 
 fun requireBundledAssets() {
     check(bundledDaemonMain.exists()) {
@@ -113,6 +114,9 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundledRoleDocs) {
         into("docs/roles")
     }
+    from(bundledAgentContext) {
+        into("docs")
+    }
 }
 
 tasks.named<BuildPluginTask>("buildPlugin") {
@@ -139,6 +143,9 @@ tasks.named<BuildPluginTask>("buildPlugin") {
     }
     from(bundledRoleDocs) {
         into("docs/roles")
+    }
+    from(bundledAgentContext) {
+        into("docs")
     }
 }
 

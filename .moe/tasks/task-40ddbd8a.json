@@ -1,0 +1,114 @@
+{
+  "id": "task-40ddbd8a",
+  "epicId": "epic-be924fb8",
+  "title": "Fix daemon unbounded map/array growth",
+  "description": "RateLimiter timestamps array (McpAdapter.ts line 19) grows unbounded - replace with counter-based sliding window. activeWaiters map (waitForTask.ts line 24) never pruned on worker crash - add periodic stale sweep. speedModeTimeouts map (submitPlan.ts line 7) entries persist for deleted tasks - cancel on task deletion. Subscriber set (StateManager.ts line 141) never cleaned if callback throws - auto-remove after 3 consecutive errors.",
+  "definitionOfDone": [
+    "RateLimiter uses O(1) memory (counter-based sliding window, not growing array)",
+    "activeWaiters has periodic stale sweep (removes entries for disconnected/crashed workers)",
+    "speedModeTimeouts entries cancelled when task is deleted",
+    "Subscriber set auto-removes callbacks after 3 consecutive errors",
+    "Unit tests prove bounded memory for RateLimiter",
+    "Unit tests verify stale waiter cleanup and timeout cascade on deletion",
+    "npm test passes with no regressions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Replace RateLimiter timestamps array with counter-based sliding window for O(1) memory. Current implementation uses number[] that grows with each request within the window, and shift() is O(n). Replace with: track windowStart timestamp and a counter. If current time > windowStart + windowMs, reset counter to 0 and windowStart to now. checkLimit() increments counter and returns false if counter >= maxRequests. getStats() returns the current counter. This bounds memory to two numbers regardless of request volume. Add error handling for edge cases (NaN timestamps, negative windows).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "startedAt": "2026-02-18T22:59:33.245Z",
+      "completedAt": "2026-02-18T23:00:01.526Z",
+      "note": "Replaced timestamp-array sliding window with O(1) counter/window-start limiter. Added defensive normalization for invalid max/window config values and invalid Date.now() handling so the limiter degrades safely instead of crashing.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add periodic stale sweep for activeWaiters map. Export a cleanupStaleWaiters(state: StateManager) function from waitForTask.ts that iterates activeWaiters, checks if the worker still exists in state.workers, and if not, cancels (clearTimeout + unsubscribe + resolve with cancelled:true) and removes the entry. Call this function from StateManager.checkBlockedTimeouts() (which already runs every 5 minutes) so stale waiters are cleaned up alongside stale workers. Add error handling for cleanup failures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T23:00:04.061Z",
+      "completedAt": "2026-02-18T23:00:32.691Z",
+      "note": "Added exported cleanupStaleWaiters(state) in waitForTask tool to cancel/remove waiter entries for missing workers with per-operation error handling. Integrated periodic stale waiter cleanup into StateManager.checkBlockedTimeouts() with guarded logging.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Cancel speedModeTimeouts on task deletion. Add cancelSpeedModeTimeout(taskId) call at the top of StateManager.deleteTask() method, before removing from memory. The import already exists (line 27). This prevents orphaned timeouts from firing callbacks on deleted tasks. Add error handling around the cancellation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T23:00:35.531Z",
+      "completedAt": "2026-02-18T23:00:51.076Z",
+      "note": "Added cancelSpeedModeTimeout(taskId) at the start of deleteTask with defensive try/catch + warning log so orphaned SPEED-mode timers are cleaned up without blocking deletion on cancellation errors.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Auto-remove broken subscribers after 3 consecutive errors. Add a private subscriberErrorCounts: Map<callback, number> to StateManager. In emit(), on subscriber error: increment count, if >= 3 then delete subscriber from both sets and log warning. On subscriber success: delete from error map (reset). This prevents a broken subscriber from generating unbounded error logs and wasting CPU on every state change. Add error handling for the removal itself.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T23:00:54.078Z",
+      "completedAt": "2026-02-18T23:01:15.698Z",
+      "note": "Added subscriberErrorCounts tracking in StateManager and hardened emit() logic: consecutive subscriber failures are counted, reset on success, and subscribers are auto-removed after 3 consecutive errors with guarded removal logging. Also clear subscriber state during clearEmitter/unsubscribe to avoid leaks.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Write unit tests for all four fixes. (1) McpAdapter.test.ts: test that RateLimiter uses bounded memory - create limiter, call checkLimit() 1000 times, verify getStats() works correctly and internal state is O(1). Test window reset behavior. (2) StateManager.test.ts: test that deleteTask cancels speed mode timeout by verifying cancelSpeedModeTimeout is called. (3) StateManager.test.ts: test subscriber auto-removal - subscribe a callback that throws, emit 3 times, verify it's removed on 4th emit. (4) waitForTask test: test cleanupStaleWaiters removes entries for non-existent workers. Run npm test to verify all tests pass with no regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ],
+      "startedAt": "2026-02-18T23:01:42.274Z",
+      "completedAt": "2026-02-18T23:02:41.170Z",
+      "note": "Added regression coverage for all four fixes: RateLimiter O(1)/window-reset tests, deleteTask speed-timeout cancellation assertion, subscriber auto-removal-after-3-errors behavior, and stale waiter cleanup tests (including error-tolerant cleanup path). Verified with targeted vitest runs and full `npx vitest run` (all passing).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:35.196Z",
+  "updatedAt": "2026-02-19T07:28:39.643Z",
+  "planSubmittedAt": "2026-02-18T22:29:27.273Z",
+  "planApprovedAt": "2026-02-18T22:29:33.791Z",
+  "workStartedAt": "2026-02-18T22:59:33.245Z",
+  "completedAt": "2026-02-18T23:02:53.291Z",
+  "reviewStartedAt": "2026-02-18T23:02:53.291Z",
+  "reviewCompletedAt": "2026-02-19T07:28:39.643Z"
+}

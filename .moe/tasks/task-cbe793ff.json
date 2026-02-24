@@ -1,0 +1,81 @@
+{
+  "id": "task-cbe793ff",
+  "epicId": "epic-ffe3ace6",
+  "title": "Proposals panel for viewing and resolving rail proposals",
+  "description": "Add a proposals view matching JetBrains ProposalPanel.kt. The VS Code extension currently has no way to view or act on rail proposals submitted by agents.\n\n**Implementation approach - Tab in the board sidebar webview:**\nAdd a tab bar at the top of the board sidebar webview with tabs: \"Board\" | \"Proposals\" | \"Activity Log\". The proposals tab shows the proposals panel. This matches the JetBrains JTabbedPane pattern at MoeToolWindowPanel.kt lines 244-248.\n\n**Proposals panel content (matching ProposalPanel.kt):**\n\nHeader: \"Rail Proposals\" in bold 14px\n\nFor each PENDING proposal, render a card with:\n- Proposal type and target scope in bold (e.g., \"ADD_RAIL - EPIC\")\n- Current value (if not null/empty): \"Current: {value}\" in muted small text\n- Proposed value: \"Proposed: {value}\" in normal small text\n- Reason: \"Reason: {reason}\" in muted small text\n- Task/Worker info: \"Task: {last 8 of taskId} | Worker: {workerId}\" in muted small text\n- Action buttons:\n  - Approve (green text, clickable) - calls daemonClient.approveProposal(proposalId)\n  - Reject (red text, clickable) - calls daemonClient.rejectProposal(proposalId)\n\nEmpty state: \"No pending proposals\" in muted text when no PENDING proposals exist.\n\n**Data flow:**\n- Filter state.proposals to only show status === \"PENDING\"\n- Re-render when state changes\n- Proposals are upserted in state via PROPOSAL_CREATED/PROPOSAL_UPDATED messages (from task 2)\n\n**Tab switching:**\n- Simple CSS-based tab switching in the webview (show/hide content divs)\n- Board tab shows the existing Kanban board\n- Proposals tab shows the proposals list\n- Activity Log tab (placeholder for task 11)\n- Persist selected tab across re-renders\n\nReference: JetBrains ProposalPanel.kt for the complete implementation.",
+  "definitionOfDone": [
+    "Tab bar added to board webview: Board | Proposals | Activity Log",
+    "Proposals tab shows pending rail proposals as cards",
+    "Each proposal card shows type, scope, current/proposed values, reason, task/worker info",
+    "Approve and Reject buttons on each proposal card are functional",
+    "APPROVE_PROPOSAL and REJECT_PROPOSAL messages sent via WebSocket",
+    "Empty state shown when no pending proposals",
+    "Tab switching preserves board state",
+    "Proposals re-render when state changes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add tab bar infrastructure to BoardViewProvider.ts webview HTML. Modify `getWebviewContent()`:\n\n**HTML structure change:** Wrap the existing board content in a tab container:\n```\n<div class=\"tab-bar\">\n  <button class=\"tab active\" data-tab=\"board\">Board</button>\n  <button class=\"tab\" data-tab=\"proposals\">Proposals</button>\n  <button class=\"tab\" data-tab=\"activity\">Activity Log</button>\n</div>\n<div class=\"tab-content\" id=\"boardTab\">...existing board HTML...</div>\n<div class=\"tab-content\" id=\"proposalsTab\" style=\"display:none\"></div>\n<div class=\"tab-content\" id=\"activityTab\" style=\"display:none\"></div>\n```\n\n**CSS for tabs:**\n- `.tab-bar` - flex row, border-bottom 1px solid var(--vscode-panel-border), padding 0 8px\n- `.tab` - padding 6px 12px, border none, background transparent, cursor pointer, color var(--vscode-foreground), font-size 12px\n- `.tab.active` - border-bottom 2px solid var(--vscode-focusBorder), font-weight bold\n- `.tab:hover` - background var(--vscode-list-hoverBackground)\n\n**JS tab switching:**\n- `let activeTab = 'board';` persists across re-renders\n- Click handler toggles `display` and `active` class\n- On state update, only re-render the active tab's content\n\nError handling: Default to board tab if stored tab is invalid.\nTest: Tabs switch between Board/Proposals/Activity. Board still works.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:25:44.245Z",
+      "completedAt": "2026-02-23T06:27:30.352Z",
+      "note": "Added tab bar with Board/Proposals/Activity Log tabs. Wrapped existing board content in boardTab div. Added proposalsTab and activityTab containers. Tab switching via CSS class toggle (active). Added proposal card CSS, approve/reject button styles, renderProposals() function, approveProposal/rejectProposal handlers. Tab bar hidden until state received.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the proposals tab content. Add `renderProposals(proposals)` function to the webview JS:\n\n1. Filter proposals to only PENDING status: `proposals.filter(p => p.status === 'PENDING')`\n2. If empty, show `<p class=\"muted\">No pending proposals</p>`\n3. For each pending proposal, render a card:\n   - Header: `<div class=\"proposal-header\">{escapeHtml(p.proposalType)} - {escapeHtml(p.targetScope)}</div>` (bold)\n   - Current value (if not null/empty): `<div class=\"proposal-field muted\">Current: {escapeHtml(p.currentValue)}</div>`\n   - Proposed value: `<div class=\"proposal-field\">Proposed: {escapeHtml(p.proposedValue)}</div>`\n   - Reason: `<div class=\"proposal-field muted\">Reason: {escapeHtml(p.reason)}</div>`\n   - Info: `<div class=\"proposal-info muted\">Task: {p.taskId.slice(-8)} | Worker: {escapeHtml(p.workerId)}</div>`\n   - Buttons: `<button class=\"btn-approve\" data-proposal-id=\"{p.id}\">Approve</button> <button class=\"btn-reject\" data-proposal-id=\"{p.id}\">Reject</button>`\n\n**CSS for proposal cards:**\n- `.proposal-card` - border 1px solid var(--vscode-panel-border), padding 10px, margin 8px 0, border-radius 4px\n- `.proposal-header` - font-weight bold, font-size 13px\n- `.proposal-field` - font-size 12px, margin 2px 0\n- `.btn-approve` - color #4caf50, `.btn-reject` - color #f44336\n\nCall `renderProposals()` in the state update handler when proposals tab is active.\n\nError handling: Guard against undefined proposals array.\nTest: Proposals render correctly. Empty state shows when no pending.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:27:30.874Z",
+      "completedAt": "2026-02-23T06:27:37.875Z",
+      "note": "renderProposals() was implemented in step-1 along with the tab infrastructure. It filters PENDING proposals, renders cards with header (type + scope), current/proposed values, reason, task/worker info, and approve/reject buttons. Empty state shows when no pending proposals. Called from state update handler when proposals tab is active.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire proposal approve/reject buttons to WebSocket messages:\n\n1. Add click event listeners (via event delegation on the proposals tab container) for `.btn-approve` and `.btn-reject` buttons\n2. On approve click: extract `data-proposal-id`, post `{ type: 'approveProposal', proposalId }` to extension\n3. On reject click: extract `data-proposal-id`, post `{ type: 'rejectProposal', proposalId }` to extension\n4. In BoardViewProvider.ts `setWebviewMessageListener`, add handlers:\n   - `approveProposal` -> `daemonClient.approveProposal(proposalId)`\n   - `rejectProposal` -> `daemonClient.rejectProposal(proposalId)`\n5. After approve/reject, the daemon sends PROPOSAL_UPDATED which updates local state and triggers re-render\n\nDisable buttons after click to prevent double-submission (re-enable on next render).\n\nError handling: Wrap daemon calls in try/catch. Show showErrorMessage on failure.\nTest: Approve/reject buttons send correct WS messages. Proposal disappears from list after resolution.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-23T06:27:38.378Z",
+      "completedAt": "2026-02-23T06:27:45.240Z",
+      "note": "Approve/reject wiring was implemented in step-1. Webview buttons have onclick handlers (approveProposal/rejectProposal) that disable the button and postMessage to extension. Extension-side handlers call daemonClient.approveProposal/rejectProposal wrapped in try/catch with showErrorMessage on failure. Buttons re-enable on next render cycle.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:04:54.174Z",
+  "updatedAt": "2026-02-23T06:28:32.614Z",
+  "planSubmittedAt": "2026-02-21T23:22:42.199Z",
+  "planApprovedAt": "2026-02-21T23:22:42.201Z",
+  "workStartedAt": "2026-02-23T06:25:44.245Z",
+  "completedAt": "2026-02-23T06:27:48.133Z",
+  "reviewStartedAt": "2026-02-23T06:27:48.133Z",
+  "reviewCompletedAt": "2026-02-23T06:28:32.614Z"
+}

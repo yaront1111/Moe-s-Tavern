@@ -1596,6 +1596,7 @@ export class StateManager {
         branchPattern: sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
         commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
         agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude'),
+        enableAgentTeams: sanitizeBoolean(project.settings?.enableAgentTeams, false),
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined
       },
       createdAt: project.createdAt || now,

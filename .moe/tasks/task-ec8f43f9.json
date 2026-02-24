@@ -1,0 +1,58 @@
+{
+  "id": "task-ec8f43f9",
+  "epicId": "epic-5ab0929c",
+  "title": "Fix unbounded reflection cache in TerminalAgentLauncher",
+  "description": "Three mutableMapOf caches for reflection methods with no eviction policy. Fix: Use a bounded LRU cache or limit to known class types.",
+  "definitionOfDone": [
+    "Reflection caches in TerminalAgentLauncher are bounded",
+    "Uses LRU eviction or limits to known class types",
+    "No functional regression in agent launching",
+    "Cache size is reasonable (e.g., max 50 entries)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Replace unbounded mutableMapOf caches with bounded LinkedHashMap-based LRU caches. In TerminalAgentLauncher.kt at lines ~33-37, replace the three cache declarations: `shellWidgetMethodsCache`, `sendCommandMethodCache`, and `executeCommandMethodCache`. Create a simple bounded cache using Kotlin's LinkedHashMap with `removeEldestEntry` override, capped at 20 entries (more than enough for IDE class variants). Implementation: `private fun <K, V> boundedCache(maxSize: Int = 20) = object : LinkedHashMap<K, V>(maxSize, 0.75f, true) { override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>): Boolean = size > maxSize }`. Apply to all three caches. Error handling: getOrPut behavior is identical to mutableMapOf so no caller changes needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/agent/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-18T23:30:40.603Z",
+      "completedAt": "2026-02-18T23:31:21.756Z",
+      "note": "Replaced unbounded reflection caches with LinkedHashMap-based bounded LRU caches (max 20 entries) using a shared boundedCache helper. This caps memory growth while preserving existing getOrPut behavior for cache reads.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify no functional regression. Manual test: (1) Launch an agent via the terminal agent launcher, verify it starts correctly. (2) Launch agents of different types (Claude, Codex) to exercise different cache entries. (3) Verify the plugin builds: `./gradlew compileKotlin` or `./gradlew buildPlugin`. (4) Verify cache entries don't grow beyond 20 by adding a log.debug statement showing cache sizes after each getOrPut call (can be removed after verification).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-18T23:31:25.623Z",
+      "completedAt": "2026-02-18T23:31:49.108Z",
+      "note": "Verified plugin compiles and packages successfully with `./gradlew.bat compileKotlin` and `./gradlew.bat buildPlugin` (both passed). Cache bound is enforced by `boundedCache(maxSize = 20)` and `removeEldestEntry` condition (`size > maxSize`), ensuring entries cannot exceed 20."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:54.100Z",
+  "updatedAt": "2026-02-19T07:41:57.722Z",
+  "planSubmittedAt": "2026-02-18T22:32:04.230Z",
+  "planApprovedAt": "2026-02-18T22:32:16.397Z",
+  "workStartedAt": "2026-02-18T23:30:40.603Z",
+  "completedAt": "2026-02-18T23:31:52.910Z",
+  "reviewStartedAt": "2026-02-18T23:31:52.910Z",
+  "reviewCompletedAt": "2026-02-19T07:41:57.722Z"
+}

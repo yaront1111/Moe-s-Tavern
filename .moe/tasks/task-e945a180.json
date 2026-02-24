@@ -1,0 +1,82 @@
+{
+  "id": "task-e945a180",
+  "epicId": "epic-ffe3ace6",
+  "title": "Enhanced task cards with priority, progress, epic label, and ID chip",
+  "description": "Upgrade the task card rendering in the board webview (BoardViewProvider.ts, renderTask function) to match the JetBrains TaskCard.kt feature set. Currently cards only show title and assignedWorkerId.\n\n**Features to add to each task card:**\n\n1. **Status color stripe** - A 4px left border colored by task status (use the same color scheme as JetBrains: green for DONE, blue for WORKING, yellow for AWAITING_APPROVAL, gray for BACKLOG, etc.)\n\n2. **Priority chip** - Color-coded badge showing priority. Skip MEDIUM to reduce noise. CRITICAL = red, HIGH = orange, LOW = gray. Display as small colored pill with white text.\n\n3. **Step progress chip** - If task has implementationPlan, show \"completed/total\" (e.g., \"3/7\") with color: green if all done, blue if in progress, gray otherwise. \n\n4. **Epic label chip** - Show the epic title as a subtle chip. Requires looking up epic title from state.epics by task.epicId.\n\n5. **Task ID chip** - Show last 4 chars of task ID in uppercase as a subtle identifier chip.\n\n6. **Description preview** - Show first ~120 chars of description in smaller, muted text below the title.\n\n7. **Status sub-chip** - When task status differs from column status (e.g., AWAITING_APPROVAL shown in PLANNING column), show actual status as a chip.\n\n8. **Pending question indicator** - If task.hasPendingQuestion is true, show a question mark icon/badge.\n\n9. **Previous/Next arrows** - Small arrow buttons on the right side of the card for quick workflow movement (left arrow = move back, right arrow = move forward). These should send appropriate messages (APPROVE_TASK for AWAITING_APPROVAL->WORKING, UPDATE_TASK for others, REOPEN_TASK for DONE/REVIEW going back).\n\n**CSS updates needed:**\n- Add chip/badge styles (small rounded pill, themed colors)\n- Add status stripe styles\n- Add hover effect (background change on mouseover)\n- Add meta row with flex-wrap for chips\n\nReference: JetBrains TaskCard.kt for the full feature set and color values.",
+  "definitionOfDone": [
+    "Task cards show colored left status stripe matching task status",
+    "Priority chip displayed for CRITICAL (red), HIGH (orange), LOW (gray) - MEDIUM hidden",
+    "Step progress chip shows completed/total count with appropriate color",
+    "Epic title shown as chip on each card",
+    "Task ID last-4-chars chip displayed",
+    "Description preview (truncated to ~120 chars) shown below title",
+    "Previous/Next arrow buttons functional on cards",
+    "Cards have hover effect",
+    "All chips use VS Code CSS variables for theme compatibility"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add CSS styles for enhanced task cards in BoardViewProvider.ts `getWebviewContent()`. Add to the `<style>` block:\n\n- `.task-card` - Add `border-left: 4px solid transparent;` for status stripe. Add `cursor: pointer;` and hover: `background: var(--vscode-list-hoverBackground);`\n- Status stripe colors via data attribute: `[data-status=\"WORKING\"]` = blue, DONE=green, REVIEW=purple, AWAITING_APPROVAL=yellow, PLANNING=orange, BACKLOG=gray\n- `.chip` - `display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; margin-right: 4px;`\n- `.chip-critical` = red bg white text, `.chip-high` = orange bg, `.chip-low` = badge bg\n- `.chip-progress` green/blue/gray variants for step progress\n- `.chip-epic`, `.chip-id` - subtle badge-background color\n- `.chip-question` - yellow background for pending question\n- `.task-desc` - 11px muted text with text-overflow ellipsis\n- `.task-meta` - flex-wrap row for chips\n- `.task-nav-btn` - Small arrow button styling\n\nAll colors use --vscode-* CSS variables for theme compatibility.\n\nError handling: CSS-only, no runtime impact.\nTest: Board renders without visual regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:42:47.163Z",
+      "completedAt": "2026-02-22T00:43:31.259Z",
+      "note": "Added CSS styles for enhanced task cards: status stripe colors via data-status attribute, chip/badge styles for priority/progress/epic/id/question/status, description preview, nav arrow buttons, hover effects, flex-wrap meta row. All using --vscode-* CSS variables for theme compatibility.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Rewrite the task card HTML generation in BoardViewProvider.ts. Replace inline card markup with a `renderTaskCard(task, epics, columnStatus)` JS function in the webview script that generates card HTML via string template literals:\n\n1. Outer div with `data-status` and `data-task-id` attributes, draggable\n2. Title row with task title text + nav arrows on the right\n3. Description preview: first ~120 chars of task.description (skip if empty)\n4. Meta row containing chips:\n   - Epic chip: look up epic title by task.epicId from epics array\n   - Priority chip: CRITICAL=red, HIGH=orange, LOW=gray (skip MEDIUM)\n   - Status sub-chip: if task.status differs from column status\n   - Step progress: completed/total from implementationPlan array\n   - Pending question: show `?` chip if task.hasPendingQuestion is true\n   - Task ID: last 4 chars uppercase\n5. Worker badge (keep existing assignedWorkerId)\n\nUse an `escapeHtml()` helper (replace <>&\" with HTML entities) to sanitize all user content before inserting into templates. Never use unsafe DOM injection.\n\nError handling: Guard against undefined fields (description, implementationPlan may be missing).\nTest: Cards show all chips correctly. Clicking cards still opens detail view.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:43:34.086Z",
+      "completedAt": "2026-02-22T00:44:52.818Z",
+      "note": "Rewrote task card HTML generation with renderTaskCard(task, epics, columnStatus) function. Added: data-status attribute for status stripe, title row with nav arrows, description preview (120 char truncation), meta row with chips (epic label, priority for CRITICAL/HIGH/LOW, status sub-chip when differs from column, step progress with color coding, pending question indicator, task ID last 4 chars), worker badge. All user content sanitized via escapeHtml() that replaces <>&\\\"' with HTML entities. Guards against undefined fields.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add Previous/Next arrow button functionality to task cards. In the webview script:\n\n1. Define workflow order: `['BACKLOG','PLANNING','AWAITING_APPROVAL','WORKING','REVIEW','DONE']`\n2. Add left/right arrow buttons (unicode arrows) to each card's title row\n3. Click handler for nav buttons:\n   - **Next**: If AWAITING_APPROVAL, send `approveTask`. Else find next status in workflow, send `updateTaskStatus`.\n   - **Prev**: If REVIEW or DONE, prompt for reason then send `reopenTask`. Else find prev status, send `updateTaskStatus`.\n   - Stop event propagation so card click (openTaskDetail) doesn't fire.\n4. Pass `epics` array to webview in `updateState` message (already in StateSnapshot).\n\nError handling: Don't show prev arrow for BACKLOG or next for DONE. Validate status before computing transitions.\nTest: Arrow clicks move tasks between columns. Approve flow works for AWAITING_APPROVAL tasks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:44:52.947Z",
+      "completedAt": "2026-02-22T00:44:59.535Z",
+      "note": "Added navTask(event, taskId, direction) function and arrow buttons in renderTaskCard. Workflow order defined as ['BACKLOG','PLANNING','AWAITING_APPROVAL','WORKING','REVIEW','DONE']. Next arrow: sends approveTask for AWAITING_APPROVAL, updateTaskStatus for others. Prev arrow: prompts for reason and sends reopenTask for REVIEW/DONE, updateTaskStatus for others. No prev arrow for BACKLOG, no next for DONE. event.stopPropagation() prevents card click from firing. Epics array already passed via state in updateState message.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:02:53.724Z",
+  "updatedAt": "2026-02-22T00:51:52.305Z",
+  "planSubmittedAt": "2026-02-21T23:16:54.267Z",
+  "planApprovedAt": "2026-02-21T23:16:54.269Z",
+  "workStartedAt": "2026-02-22T00:42:47.164Z",
+  "completedAt": "2026-02-22T00:45:19.523Z",
+  "reviewStartedAt": "2026-02-22T00:45:19.523Z",
+  "reviewCompletedAt": "2026-02-22T00:51:52.305Z"
+}

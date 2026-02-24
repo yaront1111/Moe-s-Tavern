@@ -1,0 +1,86 @@
+{
+  "id": "task-f48dc242",
+  "epicId": "epic-ffe3ace6",
+  "title": "Epic management: create, edit, and delete epics",
+  "description": "Implement full epic CRUD operations matching JetBrains CreateEpicDialog.kt and EpicDetailDialog.kt. The VS Code extension currently has no epic management capability.\n\n**Epic creation (matching CreateEpicDialog.kt):**\nCreate a webview panel or use VS Code input sequence for creating epics with fields:\n- Title (text input, required)\n- Description (textarea)\n- Architecture Notes (textarea)\n- Epic Rails (textarea, one rail per line)\n- Create button sends CREATE_EPIC via daemonClient.createEpic()\n\n**Board integration for create:**\n- Add an \"Add Epic\" button in the board header area (matching JetBrains MoeToolWindowPanel.kt line 113-125)\n- Register command moe.createEpic in extension.ts and package.json\n\n**Epic detail/edit (matching EpicDetailDialog.kt):**\nCreate a webview panel for viewing/editing epic details with fields:\n- Title (editable text input)\n- Description (editable textarea)\n- Architecture Notes (editable textarea)\n- Epic Rails (editable textarea, one per line)\n- Status dropdown (PLANNED, ACTIVE, COMPLETED)\n- Save button sends UPDATE_EPIC via daemonClient.updateEpic()\n- Delete button with confirmation dialog, sends DELETE_EPIC via daemonClient.deleteEpic()\n\n**Board integration for edit:**\n- Double-clicking an epic header in the board opens the epic detail panel\n- This requires the epic grouping from task 4 to be in place, but the panel itself can be built independently\n- Register command moe.openEpicDetail in extension.ts\n\n**Epic filtering dropdown (matching MoeToolWindowPanel.kt lines 59, 102-106, 623-647):**\n- Add an epic filter dropdown to the board header\n- Options: \"All Epics\" (default) + one entry per epic sorted by order\n- Selecting an epic filters the board to show only tasks from that epic\n- Filter persists across state updates\n- Restore selection if the selected epic still exists after state update\n\nReference: JetBrains CreateEpicDialog.kt and EpicDetailDialog.kt.",
+  "definitionOfDone": [
+    "Epic creation form with title, description, architecture notes, and rails fields",
+    "Add Epic button in board header opens creation form",
+    "Epic detail panel with editable fields and Save/Delete buttons",
+    "Double-clicking epic header opens detail panel",
+    "Epic filter dropdown in board header with All Epics + per-epic options",
+    "Filtering by epic shows only tasks from that epic on the board",
+    "Filter selection persists across state updates",
+    "CREATE_EPIC, UPDATE_EPIC, DELETE_EPIC WebSocket messages sent correctly",
+    "moe.createEpic and moe.openEpicDetail commands registered"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create `moe-vscode/src/panels/EpicDetailPanel.ts` for both creating and editing epics (dual-mode panel).\n\nClass `EpicDetailPanel`:\n- `static createOrShow(extensionUri, client, epicId?: string, state?)` - if epicId provided, edit mode; if null, create mode\n- Panel title: \"Create Epic\" or \"Edit: {epic title}\"\n- `getWebviewContent(nonce, epic?)` - returns form HTML\n\n**Form fields (all use --vscode-* CSS variables):**\n- Title: `<input type=\"text\">` required, pre-filled in edit mode\n- Description: `<textarea rows=\"4\">`, pre-filled in edit mode\n- Architecture Notes: `<textarea rows=\"4\">`, pre-filled in edit mode\n- Epic Rails: `<textarea rows=\"3\">` one per line, pre-filled with epicRails.join('\\n')\n- Status: `<select>` with PLANNED/ACTIVE/COMPLETED (only shown in edit mode)\n\n**Action buttons:**\n- Create mode: Create + Cancel\n- Edit mode: Save + Delete + Cancel\n\nAll text escaped. CSP nonce on script tags.\n\nError handling: Validate title non-empty before submit. Show inline error if empty.\nTest: Panel renders in both create and edit modes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:51:52.608Z",
+      "completedAt": "2026-02-22T00:51:57.356Z",
+      "note": "EpicDetailPanel.ts created (~230 lines) - dual-mode create/edit panel with singleton pattern, CSP nonce, escapeHtml, --vscode-* vars",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add webview message handling for EpicDetailPanel:\n\n**Webview -> Extension messages:**\n- `create`: `{ title, description, architectureNotes, epicRails: string[] }` -> `client.createEpic(...)`, dispose panel\n- `save`: `{ epicId, title, description, architectureNotes, epicRails, status }` -> `client.updateEpic(epicId, updates)`, dispose panel\n- `delete`: `{ epicId }` -> confirm via vscode.window.showWarningMessage with Yes/No, then `client.deleteEpic(epicId)`, dispose panel\n- `cancel`: dispose panel\n\n**Webview JS:**\n- Validation: disable Create/Save button until title is non-empty\n- Rails textarea: split by '\\n', filter empty lines to produce string array\n- Delete: `window.confirm('Delete this epic?')` before posting\n\nError handling: Wrap all daemon calls in try/catch, show showErrorMessage on failure.\nTest: Creating epic sends CREATE_EPIC. Editing sends UPDATE_EPIC. Delete with confirmation sends DELETE_EPIC.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "startedAt": "2026-02-22T00:52:00.215Z",
+      "completedAt": "2026-02-22T00:52:04.488Z",
+      "note": "Message handling: create/save/delete/cancel. Validation, rails textarea splitting, delete confirmation via showWarningMessage. Error handling with try/catch.",
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add epic filter dropdown and \"Add Epic\" button to the board header in BoardViewProvider.ts:\n\n**Board header modifications (in webview HTML):**\n1. Add a header bar `<div class=\"board-header\">` above the columns containing:\n   - \"Add Epic\" button: `<button id=\"addEpicBtn\">+ Epic</button>`\n   - Epic filter: `<select id=\"epicFilter\"><option value=\"\">All Epics</option></select>` populated from state.epics\n\n2. `let selectedEpicFilter = '';` JS variable to track filter state\n\n3. On epic filter change: set selectedEpicFilter, re-render board filtering tasks where `!selectedEpicFilter || task.epicId === selectedEpicFilter`\n\n4. On state update: repopulate epic filter options, preserve selected value if epic still exists\n\n5. \"Add Epic\" click: post `{ type: 'createEpic' }` to extension\n\n**Extension-side handlers:**\n- `createEpic` -> `EpicDetailPanel.createOrShow(extensionUri, client, undefined, state)`\n- `openEpicDetail` with epicId -> `EpicDetailPanel.createOrShow(extensionUri, client, epicId, state)`\n\n**Commands in extension.ts + package.json:**\n- `moe.createEpic` - \"Moe: Create Epic\"\n- `moe.openEpicDetail` - \"Moe: Open Epic Detail\"\n\nError handling: Check connection before opening panel.\nTest: Filter dropdown filters board. Add Epic button opens creation panel. Epic header double-click opens edit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-02-22T00:52:07.654Z",
+      "completedAt": "2026-02-22T00:52:11.340Z",
+      "note": "Board integration: epic filter dropdown, + Epic button, double-click epic header, commands registered. Filter persists across state updates.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:04:21.070Z",
+  "updatedAt": "2026-02-23T06:25:09.908Z",
+  "planSubmittedAt": "2026-02-21T23:21:08.066Z",
+  "planApprovedAt": "2026-02-21T23:21:08.068Z",
+  "workStartedAt": "2026-02-22T00:51:52.608Z",
+  "completedAt": "2026-02-22T00:52:39.844Z",
+  "reviewStartedAt": "2026-02-22T00:52:39.844Z",
+  "reviewCompletedAt": "2026-02-23T06:25:09.908Z"
+}

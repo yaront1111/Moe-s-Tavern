@@ -1,0 +1,81 @@
+{
+  "id": "task-36b4ba6f",
+  "epicId": "epic-ffe3ace6",
+  "title": "Epic grouping in board columns with collapsible headers",
+  "description": "Add epic-based grouping within each board column, matching the JetBrains TaskColumn.kt pattern. Currently tasks are rendered as a flat list within each column. They should be grouped by epicId with collapsible epic headers.\n\n**Epic header for each group:**\n- Collapse/expand toggle arrow (> when collapsed, v when expanded)\n- Status dot colored by epic status (PLANNED/ACTIVE/COMPLETED)\n- Epic title in bold small text\n- Task count badge\n- Epic status chip (humanized text like \"Active\", \"Planned\")\n- Double-click epic header opens epic detail (later task will add this)\n- Epic headers should be draggable for bulk moves (drag epic header to another column moves all its tasks)\n\n**Collapse behavior:**\n- Maintain a Set of collapsed epic IDs in the webview state\n- When collapsed, hide all task cards under that epic, show only the header\n- Persist collapse state across re-renders (use webview state or JS variable)\n\n**Sorting:**\n- Epic groups sorted by epic order, then by epic title\n- Tasks within each epic group sorted by task order\n\n**Implementation approach:**\n- Modify the renderBoard() function to group tasks by epicId before rendering\n- Create a renderEpicHeader() function for the collapsible headers\n- Add collapse/expand click handlers\n- Add epicMeta lookup (epic ID -> epic object) for title/status display\n- Track collapsed state in a JavaScript Set variable\n\n**Drag and drop for epic headers:**\n- Make epic headers draggable with data transfer \"epic:{epicId}\"\n- On drop of an epic header onto a column, send UPDATE_TASK for each task in that epic to the new column status\n- This matches the JetBrains onEpicDrop callback pattern\n\nReference: JetBrains TaskColumn.kt epicHeader() method and the grouped rendering logic at lines 148-165.",
+  "definitionOfDone": [
+    "Tasks grouped by epic within each column with epic headers",
+    "Epic headers show collapse toggle, status dot, title, count badge, and status chip",
+    "Clicking collapse toggle hides/shows tasks under that epic",
+    "Collapse state persists across board re-renders",
+    "Epic groups sorted by epic order then title",
+    "Tasks within groups sorted by task order",
+    "Epic headers are draggable for bulk column moves",
+    "Extension compiles and board renders correctly"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add CSS for epic group headers and collapsible sections in BoardViewProvider.ts `getWebviewContent()` style block:\n\n- `.epic-header` - flex row, padding 4px 8px, cursor pointer, border-bottom 1px solid var(--vscode-panel-border), font-size 12px, font-weight bold, gap 6px, align-items center. Draggable.\n- `.epic-header:hover` - background var(--vscode-list-hoverBackground)\n- `.epic-toggle` - 12px width, inline, cursor pointer (shows > or v unicode arrow)\n- `.epic-status-dot` - 8px circle, inline-block. Colors: ACTIVE=green, PLANNED=blue, COMPLETED=gray\n- `.epic-count` - badge style (var(--vscode-badge-background/foreground)), border-radius 8px, font-size 10px, padding 0 5px\n- `.epic-status-chip` - small text chip showing epic status text\n- `.epic-group` - container div wrapping header + task cards\n- `.epic-tasks` - the collapsible wrapper; when collapsed set `display: none`\n\nError handling: N/A (CSS only).\nTest: Styles render correctly with both dark and light VS Code themes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:45:35.468Z",
+      "completedAt": "2026-02-22T00:45:57.489Z",
+      "note": "Added CSS styles for epic group headers: .epic-group container, .epic-header with flex layout and hover effect, .epic-toggle for collapse arrow, .epic-status-dot with ACTIVE/PLANNED/COMPLETED colors, .epic-title, .epic-count badge, .epic-status-chip, .epic-tasks with .collapsed display:none. All using --vscode-* CSS variables.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Modify the board rendering JS in BoardViewProvider.ts to group tasks by epic. Replace the flat task rendering with:\n\n1. Add `let collapsedEpics = new Set();` at top of webview script to track collapsed state.\n2. In the render function, for each column:\n   a. Filter tasks for that column status (keep existing logic for AWAITING_APPROVAL mapping to PLANNING)\n   b. Group tasks by epicId using a Map: `Map<string, Task[]>`\n   c. Sort epic groups by epic.order then epic.title\n   d. Sort tasks within each group by task.order\n3. For each epic group, call `renderEpicGroup(epicId, tasks, epics, columnStatus)` which returns:\n   - Epic header div (via `renderEpicHeader`)\n   - Task cards container div (hidden if epicId is in collapsedEpics set)\n4. Tasks without an epicId (or unknown epic) go in an \"Ungrouped\" section at the bottom.\n\nError handling: Handle missing/unknown epicId gracefully (show tasks in ungrouped section).\nTest: Tasks appear grouped by epic. Column counts still correct.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:45:59.868Z",
+      "completedAt": "2026-02-22T00:47:13.413Z",
+      "note": "renderGroupedTasks() groups tasks by epicId using a Map, sorts epic groups by order then title, sorts tasks within groups by order. Single ungrouped section skips grouping UI. renderEpicGroup() renders headers with toggle, status dot, title, count badge, status chip. Collapse state maintained in collapsedEpics Set.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement epic header rendering and collapse/expand toggle in the webview script:\n\n1. `renderEpicHeader(epicId, taskCount, epics)` function:\n   - Look up epic from epics array by id\n   - Build HTML: toggle arrow (> or v based on collapsedEpics.has(epicId)), status dot, epic title, count badge, status chip\n   - All text content escaped with escapeHtml()\n   - Add `draggable=\"true\"` and `data-epic-id` attribute\n\n2. Click handler on `.epic-toggle` or `.epic-header`:\n   - Toggle epicId in collapsedEpics Set\n   - Re-render board (call existing renderBoard function)\n   - Collapse state persists because it's in a module-level JS variable\n\n3. Drag handler for epic headers:\n   - ondragstart: set dataTransfer to `epic:${epicId}`\n   - On column drop: check if data starts with 'epic:', if so extract epicId\n   - Send `updateTaskStatus` for each task in that epic to the target column's status\n   - Post message to extension for each task status update\n\nError handling: Handle case where epic is not found (show 'Unknown Epic'). Handle empty epic groups (skip rendering).\nTest: Collapse/expand toggles work. Dragging epic header to another column moves all its tasks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-02-22T00:47:16.956Z",
+      "completedAt": "2026-02-22T00:47:26.206Z",
+      "note": "Epic header rendering implemented in renderEpicGroup(): toggle arrows (right/down triangles), status dot with ACTIVE/PLANNED/COMPLETED colors, bold title, count badge, status chip. Click handler toggleEpicCollapse() toggles in collapsedEpics Set and re-renders. Epic drag handlers: onEpicDragStart sets dataTransfer with 'epic:' prefix, onDrop detects epic prefix and moves all tasks in that epic to the target column. All text escaped with escapeHtml(). Handles missing epic gracefully ('Unknown Epic').",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-21T23:03:12.969Z",
+  "updatedAt": "2026-02-22T00:52:36.128Z",
+  "planSubmittedAt": "2026-02-21T23:17:33.225Z",
+  "planApprovedAt": "2026-02-21T23:17:33.226Z",
+  "workStartedAt": "2026-02-22T00:45:35.468Z",
+  "completedAt": "2026-02-22T00:47:32.251Z",
+  "reviewStartedAt": "2026-02-22T00:47:32.251Z",
+  "reviewCompletedAt": "2026-02-22T00:52:36.128Z"
+}

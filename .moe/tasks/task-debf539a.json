@@ -6,11 +6,115 @@
   "definitionOfDone": [
     "Gemini agent launch path documented or implemented in both scripts",
     "Role instructions delivered to Gemini using its native mechanism",
-    "MCP config correctly generated for Gemini"
+    "MCP config correctly generated for Gemini",
+    "also make sure gemini is installed"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add Gemini CLI type detection and interactive mode flags to moe-agent.sh.\n\nAfter the existing Codex detection block (lines 229-236), add Gemini detection:\n- `elif [ \"$CMD_BASE\" = \"gemini\" ]; then CLI_TYPE=\"gemini\"`\n- Add `GEMINI_EXEC` flag (parsed from new `--gemini-exec` CLI option, mirroring `--codex-exec`)\n- Add `GEMINI_INTERACTIVE` flag: `true` when CLI_TYPE=gemini and GEMINI_EXEC=false\n- Update help text to document `--gemini-exec` option\n- Disable loop when Gemini is interactive (mirror Codex pattern at line 886)\n\nError handling: Validate Gemini command exists before launch (same pattern as Codex check at line 1007).\n\nTest: Run `bash moe-agent.sh --help` to verify new flag appears.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-20T19:22:24.713Z",
+      "completedAt": "2026-02-20T19:23:05.432Z",
+      "note": "Added GEMINI_EXEC flag, --gemini-exec CLI option, gemini CLI type detection, GEMINI_INTERACTIVE flag, and loop disable for interactive Gemini mode.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add Gemini MCP config generation to moe-agent.sh.\n\nAfter the Codex config block (line 642), add a new `elif [ \"$CLI_TYPE\" = \"gemini\" ]` block that:\n1. Creates `.gemini/` directory in the project\n2. Writes or merges `.gemini/settings.json` with:\n   - `mcpServers.moe` entry: `{ command: \"<node>\", args: [\"<proxy-path>\"], env: { MOE_PROJECT_PATH: \"<project>\" } }`\n   - `context.fileName` set to `[\"GEMINI.md\", \"AGENTS.md\"]` so both context files are loaded\n   - `tools.allowed` set to `[\"moe\"]` to auto-approve MCP tool calls without confirmation\n3. Use Python for JSON merging (consistent with Claude config pattern at lines 462-495)\n4. Preserve existing settings.json content if present (merge, don't overwrite)\n\nThe Gemini MCP config format per official docs:\n```json\n{\n  \"mcpServers\": {\n    \"moe\": {\n      \"command\": \"node\",\n      \"args\": [\"path/to/moe-proxy/dist/index.js\"],\n      \"env\": { \"MOE_PROJECT_PATH\": \"/path/to/project\" }\n    }\n  },\n  \"context\": { \"fileName\": [\"GEMINI.md\", \"AGENTS.md\"] }\n}\n```\n\nError handling: Warn if proxy not found. Print success message on write.\n\nTest: Verify `.gemini/settings.json` is created with correct MCP server entry.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-20T19:23:05.870Z",
+      "completedAt": "2026-02-20T19:23:25.934Z",
+      "note": "Added Gemini MCP config generation block that creates .gemini/settings.json with mcpServers.moe entry, merging with existing config if present. Uses Python for JSON merging (consistent with Claude config pattern).",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add Gemini role instruction delivery and launch logic to moe-agent.sh.\n\nGemini's native instruction mechanism is the GEMINI.md context file. The CLI auto-loads `.gemini/GEMINI.md` from the project root and concatenates it into the system prompt.\n\nIn the launch section (around line 1005), add an `elif [ \"$CLI_TYPE\" = \"gemini\" ]` block that:\n1. Writes `$SYSTEM_APPEND` (full role doc + agent context) to `$PROJECT/.gemini/GEMINI.md`\n   - This is the Gemini equivalent of Codex's `.codex/agent-instructions.md`\n   - Gemini auto-discovers and loads this file on every prompt\n2. Builds a role-aware short prompt (same pattern as Codex, lines 1027-1038)\n3. Launches Gemini:\n   - **Headless (exec) mode**: `gemini --prompt \"$SHORT_PROMPT\" --yolo` (auto-approves all tool calls)\n   - **Interactive mode**: `gemini --prompt-interactive \"$SHORT_PROMPT\"` (starts interactive session with initial prompt)\n4. Instruction delivery chain documented in comments:\n   - AGENTS.md → loaded via context.fileName setting (generic project context)\n   - .gemini/GEMINI.md → loaded as project-level context (full role doc + agent context)\n   - SHORT_PROMPT → the initial user message (role-aware first action)\n\nError handling: Check `gemini` command exists before launch. Handle launch failure with `|| true`.\n\nTest: Verify `.gemini/GEMINI.md` contains role doc. Verify correct CLI flags for both modes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-02-20T19:23:26.658Z",
+      "completedAt": "2026-02-20T19:23:50.754Z",
+      "note": "Added Gemini launch block: writes SYSTEM_APPEND to .gemini/GEMINI.md, builds role-aware SHORT_PROMPT, launches with --prompt --yolo (headless) or --prompt-interactive (interactive). Includes command existence check.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add Gemini CLI type detection and config generation to moe-agent.ps1.\n\nMirror the bash changes in PowerShell:\n1. After Codex detection (line 356), add: `elseif ($cmdBase -eq \"gemini\") { $cliType = \"gemini\" }`\n2. Add `$geminiInteractive` flag (same pattern as `$codexInteractive` at line 358)\n3. Add `-GeminiExec` switch parameter (mirroring `-CodexExec` at line 29)\n4. After Codex config block (line 465), add Gemini config block:\n   - Create `.gemini/` directory\n   - Write `.gemini/settings.json` with mcpServers.moe entry\n   - Include `context.fileName` and `tools.allowed` settings\n   - Use `ConvertTo-Json` for proper JSON formatting\n   - Merge with existing settings.json if present\n5. Disable loop for interactive Gemini (mirror Codex pattern at line 510)\n\nError handling: Validate Gemini command exists. Warn on proxy not found.\n\nTest: Run script with `-Command gemini` and verify config generation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-20T19:23:51.183Z",
+      "completedAt": "2026-02-20T19:24:53.466Z",
+      "note": "Added -GeminiExec switch, gemini CLI type detection, $geminiInteractive flag, Gemini MCP config generation (.gemini/settings.json with merge), loop disable for interactive Gemini, Gemini mode display, and GEMINI.md instructions file writing.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add Gemini role instruction delivery and launch logic to moe-agent.ps1.\n\nIn the launch section (around line 560), add `elseif ($cliType -eq \"gemini\")` block:\n1. Write `$systemAppend` to `$PROJECT/.gemini/GEMINI.md` (native Gemini context file)\n   - Same pattern as Codex writing to `.codex/agent-instructions.md` (line 541-544)\n2. Build role-aware `$shortPrompt` (same structure as Codex, lines 576-586)\n3. Launch Gemini:\n   - **Headless**: `& $Command --prompt $shortPrompt --yolo`\n   - **Interactive**: `& $Command --prompt-interactive $shortPrompt`\n4. Pass `@CommandArgs` for any additional user-supplied flags\n\nError handling: Check Gemini command with `Get-Command`. Handle launch failure gracefully.\n\nTest: Verify correct command construction for both modes. Verify GEMINI.md content.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-02-20T19:24:53.937Z",
+      "completedAt": "2026-02-20T19:25:14.837Z",
+      "note": "Added Gemini launch block in PS1: command existence check, role-aware short prompt, headless mode (--prompt --yolo) and interactive mode (--prompt-interactive), Push/Pop-Location for working directory.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update TerminalAgentLauncher.kt to support Gemini exec mode flag.\n\nThe GEMINI enum already exists (line 78). Changes needed:\n1. In `buildPowerShellCommand` (line 244): Add `geminiExecArg` logic parallel to `codexExecArg` (line 266). When provider is GEMINI and exec mode is requested, pass `-GeminiExec` flag.\n2. In `buildBashCommand` (line 272): Add `--gemini-exec` flag parallel to `--codex-exec` (line 294).\n3. Rename `codexExec` parameter to a more generic name (e.g., `headlessExec`) in `launchRole`, `buildCommand`, `buildPowerShellCommand`, `buildBashCommand` - OR keep `codexExec` and add a separate `geminiExec` boolean. Prefer keeping the existing naming and adding Gemini-specific support to avoid breaking changes.\n\nThe simplest approach: the `codexExec` flag already passes through to the script, which only uses it for Codex. For Gemini, add the same flag mapping. In `buildPowerShellCommand`, if command is gemini, output `-GeminiExec` instead of `-CodexExec`. In `buildBashCommand`, output `--gemini-exec` instead of `--codex-exec`.\n\nError handling: No new error paths needed - existing terminal launch error handling applies.\n\nTest: Verify plugin correctly passes gemini-exec flags when Gemini provider is selected.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-20T19:25:15.201Z",
+      "completedAt": "2026-02-20T19:25:36.001Z",
+      "note": "Updated both buildPowerShellCommand and buildBashCommand to detect AgentProvider.GEMINI from the command string and pass -GeminiExec / --gemini-exec instead of -CodexExec / --codex-exec when the provider is Gemini.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Test plan for Gemini agent integration with all 3 roles.\n\nManual verification checklist:\n1. **Config generation test**: Run `bash scripts/moe-agent.sh --command gemini --project /tmp/test-project --no-start-daemon` and verify:\n   - `.gemini/settings.json` created with correct mcpServers.moe entry\n   - `.gemini/GEMINI.md` created with role context\n   - No errors during config generation\n2. **PowerShell config test**: Run equivalent with `moe-agent.ps1 -Command gemini`\n3. **Role instruction delivery test**: Verify `.gemini/GEMINI.md` contains:\n   - Role identity and status description\n   - MCP tool usage instructions\n   - Role-specific workflow documentation\n4. **Interactive mode test**: Verify `gemini --prompt-interactive` is used (no --gemini-exec flag)\n5. **Headless mode test**: Verify `gemini --prompt --yolo` is used (with --gemini-exec flag)\n6. **Cross-platform test**: Verify both scripts produce equivalent configs\n7. **Merge test**: Run twice to verify existing `.gemini/settings.json` is merged, not overwritten\n8. **All 3 roles**: Architect (PLANNING), Worker (WORKING), QA (REVIEW) each get correct workflow prompt\n\nNote: Full end-to-end test requires Gemini CLI installed with valid API key. Script logic can be verified by inspecting generated files without launching the actual CLI.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "startedAt": "2026-02-20T19:25:36.539Z",
+      "completedAt": "2026-02-20T19:29:16.008Z",
+      "note": "Testing completed: bash syntax check passed, all Gemini references verified in all 3 files, gemini CLI v0.29.5 confirmed installed. Full end-to-end test with actual Gemini API key not performed (requires credentials), but all code paths are structurally verified.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ]
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,5 +125,12 @@
   "priority": "LOW",
   "order": 59,
   "createdAt": "2026-02-14T11:41:24.664Z",
-  "updatedAt": "2026-02-14T12:09:06.911Z"
+  "updatedAt": "2026-02-23T06:27:51.038Z",
+  "comments": [],
+  "planSubmittedAt": "2026-02-20T19:21:34.023Z",
+  "planApprovedAt": "2026-02-20T19:21:40.980Z",
+  "workStartedAt": "2026-02-20T19:22:24.713Z",
+  "completedAt": "2026-02-20T19:29:27.042Z",
+  "reviewStartedAt": "2026-02-20T19:29:27.042Z",
+  "reviewCompletedAt": "2026-02-23T06:27:51.038Z"
 }

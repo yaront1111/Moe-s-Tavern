@@ -1,0 +1,86 @@
+{
+  "id": "task-a90a33ad",
+  "epicId": "epic-be924fb8",
+  "title": "Plugin EDT safety and listener lifecycle",
+  "description": "handleMessage() modifies state on WebSocket thread (MoeProjectService.kt line 233), not EDT - race with UI reads. disposed flag not atomic - scheduleReconnect() can race with dispose(). PlanReviewDialog onState updates not debounced.",
+  "definitionOfDone": [
+    "All state mutations in handleMessage() wrapped in invokeLater (EDT dispatch)",
+    "disposed flag uses AtomicBoolean with proper guards in scheduleReconnect()",
+    "PlanReviewDialog onState updates debounced",
+    "./gradlew buildPlugin passes with no errors"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Move state mutations in handleMessage() to EDT. Currently state = newState (line 233) runs on WebSocket thread while UI reads state on EDT. Wrap the compound state mutation (read current -> modify -> write back) inside ApplicationManager.getApplication().invokeLater { ... } for each branch of the when block (STATE_SNAPSHOT, TASK_UPDATED, TASK_CREATED, TASK_DELETED, EPIC_UPDATED, etc). The publishState() call already dispatches to EDT, so consolidate: do state mutation AND listener notification in one invokeLater block. Keep JSON parsing (MoeJson.parseTask etc) on the WS thread to avoid blocking EDT. Add error handling with try-catch around the invokeLater block contents, logging parse failures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-19T07:25:42.293Z",
+      "completedAt": "2026-02-19T07:27:37.106Z",
+      "note": "Moved all handleMessage state mutation branches to EDT dispatch using a shared applyMessageOnEdt helper. JSON parsing remains on the WebSocket thread, while mutation + publishState now run inside invokeLater with try/catch logging and publishError fallback. TASK_UPDATED/TASK_CREATED status-change notifications now run in the same EDT mutation block.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Replace @Volatile disposed flag with AtomicBoolean. Import java.util.concurrent.atomic.AtomicBoolean. Change 'private var disposed = false' (line 46) to 'private val disposed = AtomicBoolean(false)'. In dispose(): use disposed.compareAndSet(false, true) as guard (prevents double-dispose). In scheduleReconnect() and all other disposed checks: replace 'if (disposed)' with 'if (disposed.get())'. In connect(), connectWithRetry(), doConnect(), startAutoRefresh() lambdas: same change. Add error handling for edge cases where scheduler tasks run after dispose.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-02-19T07:27:46.698Z",
+      "completedAt": "2026-02-19T07:28:17.526Z",
+      "note": "Replaced disposed boolean with AtomicBoolean and updated all guards to disposed.get(). dispose() now uses compareAndSet(false, true) to prevent double-dispose races. Added disposed guard in applyMessageOnEdt and scheduler lambdas to safely ignore late-running tasks after disposal.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Debounce PlanReviewDialog onState updates. Add a private var pendingUpdate: Runnable? = null field and a DEBOUNCE_MS = 200L constant. In onState(): instead of immediately calling renderComments(), cancel any pending update and schedule a new one via SwingUtilities.invokeLater with a javax.swing.Timer(200, ...).start() pattern. This prevents rapid-fire re-renders when many state updates arrive in quick succession. Add error handling for the case where the dialog is already disposed when the timer fires (check isDisposed before rendering).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt"
+      ],
+      "startedAt": "2026-02-19T07:28:32.809Z",
+      "completedAt": "2026-02-19T07:29:00.875Z",
+      "note": "Implemented debounced PlanReviewDialog comment updates with DEBOUNCE_MS=200 using Swing Timer scheduling on EDT. Added pendingUpdate tracking, disposal guards before render/schedule execution, and try/catch logging around delayed render execution. Timer/pending state is cleaned up in dispose() to prevent listener/timer leaks.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify build passes. Run ./gradlew buildPlugin to ensure all Kotlin compilation succeeds with no errors. This serves as the test verification since plugin code doesn't have unit tests - the build itself validates type safety of AtomicBoolean usage, EDT dispatch, and debounce timer integration.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-02-19T07:29:04.718Z",
+      "completedAt": "2026-02-19T07:29:26.043Z",
+      "note": "Verification complete: `./gradlew.bat buildPlugin` passed successfully after EDT dispatch, AtomicBoolean disposal guards, and PlanReviewDialog debounce changes."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:27:49.279Z",
+  "updatedAt": "2026-02-19T07:41:36.073Z",
+  "planSubmittedAt": "2026-02-18T22:32:29.174Z",
+  "planApprovedAt": "2026-02-18T22:34:42.466Z",
+  "workStartedAt": "2026-02-19T07:25:42.293Z",
+  "completedAt": "2026-02-19T07:29:32.071Z",
+  "reviewStartedAt": "2026-02-19T07:29:32.071Z",
+  "reviewCompletedAt": "2026-02-19T07:41:36.073Z"
+}

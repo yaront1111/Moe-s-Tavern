@@ -1,0 +1,106 @@
+{
+  "id": "task-6c0106b8",
+  "epicId": "epic-5ab0929c",
+  "title": "Bound comments array per task",
+  "description": "ADD_TASK_COMMENT appends to comments array with no size limit. Large comment arrays inflate state snapshots sent to all clients every 3s. Fix: Add a max comment count (e.g., 200), reject or trim oldest when exceeded.",
+  "definitionOfDone": [
+    "Comments array per task is bounded to a configurable max (e.g., 200)",
+    "When limit is exceeded, oldest comments are trimmed",
+    "State snapshots no longer grow unboundedly from comments",
+    "Existing comments are preserved (no data loss on upgrade)",
+    "Error handling covers edge cases"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add MAX_COMMENTS_PER_TASK constant and trimComments helper to StateManager. Add `const MAX_COMMENTS_PER_TASK = 200;` near the top of StateManager.ts alongside other constants. Add a private helper `trimComments(comments: TaskComment[]): TaskComment[]` that returns the last MAX_COMMENTS_PER_TASK comments if the array exceeds the limit (preserves newest, trims oldest). This keeps the trimming logic centralized. Include error handling for null/undefined comments arrays.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-18T23:10:50.566Z",
+      "completedAt": "2026-02-19T07:19:56.287Z",
+      "note": "Verified step-1 implementation already present in StateManager: exported MAX_COMMENTS_PER_TASK constant (env-configurable fallback to 200) and centralized trimComments helper handling null/undefined/non-array inputs by returning an empty array and trimming oversized arrays to newest entries.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Apply comment trimming in updateTask() method of StateManager. In the updateTask method, when the updates include a `comments` field, apply trimComments() before persisting. This catches both the WebSocket ADD_TASK_COMMENT handler and the MCP addComment tool, since both call updateTask(). Log a warning when trimming occurs (at info level) so operators know comments were dropped. This is the single enforcement point - no need to modify individual callers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-02-19T07:19:59.702Z",
+      "completedAt": "2026-02-19T07:20:16.916Z",
+      "note": "Added centralized enforcement in updateTask(): when a comments field is present, comments are normalized via trimComments() before persistence. Added info-level operational log with dropped count whenever trimming occurs, then applied status-change assignment logic against normalized updates.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Apply comment trimming in the addComment MCP tool handler for defensive depth. In addComment.ts at line ~42, after building the new comments array `[...task.comments, comment]`, apply a slice to keep only the last MAX_COMMENTS_PER_TASK entries. Import the constant from StateManager or define it in a shared constants file. Return `totalComments` accurately reflecting the trimmed count. Error handling: if task.comments is null/undefined, default to empty array (already handled).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts"
+      ],
+      "startedAt": "2026-02-19T07:20:19.546Z",
+      "completedAt": "2026-02-19T07:20:29.443Z",
+      "note": "Added defensive comment bounding in addComment tool by importing MAX_COMMENTS_PER_TASK, normalizing existing comments with Array.isArray, slicing to newest max entries before updateTask(), and returning totalComments from persisted updated.comments length.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/addComment.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Apply same comment trimming in WebSocket ADD_TASK_COMMENT handler. In WebSocketServer.ts at line ~457, after building `const comments = [...(existing.comments || []), comment]`, apply the same slice. Import MAX_COMMENTS_PER_TASK from a shared location. This provides defense-in-depth alongside the StateManager enforcement.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-02-19T07:20:32.958Z",
+      "completedAt": "2026-02-19T07:20:48.880Z",
+      "note": "Added defense-in-depth in ADD_TASK_COMMENT WebSocket handler: imported MAX_COMMENTS_PER_TASK, normalized existing.comments via Array.isArray, bounded appended list to newest max entries, and sent bounded comments into updateTask().",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add unit tests for comment bounding. Test cases: (1) Adding a comment when under limit preserves all comments, (2) Adding a comment when at limit trims the oldest comment, (3) Adding a comment to a task with 300 existing comments trims to 200, (4) Null/undefined comments array is handled gracefully, (5) The newest comments (including the just-added one) are always preserved. Use vitest consistent with existing test patterns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-02-19T07:20:52.210Z",
+      "completedAt": "2026-02-19T07:21:47.568Z",
+      "note": "Added comment-bounding unit coverage in tools.test for: under-limit preservation, at-limit oldest-trim behavior, 300-existing-comments trimming to max, null comments handling, and newest-comment preservation. Verification: `npx vitest run src/tools/tools.test.ts src/tools/addComment.test.ts src/server/WebSocketServer.test.ts` and full `npm test` both passed.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-02-18T22:21:39.894Z",
+  "updatedAt": "2026-02-19T07:31:11.435Z",
+  "planSubmittedAt": "2026-02-18T22:25:58.242Z",
+  "planApprovedAt": "2026-02-18T22:28:05.419Z",
+  "workStartedAt": "2026-02-18T23:10:50.566Z",
+  "completedAt": "2026-02-19T07:21:51.464Z",
+  "reviewStartedAt": "2026-02-19T07:21:51.464Z",
+  "reviewCompletedAt": "2026-02-19T07:31:11.435Z"
+}
