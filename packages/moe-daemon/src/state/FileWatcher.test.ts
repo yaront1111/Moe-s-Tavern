@@ -176,4 +176,26 @@ describe('FileWatcher', () => {
     const otherEvents = receivedEvents.filter((e) => e.path.includes('other.txt'));
     expect(otherEvents.length).toBe(0);
   });
+
+  it('ignores file changes after stop (B32)', async () => {
+    watcher = new FileWatcher(moePath, (event) => {
+      receivedEvents.push(event);
+    });
+    watcher.start();
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Stop the watcher
+    await watcher.stop();
+
+    // Write a file after stop — should be ignored
+    const taskFile = path.join(moePath, 'tasks', 'task-after-stop.json');
+    fs.writeFileSync(taskFile, JSON.stringify({ id: 'post-stop' }));
+
+    // Wait long enough for debounce to have fired if the guard was missing
+    await new Promise((r) => setTimeout(r, 400));
+
+    const postStopEvents = receivedEvents.filter((e) => e.path.includes('task-after-stop'));
+    expect(postStopEvents.length).toBe(0);
+  });
 });

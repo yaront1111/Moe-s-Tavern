@@ -81,7 +81,48 @@ export interface Project {
   updatedAt: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
+
+export interface ChatChannel {
+  id: string;
+  name: string;
+  type: 'general' | 'role' | 'custom';
+  linkedEntityId: string | null;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  channel: string;
+  sender: string;
+  content: string;
+  replyTo: string | null;
+  mentions: string[];
+  timestamp: string;
+  decisionId?: string;
+}
+
+export interface PinEntry {
+  messageId: string;
+  pinnedBy: string;
+  pinnedAt: string;
+  done: boolean;
+  doneAt: string | null;
+}
+
+export type DecisionStatus = 'proposed' | 'approved' | 'rejected';
+
+export interface Decision {
+  id: string;
+  proposedBy: string;
+  content: string;
+  status: DecisionStatus;
+  approvedBy: string | null;
+  channel: string | null;
+  messageId: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
 
 export interface Team {
   id: string;
@@ -182,6 +223,7 @@ export interface Worker {
   lastError: string | null;
   errorCount: number;
   teamId: string | null;
+  chatCursors?: Record<string, string>;
 }
 
 export interface RailProposal {
@@ -246,7 +288,9 @@ export const ACTIVITY_EVENT_TYPES = [
   'TEAM_MEMBER_REMOVED',
   'TASK_ARCHIVED',
   'TASK_COMMENT_ADDED',
-  'PROPOSAL_PURGED'
+  'PROPOSAL_PURGED',
+  'MESSAGE_CREATED',
+  'CHANNEL_CREATED'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];
@@ -273,6 +317,8 @@ export interface MoeStateSnapshot {
   workers: Worker[];
   proposals: RailProposal[];
   teams: Team[];
+  channels: ChatChannel[];
+  decisions: Decision[];
 }
 
 export interface DaemonInfo {
@@ -313,7 +359,17 @@ export type PluginOutboundMessage =
   | { type: 'ADD_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
   | { type: 'REMOVE_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
   | { type: 'ARCHIVE_DONE_TASKS'; payload?: { epicId?: string } }
-  | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } };
+  | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } }
+  | { type: 'GET_CHANNELS' }
+  | { type: 'GET_MESSAGES'; payload: { channel: string; limit?: number; sinceId?: string } }
+  | { type: 'SEND_MESSAGE'; payload: { channel: string; content: string } }
+  | { type: 'GET_PINS'; payload: { channel: string } }
+  | { type: 'PIN_MESSAGE'; payload: { channel: string; messageId: string } }
+  | { type: 'UNPIN_MESSAGE'; payload: { channel: string; messageId: string } }
+  | { type: 'TOGGLE_PIN_DONE'; payload: { channel: string; messageId: string } }
+  | { type: 'GET_DECISIONS' }
+  | { type: 'APPROVE_DECISION'; payload: { decisionId: string } }
+  | { type: 'REJECT_DECISION'; payload: { decisionId: string } };
 
 /**
  * Messages sent from the daemon to the client via /ws.
@@ -338,6 +394,18 @@ export type DaemonInboundMessage =
   | { type: 'TEAM_UPDATED'; payload: Team }
   | { type: 'TEAM_DELETED'; payload: Team }
   | { type: 'ACTIVITY_LOG'; payload: ActivityEvent[] }
+  | { type: 'CHANNELS'; payload: { channels: ChatChannel[] } }
+  | { type: 'MESSAGES'; payload: { channel: string; messages: ChatMessage[] } }
+  | { type: 'MESSAGE_SENT'; payload: { message: ChatMessage } }
+  | { type: 'MESSAGE_CREATED'; payload: ChatMessage }
+  | { type: 'CHANNEL_CREATED'; payload: ChatChannel }
+  | { type: 'PINS'; payload: { channel: string; pins: PinEntry[] } }
+  | { type: 'PIN_CREATED'; payload: { channel: string; pin: PinEntry } }
+  | { type: 'PIN_REMOVED'; payload: { channel: string; messageId: string } }
+  | { type: 'PIN_TOGGLED'; payload: { channel: string; pin: PinEntry } }
+  | { type: 'DECISIONS'; payload: { decisions: Decision[] } }
+  | { type: 'DECISION_PROPOSED'; payload: Decision }
+  | { type: 'DECISION_RESOLVED'; payload: Decision }
   | { type: 'ERROR'; message: string }
   | { type: 'DAEMON_SHUTTING_DOWN' };
 
@@ -351,6 +419,9 @@ const DAEMON_MESSAGE_TYPES = new Set([
   'WORKER_CREATED', 'WORKER_UPDATED', 'WORKER_DELETED',
   'PROPOSAL_CREATED', 'PROPOSAL_UPDATED', 'SETTINGS_UPDATED',
   'TEAM_CREATED', 'TEAM_UPDATED', 'TEAM_DELETED',
+  'CHANNELS', 'MESSAGES', 'MESSAGE_SENT', 'MESSAGE_CREATED', 'CHANNEL_CREATED',
+  'PINS', 'PIN_CREATED', 'PIN_REMOVED', 'PIN_TOGGLED',
+  'DECISIONS', 'DECISION_PROPOSED', 'DECISION_RESOLVED',
   'ACTIVITY_LOG', 'ERROR', 'DAEMON_SHUTTING_DOWN'
 ]);
 

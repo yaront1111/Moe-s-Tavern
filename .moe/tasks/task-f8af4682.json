@@ -1,0 +1,145 @@
+{
+  "id": "task-f8af4682",
+  "epicId": "epic-941ca1ca",
+  "title": "StateManager Chat Operations",
+  "description": "Add message persistence and channel management to the daemon's state layer.\n\n## What to implement\n\n### New methods in `packages/moe-daemon/src/state/StateManager.ts`:\n\n1. **`createChannel(opts: { name, type, linkedEntityId? }): ChatChannel`**\n   - Creates `.moe/channels/{channel-id}.json` with channel metadata\n   - Creates empty `.moe/messages/{channel-id}.jsonl` file\n   - Emits CHANNEL_CREATED event\n   - Returns the new channel\n\n2. **`sendMessage(opts: { channel, sender, content, replyTo? }): ChatMessage`**\n   - Validates channel exists, content ≤ 10KB\n   - Parses @mentions from content (delegate to mentionRouter when available, or simple regex for now)\n   - Generates msg-{uuid} ID\n   - Appends JSON line to `.moe/messages/{channel-id}.jsonl`\n   - Emits MESSAGE_CREATED event\n   - Returns the new message\n\n3. **`getMessages(channel, opts?: { sinceId?, limit? }): ChatMessage[]`**\n   - Reads from `.moe/messages/{channel-id}.jsonl`\n   - If sinceId provided, return messages after that ID\n   - Default limit: 50, max: 200\n   - Returns messages in chronological order\n\n4. **`getChannels(): ChatChannel[]`**\n   - Reads all `.moe/channels/*.json` files\n   - Returns sorted by createdAt\n\n5. **`deleteChannel(channelId: string): void`**\n   - Removes channel JSON and messages JSONL\n   - Emits event\n\n### FileWatcher updates (`packages/moe-daemon/src/state/FileWatcher.ts`):\n- Watch `.moe/channels/` directory for external changes\n- Watch `.moe/messages/` directory (optional, lower priority since daemon is sole writer)\n\n### Init updates:\n- On project init, auto-create a \"general\" channel with type 'general'\n\n### Key design decisions:\n- JSONL for messages (append-only, no rewriting)\n- Read entire JSONL and filter in memory (acceptable for <10K messages per channel)\n- Channel metadata as individual JSON files (StateManager already handles this pattern for tasks/epics)",
+  "definitionOfDone": [
+    "createChannel() creates channel JSON file and empty messages JSONL",
+    "sendMessage() appends to JSONL, emits MESSAGE_CREATED event",
+    "getMessages() supports sinceId cursor and limit pagination",
+    "getChannels() returns all channels sorted by createdAt",
+    "deleteChannel() removes both channel and messages files",
+    "Default 'general' channel created on project init",
+    "FileWatcher watches .moe/channels/ directory",
+    "npm run build succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add in-memory channels Map to StateManager class: channels = new Map<string, ChatChannel>(). Add channels loading in load() method: scan .moe/channels/*.json using existing loadEntities pattern. Add channels to getSnapshot() so MoeStateSnapshot includes channels array. Include error handling for malformed channel JSON files (log warning, skip file).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:29:59.783Z",
+      "completedAt": "2026-03-02T17:30:36.747Z",
+      "note": "Added channels Map, loading in load() via loadEntities pattern, and updated getSnapshot() to return real channels sorted by createdAt. loadEntities already handles missing directories and malformed JSON gracefully.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement createChannel(opts: { name: string, type: ChatChannel['type'], linkedEntityId?: string }): Promise<ChatChannel>. Generate ID with generateId('chan'). Write channel JSON to .moe/channels/{id}.json using writeEntity pattern. Create empty .moe/messages/{id}.jsonl file using fs.writeFile. Add to in-memory channels Map. Emit CHANNEL_CREATED event. Include error handling: validate name is non-empty string, type is valid enum value, catch and rethrow file write errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:30:36.886Z",
+      "completedAt": "2026-03-02T17:31:01.527Z",
+      "note": "Implemented createChannel with validation (non-empty name, valid type enum), writeEntity for channel JSON, empty JSONL creation, in-memory map update, CHANNEL_CREATED event emission, and activity logging. Also added getChannel, getChannels, and getChannelByLinkedEntity helpers.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement sendMessage(opts: { channel: string, sender: string, content: string, replyTo?: string }): Promise<ChatMessage>. Validate channel exists (throw notFound if missing). Validate content is string, non-empty, max 10KB. Generate msg-{uuid} ID. Parse @mentions with simple regex /@(\\w[\\w-]*)/g for now (mentionRouter integration later). Build ChatMessage object with ISO timestamp. Append JSON line to .moe/messages/{channel}.jsonl using fs.appendFile. Emit MESSAGE_CREATED event. Error handling: catch appendFile errors, validate replyTo message exists if provided.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:31:01.818Z",
+      "completedAt": "2026-03-02T17:31:27.514Z",
+      "note": "Implemented sendMessage with: channel existence validation, content non-empty + 10KB limit (byte-level check), @mention regex parsing with dedup, JSONL append via appendFileSync, MESSAGE_CREATED event + activity log. Also implemented getMessages with: sinceId cursor support, limit pagination (default 50, max 200), malformed line skipping with warning log, ENOENT handling.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Implement getMessages(channelId: string, opts?: { sinceId?: string, limit?: number }): Promise<ChatMessage[]>. Read .moe/messages/{channelId}.jsonl, split by newlines, parse each line as JSON. Filter out empty lines. If sinceId provided, find that message index and return messages after it. Apply limit (default 50, max 200). Return in chronological order. Error handling: if JSONL file doesn't exist return empty array, skip malformed JSON lines with warning log, handle file read errors gracefully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:31:27.845Z",
+      "completedAt": "2026-03-02T17:31:33.138Z",
+      "note": "getMessages was already implemented in step-3 alongside sendMessage. It supports sinceId cursor, limit pagination (default 50, max 200), graceful ENOENT handling, and malformed line skipping."
+    },
+    {
+      "stepId": "step-5",
+      "description": "Implement getChannels(): ChatChannel[]. Return Array.from(this.channels.values()) sorted by createdAt ascending. Implement deleteChannel(channelId: string): Promise<void>. Validate channel exists. Remove .moe/channels/{id}.json and .moe/messages/{id}.jsonl using fs.unlink. Remove from in-memory Map. Error handling: catch ENOENT errors silently (files may already be deleted), throw notFound if channel not in Map.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:31:33.252Z",
+      "completedAt": "2026-03-02T17:32:02.599Z",
+      "note": "Added deleteChannel with channel existence validation, fs.unlinkSync for both channel JSON and messages JSONL, ENOENT silencing, and in-memory map removal. getChannels was already implemented in step-2.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update FileWatcher.start() to add .moe/channels/*.json to the chokidar watch patterns array alongside existing epics/tasks/workers/proposals patterns. This enables external file change detection for channels.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "startedAt": "2026-03-02T17:32:03.141Z",
+      "completedAt": "2026-03-02T17:32:18.055Z",
+      "note": "Added channels/*.json to FileWatcher patterns. Messages JSONL files intentionally excluded since daemon is sole writer.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Update initProject tool to create .moe/channels/ and .moe/messages/ directories during project initialization (alongside existing epics/tasks/workers/proposals dirs). After directory creation, call state.createChannel({ name: 'general', type: 'general' }) to create the default general channel.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ],
+      "startedAt": "2026-03-02T17:32:18.526Z",
+      "completedAt": "2026-03-02T17:32:46.167Z",
+      "note": "Added channels/ and messages/ to init dirs. Created default 'general' channel inline (channel JSON + empty JSONL) since initProject runs before StateManager loads. Used crypto.randomUUID for consistent ID generation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Test: Run 'cd packages/moe-daemon && npm run build' to verify compilation. Manually test by starting daemon, calling initProject, verifying .moe/channels/ contains general channel JSON and empty .moe/messages/ JSONL file exists.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:32:46.548Z",
+      "completedAt": "2026-03-02T17:33:11.215Z",
+      "note": "Build passes clean (tsc, zero errors). All 275 tests pass across 15 test files. No regressions."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:21:09.280Z",
+  "updatedAt": "2026-03-02T18:00:18.813Z",
+  "planSubmittedAt": "2026-03-02T16:33:00.771Z",
+  "planApprovedAt": "2026-03-02T16:33:00.773Z",
+  "workStartedAt": "2026-03-02T17:29:59.783Z",
+  "completedAt": "2026-03-02T17:33:19.671Z",
+  "reviewStartedAt": "2026-03-02T17:33:19.671Z",
+  "reviewCompletedAt": "2026-03-02T18:00:18.813Z"
+}

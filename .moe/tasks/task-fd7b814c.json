@@ -1,0 +1,67 @@
+{
+  "id": "task-fd7b814c",
+  "epicId": "epic-7e26d221",
+  "title": "Fix moe-agent.ps1 temp file cleanup (B34)",
+  "description": "**B34 (LOW): Temp MCP config files never cleaned up**\\n- File: scripts/moe-agent.ps1:216\\n- $mcpConfigFile created in %TEMP% but never deleted on exit or error. Accumulates stale files.\\n- Fix: Add a try/finally block around the main script body, or register a cleanup trap. In the finally block: `Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue`. Also check moe-agent.sh for the same issue.",
+  "definitionOfDone": [
+    "moe-agent.ps1 cleans up temp MCP config file on exit",
+    "moe-agent.sh cleans up temp file if applicable",
+    "Cleanup works on both normal exit and Ctrl+C"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix moe-agent.ps1 temp file cleanup. In scripts/moe-agent.ps1, wrap the main polling loop (~line 640 onwards) in a try/finally block. In the finally block add: `if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) { Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue }`. Also register a Ctrl+C handler using `Register-EngineEvent PowerShell.Exiting -Action { ... }` or use `[Console]::CancelKeyPress` to clean up on interrupt. Error handling: SilentlyContinue ensures no errors on already-deleted files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-03-03T23:18:11.569Z",
+      "completedAt": "2026-03-03T23:19:03.218Z",
+      "note": "Wrapped main do-while loop in try/finally. Finally block removes $mcpConfigFile with -Force -ErrorAction SilentlyContinue. Handles normal exit, errors, and Ctrl+C.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix moe-agent.sh temp file cleanup. In scripts/moe-agent.sh, check if it creates a temp MCP config file. If so, add a trap handler: `trap 'rm -f \"$MCP_CONFIG_FILE\"' EXIT INT TERM`. Place this right after the temp file is created. The EXIT trap ensures cleanup on both normal exit and signals. Error handling: rm -f never fails on missing files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-03-03T23:19:06.919Z",
+      "completedAt": "2026-03-03T23:19:23.524Z",
+      "note": "No changes needed. moe-agent.sh already has `trap cleanup_temp EXIT` (line 90) for its SECURE_TEMP_DIR. The MCP config in the shell script is written to ~/.config/claude/mcp_servers.json (permanent config), not a temp file."
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify: Run moe-agent.ps1 with a test project and Ctrl+C. Verify the temp file in %TEMP% is deleted. Check that no moe-mcp-config-*.json files accumulate.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T23:19:27.337Z",
+      "completedAt": "2026-03-03T23:19:49.757Z",
+      "note": "Verified ps1 try/finally structure is syntactically correct. Daemon build and 327 tests pass. Cannot run interactive agent script in CI but structure is standard PowerShell try/finally pattern."
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:58:57.001Z",
+  "updatedAt": "2026-03-03T23:19:54.074Z",
+  "planSubmittedAt": "2026-03-03T23:00:32.959Z",
+  "planApprovedAt": "2026-03-03T23:00:32.962Z",
+  "workStartedAt": "2026-03-03T23:18:11.569Z",
+  "completedAt": "2026-03-03T23:19:54.074Z",
+  "reviewStartedAt": "2026-03-03T23:19:54.074Z"
+}

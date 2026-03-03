@@ -278,7 +278,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   const port = await findAvailablePort(preferredPort || DEFAULT_PORT);
   const state = new StateManager({ projectPath });
   await state.load();
-  state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
+  await state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
 
   const startTime = Date.now();
 
@@ -357,6 +357,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
       logger.error({ error }, 'Failed to reload state from file watcher');
     }
   });
+  state.setFileWatcher(watcher);
   watcher.start();
 
   const info: DaemonInfo = {
@@ -394,6 +395,8 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
         releaseLock(projectPath);
       } catch (error) {
         logger.error({ error }, 'Error releasing lock during forced shutdown exit');
+        // Last-resort: directly remove lock file
+        try { fs.rmSync(lockFilePath(projectPath), { force: true }); } catch { /* ignore */ }
       }
       try {
         removeDaemonInfo(projectPath);
@@ -450,12 +453,13 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   // Handle uncaught errors gracefully
   process.on('uncaughtException', (error) => {
     logger.fatal({ error }, 'Uncaught exception');
-    try {
-      releaseLock(projectPath);
-    } catch (lockError) {
-      logger.error({ error: lockError }, 'Failed to release lock in uncaughtException handler');
-    }
-    shutdown();
+    // Safety timeout in case shutdown() hangs
+    const safetyTimeout = setTimeout(() => {
+      try { releaseLock(projectPath); } catch { /* best effort */ }
+      process.exit(1);
+    }, 5000);
+    safetyTimeout.unref();
+    shutdown().then(() => process.exit(1)).catch(() => process.exit(1));
   });
 
   process.on('unhandledRejection', (reason) => {

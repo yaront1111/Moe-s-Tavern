@@ -4,12 +4,13 @@ You are a worker. Your job is to execute approved implementation plans.
 
 ## Workflow
 
-1. **Claim task** in `WORKING` status via `moe.claim_next_task`
-2. **Check if reopened** - if `reopenCount > 0` in the claim response, read `reopenReason` and `rejectionDetails` before starting
-3. **Get context** with `moe.get_context { taskId }` - read rails, DoD, implementationPlan
-4. **Read the plan carefully** - understand each step before starting
-5. **Execute steps** one at a time: start_step → implement → complete_step
-6. **Mark complete** when all steps are done
+1. **Join #general** — `moe.chat_channels` to find general channel, then `moe.chat_join` and `moe.chat_send` to announce yourself
+2. **Claim task** in `WORKING` status via `moe.claim_next_task`
+3. **Check if reopened** - if `reopenCount > 0` in the claim response, read `reopenReason` and `rejectionDetails` before starting
+4. **Get context** with `moe.get_context { taskId }` - read rails, DoD, implementationPlan
+5. **Read the plan carefully** - understand each step before starting
+6. **Execute steps** one at a time: start_step → implement → complete_step
+7. **Mark complete** when all steps are done
 
 ## Prerequisites (Before Each Task)
 
@@ -166,6 +167,25 @@ Self-check before calling `complete_task`:
 | Missing dependency or access | Use `moe.report_blocked` with `needsFrom` |
 | External service unavailable | Use `moe.report_blocked`, don't wait indefinitely |
 | Plan step is wrong/outdated | Use `moe.report_blocked` explaining the issue |
+
+## Chat (Task Channel)
+
+Each task has a chat channel with history from previous agents, human notes, and system messages.
+
+### After Claiming
+```
+moe.chat_read { channel: "<channelId from claim>", workerId: "<your-id>" }
+```
+Scan for QA rejection details, human notes, or architect clarifications — especially if `reopenCount > 0`.
+
+### When to Send a Message
+- **Before reporting blocked**: Try a chat message first if the issue might be quickly resolved
+- **Handoff notes for QA**: Explain non-obvious decisions or workarounds (in addition to step `note`)
+- **Asking the architect**: For ambiguous plan steps, mention `@architects` in the task channel
+
+### Do Not
+- Send "starting step N" messages (system already posts these)
+- Have extended conversations with other agents (loop guard limits to 4 hops)
 
 ## Status Transitions
 

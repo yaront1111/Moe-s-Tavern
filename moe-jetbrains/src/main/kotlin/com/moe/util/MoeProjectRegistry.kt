@@ -6,6 +6,8 @@ import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.Logger
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 data class MoeProjectInfo(
     val path: String,
@@ -64,6 +66,27 @@ object MoeProjectRegistry {
         }
     }
 
+    // ---- Daemon reference counting ----
+    private val daemonRefCount = ConcurrentHashMap<Int, AtomicInteger>()
+
+    /** Register a daemon PID as being used by a project. Increments refcount. */
+    fun registerDaemon(pid: Int) {
+        daemonRefCount.computeIfAbsent(pid) { AtomicInteger(0) }.incrementAndGet()
+        log.debug("Daemon PID $pid registered (refcount=${daemonRefCount[pid]?.get()})")
+    }
+
+    /** Unregister a daemon PID. Returns true if this was the last user (refcount hit 0). */
+    fun unregisterDaemon(pid: Int): Boolean {
+        val counter = daemonRefCount[pid] ?: return true // Unknown PID — safe to kill
+        val remaining = counter.decrementAndGet()
+        log.debug("Daemon PID $pid unregistered (refcount=$remaining)")
+        if (remaining <= 0) {
+            daemonRefCount.remove(pid)
+            return true
+        }
+        return false
+    }
+
     /**
      * Reads ~/.moe/config.json and returns the installPath if it exists and
      * the canary file (packages/moe-daemon/dist/index.js) is present.
@@ -74,7 +97,8 @@ object MoeProjectRegistry {
             val configFile = File(home, ".moe${File.separator}config.json")
             if (!configFile.exists()) return null
             val json = gson.fromJson(configFile.readText(), JsonObject::class.java)
-            val installPath = json?.get("installPath")?.asString ?: return null
+            val el = json?.get("installPath")
+            val installPath = if (el == null || el.isJsonNull) return null else el.asString
             val canary = File(installPath, "packages${File.separator}moe-daemon${File.separator}dist${File.separator}index.js")
             if (!canary.exists()) {
                 log.debug("Global config installPath canary missing: ${canary.absolutePath}")

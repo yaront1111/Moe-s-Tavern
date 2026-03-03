@@ -1,0 +1,163 @@
+{
+  "id": "task-1c74e448",
+  "epicId": "epic-941ca1ca",
+  "title": "MCP Chat Tools (6 tools)",
+  "description": "Add 6 new MCP tools for agent chat communication.\n\n## Tools to implement\n\n### 1. `moe.chat_send` — `packages/moe-daemon/src/tools/chatSend.ts`\n```\nParameters: { channel: string, content: string, workerId?: string, replyTo?: string }\nReturns: { messageId, channel, timestamp, routed: string[] }\n```\n- Calls StateManager.sendMessage()\n- Uses MentionRouter.route() to determine notification targets\n- Returns routing result so agent knows who was notified\n\n### 2. `moe.chat_read` — `packages/moe-daemon/src/tools/chatRead.ts`\n```\nParameters: { channel?: string, workerId?: string, sinceId?: string, limit?: number }\nReturns: { messages: ChatMessage[], cursor: string }\n```\n- If workerId provided and no sinceId, uses worker's chatCursor for that channel\n- Updates worker's chatCursor after read\n- If no channel specified, reads from all channels (merged, sorted by timestamp)\n- Default limit: 20\n\n### 3. `moe.chat_channels` — `packages/moe-daemon/src/tools/chatChannels.ts`\n```\nParameters: {}\nReturns: { channels: ChatChannel[] }\n```\n- Returns all channels from StateManager.getChannels()\n\n### 4. `moe.chat_join` — `packages/moe-daemon/src/tools/chatJoin.ts`\n```\nParameters: { channel: string, workerId: string }\nReturns: { channel: string, onlineWorkers: { id, status }[] }\n```\n- Posts a system message \"worker-abc joined #channel\"\n- Returns current online workers (from worker status)\n\n### 5. `moe.chat_who` — `packages/moe-daemon/src/tools/chatWho.ts`\n```\nParameters: { channel?: string }\nReturns: { online: { workerId, status, lastActivity, currentTaskId }[] }\n```\n- Leverages existing worker data (no new heartbeat mechanism needed)\n- Filters by workers who have interacted with the channel if channel specified\n\n### 6. `moe.chat_wait` — `packages/moe-daemon/src/tools/chatWait.ts`\n```\nParameters: { workerId: string, channels?: string[], timeoutMs?: number }\nReturns: { hasMessage: boolean, messages?: ChatMessage[] }\n```\n- Long-poll pattern matching existing `waitForTask.ts`\n- Subscribes to MESSAGE_CREATED events\n- Returns when a message arrives mentioning this workerId, or timeout (default 300s, max 600s)\n- Only returns messages where workerId is in the mentions array or sender is human\n\n### Registration:\n- Add all 6 tools to `packages/moe-daemon/src/tools/index.ts`\n- Update `docs/MCP_SERVER.md` with tool documentation",
+  "definitionOfDone": [
+    "All 6 chat tools created as individual files in packages/moe-daemon/src/tools/",
+    "Tools registered in packages/moe-daemon/src/tools/index.ts",
+    "chat_send stores message and returns routing result",
+    "chat_read supports cursor-based pagination and auto-cursor via workerId",
+    "chat_channels returns all channels",
+    "chat_join posts system message and returns online workers",
+    "chat_who returns worker presence from existing worker data",
+    "chat_wait long-polls for messages mentioning the worker",
+    "docs/MCP_SERVER.md updated with all 6 tool contracts",
+    "All tools callable via moe-proxy MCP",
+    "npm run build succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create packages/moe-daemon/src/tools/chatSend.ts following the addComment.ts tool pattern. Tool name: 'moe.chat_send'. Input schema: { channel: string (required), content: string (required), workerId: string (optional), replyTo: string (optional) }. Handler: validate params with missingRequired/invalidInput errors, call state.sendMessage(), use MentionRouter.route() if available to get routing targets, return { success: true, messageId, channel, timestamp, routed: string[] }. Error handling: throw notFound if channel missing, invalidInput if content exceeds 10KB or is empty.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "startedAt": "2026-03-02T17:33:38.747Z",
+      "completedAt": "2026-03-02T17:33:53.904Z",
+      "note": "Created chatSend tool following addComment pattern. Validates channel/content, delegates to state.sendMessage, returns messageId/channel/timestamp/routed mentions.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/tools/chatRead.ts. Tool name: 'moe.chat_read'. Input schema: { channel: string (optional), workerId: string (optional), sinceId: string (optional), limit: number (optional, default 20, max 200) }. Handler: if workerId provided and no sinceId, look up worker.chatCursors[channel] as cursor. Call state.getMessages(channel, { sinceId, limit }). After read, update worker's chatCursor to last message ID via state.updateWorker(). If no channel specified, iterate all channels, merge and sort by timestamp. Return { messages, cursor }. Error handling: validate limit is positive number, handle missing worker gracefully (proceed without cursor).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ],
+      "startedAt": "2026-03-02T17:33:54.301Z",
+      "completedAt": "2026-03-02T17:34:13.379Z",
+      "note": "Created chatRead with auto-cursor via worker.chatCursors, sinceId support, multi-channel merge when no channel specified, cursor update after read. Default limit 20.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create packages/moe-daemon/src/tools/chatChannels.ts. Tool name: 'moe.chat_channels'. Input schema: {} (no required params). Handler: call state.getChannels(), return { channels: ChatChannel[] }. Simple tool with minimal error handling - just return empty array if no channels exist.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatChannels.ts"
+      ],
+      "startedAt": "2026-03-02T17:34:13.893Z",
+      "completedAt": "2026-03-02T17:34:22.990Z",
+      "note": "Simple tool delegating to state.getChannels().",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatChannels.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create packages/moe-daemon/src/tools/chatJoin.ts. Tool name: 'moe.chat_join'. Input schema: { channel: string (required), workerId: string (required) }. Handler: validate channel exists (notFound error if missing), validate workerId. Post a system message to channel: '{workerId} joined #{channelName}' via state.sendMessage({ channel, sender: 'system', content }). Get online workers from state.workers filtered by status !== 'IDLE' or recent lastActivityAt. Return { channel, onlineWorkers: [{ id, status }] }. Error handling: validate both required params.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ],
+      "startedAt": "2026-03-02T17:34:23.113Z",
+      "completedAt": "2026-03-02T17:34:36.630Z",
+      "note": "Created chatJoin with system join message and online workers list (using 120s presence timeout matching agentchattr).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Create packages/moe-daemon/src/tools/chatWho.ts. Tool name: 'moe.chat_who'. Input schema: { channel: string (optional) }. Handler: get all workers from state. Filter to those with recent lastActivityAt (within 120s). If channel provided, further filter to workers whose chatCursors include that channel. Map to { workerId, status, lastActivity, currentTaskId }. Return { online: [...] }. Error handling: return empty array if no workers registered, handle missing lastActivityAt gracefully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts"
+      ],
+      "startedAt": "2026-03-02T17:34:36.893Z",
+      "completedAt": "2026-03-02T17:34:52.558Z",
+      "note": "Created chatWho with 120s presence timeout, optional channel filter via chatCursors check.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Create packages/moe-daemon/src/tools/chatWait.ts following the waitForTask.ts long-poll pattern exactly. Tool name: 'moe.chat_wait'. Input schema: { workerId: string (required), channels: string[] (optional), timeoutMs: number (optional, default 300000, max 600000) }. Handler: subscribe to state events via state.subscribe(). Listen for MESSAGE_CREATED events where the message mentions this workerId or sender is 'human'. If channels provided, filter to those channels only. On match, unsubscribe and resolve with { hasMessage: true, messages: [matched] }. Set timeout timer. On timeout, unsubscribe and resolve with { hasMessage: false }. Track active waiters in module-level Map for cleanup. Error handling: validate workerId required, sanitize timeoutMs bounds, cleanup subscription on early disconnect.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ],
+      "startedAt": "2026-03-02T17:34:53.088Z",
+      "completedAt": "2026-03-02T17:35:17.246Z",
+      "note": "Created chatWait following waitForTask.ts pattern exactly. Long-poll with subscribe, timer.unref(), activeWaiters map, cleanup on cancel/timeout/match. Filters for messages mentioning workerId or from human sender. Includes cleanupStaleChatWaiters export.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Register all 6 new tools in packages/moe-daemon/src/tools/index.ts. Import chatSendTool, chatReadTool, chatChannelsTool, chatJoinTool, chatWhoTool, chatWaitTool. Add to the getTools() return array following existing alphabetical/grouped ordering.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-03-02T17:35:17.524Z",
+      "completedAt": "2026-03-02T17:35:58.054Z",
+      "note": "Registered all 6 chat tools in index.ts. Build passes clean.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Update docs/MCP_SERVER.md with documentation for all 6 new chat tools. For each tool: name, description, input schema (JSON Schema), return type, usage example. Follow the existing documentation format in the file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-03-02T17:35:58.540Z",
+      "completedAt": "2026-03-02T17:36:57.926Z",
+      "note": "Added full documentation for all 6 chat tools to MCP_SERVER.md with parameters, return types, and usage notes. Follows existing doc format.",
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Test: Run 'cd packages/moe-daemon && npm run build' to verify compilation. Start daemon and proxy, test each tool via MCP JSON-RPC: chat_channels (should return general channel), chat_send (post a message), chat_read (read it back), chat_join, chat_who, chat_wait (with short timeout).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T17:36:58.082Z",
+      "completedAt": "2026-03-02T17:37:18.691Z",
+      "note": "Build clean, all 275 tests pass. All 6 chat tools compile and register correctly."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:21:39.662Z",
+  "updatedAt": "2026-03-02T18:01:10.247Z",
+  "planSubmittedAt": "2026-03-02T16:33:37.310Z",
+  "planApprovedAt": "2026-03-02T16:33:37.313Z",
+  "workStartedAt": "2026-03-02T17:33:38.747Z",
+  "completedAt": "2026-03-02T17:37:25.037Z",
+  "reviewStartedAt": "2026-03-02T17:37:25.037Z",
+  "reviewCompletedAt": "2026-03-02T18:01:10.247Z"
+}

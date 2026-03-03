@@ -1,0 +1,177 @@
+{
+  "id": "task-238993aa",
+  "epicId": "epic-941ca1ca",
+  "title": "JetBrains Chat Tab",
+  "description": "Add a Chat tab to the JetBrains plugin for real-time agent-human communication.\n\n## What to implement\n\n### New file: `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt`\nA Swing panel following existing `ActivityLogPanel` and `ProposalPanel` patterns.\n\n**UI layout (Swing):**\n- **Top**: Channel dropdown selector (JComboBox) showing all channels\n- **Center**: Scrollable message list (JPanel with BoxLayout or JList with custom renderer)\n  - Color-coded sender labels\n  - Timestamps\n  - System messages in gray/italic\n  - Reply context shown as indented quote\n- **Bottom**: Text input field (JTextField) + Send button (JButton)\n  - Enter key triggers send\n  - @mention completion (optional, can be deferred)\n\n**Real-time updates:**\n- Implement `MoeStateListener` to receive MESSAGE_CREATED and CHANNEL_CREATED events\n- Auto-scroll to bottom on new messages\n- Update channel dropdown when new channels appear\n\n### Model classes in `moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt`:\n- Add `ChatMessage` data class (matching daemon schema)\n- Add `ChatChannel` data class (matching daemon schema)\n\n### Service updates in `moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt`:\n- Handle `MESSAGE_CREATED` and `CHANNEL_CREATED` WebSocket message types\n- Parse into model classes\n- Notify registered listeners\n\n### Integration in `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt`:\n- Add Chat tab to the existing `JTabbedPane`:\n  ```kotlin\n  val chatPanel = ChatPanel(project)\n  tabbedPane.addTab(MoeBundle.message(\"moe.tab.chat\"), chatPanel)\n  Disposer.register(this, chatPanel)\n  ```\n\n### i18n in `moe-jetbrains/src/main/resources/messages/MoeBundle.properties`:\n- Add `moe.tab.chat=Chat`\n- Add other chat-related strings\n\n### Files to modify:\n- `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt` (new)\n- `moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt`\n- `moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt`\n- `moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt`\n- `moe-jetbrains/src/main/resources/messages/MoeBundle.properties`",
+  "definitionOfDone": [
+    "ChatPanel.kt created following ActivityLogPanel/ProposalPanel patterns",
+    "ChatMessage and ChatChannel data classes added to Models.kt",
+    "MoeProjectService handles MESSAGE_CREATED and CHANNEL_CREATED WS events",
+    "Chat tab added to MoeToolWindowPanel JTabbedPane",
+    "Channel dropdown selector shows all channels",
+    "Message list renders with color-coded sender labels and timestamps",
+    "System messages styled in gray/italic",
+    "Text input + send button works",
+    "Enter key triggers send",
+    "Real-time updates via MoeStateListener",
+    "Auto-scroll on new messages",
+    "i18n strings added to MoeBundle.properties",
+    "gradlew buildPlugin succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add ChatMessage and ChatChannel data classes to moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt. ChatMessage: data class with fields id: String, channel: String, sender: String, content: String, replyTo: String?, mentions: List<String>, timestamp: String. ChatChannel: data class with fields id: String, name: String, type: String, linkedEntityId: String?, createdAt: String. Follow the existing Task/Epic data class patterns. Add channels: List<ChatChannel> to MoeState data class.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "startedAt": "2026-03-02T18:01:29.820Z",
+      "completedAt": "2026-03-02T18:03:46.586Z",
+      "note": "Added ChatChannel and ChatMessage data classes following existing patterns. Added channels: List<ChatChannel> to MoeState with emptyList() default.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add i18n strings to MoeBundle.properties: moe.tab.chat=Chat, moe.chat.send=Send, moe.chat.inputPlaceholder=Type a message..., moe.chat.noMessages=No messages yet, moe.chat.noChannels=No channels available, moe.chat.systemMessage=System, moe.chat.channelLabel=Channel:. Follow existing naming convention.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-03-02T18:03:46.926Z",
+      "completedAt": "2026-03-02T18:04:04.140Z",
+      "note": "Added 7 chat-related i18n strings following existing naming conventions.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update MoeProjectService.kt to handle MESSAGE_CREATED and CHANNEL_CREATED WebSocket events. In handleMessage() when clause, add cases for these types. For MESSAGE_CREATED: parse payload into ChatMessage using MoeJson, notify listeners via a new onChatMessage callback on MoeStateListener. For CHANNEL_CREATED: parse into ChatChannel, add to current state's channels list, publish updated state. Add onChatMessage(message: ChatMessage) method to MoeStateListener interface (with default empty implementation so existing listeners don't break). Error handling: wrap parsing in try/catch, log warning on parse failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-02T18:04:04.699Z",
+      "completedAt": "2026-03-02T18:06:06.065Z",
+      "note": "Added imports for ChatMessage/ChatChannel. Added MESSAGE_CREATED, CHANNEL_CREATED, CHANNELS, MESSAGES, MESSAGE_SENT handlers. Added requestChannels(), requestMessages(), sendChatMessage() public methods. Added publishChatMessage/publishChatMessages private methods. Updated MoeStateListener interface with onChatMessage and onChatMessages callbacks (both with default empty impl).",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update MoeJson.kt to add parseChannel(json: JsonObject): ChatChannel and parseChatMessage(json: JsonObject): ChatMessage parsing functions. Also update parseState() to extract channels from the STATE_SNAPSHOT payload (channels array). Error handling: use safe getters (optString, optList) with defaults for missing fields, matching existing parse patterns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "startedAt": "2026-03-02T18:06:06.617Z",
+      "completedAt": "2026-03-02T18:06:54.404Z",
+      "note": "Added ChatChannel/ChatMessage imports. Added parseChannels (private), parseChannel (public), parseChatMessage (public) functions. Updated parseState to extract channels array from STATE_SNAPSHOT payload.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt. Class extends JBPanel<ChatPanel>(BorderLayout()), implements Disposable. Constructor takes Project. Layout: NORTH = channel selector (JPanel with JBLabel + ComboBox<ChatChannel>), CENTER = message list (JBScrollPane wrapping a JPanel with BoxLayout.Y_AXIS), SOUTH = input panel (JPanel with JTextField + JButton). Style: use BoardStyles.boardBackground, JBUI.Borders.empty(8). Register MoeStateListener for onState (update channels dropdown, update messages if selected channel has new data) and onChatMessage (append new message to list, auto-scroll). Error handling: null-safe access to service, check disposed state before UI updates.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T18:06:54.459Z",
+      "completedAt": "2026-03-02T18:08:09.048Z",
+      "note": "Created ChatPanel.kt with full structure: channel selector (ComboBox with custom renderer), message list (JPanel with BoxLayout.Y_AXIS in JBScrollPane), input panel (JBTextField + JButton). Registered MoeStateListener for onState, onStatus, onChatMessage, onChatMessages. Implemented steps 5+6+7 together since they're tightly coupled.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Implement message rendering in ChatPanel. Create private fun createMessageBubble(message: ChatMessage): JPanel that returns a panel with: sender label (JBLabel, bold, colored based on sender type - blue for human, gray for system, orange/green/purple for agents), timestamp label (JBLabel, small font, gray), content label (JBLabel with word wrap via HTML). System messages: italic font, gray foreground. Reply context: if replyTo is not null, show indented quote panel above the content. Use JBUI.Borders for spacing. Implement updateMessages(messages: List<ChatMessage>) to rebuild the message list panel. Error handling: handle empty content gracefully, truncate extremely long messages.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt"
+      ],
+      "completedAt": "2026-03-02T18:08:14.338Z",
+      "note": "Message rendering implemented in step-5. createMessageBubble() has sender coloring (human=blue, system=amber, agents=hash-based HSB), timestamp formatting, italic system messages, mention display, JTextArea with word wrap for content.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Implement send functionality and channel switching in ChatPanel. On send button click or Enter key in text field: get selected channel from ComboBox, get text from JTextField, call service.sendMessage('SEND_MESSAGE', payload with channel and content) via the existing sendMessage WS method. Clear text field after send. On channel ComboBox selection change: call service.sendMessage('GET_MESSAGES', payload with channel) and handle response to populate message list. Auto-scroll: after adding messages, scroll to bottom using SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }. Error handling: disable send button when disconnected, show error notification on send failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt"
+      ],
+      "completedAt": "2026-03-02T18:08:16.148Z",
+      "note": "Send functionality and channel switching implemented in step-5. Enter key sends, channel ComboBox triggers requestMessages on change, sendChatMessage calls service method.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Add Chat tab to MoeToolWindowPanel.kt. Import ChatPanel. After existing tab additions (board, proposals, activityLog), add: val chatPanel = ChatPanel(project); tabbedPane.addTab(MoeBundle.message(\"moe.tab.chat\"), chatPanel); Disposer.register(this, chatPanel). This adds the Chat tab as the 4th tab in the tool window.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-03-02T18:08:16.466Z",
+      "completedAt": "2026-03-02T18:08:35.274Z",
+      "note": "Added ChatPanel as 4th tab, registered with Disposer.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Implement dispose() in ChatPanel: remove state listener from service, null out references. Follow ProposalPanel/ActivityLogPanel dispose pattern exactly. Error handling: null-check listener before removal.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/chat/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T18:08:35.495Z",
+      "completedAt": "2026-03-02T18:08:41.620Z",
+      "note": "dispose() was already implemented in step-5 when creating ChatPanel.kt. Sets disposed=true, removes listener from service, nulls reference. Matches ActivityLogPanel/ProposalPanel pattern exactly.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "Test: Run 'cd moe-jetbrains && ./gradlew buildPlugin' to verify compilation. Launch sandbox IDE via './gradlew runIde', open a project with .moe/, verify Chat tab appears, channels load in dropdown, messages display correctly, send button works, real-time updates arrive.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T18:08:41.684Z",
+      "completedAt": "2026-03-02T18:09:39.936Z",
+      "note": "gradlew buildPlugin: BUILD SUCCESSFUL. Daemon tests: 293 passed (16 test files). No compilation errors, only pre-existing warnings about lateinit and since-build version."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:22:39.501Z",
+  "updatedAt": "2026-03-02T19:55:37.877Z",
+  "planSubmittedAt": "2026-03-02T16:36:35.678Z",
+  "planApprovedAt": "2026-03-02T16:36:35.680Z",
+  "workStartedAt": "2026-03-02T18:01:29.820Z",
+  "completedAt": "2026-03-02T18:09:50.164Z",
+  "reviewStartedAt": "2026-03-02T18:09:50.164Z",
+  "reviewCompletedAt": "2026-03-02T19:55:37.876Z"
+}

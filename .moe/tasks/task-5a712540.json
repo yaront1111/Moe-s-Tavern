@@ -1,0 +1,90 @@
+{
+  "id": "task-5a712540",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix get_activity_log response size — truncate large payloads and enforce limit",
+  "description": "The `moe.get_activity_log` MCP tool can return responses that exceed MCP's max response size (agent passed limit:20 but got 169K chars back). This breaks agents trying to read task history.\n\nRoot causes:\n1. Activity log event payloads can contain full plan JSON, large rejection details, etc. — individual entries can be huge.\n2. The `limit` parameter may not be correctly capping output size.\n\nFix needed:\n- Truncate large event payloads (e.g., cap payload JSON to 500 chars with '...' suffix)\n- Verify `limit` param is applied before serialization\n- Consider adding `offset` param for proper pagination\n- Consider adding a `maxResponseBytes` safety cap",
+  "definitionOfDone": [
+    "get_activity_log with limit:20 never exceeds 50K chars response",
+    "Large event payloads are truncated (e.g., plan steps, rejection details)",
+    "limit parameter correctly caps number of entries returned",
+    "offset parameter added for pagination",
+    "Existing tests pass, new tests cover truncation behavior"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add payload truncation and offset parameter to getActivityLog tool.\n\nIn `packages/moe-daemon/src/tools/getActivityLog.ts`:\n\n1. Add `offset` to inputSchema properties: `offset: { type: 'number', description: 'Skip first N events (for pagination, default 0)' }`\n2. Add `maxPayloadChars` to inputSchema: `maxPayloadChars: { type: 'number', description: 'Max chars per event payload (default 500, 0 = no limit)' }`\n3. Parse new params with defaults: `const offset = params.offset && params.offset > 0 ? params.offset : 0;` and `const maxPayloadChars = params.maxPayloadChars !== undefined ? params.maxPayloadChars : 500;`\n4. After filtering and before final slice, apply offset: `events = events.slice(offset, offset + limit);`\n5. Add a `truncatePayload()` helper that takes an event and maxPayloadChars, deep-clones the event, and truncates string values in `payload` that exceed maxPayloadChars. For object/array payload values, stringify then truncate. Append `' [truncated]'` suffix.\n6. Apply truncation to every returned event: `events = events.map(e => truncatePayload(e, maxPayloadChars))`\n7. Add `offset` to the returned `filters` object.\n8. Add `hasMore: boolean` to response — true if there were more events beyond the returned window.\n\nError handling: truncatePayload must never throw — wrap in try/catch, return original event on error.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "startedAt": "2026-03-03T15:04:14.601Z",
+      "completedAt": "2026-03-03T15:04:36.978Z",
+      "note": "Added truncatePayload helper, offset param, maxPayloadChars param (default 500), hasMore flag. Truncation handles strings and objects, never throws.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Cap the pre-fetch multiplier to prevent reading too many lines.\n\nIn `packages/moe-daemon/src/tools/getActivityLog.ts`, the fetchLimit calculation on line ~43 does `Math.max(limit * 5, 500)` which reads 500+ entries even for limit:20. Change to:\n```typescript\nconst fetchLimit = params.taskId || params.epicId || params.workerId || params.eventTypes\n  ? Math.min(Math.max(limit * 5, 100), 1000)\n  : limit;\n```\nThis caps pre-fetch at 1000 lines max (was unbounded for large limits). Also add offset to the pre-fetch: `fetchLimit + offset` so pagination works correctly with the underlying reader.\n\nError handling: ensure fetchLimit is always a positive integer.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "startedAt": "2026-03-03T15:04:42.742Z",
+      "completedAt": "2026-03-03T15:04:47.510Z",
+      "note": "Already addressed in step 1: fetchLimit capped at 1000 with Math.min, offset factored into pre-fetch calculation."
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add test coverage for payload truncation, offset pagination, and response size cap.\n\nCreate or update test file for getActivityLog. Tests:\n1. Payload truncation: create events with large payloads (e.g., 5000 char strings), call tool with default maxPayloadChars=500, verify returned payload values are truncated with '[truncated]' suffix\n2. Payload no-truncation: call with maxPayloadChars=0, verify payloads returned in full\n3. Offset pagination: create 10 events, call with limit=3 offset=0, then limit=3 offset=3, verify non-overlapping windows and correct ordering\n4. hasMore flag: verify hasMore=true when more events exist beyond window, false when at end\n5. Combined filters + offset: filter by taskId with offset, verify correct results\n6. Error handling: verify truncatePayload handles non-string payload values gracefully\n\nUse vitest, follow existing test patterns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T15:04:51.627Z",
+      "completedAt": "2026-03-03T15:08:42.768Z",
+      "note": "Added 6 tests: payload truncation, no-truncation (maxPayloadChars=0), offset pagination non-overlapping windows, hasMore true/false, object payload truncation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Build and run test suite to verify compilation and all tests pass.\n\nRun `npx tsc --noEmit` and `npx vitest run` in packages/moe-daemon. Fix any compilation or test failures. Verify no regressions in existing tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T15:08:43.074Z",
+      "completedAt": "2026-03-03T15:08:47.931Z",
+      "note": "tsc --noEmit clean. 309 tests pass, 0 failures. Fixed off-by-one in fetchLimit for hasMore detection (needed +1 to peek beyond window).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 23,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T14:54:19.025Z",
+  "updatedAt": "2026-03-03T15:15:34.350Z",
+  "planSubmittedAt": "2026-03-03T14:56:01.757Z",
+  "planApprovedAt": "2026-03-03T14:56:01.761Z",
+  "workStartedAt": "2026-03-03T15:04:14.601Z",
+  "completedAt": "2026-03-03T15:08:52.944Z",
+  "reviewStartedAt": "2026-03-03T15:08:52.944Z",
+  "reviewCompletedAt": "2026-03-03T15:15:34.350Z"
+}

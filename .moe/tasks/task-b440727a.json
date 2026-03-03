@@ -1,0 +1,125 @@
+{
+  "id": "task-b440727a",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 3: Activity Indicators in Chat",
+  "description": "Show colored status dots next to agent names in chat messages based on worker status (IDLE=gray, CODING=green, PLANNING=purple, BLOCKED=red). Small data flow change + UI in both VS Code and JetBrains.",
+  "definitionOfDone": [
+    "VS Code: workers array changed to workerMap with id and status",
+    "VS Code: getStatusIndicator() returns colored dot span based on worker status",
+    "VS Code: Status dots displayed before sender badge in renderMessage()",
+    "VS Code: refreshStatusBadges() updates dots without full re-render",
+    "JetBrains: workerStatusMap field populated from state.workers",
+    "JetBrains: Colored dot painted before senderLabel for agent senders",
+    "Both compile successfully"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VS Code data flow: In `ChatViewProvider.ts`, change `onStateChanged` (line 51) and `ready` handler (line 109) to send `state.workers.map(w => ({ id: w.id, status: w.status }))` instead of `state.workers.map(w => w.id)`. This passes worker status alongside ID to the webview. Error handling: gracefully handle workers with missing status field (default to 'IDLE').",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:36:56.550Z",
+      "completedAt": "2026-03-02T21:37:24.830Z",
+      "note": "Changed both onStateChanged and ready handler to send {id, status} objects instead of bare IDs. Defaults to 'IDLE' for missing status.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code webview: Replace `workers = []` array (line ~370) with `workerMap = {}` (id -> {id, status}). Update `updateWorkers` message handler to populate workerMap. Add `getStatusIndicator(sender)` function returning a `<span class=\"status-dot\">` with inline background color: IDLE=#888, CODING=#22c55e, PLANNING=#a855f7, BLOCKED=#ef4444, REVIEWING=#f59e0b, default=#888. Insert status dot before sender badge in `renderMessage()` (line 487). Add `refreshStatusBadges()` to update all existing dots by querying `.status-dot` elements. Call it from `updateWorkers` handler. Error handling: unknown sender returns no dot.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:37:29.415Z",
+      "completedAt": "2026-03-02T21:39:11.993Z",
+      "note": "Replaced workers array with workerMap object. Added getStatusIndicator() with color mapping, refreshStatusBadges() for live updates. Inserted status dot before sender badge in renderMessage(). Updated updateWorkers handler and mention autocomplete to use workerMap.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VS Code CSS: Add `.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }` to the `<style>` block in `getHtmlContent()`. Also update the @mention autocomplete items to use workerMap for completion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:39:16.681Z",
+      "completedAt": "2026-03-02T21:39:32.149Z",
+      "note": "Added .status-dot CSS with 8px circle, inline-block display, and vertical-align middle.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "JetBrains: Add `private val workerStatusMap = mutableMapOf<String, String>()` field to ChatPanel. Update `onState` callback (line ~129) to populate it from `state.workers.associate { it.id to (it.status ?: \"IDLE\") }`. Note: Worker model in Models.kt may need `status` field added if missing. Error handling: default to IDLE for missing status.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "startedAt": "2026-03-02T21:39:36.772Z",
+      "completedAt": "2026-03-02T21:40:06.283Z",
+      "note": "Added workerStatusMap field. Updated onState to populate it from state.workers. Worker model already has status field.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "JetBrains: In `createMessageBubble()`, add a colored dot panel before `senderLabel` in `headerPanel` for non-human/non-system senders. Create `statusDotColor(status: String): Color` helper mapping IDLE->gray, CODING->green, PLANNING->purple, BLOCKED->red, REVIEWING->amber. The dot is a small JPanel(8x8) with `paintComponent` override drawing a filled circle. Error handling: unknown status defaults to gray.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:40:10.309Z",
+      "completedAt": "2026-03-02T21:40:50.287Z",
+      "note": "Added 8px colored dot JPanel before senderLabel for agent senders. Added statusDotColor() helper mapping IDLE->gray, CODING->green, PLANNING->purple, BLOCKED->red, REVIEWING->amber.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test and verify: Run `cd moe-vscode && npm run compile` and `cd moe-jetbrains && ./gradlew buildPlugin` to confirm compilation. Manual test: when an agent worker is CODING, its status dot should appear green next to its name in chat messages.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:40:54.579Z",
+      "completedAt": "2026-03-02T21:41:24.663Z",
+      "note": "VS Code compiles cleanly. JetBrains BUILD SUCCESSFUL."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 14,
+  "comments": [
+    {
+      "id": "comment-80101c48",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains status dots FIRST, then VS Code.",
+      "timestamp": "2026-03-02T21:51:03.714Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:14:32.818Z",
+  "updatedAt": "2026-03-02T22:08:44.463Z",
+  "planSubmittedAt": "2026-03-02T21:15:45.745Z",
+  "planApprovedAt": "2026-03-02T21:15:45.748Z",
+  "workStartedAt": "2026-03-02T21:36:56.550Z",
+  "completedAt": "2026-03-02T21:41:35.612Z",
+  "reviewStartedAt": "2026-03-02T21:41:35.612Z",
+  "reviewCompletedAt": "2026-03-02T22:08:44.463Z"
+}

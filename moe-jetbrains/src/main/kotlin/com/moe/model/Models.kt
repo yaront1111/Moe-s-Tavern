@@ -6,7 +6,8 @@ data class MoeState(
     val tasks: List<Task>,
     val proposals: List<RailProposal> = emptyList(),
     val workers: List<Worker> = emptyList(),
-    val teams: List<Team> = emptyList()
+    val teams: List<Team> = emptyList(),
+    val channels: List<ChatChannel> = emptyList()
 )
 
 data class Project(
@@ -33,7 +34,9 @@ data class Epic(
     val architectureNotes: String,
     val epicRails: List<String>,
     val status: String,
-    val order: Double
+    val order: Double,
+    val createdAt: String = "",
+    val updatedAt: String = ""
 )
 
 data class TaskComment(
@@ -114,4 +117,43 @@ data class Team(
     val role: String,
     val memberIds: List<String>,
     val maxSize: Int = 10
+)
+
+data class ChatChannel(
+    val id: String,
+    val name: String,
+    val type: String,
+    val linkedEntityId: String? = null,
+    val createdAt: String = ""
+)
+
+data class ChatMessage(
+    val id: String,
+    val channel: String,
+    val sender: String,
+    val content: String,
+    val replyTo: String? = null,
+    val mentions: List<String> = emptyList(),
+    val timestamp: String = "",
+    val decisionId: String? = null
+)
+
+data class PinEntry(
+    val messageId: String,
+    val pinnedBy: String,
+    val pinnedAt: String,
+    val done: Boolean,
+    val doneAt: String? = null
+)
+
+data class Decision(
+    val id: String,
+    val proposedBy: String,
+    val content: String,
+    val status: String,
+    val approvedBy: String? = null,
+    val channel: String? = null,
+    val messageId: String? = null,
+    val createdAt: String = "",
+    val resolvedAt: String? = null
 )

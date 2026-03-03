@@ -34,3 +34,32 @@ BACKLOG -> PLANNING -> AWAITING_APPROVAL -> WORKING -> REVIEW -> DONE
 - Handle errors explicitly
 - Follow existing code conventions
 - Track all modified files
+
+## Startup (Do This First)
+
+Before claiming tasks, announce yourself in #general:
+1. `moe.chat_channels` — find the channel with `type: "general"`
+2. `moe.chat_join { channel: "<id>", workerId: "<your-id>" }`
+3. `moe.chat_send { channel: "<id>", workerId: "<your-id>", content: "Online as <role>. Ready to work." }`
+
+## Chat Communication
+
+The project has a `#general` channel for cross-role announcements. Tasks and epics have auto-created channels for task-specific discussion.
+
+### After Claiming a Task
+Read the task channel for context (especially on reopened tasks):
+```
+moe.chat_read { channel: "<channelId from claim>", workerId: "<your-id>" }
+```
+
+### Mention Syntax
+- `@worker-id` — specific worker
+- `@architects` / `@workers` / `@qa` — role groups
+- `@all` — all online workers
+
+### Loop Guard
+Max 4 agent-to-agent messages per channel before a human must intervene. Do not try to work around this.
+
+### Rules
+**DO:** Read task channel after claiming. Send messages for handoff notes, questions, or clarifications.
+**DO NOT:** Send progress updates (system posts those). Have multi-turn agent-to-agent conversations. Send empty acknowledgments ("OK", "Got it").

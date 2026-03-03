@@ -1,0 +1,27 @@
+{
+  "id": "task-952a3a6b",
+  "epicId": "epic-7e26d221",
+  "title": "Fix plugin WebSocket handlers bypassing StateManager mutex (race condition)",
+  "description": "**Found during QA deep audit of B1/B2 fixes.**\n\nPlugin WebSocket handlers in WebSocketServer.ts call state-mutating methods directly without `state.runExclusive()`, creating race conditions with MCP tool handlers that DO use the mutex.\n\n**Affected handlers:**\n- `UPDATE_TASK` (line ~223): `state.updateTask()` — can race with `claimNextTask`\n- `CREATE_TASK` (line ~168): `state.createTask()`\n- `APPROVE_TASK`: `state.approveTask()`\n- `REJECT_TASK`: `state.rejectTask()`\n- `REOPEN_TASK`: `state.reopenTask()`\n- `ARCHIVE_DONE_TASKS`: iterates + updates tasks without mutex\n\n**Race scenario:**\n1. MCP `claimNextTask` enters `state.runExclusive`, reads task list, about to assign\n2. Plugin sends `UPDATE_TASK` for same task — calls `state.updateTask` directly, no mutex\n3. Both calls interleave during `await writeEntity` yield — torn state\n\n**Fix:** Either wrap all plugin state-mutating handlers in `state.runExclusive()`, or make `updateTask`/`createTask` etc. acquire the mutex internally (then `claimNextTask` needs a non-locking internal variant).",
+  "definitionOfDone": [
+    "All plugin state-mutating WebSocket handlers use state.runExclusive() or equivalent mutex protection",
+    "No race between plugin UPDATE_TASK and MCP claimNextTask",
+    "Existing tests pass + new concurrency test"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 11,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T23:23:07.331Z",
+  "updatedAt": "2026-03-03T23:23:07.331Z"
+}

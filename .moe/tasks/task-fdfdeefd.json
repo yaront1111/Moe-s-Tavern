@@ -1,0 +1,101 @@
+{
+  "id": "task-fdfdeefd",
+  "epicId": "epic-7e26d221",
+  "title": "Fix proxy and script bugs (B14, B15, B21, B22)",
+  "description": "Fix proxy and script reliability bugs:\\n\\n**B14 (HIGH): Proxy message loss on stdout pipe failure**\\n- File: packages/moe-proxy/src/index.ts:84-93, 407-422\\n- When stdout broken, messages dropped silently — error responses also go to broken pipe.\\n- Fix: Detect broken pipe and exit cleanly, or use stderr for error signaling.\\n\\n**B15 (MEDIUM): Speed mode timeout error handling**\\n- File: packages/moe-daemon/src/tools/submitPlan.ts:124-140\\n- If updateTask() throws in timeout callback, task stuck. Timeout ID leaks.\\n- Fix: Always delete from map in finally block; surface error.\\n\\n**B21 (MEDIUM): moe-agent.ps1 team setup crashes on null MCP response**\\n- File: scripts/moe-agent.ps1:539\\n- $createResult.result.content[0].text throws 'Cannot index into a null array' when daemon not running.\\n- Fix: Add null checks: if ($createResult.result -and $createResult.result.content)\\n\\n**B22 (MEDIUM): Proxy buffer overflow — no per-line size limit**\\n- File: packages/moe-proxy/src/index.ts:376-386\\n- Buffer overflow check only when >1MB AND no newline. 999KB lines bypass the check.\\n- Fix: Add per-line length limit.",
+  "definitionOfDone": [
+    "Proxy detects broken pipe and exits cleanly",
+    "Speed mode timeout always cleans up map entry in finally block",
+    "moe-agent.ps1 handles null MCP responses gracefully",
+    "Proxy enforces per-line length limit",
+    "npm run build succeeds for daemon and proxy"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B14 Fix: Detect broken stdout pipe in proxy and exit cleanly. In packages/moe-proxy/src/index.ts, in the safeStdoutWrite() function (~line 84-93), after catching a write error, check if `err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED'`. If so, log to stderr 'stdout pipe broken, exiting' and call `process.exit(1)`. This prevents the proxy from silently dropping all subsequent messages. Also add a `process.stdout.on('error', ...)` handler at startup that does the same check. Error handling: exit code 1 signals the parent process (moe-agent.sh/ps1) to restart.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-03-03T22:49:45.211Z",
+      "completedAt": "2026-03-03T22:50:23.407Z",
+      "note": "Added EPIPE/ERR_STREAM_DESTROYED detection to safeStdoutWrite — exits cleanly on broken pipe. Added global process.stdout.on('error') handler in main() for early detection.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B15 Fix: Fix speed mode timeout cleanup in submitPlan.ts. In the setTimeout callback (~line 124-140), move `speedModeTimeouts.delete(task.id)` into a `finally` block so it runs even if updateTask() throws. Structure: `try { ... await state.updateTask(...) } catch (error) { state.appendActivity(...) } finally { speedModeTimeouts.delete(task.id); }`. This prevents timeout ID memory leaks. Error handling: the catch block already logs the error; the finally ensures cleanup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "startedAt": "2026-03-03T22:50:23.720Z",
+      "completedAt": "2026-03-03T22:50:48.005Z",
+      "note": "Moved speedModeTimeouts.delete() from before try into finally block. Ensures cleanup happens regardless of whether updateTask succeeds or throws.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B21 Fix: Add null checks to moe-agent.ps1 team setup. In scripts/moe-agent.ps1 (~line 538-549), before indexing into the MCP response, add validation:\n```powershell\nif ($createResult -and $createResult.result -and $createResult.result.content -and $createResult.result.content.Count -gt 0) {\n    $teamObj = $createResult.result.content[0].text | ConvertFrom-Json\n    ...\n} else {\n    Write-Host 'WARNING: Could not parse team creation response' -ForegroundColor Yellow\n}\n```\nAlso add the same null-safety to the join_team response parsing. Error handling: on parse failure, continue without team context (agent still works, just without team awareness).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-03-03T22:50:48.394Z",
+      "completedAt": "2026-03-03T22:51:13.042Z",
+      "note": "Added null checks before indexing into MCP response. If createResult/result/content is null, shows warning and continues without team context instead of crashing.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "B22 Fix: Add per-line length limit to proxy stdin buffer. In packages/moe-proxy/src/index.ts (~line 376-386), after splitting on newline, check each line's length. Add a `MAX_LINE_SIZE = 512 * 1024` (512KB) constant. If any line exceeds this, log error to stderr and skip it (don't process). Also change the existing buffer overflow check to trigger on total buffer size > MAX_BUFFER_SIZE regardless of newline presence — remove the `&& buffer.indexOf('\\n') === -1` condition. Error handling: send JSON-RPC error response for oversized messages if possible.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ],
+      "startedAt": "2026-03-03T22:51:13.423Z",
+      "completedAt": "2026-03-03T22:51:36.254Z",
+      "note": "Added MAX_LINE_SIZE=512KB constant. Lines exceeding limit are logged and skipped. Removed the '&& no newline' condition from buffer overflow check — now triggers on total buffer size alone.",
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Build and verify: Run `cd packages/moe-daemon && npm run build && npm test` and `cd packages/moe-proxy && npm run build`. Test moe-agent.ps1 team setup with daemon not running (should warn gracefully, not crash).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T22:51:36.665Z",
+      "completedAt": "2026-03-03T22:52:02.849Z",
+      "note": "Daemon and proxy both build clean. 319 daemon tests pass."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:17:00.986Z",
+  "updatedAt": "2026-03-03T22:55:04.823Z",
+  "planSubmittedAt": "2026-03-03T22:19:30.361Z",
+  "planApprovedAt": "2026-03-03T22:19:30.365Z",
+  "workStartedAt": "2026-03-03T22:49:45.211Z",
+  "completedAt": "2026-03-03T22:52:11.350Z",
+  "reviewStartedAt": "2026-03-03T22:52:11.350Z",
+  "reviewCompletedAt": "2026-03-03T22:55:04.823Z"
+}

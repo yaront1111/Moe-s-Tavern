@@ -718,3 +718,207 @@ List all teams, optionally filtered by role.
   }>
 }
 ```
+
+---
+
+## Chat Tools
+
+Real-time multi-agent chat communication. Ported from [agentchattr](https://github.com/bcurts/agentchattr).
+
+### moe.chat_send
+
+Send a chat message to a channel. Parses @mentions and returns routing info.
+
+**Parameters:**
+```typescript
+{
+  channel: string,      // Required: channel ID
+  content: string,      // Required: message text (max 10KB)
+  workerId?: string,    // Sender worker ID (defaults to "human")
+  replyTo?: string      // Message ID for threading
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, messageId, channel, timestamp, routed: string[] }
+```
+
+**Notes:**
+- @mentions are parsed from content (e.g., `@worker-abc123`)
+- `routed` array contains all mentioned worker IDs
+
+---
+
+### moe.chat_read
+
+Read chat messages with cursor-based pagination. Auto-tracks read position per worker.
+
+**Parameters:**
+```typescript
+{
+  channel?: string,     // Channel ID (omit to read from all channels)
+  workerId?: string,    // Worker ID for auto-cursor tracking
+  sinceId?: string,     // Return messages after this message ID
+  limit?: number        // Max messages (default 20, max 200)
+}
+```
+
+**Returns:**
+```typescript
+{ messages: ChatMessage[], cursor: string | null }
+```
+
+**Notes:**
+- If `workerId` provided without `sinceId`, uses the worker's saved cursor for incremental reads
+- After reading, the worker's cursor is automatically updated
+- When no `channel` specified, reads from all channels merged by timestamp
+
+---
+
+### moe.chat_channels
+
+List all chat channels in the project.
+
+**Parameters:**
+```typescript
+{}  // No required parameters
+```
+
+**Returns:**
+```typescript
+{ channels: ChatChannel[] }
+```
+
+---
+
+### moe.chat_join
+
+Join a chat channel. Posts a system message and returns online workers.
+
+**Parameters:**
+```typescript
+{
+  channel: string,      // Required: channel ID
+  workerId: string      // Required: your worker ID
+}
+```
+
+**Returns:**
+```typescript
+{ channel, channelName, onlineWorkers: Array<{ id, status }> }
+```
+
+**Notes:**
+- Posts a system message: `{workerId} joined #{channelName}`
+- Online workers are those with activity within the last 120 seconds
+
+---
+
+### moe.chat_who
+
+List online workers. Optionally filter by channel participation.
+
+**Parameters:**
+```typescript
+{
+  channel?: string      // Optional: filter by channel participation
+}
+```
+
+**Returns:**
+```typescript
+{
+  online: Array<{
+    workerId: string,
+    status: string,
+    lastActivity: string,
+    currentTaskId: string | null
+  }>
+}
+```
+
+**Notes:**
+- Uses 120-second presence timeout (matching agentchattr)
+- Channel filter checks worker's chatCursors for participation
+
+---
+
+### moe.chat_wait
+
+Long-poll for chat messages mentioning this worker or from humans.
+
+**Parameters:**
+```typescript
+{
+  workerId: string,     // Required: your worker ID
+  channels?: string[],  // Optional: channel filter
+  timeoutMs?: number    // Max wait (default 300000, max 600000)
+}
+```
+
+**Returns:**
+```typescript
+{ hasMessage: true, messages: [ChatMessage] }  // on match
+{ hasMessage: false, timedOut: true }           // on timeout
+{ hasMessage: false, cancelled: true }          // if cancelled
+```
+
+**Notes:**
+- Follows the same long-poll pattern as `moe.wait_for_task`
+- Only wakes for messages where `workerId` is in `mentions` or `sender` is "human"
+- Cancels any previous wait for the same worker
+
+### moe.chat_decision
+
+Propose a decision for human approval. Optionally posts a system message to a chat channel linking to the decision.
+
+**Parameters:**
+```typescript
+{
+  content: string,      // Required: decision text (max 10KB)
+  channel?: string,     // Optional: channel ID to post decision message
+  workerId?: string     // Optional: proposing worker ID (defaults to "human")
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  decision: Decision,   // The created decision entity
+  messageId?: string    // System message ID (if channel was specified)
+}
+```
+
+**Notes:**
+- Creates a Decision entity in `.moe/decisions/{id}.json`
+- If `channel` is provided, posts a system message with `decisionId` set on the ChatMessage
+- Decision starts in `proposed` status
+- Humans approve/reject from IDE UI (GET_DECISIONS → APPROVE_DECISION / REJECT_DECISION WebSocket messages)
+- Emits `DECISION_PROPOSED` state change event
+
+---
+
+### moe.chat_resync
+
+Clear chat cursors and return full message history for resync. Useful when a worker loses context or wants to re-read all messages.
+
+**Parameters:**
+```typescript
+{
+  workerId: string,   // Required: worker whose cursors to reset
+  channel?: string,   // Optional: specific channel to resync (omit for all)
+  limit?: number      // Max messages per channel (default 50, max 200)
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, messagesCount: number, messages: ChatMessage[], cursorsReset: true }
+```
+
+**Notes:**
+- Clears the worker's chatCursors for the specified channel (or all channels)
+- Returns messages from the beginning of history
+- Updates cursors to the latest message after resync

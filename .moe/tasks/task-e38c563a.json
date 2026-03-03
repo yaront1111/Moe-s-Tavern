@@ -1,0 +1,135 @@
+{
+  "id": "task-e38c563a",
+  "epicId": "epic-941ca1ca",
+  "title": "Chat Schema & Data Model",
+  "description": "Add ChatMessage, ChatChannel TypeScript interfaces and extend existing types for chat support.\n\n## What to implement\n\n### New interfaces in `packages/moe-daemon/src/types/schema.ts`:\n\n```typescript\ninterface ChatMessage {\n  id: string;                    // \"msg-{uuid}\"\n  channel: string;               // channel ID\n  sender: string;                // workerId or \"human\" or \"system\"\n  content: string;               // message text (max 10KB)\n  replyTo: string | null;        // parent message ID for threading\n  mentions: string[];            // parsed @mentions (workerId strings)\n  timestamp: string;             // ISO 8601\n}\n\ninterface ChatChannel {\n  id: string;                    // \"chan-{uuid}\"\n  name: string;                  // \"general\", \"epic-auth\", \"task-login\"\n  type: 'general' | 'epic' | 'task' | 'custom';\n  linkedEntityId: string | null; // epicId or taskId if type is epic/task\n  createdAt: string;\n}\n```\n\n### Extend existing interfaces:\n\n- `Worker` — add `chatCursors: Record<string, string>` (channelId → lastReadMessageId)\n- `ProjectSettings` — add `chatEnabled: boolean` (default: true), `chatMaxAgentHops: number` (default: 4), `chatAutoCreateChannels: boolean` (default: true)\n- `StateChangeEvent` — add variants `MESSAGE_CREATED` and `CHANNEL_CREATED`\n- `MoeStateSnapshot` — add `channels: ChatChannel[]`\n\n### Documentation:\n- Update `docs/SCHEMA.md` with new types and storage layout\n\n### Storage directories (documented, not created yet — migration task handles that):\n- `.moe/channels/{channel-id}.json` — Channel metadata\n- `.moe/messages/{channel-id}.jsonl` — Append-only JSONL per channel",
+  "definitionOfDone": [
+    "ChatMessage and ChatChannel interfaces added to schema.ts",
+    "Worker interface extended with chatCursors field",
+    "ProjectSettings extended with chatEnabled, chatMaxAgentHops, chatAutoCreateChannels",
+    "StateChangeEvent extended with MESSAGE_CREATED and CHANNEL_CREATED variants",
+    "MoeStateSnapshot extended with channels array",
+    "docs/SCHEMA.md updated with new types and storage layout",
+    "npm run build succeeds with no type errors"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add ChatMessage and ChatChannel interfaces to packages/moe-daemon/src/types/schema.ts. ChatMessage: { id: string (msg-{uuid}), channel: string, sender: string, content: string, replyTo: string | null, mentions: string[], timestamp: string }. ChatChannel: { id: string (chan-{uuid}), name: string, type: 'general' | 'epic' | 'task' | 'custom', linkedEntityId: string | null, createdAt: string }. Export both interfaces alongside existing types. Add 'chan' and 'msg' to the ID prefix patterns.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:35:37.487Z",
+      "completedAt": "2026-03-02T16:51:06.984Z",
+      "note": "Added ChatMessage and ChatChannel interfaces. ChatMessage mirrors agentchattr's message model (id, channel, sender, content, replyTo for threading, mentions array, timestamp). ChatChannel adds typed channels with linkedEntityId for epic/task auto-channels. ID prefixes: msg- and chan-.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Extend the Worker interface in schema.ts by adding optional field: chatCursors?: Record<string, string> (channelId to lastReadMessageId mapping). This field is optional so existing workers without it still validate. Add error handling notes: consumers must default to {} if undefined.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:51:07.002Z",
+      "completedAt": "2026-03-02T16:51:36.310Z",
+      "note": "Added chatCursors as optional Record<string, string> to Worker. Mirrors agentchattr's _cursors pattern (per-agent, per-channel last-read tracking). Optional so existing worker JSON files remain valid.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Extend ProjectSettings interface in schema.ts with three new optional fields with defaults: chatEnabled?: boolean (default true), chatMaxAgentHops?: number (default 4), chatAutoCreateChannels?: boolean (default true). Mark as optional so existing projects without these fields still load correctly. Consumers should apply defaults via nullish coalescing for error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:51:36.342Z",
+      "completedAt": "2026-03-02T16:51:56.377Z",
+      "note": "Added chatEnabled, chatMaxAgentHops (mirrors agentchattr's max_agent_hops=4), chatAutoCreateChannels. All optional for backward compat.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Extend the StateChangeEvent union type in schema.ts with two new variants: { type: 'MESSAGE_CREATED'; payload: ChatMessage } and { type: 'CHANNEL_CREATED'; payload: ChatChannel }. Add 'MESSAGE_CREATED' and 'CHANNEL_CREATED' to the ActivityEventType union if applicable, or keep separate if chat events don't go to activity.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:51:56.786Z",
+      "completedAt": "2026-03-02T16:52:58.836Z",
+      "note": "StateChangeEvent lives in StateManager.ts (not schema.ts). Added MESSAGE_CREATED and CHANNEL_CREATED variants there with proper ChatMessage/ChatChannel payload types. Also added both to ACTIVITY_EVENT_TYPES in schema.ts so they can appear in activity.log.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Extend MoeStateSnapshot interface in schema.ts by adding: channels: ChatChannel[]. This will be included in STATE_SNAPSHOT broadcasts to plugins. Messages are NOT included (fetched on-demand per channel).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:52:58.877Z",
+      "completedAt": "2026-03-02T16:53:45.754Z",
+      "note": "Added channels: ChatChannel[] to MoeStateSnapshot. Updated getSnapshot() in StateManager to return channels: [] as placeholder until ChatManager is built in a later task. Messages are intentionally excluded from snapshot (fetched on-demand per channel, matching agentchattr's pattern).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update docs/SCHEMA.md to document the new ChatMessage and ChatChannel types, the extended Worker.chatCursors field, the extended ProjectSettings chat fields, the new StateChangeEvent variants, and the storage layout (.moe/channels/{id}.json for channel metadata, .moe/messages/{id}.jsonl for append-only messages). Document that schema version will be bumped to 5 in the migration task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "startedAt": "2026-03-02T16:53:46.171Z",
+      "completedAt": "2026-03-02T16:55:51.728Z",
+      "note": "Updated SCHEMA.md with: ChatChannel and ChatMessage type docs with examples, ProjectSettings.chat* fields, Worker.chatCursors, new activity event types (MESSAGE_CREATED, CHANNEL_CREATED), storage layout docs (.moe/channels/ + .moe/messages/), updated entity diagram, updated ID prefix list with chan- and msg-. Documented @mention routing and loop guard behavior. Noted schema version 5 bump will happen in migration task.",
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Test: Run 'cd packages/moe-daemon && npm run build' to verify no type errors. Fix any compilation issues. Verify that existing code compiles cleanly with the new optional fields and that no existing test suites break.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T16:55:51.881Z",
+      "completedAt": "2026-03-02T16:56:34.019Z",
+      "note": "Build passes (tsc clean, zero errors). All 275 tests pass across 15 test files. No regressions from the new optional fields."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:20:57.102Z",
+  "updatedAt": "2026-03-02T17:59:17.972Z",
+  "planSubmittedAt": "2026-03-02T16:32:34.846Z",
+  "planApprovedAt": "2026-03-02T16:32:34.848Z",
+  "workStartedAt": "2026-03-02T16:35:37.487Z",
+  "completedAt": "2026-03-02T16:56:43.203Z",
+  "reviewStartedAt": "2026-03-02T16:56:43.203Z",
+  "reviewCompletedAt": "2026-03-02T17:59:17.972Z"
+}

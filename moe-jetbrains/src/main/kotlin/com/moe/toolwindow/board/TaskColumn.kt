@@ -37,7 +37,8 @@ class TaskColumn(
     private val onCreateTask: (() -> Unit)? = null,
     private val onClearColumn: (() -> Unit)? = null,
     private val onNext: ((Task) -> Unit)? = null,
-    private val onPrevious: ((Task) -> Unit)? = null
+    private val onPrevious: ((Task) -> Unit)? = null,
+    private val epicSortByDate: Boolean = false
 ) : JBPanel<TaskColumn>(BorderLayout()) {
 
     init {
@@ -146,9 +147,15 @@ class TaskColumn(
         listPanel.transferHandler = dropHandler
 
         val grouped = tasks.groupBy { it.epicId }
-        val sortedEpicIds = grouped.keys.sortedWith(
-            compareBy({ epicMeta[it]?.order ?: Double.MAX_VALUE }, { epicMeta[it]?.title ?: "No Epic" })
-        )
+        val sortedEpicIds = if (epicSortByDate) {
+            grouped.keys.sortedWith(
+                compareBy({ epicMeta[it]?.createdAt ?: "" }, { epicMeta[it]?.title ?: "No Epic" })
+            )
+        } else {
+            grouped.keys.sortedWith(
+                compareBy({ epicMeta[it]?.order ?: Double.MAX_VALUE }, { epicMeta[it]?.title ?: "No Epic" })
+            )
+        }
 
         for (epicId in sortedEpicIds) {
             val epic = epicMeta[epicId]

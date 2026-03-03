@@ -1,0 +1,163 @@
+{
+  "id": "task-5323dae2",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix daemon chat settings stripped + decision/mention data bugs",
+  "description": "3 HIGH + 6 MEDIUM daemon bugs.\\n\\nHIGH: (D1) normalizeProject strips chatEnabled/chatMaxAgentHops/chatAutoCreateChannels on every daemon start. (D2) initProject missing enableAgentTeams. (D3) mentions field stores routing targets not actual @mentions — paused channels lose data.\\n\\nMEDIUM: (D4) chatRead validation dead code. (D5) deleteChannel leaves orphaned pins. (D6) MentionRouter maxHops hardcoded ignoring setting. (D7) createDecision doesn't set decisionId on ChatMessage. (D8) createDecision ENOENT on migrated projects. (D9) pinMessage no messageId validation.",
+  "definitionOfDone": [
+    "D1: normalizeProject includes chatEnabled, chatMaxAgentHops, chatAutoCreateChannels in output",
+    "D2: initProject includes enableAgentTeams: false in created project.json",
+    "D3: ChatMessage stores both raw mentions (parsed from text) and routing targets separately, or stores raw mentions and computes routing at delivery time",
+    "D5: deleteChannel also removes .moe/pins/{channelId}.json if exists",
+    "D6: MentionRouter maxHops reads from project.settings.chatMaxAgentHops",
+    "D7: createDecision sets decisionId on the linked ChatMessage in JSONL",
+    "D8: createDecision ensures decisions/ directory exists before writing",
+    "D9: pinMessage validates messageId exists in channel messages",
+    "npm run build succeeds in packages/moe-daemon",
+    "npm test passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "D1: Fix `normalizeProject()` in StateManager.ts (~line 2192). Add chat settings to the output object: `chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true)`, `chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20)`, `chatAutoCreateChannels: sanitizeBoolean(project.settings?.chatAutoCreateChannels, true)`. Place after `columnLimits`. Error handling: defaults match schema defaults (true, 4, true).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T08:56:47.254Z",
+      "completedAt": "2026-03-03T08:57:04.974Z",
+      "note": "Added chatEnabled, chatMaxAgentHops, chatAutoCreateChannels to normalizeProject output with proper sanitization defaults (true, 4, true).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "D2: Fix `initProject.ts` (~line 76). Add `enableAgentTeams: false` to the settings object in the created project.json, alongside the existing chat settings. Error handling: this is a required field per the ProjectSettings interface.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ],
+      "startedAt": "2026-03-03T08:57:08.128Z",
+      "completedAt": "2026-03-03T08:57:22.339Z",
+      "note": "Added enableAgentTeams: false to initProject settings.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "D3: Fix mentions storage in `sendMessage()` (StateManager.ts ~line 671). Store raw @mentions parsed from text in `message.mentions`, and use the routing result only for notification delivery. Change: (1) Parse raw mentions with regex first: `const rawMentions = [...content.matchAll(/@(\\w[\\w-]*)/g)].map(m => m[1])`. (2) Set `message.mentions = rawMentions` (actual text mentions). (3) Use `routingResult.targets` only for the return value or a separate `routedTo` property for chatWait filtering. Since chatWait uses `message.mentions.includes(workerId)`, keep `mentions` as the routing targets but add a comment explaining the semantic. OR better: store raw mentions, and update chatWait to use the MentionRouter for filtering instead of `message.mentions`. Error handling: fall back to raw regex if MentionRouter errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T08:57:26.286Z",
+      "completedAt": "2026-03-03T08:59:47.532Z",
+      "note": "D3: message.mentions now stores raw @mentions parsed from text. Routing targets (expanded @all, loop guards) computed separately via MentionRouter and passed as routingTargets on the MESSAGE_CREATED event. chatWait updated to use routingTargets for delivery filtering, falling back to raw mentions. JSONL now stores accurate text mentions instead of ephemeral routing state.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "D5: Fix `deleteChannel()` in StateManager.ts (~line 796). After removing messages JSONL, also remove pins file: `const pinsFile = path.join(this.moePath, 'pins', channelId + '.json'); try { if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile); } catch {}`. Error handling: silently ignore if pins file doesn't exist.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T09:00:07.503Z",
+      "completedAt": "2026-03-03T09:00:25.801Z",
+      "note": "deleteChannel now removes pins/{channelId}.json alongside messages JSONL. Silently ignores missing pins file.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "D6: Fix MentionRouter maxHops in StateManager constructor (~line 188). Change from `new MentionRouter(4)` to lazy initialization: after `load()` completes and project settings are available, update the router: `this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4)`. Call this at end of `load()` method. Error handling: default to 4 if setting undefined.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T09:00:33.132Z",
+      "completedAt": "2026-03-03T09:00:59.161Z",
+      "note": "MentionRouter re-initialized at end of load() with project.settings.chatMaxAgentHops (default 4). Constructor still initializes with default 4 for pre-load usage.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "D7: Fix `createDecision()` in StateManager.ts (~line 941). After calling `sendMessage()`, update the message in the JSONL file to include `decisionId`. Since JSONL is append-only, add `decisionId` to the sendMessage opts — extend `sendMessage` to accept optional `decisionId` parameter, include it in the ChatMessage object. Error handling: decisionId is optional field, backward-compatible.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T09:01:03.216Z",
+      "completedAt": "2026-03-03T09:01:44.640Z",
+      "note": "Extended sendMessage to accept optional decisionId param. createDecision now passes decision.id to sendMessage, so the ChatMessage in JSONL has decisionId set. Schema already has decisionId as optional on ChatMessage.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "D8: Fix `createDecision()` to ensure decisions/ directory exists. Before `fs.writeFileSync(decisionFile, ...)`, add: `const decisionsDir = path.join(this.moePath, 'decisions'); fs.mkdirSync(decisionsDir, { recursive: true });`. Error handling: recursive mkdir is idempotent.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T09:01:50.840Z",
+      "completedAt": "2026-03-03T09:02:06.006Z",
+      "note": "Added recursive mkdirSync for decisions/ directory before writing decision file. Idempotent - no error if already exists.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "D9: Fix `pinMessage()` to validate messageId exists. After checking channel exists and not already pinned, add: `const messages = await this.getMessages(channelId, { limit: 200 }); if (!messages.some(m => m.id === messageId)) throw new Error('Message not found in channel');`. Error handling: throw descriptive error for invalid messageId.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T09:02:15.057Z",
+      "completedAt": "2026-03-03T09:02:35.775Z",
+      "note": "pinMessage now validates messageId exists in channel messages before pinning. Throws descriptive error for invalid messageId.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Test: Run `cd packages/moe-daemon && npm run build` and `npm test`. Verify normalizeProject preserves chat settings, MentionRouter uses project maxHops, createDecision sets decisionId on message, pinMessage rejects invalid messageIds.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T09:02:40.850Z",
+      "completedAt": "2026-03-03T09:03:02.486Z",
+      "note": "Build clean (tsc), all 293/293 tests pass."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 19,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T22:33:23.210Z",
+  "updatedAt": "2026-03-03T13:11:54.825Z",
+  "planSubmittedAt": "2026-03-02T22:34:28.302Z",
+  "planApprovedAt": "2026-03-02T22:34:28.304Z",
+  "workStartedAt": "2026-03-03T08:56:47.254Z",
+  "completedAt": "2026-03-03T09:03:13.459Z",
+  "reviewStartedAt": "2026-03-03T09:03:13.459Z",
+  "reviewCompletedAt": "2026-03-03T13:11:54.825Z"
+}

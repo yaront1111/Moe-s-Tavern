@@ -60,9 +60,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
     private val workerPanel = WorkerPanel()
+    @Volatile private var panelDisposed = false
     private var stateListener: MoeStateListener? = null
     private lateinit var agentsButton: JBLabel
     private var searchQuery: String = ""
+    private var epicSortByDate: Boolean = false
     private var lastStateFingerprint: String = ""
     private val columnOrder = listOf("BACKLOG", "PLANNING", "WORKING", "REVIEW", "DONE")
     private val columnPanels = mutableMapOf<String, TaskColumn>()
@@ -103,6 +105,21 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         epicFilter.preferredSize = Dimension(140, epicFilter.preferredSize.height)
         epicFilter.minimumSize = Dimension(100, epicFilter.preferredSize.height)
         header.add(epicFilter)
+
+        header.add(Box.createHorizontalStrut(8))
+        val epicSortCombo = ComboBox(arrayOf(
+            MoeBundle.message("moe.panel.sortOrder"),
+            MoeBundle.message("moe.panel.sortDate")
+        ))
+        epicSortCombo.preferredSize = Dimension(110, epicSortCombo.preferredSize.height)
+        epicSortCombo.toolTipText = MoeBundle.message("moe.panel.sortTooltip")
+        epicSortCombo.addActionListener {
+            epicSortByDate = epicSortCombo.selectedIndex == 1
+            lastStateFingerprint = ""
+            lastState?.let { updateBoard(it) }
+        }
+        header.add(JBLabel(MoeBundle.message("moe.panel.sortLabel")))
+        header.add(epicSortCombo)
 
         header.add(Box.createHorizontalStrut(8))
         header.add(JBLabel(MoeBundle.message("moe.panel.project")))
@@ -240,28 +257,34 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
         val proposalPanel = ProposalPanel(project)
         val activityLogPanel = ActivityLogPanel(project)
+        val chatPanel = ChatPanel(project)
 
         val tabbedPane = JTabbedPane().apply {
             addTab(MoeBundle.message("moe.tab.board"), scroll)
             addTab(MoeBundle.message("moe.tab.proposals"), proposalPanel)
             addTab(MoeBundle.message("moe.tab.activityLog"), activityLogPanel)
+            addTab(MoeBundle.message("moe.tab.chat"), chatPanel)
         }
         add(tabbedPane, BorderLayout.CENTER)
 
         // Register child disposables
         Disposer.register(this, proposalPanel)
         Disposer.register(this, activityLogPanel)
+        Disposer.register(this, chatPanel)
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
+                if (panelDisposed) return
                 updateBoard(state)
             }
 
             override fun onStatus(connected: Boolean, message: String) {
+                if (panelDisposed) return
                 styleStatusLabel(connected, message)
             }
 
             override fun onError(operation: String, message: String) {
+                if (panelDisposed) return
                 NotificationGroupManager.getInstance()
                     .getNotificationGroup("Moe Notifications")
                     .createNotification(MoeBundle.message("moe.notification.error"), MoeBundle.message("moe.notification.operationFailed", operation, message), NotificationType.ERROR)
@@ -367,7 +390,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     "${it.id}:${it.title}:${it.status}:${it.order}"
                 }
                 val collapsedFingerprint = collapsedEpics.toList().sorted().joinToString(",")
-                "$taskFingerprint|$epicFingerprint|epic=${selectedEpicId ?: "ALL"}|search=${searchQuery.lowercase()}|collapsed=$collapsedFingerprint"
+                "$taskFingerprint|$epicFingerprint|epic=${selectedEpicId ?: "ALL"}|search=${searchQuery.lowercase()}|collapsed=$collapsedFingerprint|sortByDate=$epicSortByDate"
             }.getOrElse { error ->
                 logger.warn("Failed to compute board fingerprint; proceeding with rebuild", error)
                 ""
@@ -536,7 +559,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         }
                     } else null,
                     onNext = if (!isDone) { task -> handleNext(task) } else null,
-                    onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null
+                    onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null,
+                    epicSortByDate = epicSortByDate
                 )
                 val colPref = column.preferredSize
                 column.preferredSize = Dimension(BoardStyles.columnWidth, colPref.height)
@@ -625,7 +649,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val currentSelection = selectedEpicId
         val items = mutableListOf<EpicFilterItem>()
         items.add(EpicFilterItem(MoeBundle.message("moe.panel.allEpics"), null))
-        for (epic in epics.sortedBy { it.order }) {
+        val sorted = if (epicSortByDate) epics.sortedBy { it.createdAt } else epics.sortedBy { it.order }
+        for (epic in sorted) {
             items.add(EpicFilterItem(epic.title, epic.id))
         }
         epicFilter.model = javax.swing.DefaultComboBoxModel(items.toTypedArray())
@@ -725,6 +750,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     }
 
     override fun dispose() {
+        panelDisposed = true
         stateListener?.let { service.removeListener(it) }
         stateListener = null
     }

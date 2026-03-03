@@ -37,6 +37,11 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         'QA_APPROVED'
       );
 
+      // Post system message to task channel
+      try {
+        await state.postSystemMessage(params.taskId, 'QA approved — task complete');
+      } catch { /* never block tool */ }
+
       return {
         success: true,
         taskId: updated.id,

@@ -1,0 +1,90 @@
+{
+  "id": "task-2201362a",
+  "epicId": "epic-7e26d221",
+  "title": "Fix daemon shutdown and lifecycle bugs (B26, B32, B33)",
+  "description": "**B26 (HIGH): uncaughtException handler doesn't await shutdown()**\\n- File: packages/moe-daemon/src/index.ts:452-459\\n- shutdown() is async but not awaited in uncaughtException handler. Process exits before cleanup finishes.\\n- Fix: Use shutdown().then(() => process.exit(1)).catch(() => process.exit(1)) since you can't await in uncaughtException handler. Or call synchronous cleanup directly.\\n\\n**B32 (MEDIUM): FileWatcher scheduleChange called after stop()**\\n- File: packages/moe-daemon/src/state/FileWatcher.ts:72-87\\n- No guard in scheduleChange() against processing events after stop() is called.\\n- Fix: Add `private stopped = false` flag. Set in stop(). Check at top of scheduleChange() and return early if stopped.\\n\\n**B33 (MEDIUM): Lock file not guaranteed deleted on force shutdown**\\n- File: packages/moe-daemon/src/index.ts:392-405\\n- If releaseLock() throws during force shutdown timeout, lock file persists. Stale locks prevent new daemons.\\n- Fix: Use fs.unlinkSync directly as last-resort fallback if releaseLock throws. Or use fs.rmSync with force:true.",
+  "definitionOfDone": [
+    "uncaughtException handler ensures cleanup before exit",
+    "FileWatcher ignores events after stop()",
+    "Lock file always cleaned up even on crash",
+    "npm run build && npm test pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B26 Fix: In packages/moe-daemon/src/index.ts uncaughtException handler (~line 452-459), replace the bare `shutdown()` call with `shutdown().then(() => process.exit(1)).catch(() => process.exit(1))`. This chains the exit after async cleanup completes. Also add a safety timeout (5s) inside the handler in case shutdown() hangs: `setTimeout(() => process.exit(1), 5000).unref()`. Error handling: both .then and .catch exit with code 1 since this is a crash path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-03-03T23:10:41.422Z",
+      "completedAt": "2026-03-03T23:11:07.764Z",
+      "note": "Replaced bare shutdown() call with shutdown().then/catch that exits with code 1. Added 5s safety timeout with unref() in case shutdown hangs.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B32 Fix: In packages/moe-daemon/src/state/FileWatcher.ts, add `private stopped = false` field. In stop() method (~line 111-119), set `this.stopped = true` as the first line, before clearing timers. In scheduleChange() (~line 72), add early return at the top: `if (this.stopped) return;`. Also check in the debounce callback (~line 85): if stopped, don't call the onChange handler. Error handling: this is a guard pattern, no errors to handle.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "startedAt": "2026-03-03T23:11:10.734Z",
+      "completedAt": "2026-03-03T23:11:49.450Z",
+      "note": "Added `stopped` flag set in stop(). scheduleChange() returns early if stopped. Debounce callback also checks stopped before calling processChange().",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B33 Fix: In packages/moe-daemon/src/index.ts force shutdown timeout (~line 392-405), after the `releaseLock()` try/catch, add a fallback that directly deletes the lock file. Import path and fs at the top (already imported). In the catch block, add: `try { const lockPath = path.join(projectPath, '.moe', 'daemon.lock'); fs.rmSync(lockPath, { force: true }); } catch {}`. The `force: true` flag means rmSync won't throw if file doesn't exist. Error handling: nested try/catch ensures we always proceed to process.exit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "startedAt": "2026-03-03T23:11:53.308Z",
+      "completedAt": "2026-03-03T23:12:09.352Z",
+      "note": "Added fs.rmSync with force:true as last-resort fallback in the catch block of releaseLock during forced shutdown. This ensures the lock file is cleaned up even if releaseLock throws.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add tests and verify: (1) FileWatcher test: verify that scheduleChange after stop() is a no-op. (2) Verify build: `cd packages/moe-daemon && npm run build && npm test`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "startedAt": "2026-03-03T23:12:12.116Z",
+      "completedAt": "2026-03-03T23:12:41.045Z",
+      "note": "Added regression test verifying FileWatcher ignores events after stop(). 321 tests pass, build clean.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/FileWatcher.test.ts"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:58:41.045Z",
+  "updatedAt": "2026-03-03T23:31:22.770Z",
+  "planSubmittedAt": "2026-03-03T22:59:36.101Z",
+  "planApprovedAt": "2026-03-03T22:59:36.103Z",
+  "workStartedAt": "2026-03-03T23:10:41.422Z",
+  "completedAt": "2026-03-03T23:12:47.100Z",
+  "reviewStartedAt": "2026-03-03T23:12:47.100Z"
+}

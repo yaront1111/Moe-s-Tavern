@@ -6,6 +6,8 @@ import type { Migration, MigrationResult } from './types.js';
 import { v1ToV2 } from './v1_to_v2.js';
 import { v2ToV3 } from './v2_to_v3.js';
 import { v3ToV4 } from './v3_to_v4.js';
+import { v4ToV5 } from './v4_to_v5.js';
+import { v5ToV6 } from './v5_to_v6.js';
 import { logger } from '../util/logger.js';
 import { CURRENT_SCHEMA_VERSION } from '../types/schema.js';
 
@@ -13,7 +15,9 @@ import { CURRENT_SCHEMA_VERSION } from '../types/schema.js';
 const migrations: Migration[] = [
   v1ToV2,
   v2ToV3,
-  v3ToV4
+  v3ToV4,
+  v4ToV5,
+  v5ToV6
 ];
 
 /**

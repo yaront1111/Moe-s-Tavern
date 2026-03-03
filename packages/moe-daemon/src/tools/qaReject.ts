@@ -124,6 +124,11 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         'QA_REJECTED'
       );
 
+      // Post system message to task channel
+      try {
+        await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
+      } catch { /* never block tool */ }
+
       return {
         success: true,
         taskId: updated.id,

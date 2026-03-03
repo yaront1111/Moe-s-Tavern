@@ -1,0 +1,21 @@
+{
+  "id": "epic-941ca1ca",
+  "projectId": "proj-3830fac7",
+  "title": "Integrate agentchattr Chat System (Deep Integration)",
+  "description": "Port agentchattr's real-time multi-agent chat features natively into the Moe daemon (TypeScript). Adds channels, @mention routing with loop guards, per-agent read cursors, presence tracking, and task-linked auto-channels. Includes MCP tools for agents, WebSocket protocol extensions, and chat UI in both VS Code and JetBrains plugins.\n\nWhat we port: Channels, @mention routing, loop guards, per-agent read cursors, presence tracking.\nWhat we skip: Terminal wrapper (Moe uses MCP), decisions (overlaps with proposals), avatar hats, voice typing, image attachments.\n\nReference: https://github.com/bcurts/agentchattr",
+  "architectureNotes": "## Storage Design\n- `.moe/channels/{channel-id}.json` — Channel metadata (individual JSON files)\n- `.moe/messages/{channel-id}.jsonl` — Append-only JSONL per channel (proven pattern from agentchattr)\n- Worker chatCursors stored in existing `.moe/workers/{worker-id}.json`\n\n## Key Patterns\n- Messages use JSONL for high-volume append-only writes\n- Channels use individual JSON files (infrequent changes)\n- Auto-channels created per epic/task with linkedEntityId for reverse lookup\n- @mention routing with per-channel hop counters and configurable max hops\n- Long-poll `chat_wait` follows existing `waitForTask` pattern\n- Plugin fetches messages on-demand per channel (not included in STATE_SNAPSHOT)\n\n## Dependencies Between Tasks\n- Task 1 (Schema) must complete before Tasks 2-6\n- Task 2 (StateManager) must complete before Tasks 3-6\n- Task 3 (Router) must complete before Task 4 (MCP tools use it)\n- Task 6 (WebSocket) should complete before Tasks 7-8 (plugin UI)\n- Task 9 (Migration) can be done in parallel with Tasks 3-6",
+  "epicRails": [
+    "All new MCP tools must follow existing tool patterns in packages/moe-daemon/src/tools/",
+    "Messages stored as JSONL (append-only) per channel for performance",
+    "Chat UI in VS Code follows BoardViewProvider.ts patterns",
+    "Chat UI in JetBrains follows ActivityLogPanel/ProposalPanel Swing patterns",
+    "Per-channel loop guards to prevent runaway agent conversations (default max 4 hops)",
+    "Role-based channels (#general, #workers, #architects, #qa) created on project init — no per-task/epic auto-channels",
+    "No Python dependency - everything ported to TypeScript",
+    "Primary IDE is PyCharm/JetBrains — implement and test JetBrains plugin changes FIRST, VS Code second. JetBrains quality must never be lower than VS Code."
+  ],
+  "status": "ACTIVE",
+  "order": 16,
+  "createdAt": "2026-03-02T15:20:43.154Z",
+  "updatedAt": "2026-03-03T22:15:59.455Z"
+}

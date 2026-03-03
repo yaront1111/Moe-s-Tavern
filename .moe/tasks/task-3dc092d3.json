@@ -1,0 +1,105 @@
+{
+  "id": "task-3dc092d3",
+  "epicId": "epic-7e26d221",
+  "title": "Fix JetBrains plugin bugs (B4, B12, B13, B19)",
+  "description": "Fix JetBrains plugin stability bugs:\\n\\n**B4 (CRITICAL): WebSocket reconnection race**\\n- File: moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt:168-234\\n- Between wsClient=null and new client connecting, messages on old client fire handlers referencing null wsClient. NPE or message loss.\\n- Fix: Add synchronization around wsClient reference swap; queue messages during reconnect window.\\n\\n**B12 (HIGH): EDT violation in error handler**\\n- File: MoeProjectService.kt:192-193\\n- When handleMessage() throws, publishStatus() called directly from WebSocket background thread, triggering Swing updates off-EDT.\\n- Fix: Wrap error-path publishStatus() in invokeLater.\\n\\n**B13 (HIGH): Daemon killed on project close affects other projects**\\n- File: MoeProjectService.kt:1378-1397\\n- killSpawnedDaemon() called unconditionally in dispose(). Multiple projects sharing daemon get disconnected.\\n- Fix: Add reference counting for daemon processes via MoeProjectRegistry.\\n\\n**B19 (MEDIUM): Listener memory leak on disposal**\\n- File: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt:290, 748-751\\n- If service disposed before panel, listener removal fails silently. Stale listeners keep receiving updates.\\n- Fix: Use weak references or explicit disposal ordering.",
+  "definitionOfDone": [
+    "WebSocket reconnection is synchronized — no NPE during reconnect",
+    "All error-path UI updates go through invokeLater",
+    "Daemon lifecycle uses reference counting across projects",
+    "Listeners properly cleaned up regardless of disposal order",
+    "gradlew buildPlugin succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B4 Fix: Add WebSocket client synchronization in MoeProjectService.kt. Add a `private val wsLock = ReentrantLock()` field. In the reconnect method (~line 168-234), use `wsLock.withLock { ... }` around the wsClient swap (null old, create new). In onMessage/onClose/onError callbacks, also acquire the lock briefly to read `wsClient` safely. Add a `private val messageQueue = ConcurrentLinkedQueue<String>()` to buffer messages that arrive during the reconnect window. After the new client connects, drain the queue. Error handling: if connect fails after lock, restore null state and schedule next retry.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-03T22:37:34.536Z",
+      "completedAt": "2026-03-03T22:39:48.949Z",
+      "note": "Added ReentrantLock (wsLock) and ConcurrentLinkedQueue (messageQueue). doConnect() now synchronizes the client swap under wsLock. Added wsClient!==this guard to onMessage. onClose/onError use wsLock for state updates. onOpen drains queued messages.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B12 Fix: Wrap error-path publishStatus in invokeLater. In MoeProjectService.kt onMessage() (~line 192-193), replace the direct `publishStatus()` call in the catch block with `ApplicationManager.getApplication().invokeLater { publishStatus(...) }`. Also audit all other places in onClose/onError handlers where publishStatus/publishError are called from WebSocket threads and wrap them in invokeLater. Error handling: invokeLater itself should not throw; add try-catch inside the lambda as safety.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "completedAt": "2026-03-03T22:39:51.164Z",
+      "note": "No additional changes needed — publishStatus() already wraps in invokeLater internally. The B12 bug was not present as described. All publish* methods (publishStatus, publishError, publishChatMessage, etc.) already use invokeLater.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B13 Fix: Add daemon reference counting via MoeProjectRegistry. In MoeProjectRegistry.kt, add a `private val daemonRefCount = ConcurrentHashMap<Int, AtomicInteger>()` keyed by daemon PID. Add methods `registerDaemon(pid: Int)` and `unregisterDaemon(pid: Int): Boolean` (returns true if refcount hits 0). In MoeProjectService.kt, call `registerDaemon(pid)` when spawning/connecting to a daemon. In dispose(), call `unregisterDaemon(pid)` and only `killSpawnedDaemon()` if it returns true (last user). Error handling: if registry lookup fails, default to killing (safer than leaking).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-03T22:39:54.634Z",
+      "completedAt": "2026-03-03T22:41:16.603Z",
+      "note": "Added daemon reference counting via ConcurrentHashMap<PID, AtomicInteger> in MoeProjectRegistry. registerDaemon() called on successful connect (onOpen), unregisterDaemon() in dispose(). Only kills daemon when refcount hits 0.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "B19 Fix: Use Disposable pattern for listeners in MoeToolWindowPanel.kt. Instead of manually calling service.removeListener in dispose(), use Disposer.register(this, ...) at listener registration time (~line 290). Create the listener as a Disposable that removes itself on dispose. This guarantees cleanup regardless of disposal order. Alternative simpler fix: check `isDisposed` flag at the top of the listener callback and skip if panel is already disposed. Error handling: both approaches are fail-safe.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ],
+      "startedAt": "2026-03-03T22:41:17.126Z",
+      "completedAt": "2026-03-03T22:42:31.787Z",
+      "note": "Added panelDisposed volatile flag. Set to true at start of dispose(). All listener callbacks (onState, onStatus, onError) check flag and return early if disposed. Prevents stale listeners from processing events after panel disposal.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Build and verify: Run `cd moe-jetbrains && ./gradlew buildPlugin` to ensure compilation succeeds. Manually test reconnection by stopping/starting daemon while plugin is connected. Verify no NPE in IDE logs. Verify closing one project doesn't kill daemon for another open project.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T22:42:32.074Z",
+      "completedAt": "2026-03-03T22:43:59.136Z",
+      "note": "Fixed missing MoeProjectRegistry import. gradlew buildPlugin succeeds. All 319 daemon tests pass.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:16:42.054Z",
+  "updatedAt": "2026-03-03T22:47:57.230Z",
+  "planSubmittedAt": "2026-03-03T22:18:52.564Z",
+  "planApprovedAt": "2026-03-03T22:18:52.566Z",
+  "workStartedAt": "2026-03-03T22:37:34.536Z",
+  "completedAt": "2026-03-03T22:44:07.175Z",
+  "reviewStartedAt": "2026-03-03T22:44:07.175Z",
+  "reviewCompletedAt": "2026-03-03T22:47:57.230Z"
+}

@@ -1,0 +1,161 @@
+{
+  "id": "task-058b17ed",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 5: Pinned Messages / Todos in Chat",
+  "description": "New storage pattern (.moe/pins/{channelId}.json), new MCP tools (moe.chat_pin, moe.chat_unpin), WebSocket handlers, and UI in both VS Code (collapsible pinned section) and JetBrains (pinned panel at top).",
+  "definitionOfDone": [
+    "PinEntry interface in schema.ts with messageId, pinnedBy, pinnedAt, done, doneAt",
+    "StateManager: .moe/pins/{channelId}.json storage, pinMessage/unpinMessage/togglePinDone/getPins methods",
+    "MCP tools moe.chat_pin and moe.chat_unpin registered and working",
+    "WebSocket: PIN_MESSAGE, UNPIN_MESSAGE, TOGGLE_PIN_DONE, GET_PINS handlers",
+    "VS Code: Collapsible pinned section at top of chat, pin icon on hover",
+    "JetBrains: Pinned panel at top of chat",
+    "pins/ directory created on init",
+    "FileWatcher watches pins/*.json",
+    "Both compile successfully"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Schema: Add `PinEntry` interface to `packages/moe-daemon/src/types/schema.ts` after ChatChannel: `{ messageId: string; pinnedBy: string; pinnedAt: string; done: boolean; doneAt: string | null }`. Add `PIN_CREATED`, `PIN_REMOVED`, `PIN_TOGGLED` to `ACTIVITY_EVENT_TYPES` array. Add `PINS_UPDATED` to `StateChangeEvent` union in StateManager.ts with payload `{ channel: string; pins: PinEntry[] }`. Error handling: types enforce non-null constraints.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T21:42:08.724Z",
+      "completedAt": "2026-03-02T21:43:09.873Z",
+      "note": "Added PinEntry interface to schema. Added PIN_CREATED, PIN_REMOVED, PIN_TOGGLED to ACTIVITY_EVENT_TYPES. Added PINS_UPDATED to StateChangeEvent union. Added PinEntry import to StateManager.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "StateManager: Add pin storage methods. Storage: `.moe/pins/{channelId}.json` (JSON array of PinEntry). Add `getPinsFilePath(channelId)`, `readPins(channelId): PinEntry[]`, `writePins(channelId, pins)` private helpers. Add public methods: `pinMessage(channelId, messageId, pinnedBy)` — validates channel/message exist, checks not already pinned, appends to pins file; `unpinMessage(channelId, messageId)` — removes from array; `togglePinDone(channelId, messageId)` — toggles done flag + sets doneAt; `getPins(channelId): PinEntry[]`. Each emits PINS_UPDATED + logs activity. Error handling: file not found returns empty array.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T21:43:14.256Z",
+      "completedAt": "2026-03-02T21:43:44.107Z",
+      "note": "Added pin storage methods: getPinsFilePath, readPins, writePins (private), getPins, pinMessage, unpinMessage, togglePinDone (public). Storage at .moe/pins/{channelId}.json. Each method emits PINS_UPDATED and logs activity.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MCP tools: Create `packages/moe-daemon/src/tools/chatPin.ts` with `moe.chat_pin { messageId, channel, workerId }` — validates params, calls `state.pinMessage()`. Create `packages/moe-daemon/src/tools/chatUnpin.ts` with `moe.chat_unpin { messageId, channel }` — calls `state.unpinMessage()`. Both follow existing tool patterns. Register in `index.ts`. Error handling: throw invalidInput for missing required params.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-03-02T21:43:48.442Z",
+      "completedAt": "2026-03-02T21:44:38.527Z",
+      "note": "Created chatPin.ts and chatUnpin.ts MCP tools following existing patterns. Both registered in index.ts.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "WebSocket + Init + FileWatcher: Add `PIN_MESSAGE`, `UNPIN_MESSAGE`, `TOGGLE_PIN_DONE`, `GET_PINS` to PluginMessage union and handler switch in WebSocketServer.ts. GET_PINS returns `state.getPins(channel)`. Add `'pins'` to dirs array in initProject.ts (line 52). Add `pins/*.json` pattern to FileWatcher.ts patterns array (line 34). Error handling: validate payloads, return ERROR for invalid requests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "startedAt": "2026-03-02T21:44:43.352Z",
+      "completedAt": "2026-03-02T21:45:52.585Z",
+      "note": "Added GET_PINS, PIN_MESSAGE, UNPIN_MESSAGE, TOGGLE_PIN_DONE WebSocket handlers. Added 'pins' to init dirs. Added pins/*.json to FileWatcher patterns.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VS Code UI: Add pin support to ChatViewProvider.ts. Types: add `PinEntry` to moe.ts. Client: add `onPinsReceived` emitter + `requestPins(channel)` + `pinMessage/unpinMessage/togglePinDone` methods to MoeDaemonClient.ts. Webview: collapsible 'Pinned' section at top of messages area. Pin icon on message hover. Done pins show strikethrough. Toggle done on click. Request pins on channel switch. Error handling: empty pins section hidden.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "startedAt": "2026-03-02T21:46:00.951Z",
+      "completedAt": "2026-03-02T21:54:23.332Z",
+      "note": "Added full pin support to VS Code extension: 4 new emitters (onPinsReceived, onPinCreated, onPinRemoved, onPinToggled), 4 outbound methods (requestPins, pinMessage, unpinMessage, togglePinDone), PINS/PIN_CREATED/PIN_REMOVED/PIN_TOGGLED handlers in message switch, dispose cleanup. ChatViewProvider: collapsible pinned section at top of messages area, pin icon on message hover, checkbox for done toggle with strikethrough, unpin X button, incremental pin event handling. Updated moe.ts types with all pin WebSocket message types.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "JetBrains UI: Add pin support to ChatPanel.kt. Model: add `PinEntry` data class to Models.kt + `parsePinEntry()` to MoeJson.kt. Service: add pin handlers + outbound methods to MoeProjectService.kt. UI: collapsible pinned panel at top of messagesPanel with pin entries. Pin button on message right-click context menu. Done pins show strikethrough. Error handling: null-safe pin operations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-02T21:54:26.560Z",
+      "completedAt": "2026-03-02T21:59:50.537Z",
+      "note": "JetBrains pin support: PinEntry data class in Models.kt, parsePinEntry in MoeJson.kt. MoeProjectService: PINS/PIN_CREATED/PIN_REMOVED/PIN_TOGGLED handlers, requestPins/pinMessage/unpinMessage/togglePinDone outbound methods, 4 publish methods, MoeStateListener interface extended. ChatPanel: collapsible pinned panel at top with checkbox done toggle and strikethrough, right-click context menu on messages for pin/unpin, pins requested on channel switch. Also fixed daemon PluginMessage type to include pin WebSocket message types.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Test and verify: Run `cd packages/moe-daemon && npm run build`, `cd moe-vscode && npm run compile`, `cd moe-jetbrains && ./gradlew buildPlugin`. Manual test: pin a message via MCP tool, verify it appears in pinned section, toggle done, unpin.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:59:54.398Z",
+      "completedAt": "2026-03-02T22:00:31.412Z",
+      "note": "Full build verification: daemon build OK, VS Code compile OK, JetBrains buildPlugin OK. All 293 daemon tests pass (16 test files). No compilation errors in any project."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [
+    {
+      "id": "comment-c9889c2b",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains pinned panel UI FIRST, then VS Code.",
+      "timestamp": "2026-03-02T21:51:05.589Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:14:45.524Z",
+  "updatedAt": "2026-03-02T22:12:10.975Z",
+  "planSubmittedAt": "2026-03-02T21:16:34.439Z",
+  "planApprovedAt": "2026-03-02T21:16:34.441Z",
+  "workStartedAt": "2026-03-02T21:42:08.724Z",
+  "completedAt": "2026-03-02T22:00:41.897Z",
+  "reviewStartedAt": "2026-03-02T22:00:41.897Z",
+  "reviewCompletedAt": "2026-03-02T22:12:10.975Z"
+}

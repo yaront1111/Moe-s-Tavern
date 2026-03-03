@@ -1,0 +1,124 @@
+{
+  "id": "task-a4ea8860",
+  "epicId": "epic-7e26d221",
+  "title": "Fix StateManager race conditions (B1, B7, B8, B16)",
+  "description": "Fix multiple race conditions in StateManager:\\n\\n**B1 (CRITICAL): deleteWorker/purgeAllWorkers bypass mutex**\\n- File: packages/moe-daemon/src/state/StateManager.ts:1555-1651\\n- Both use sync fs.writeFileSync without mutex. Concurrent updateTask can race.\\n- Fix: Make async, wrap in writeMutex.runExclusive()\\n\\n**B7 (HIGH): Activity log flush race**\\n- File: StateManager.ts:393-410, 1864\\n- pendingActivityWrites incremented after early-exit check in flushActivityLog()\\n- Fix: Use promise-based queue instead of counter\\n\\n**B8 (HIGH): JSONL concurrent append corruption**\\n- File: StateManager.ts:715\\n- fs.appendFileSync not atomic for concurrent sendMessage calls\\n- Fix: Add per-channel write mutex or async queue\\n\\n**B16 (MEDIUM): Pin operations not mutex-protected**\\n- File: StateManager.ts:864-920\\n- Concurrent pins can race past duplicate check\\n- Fix: Add mutex to pin operations",
+  "definitionOfDone": [
+    "deleteWorker() and purgeAllWorkers() are async and use writeMutex",
+    "Activity log flush correctly tracks all pending writes",
+    "JSONL appends are serialized per-channel",
+    "Pin operations are mutex-protected",
+    "All existing tests pass",
+    "New regression tests for concurrent operations"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B1 Fix: Make deleteWorker() async and mutex-protected. In StateManager.ts, change `deleteWorker(workerId: string): void` to `async deleteWorker(workerId: string): Promise<void>`. Wrap the entire body in `await this.mutex.runExclusive(async () => { ... })`. Replace all `fs.writeFileSync` calls with `await this.writeEntity(...)` for tasks and teams. Update callers (WebSocketServer.ts handles DISCONNECT) to await the result. Error handling: keep existing try/catch per file write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-03-03T22:21:33.428Z",
+      "completedAt": "2026-03-03T22:23:16.324Z",
+      "note": "Made deleteWorker async with mutex.runExclusive(). Replaced fs.writeFileSync with writeEntity() for tasks/teams. Updated callers: WebSocketServer.cleanupMcpWorkers (now async), StateManager stale worker sweep (already async).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B1 Fix (cont): Make purgeAllWorkers() async and mutex-protected. Change signature to `async purgeAllWorkers(): Promise<void>`. Wrap body in `await this.mutex.runExclusive(...)`. Replace `fs.writeFileSync` for tasks and teams with `await this.writeEntity(...)`. Since purgeAllWorkers runs at startup before any concurrent access, the mutex is mainly for consistency. Update caller in StateManager.loadProject() to await it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T22:23:20.570Z",
+      "completedAt": "2026-03-03T22:24:09.626Z",
+      "note": "Made purgeAllWorkers async with mutex.runExclusive(). Replaced fs.writeFileSync with writeEntity() for tasks/teams. Updated caller in index.ts to await.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B7 Fix: Fix activity log flush race. In appendActivity(), move `this.pendingActivityWrites++` to BEFORE the early-exit check (`if (!this.project) return`). Better yet, increment it at the very top of the method, and decrement in the finally block of the mutex callback. This ensures flushActivityLog() never returns prematurely. Also add a safety timeout in flushActivityLog() (5s max wait) so shutdown can't hang forever.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T22:24:13.372Z",
+      "completedAt": "2026-03-03T22:24:54.519Z",
+      "note": "Moved pendingActivityWrites++ to before the project guard (decrement+notify in guard path). Added 5s safety timeout to flushActivityLog() so shutdown can't hang forever.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "B8 Fix: Add per-channel message write mutex. Create a `private messageMutexes = new Map<string, AsyncMutex>()` on StateManager. Add a helper `private getMessageMutex(channelId: string): AsyncMutex` that creates/returns a mutex per channel. In sendMessage(), wrap the `fs.appendFileSync` call in `await this.getMessageMutex(channelId).runExclusive(...)`. This serializes writes per channel without blocking cross-channel writes. Error handling: if mutex.runExclusive throws, propagate the error.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T22:24:58.248Z",
+      "completedAt": "2026-03-03T22:25:57.928Z",
+      "note": "Added per-channel message write mutex (messageMutexes Map + getMessageMutex helper). JSONL appends in sendMessage() now wrapped in channelMutex.runExclusive(). Cross-channel writes don't block each other.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "B16 Fix: Protect pin operations with mutex. In pinMessage() and unpinMessage(), wrap the read-check-write sequence in `await this.mutex.runExclusive(...)`. Since pin operations modify channel-level data (pins.json), use the main mutex (not per-channel) to avoid complexity. This prevents concurrent pin/unpin from racing past the duplicate check.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T22:26:01.310Z",
+      "completedAt": "2026-03-03T22:26:32.538Z",
+      "note": "Wrapped pinMessage, unpinMessage, and togglePinDone in mutex.runExclusive(). Prevents concurrent pin/unpin from racing past duplicate checks.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add regression tests. In StateManager.test.ts: (1) Test that deleteWorker properly clears assignedWorkerId on tasks. (2) Test concurrent sendMessage calls don't corrupt JSONL (send 10 messages in parallel, verify all are readable). (3) Test concurrent pinMessage calls (pin same message twice, verify only one succeeds). (4) Test flushActivityLog waits for pending writes. Run `npm run build && npm test`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T22:26:38.502Z",
+      "completedAt": "2026-03-03T22:28:07.461Z",
+      "note": "Added 4 regression tests: deleteWorker clears assignedWorkerId, concurrent sendMessage produces valid JSONL, concurrent pinMessage only one succeeds, flushActivityLog waits for pending writes. All 312 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:16:15.584Z",
+  "updatedAt": "2026-03-03T22:45:26.491Z",
+  "planSubmittedAt": "2026-03-03T22:17:46.159Z",
+  "planApprovedAt": "2026-03-03T22:17:46.162Z",
+  "workStartedAt": "2026-03-03T22:21:33.428Z",
+  "completedAt": "2026-03-03T22:28:12.137Z",
+  "reviewStartedAt": "2026-03-03T22:28:12.137Z",
+  "reviewCompletedAt": "2026-03-03T22:45:26.491Z"
+}

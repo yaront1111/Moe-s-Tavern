@@ -1,0 +1,28 @@
+{
+  "id": "task-73fbedaa",
+  "epicId": "epic-7e26d221",
+  "title": "Fix missing mutex on createChannel/deleteChannel/createDecision",
+  "description": "**Found during QA deep audit of B8/B16 fixes.**\n\n`createChannel()` (line ~665), `deleteChannel()` (line ~886), and `createDecision()` (line ~1026) perform read-check-write sequences without holding `this.mutex`.\n\n**Race scenario for createChannel:**\n1. Two concurrent calls with same channel name\n2. Both pass the duplicate name check at line ~681\n3. Both write the channel — duplicate created\n\n**Fix:** Wrap these methods in `this.mutex.runExclusive()` like `pinMessage`/`unpinMessage` already are.\n\nAlso document the lock ordering constraint: `this.mutex` → `channelMutex` (never reverse). `claimNextTask` holds `this.mutex` and calls `sendMessage` which acquires `channelMutex` — this ordering must be preserved.",
+  "definitionOfDone": [
+    "createChannel, deleteChannel, createDecision wrapped in mutex.runExclusive",
+    "Lock ordering documented in code comment",
+    "No concurrent createChannel can create duplicates",
+    "Existing tests pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 12,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T23:23:12.239Z",
+  "updatedAt": "2026-03-03T23:23:12.239Z"
+}

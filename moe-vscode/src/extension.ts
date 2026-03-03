@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { BoardViewProvider } from './providers/BoardViewProvider';
+import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MoeDaemonClient } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
@@ -29,7 +30,17 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize board view provider
     const boardProvider = new BoardViewProvider(context.extensionUri, daemonClient);
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('moe.board', boardProvider)
+        vscode.window.registerWebviewViewProvider('moe.board', boardProvider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
+
+    // Initialize chat view provider
+    const chatProvider = new ChatViewProvider(context.extensionUri, daemonClient);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('moe.chat', chatProvider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
     );
 
     // Register commands

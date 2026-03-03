@@ -45,6 +45,8 @@ export interface ProjectSettings {
   agentCommand: string;
   enableAgentTeams: boolean;
   columnLimits?: Record<string, number>;
+  chatEnabled?: boolean;              // default: true
+  chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
 }
 
 export interface Project {
@@ -58,7 +60,7 @@ export interface Project {
   updatedAt: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export type TeamRole = 'architect' | 'worker' | 'qa';
 
@@ -163,6 +165,7 @@ export interface Worker {
   lastError: string | null;
   errorCount: number;
   teamId: string | null;
+  chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
 }
 
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
@@ -226,7 +229,16 @@ export const ACTIVITY_EVENT_TYPES = [
   'TEAM_MEMBER_REMOVED',
   'TASK_ARCHIVED',
   'TASK_COMMENT_ADDED',
-  'PROPOSAL_PURGED'
+  'PROPOSAL_PURGED',
+  'MESSAGE_CREATED',
+  'CHANNEL_CREATED',
+  'CHANNEL_DELETED',
+  'PIN_CREATED',
+  'PIN_REMOVED',
+  'PIN_TOGGLED',
+  'DECISION_PROPOSED',
+  'DECISION_APPROVED',
+  'DECISION_REJECTED'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];
@@ -249,6 +261,53 @@ export interface MoeStateSnapshot {
   workers: Worker[];
   proposals: RailProposal[];
   teams: Team[];
+  channels: ChatChannel[];
+  decisions: Decision[];
+}
+
+// =============================================================================
+// Chat Types
+// =============================================================================
+
+export interface ChatMessage {
+  id: string;                    // "msg-{uuid}"
+  channel: string;               // channel ID
+  sender: string;                // workerId or "human" or "system"
+  content: string;               // message text (max 10KB)
+  replyTo: string | null;        // parent message ID for threading
+  mentions: string[];            // parsed @mentions (workerId strings)
+  timestamp: string;             // ISO 8601
+  decisionId?: string;           // linked decision ID (if this message proposes a decision)
+}
+
+export interface ChatChannel {
+  id: string;                    // "chan-{uuid}"
+  name: string;                  // "general", "epic-auth", "task-login"
+  type: 'general' | 'role' | 'custom';
+  linkedEntityId: string | null; // epicId or taskId if type is epic/task
+  createdAt: string;
+}
+
+export interface PinEntry {
+  messageId: string;
+  pinnedBy: string;
+  pinnedAt: string;
+  done: boolean;
+  doneAt: string | null;
+}
+
+export type DecisionStatus = 'proposed' | 'approved' | 'rejected';
+
+export interface Decision {
+  id: string;
+  proposedBy: string;
+  content: string;
+  status: DecisionStatus;
+  approvedBy: string | null;
+  channel: string | null;
+  messageId: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 export interface DaemonInfo {

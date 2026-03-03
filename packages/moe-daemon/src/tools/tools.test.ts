@@ -461,6 +461,41 @@ describe('MCP Tools', () => {
       const task = state.getTask('task-1');
       expect(task?.prLink).toBe('https://github.com/pr/123');
     });
+
+    it('prefers modifiedFiles over affectedFiles in stats (B24)', async () => {
+      // Update the existing task to have steps with both modifiedFiles and affectedFiles
+      await state.updateTask('task-1', {
+        implementationPlan: [
+          {
+            stepId: 'step-1',
+            description: 'Step with both fields',
+            status: 'COMPLETED',
+            affectedFiles: ['planned.ts', 'old.ts'],
+            modifiedFiles: ['actual.ts', 'real.ts', 'extra.ts'],
+          },
+          {
+            stepId: 'step-2',
+            description: 'Step with only affectedFiles',
+            status: 'COMPLETED',
+            affectedFiles: ['fallback.ts'],
+          },
+        ],
+      });
+
+      const tool = completeTaskTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+        stats: { filesModified: string[] };
+      };
+
+      // Step 1 should use modifiedFiles (not affectedFiles)
+      expect(result.stats.filesModified).toContain('actual.ts');
+      expect(result.stats.filesModified).toContain('real.ts');
+      expect(result.stats.filesModified).toContain('extra.ts');
+      expect(result.stats.filesModified).not.toContain('planned.ts');
+      expect(result.stats.filesModified).not.toContain('old.ts');
+      // Step 2 should fall back to affectedFiles
+      expect(result.stats.filesModified).toContain('fallback.ts');
+    });
   });
 
   describe('moe.report_blocked', () => {

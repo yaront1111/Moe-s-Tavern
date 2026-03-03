@@ -536,15 +536,19 @@ if ($Team) {
     $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
     try {
         $createResult = $createRpc | & $nodeExe $proxyScript 2>$null | ConvertFrom-Json
-        $teamObj = $createResult.result.content[0].text | ConvertFrom-Json
-        $teamId = $teamObj.team.id
-        Write-Host "Team '$Team' ready (id: $teamId)"
+        if ($createResult -and $createResult.result -and $createResult.result.content -and $createResult.result.content.Count -gt 0) {
+            $teamObj = $createResult.result.content[0].text | ConvertFrom-Json
+            $teamId = $teamObj.team.id
+            Write-Host "Team '$Team' ready (id: $teamId)"
 
-        $joinJson = ConvertTo-Json @{ teamId = $teamId; workerId = $WorkerId } -Compress
-        $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + $joinJson + '}}'
-        $joinRpc | & $nodeExe $proxyScript 2>$null | Out-Null
-        Write-Host "Worker $WorkerId joined team '$Team'"
-        $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
+            $joinJson = ConvertTo-Json @{ teamId = $teamId; workerId = $WorkerId } -Compress
+            $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + $joinJson + '}}'
+            $joinRpc | & $nodeExe $proxyScript 2>$null | Out-Null
+            Write-Host "Worker $WorkerId joined team '$Team'"
+            $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
+        } else {
+            Write-Host "WARNING: Could not parse team creation response (daemon may not be running)" -ForegroundColor Yellow
+        }
     } catch {
         Write-Host "WARNING: Failed to set up team: $_" -ForegroundColor Yellow
     }
@@ -618,6 +622,7 @@ if ($cliType -eq "gemini") {
     Write-Host "Agent instructions written to: $geminiInstructionsPath"
 }
 
+try {
 do {
     if (-not $firstRun) {
         Write-Host ""
@@ -628,7 +633,7 @@ do {
     $firstRun = $false
 
     $claimPrompt = if ($AutoClaim) {
-        "Call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
     } else { $null }
 
     if ($cliType -eq "codex") {
@@ -654,9 +659,9 @@ do {
             default     { "Workflow: claim task -> get_context -> complete task" }
         }
         if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. Start by calling moe.claim_next_task to get your next task."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
         }
 
         if ($CodexExec) {
@@ -688,9 +693,9 @@ do {
             default     { "Workflow: claim task -> get_context -> complete task" }
         }
         if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. Start by calling moe.claim_next_task to get your next task."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
         }
 
         if ($GeminiExec) {
@@ -727,3 +732,9 @@ do {
         }
     }
 } while ($loopEnabled)
+} finally {
+    # Clean up temp MCP config file (B34)
+    if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) {
+        Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue
+    }
+}

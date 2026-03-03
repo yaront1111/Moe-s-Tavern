@@ -2,10 +2,15 @@ package com.moe.services
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.moe.model.ActivityEvent
+import com.moe.model.ChatChannel
+import com.moe.model.ChatMessage
+import com.moe.model.Decision
 import com.moe.model.DaemonInfo
 import com.moe.model.Epic
+import com.moe.model.PinEntry
 import com.moe.model.MoeState
 import com.moe.model.Project
 import com.moe.model.RailProposal
@@ -13,6 +18,7 @@ import com.moe.model.Task
 import com.moe.model.Worker
 import com.moe.util.MoeJson
 import com.moe.util.MoeProjectInitializer
+import com.moe.util.MoeProjectRegistry
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -28,17 +34,26 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 @Service(Service.Level.PROJECT)
 class MoeProjectService(private val project: IdeaProject) : Disposable {
     private val log = Logger.getInstance(MoeProjectService::class.java)
     private val gson = Gson()
+
+    /** Safe asString that handles both Kotlin null and Gson JsonNull */
+    private fun JsonElement?.safeAsString(): String? =
+        if (this == null || this.isJsonNull) null else this.asString
     private val listeners = CopyOnWriteArrayList<MoeStateListener>()
+    private val wsLock = ReentrantLock()
+    private val messageQueue = ConcurrentLinkedQueue<String>()
     @Volatile private var wsClient: WebSocketClient? = null
     @Volatile private var connected = false
     @Volatile private var state: MoeState? = null
@@ -48,6 +63,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     @Volatile private var isManualDisconnect = false
     @Volatile private var reconnectAttempts = 0
     @Volatile private var spawnedDaemonProcess: Process? = null
+    @Volatile private var connectedDaemonPid: Int? = null
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Moe-Refresh").apply { isDaemon = true }
     }
@@ -158,68 +174,94 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         if (disposed.get() || connected || connecting) return
         connecting = true
 
-        // Always close the previous client before replacing it to avoid leaking
-        // unreferenced WebSocketClient instances during reconnect cycles.
-        val oldClient = wsClient
-        wsClient = null
-        closeQuietly(oldClient)
+        // Synchronize the client swap to prevent races with callbacks
+        val newClient: WebSocketClient
+        wsLock.withLock {
+            val oldClient = wsClient
+            wsClient = null
+            closeQuietly(oldClient)
 
-        val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
-        wsClient = object : WebSocketClient(uri) {
-            override fun onOpen(handshakedata: ServerHandshake?) {
-                connecting = false
-                connected = true
-                reconnectAttempts = 0
-                isManualDisconnect = false
-                publishStatus(true, "Connected")
-                sendMessage("GET_STATE", JsonObject())
-                startAutoRefresh()
-            }
-
-            override fun onMessage(message: String?) {
-                if (message == null) return
-                try {
-                    handleMessage(message)
-                } catch (ex: Exception) {
-                    publishStatus(false, ex.message ?: "Failed to parse state")
+            val uri = URI("ws://127.0.0.1:${daemonInfo.port}/ws")
+            newClient = object : WebSocketClient(uri) {
+                override fun onOpen(handshakedata: ServerHandshake?) {
+                    wsLock.withLock {
+                        connecting = false
+                        connected = true
+                        reconnectAttempts = 0
+                        isManualDisconnect = false
+                        connectedDaemonPid = daemonInfo.pid
+                    }
+                    MoeProjectRegistry.registerDaemon(daemonInfo.pid)
+                    publishStatus(true, "Connected")
+                    // Drain any messages queued during reconnect
+                    while (true) {
+                        val queued = messageQueue.poll() ?: break
+                        try { handleMessage(queued) } catch (ex: Exception) {
+                            log.warn("Failed to process queued message", ex)
+                        }
+                    }
+                    sendMessage("GET_STATE", JsonObject())
+                    startAutoRefresh()
                 }
-            }
 
-            override fun onClose(code: Int, reason: String?, remote: Boolean) {
-                if (wsClient === this) {
-                    connecting = false
-                    connected = false
-                    wsClient = null
-                    stopAutoRefresh()
+                override fun onMessage(message: String?) {
+                    if (message == null) return
+                    if (wsClient !== this) {
+                        log.debug("Ignoring onMessage from stale WebSocket client")
+                        return
+                    }
+                    try {
+                        handleMessage(message)
+                    } catch (ex: Exception) {
+                        publishStatus(false, ex.message ?: "Failed to parse state")
+                    }
+                }
+
+                override fun onClose(code: Int, reason: String?, remote: Boolean) {
+                    wsLock.withLock {
+                        if (wsClient === this) {
+                            connecting = false
+                            connected = false
+                            wsClient = null
+                            stopAutoRefresh()
+                        } else {
+                            log.debug("Ignoring onClose from stale WebSocket client")
+                            return
+                        }
+                    }
                     publishStatus(false, reason ?: "Disconnected")
                     scheduleReconnect()
-                } else {
-                    log.debug("Ignoring onClose from stale WebSocket client")
                 }
-            }
 
-            override fun onError(ex: Exception?) {
-                if (wsClient === this) {
-                    connecting = false
-                    connected = false
-                    wsClient = null
-                    stopAutoRefresh()
+                override fun onError(ex: Exception?) {
+                    wsLock.withLock {
+                        if (wsClient === this) {
+                            connecting = false
+                            connected = false
+                            wsClient = null
+                            stopAutoRefresh()
+                        } else {
+                            log.debug("Ignoring onError from stale WebSocket client")
+                            return
+                        }
+                    }
                     publishStatus(false, ex?.message ?: "WebSocket error")
                     scheduleReconnect()
-                } else {
-                    log.debug("Ignoring onError from stale WebSocket client")
                 }
             }
+            wsClient = newClient
         }
 
         try {
-            wsClient?.connect()
+            newClient.connect()
         } catch (ex: Exception) {
             log.warn("WebSocket connect() failed", ex)
-            connecting = false
-            connected = false
-            closeQuietly(wsClient)
-            wsClient = null
+            wsLock.withLock {
+                connecting = false
+                connected = false
+                closeQuietly(wsClient)
+                wsClient = null
+            }
             publishStatus(false, ex.message ?: "Failed to connect")
             scheduleReconnect()
         }
@@ -278,11 +320,11 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
     private fun handleMessage(message: String) {
         val json = gson.fromJson(message, JsonObject::class.java)
-        val type = json.get("type")?.asString ?: return
+        val type = json.get("type").safeAsString() ?: return
 
         when (type) {
             "STATE_SNAPSHOT" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val newState = MoeJson.parseState(payload)
                 applyMessageOnEdt(type) {
                     state = newState
@@ -290,7 +332,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "TASK_UPDATED", "TASK_CREATED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val task = MoeJson.parseTask(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -318,7 +360,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "TASK_DELETED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val task = MoeJson.parseTask(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -333,7 +375,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "EPIC_UPDATED", "EPIC_CREATED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val epic = MoeJson.parseEpic(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -348,7 +390,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "EPIC_DELETED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val epic = MoeJson.parseEpic(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -364,8 +406,8 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "ERROR" -> {
-                val errorMessage = json.get("message")?.asString ?: "Unknown error"
-                val operation = json.get("operation")?.asString ?: "unknown"
+                val errorMessage = json.get("message").safeAsString() ?: "Unknown error"
+                val operation = json.get("operation").safeAsString() ?: "unknown"
                 publishError(operation, errorMessage)
             }
             "ACTIVITY_LOG" -> {
@@ -377,7 +419,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 publishActivityLog(events)
             }
             "PROPOSAL_UPDATED", "PROPOSAL_CREATED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val proposal = MoeJson.parseProposal(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -391,8 +433,23 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                     publishState(newState)
                 }
             }
+            "PROPOSAL_DELETED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val proposal = MoeJson.parseProposal(payload)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val proposals = current.proposals.filter { it.id != proposal.id }
+                    val newState = current.copy(proposals = proposals)
+                    state = newState
+                    publishState(newState)
+                }
+            }
             "WORKER_UPDATED", "WORKER_CREATED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val worker = MoeJson.parseWorker(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -406,8 +463,23 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                     publishState(newState)
                 }
             }
+            "WORKER_DELETED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val worker = MoeJson.parseWorker(payload)
+                applyMessageOnEdt(type) {
+                    val current = state
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val workers = current.workers.filter { it.id != worker.id }
+                    val newState = current.copy(workers = workers)
+                    state = newState
+                    publishState(newState)
+                }
+            }
             "TEAM_CREATED", "TEAM_UPDATED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val team = MoeJson.parseTeam(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -422,7 +494,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 }
             }
             "TEAM_DELETED" -> {
-                val payload = json.getAsJsonObject("payload")
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val team = MoeJson.parseTeam(payload)
                 applyMessageOnEdt(type) {
                     val current = state
@@ -434,6 +506,149 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                     val newState = current.copy(teams = teams)
                     state = newState
                     publishState(newState)
+                }
+            }
+            "CHANNELS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channelsArray = payload.get("channels")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
+                try {
+                    val channels = channelsArray.map { MoeJson.parseChannel(it.asJsonObject) }
+                    applyMessageOnEdt(type) {
+                        val current = state ?: return@applyMessageOnEdt
+                        val newState = current.copy(channels = channels)
+                        state = newState
+                        publishState(newState)
+                    }
+                } catch (e: Exception) {
+                    log.warn("Failed to parse CHANNELS payload", e)
+                }
+            }
+            "MESSAGES" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channel = payload.get("channel").safeAsString() ?: return
+                val messagesArray = payload.get("messages")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
+                try {
+                    val messages = messagesArray.map { MoeJson.parseChatMessage(it.asJsonObject) }
+                    publishChatMessages(channel, messages)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse MESSAGES payload", e)
+                }
+            }
+            "MESSAGE_SENT" -> {
+                // MESSAGE_SENT is the direct response to sender; MESSAGE_CREATED broadcast handles all UI updates
+            }
+            "MESSAGE_CREATED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val message = MoeJson.parseChatMessage(payload)
+                    publishChatMessage(message)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse MESSAGE_CREATED payload", e)
+                }
+            }
+            "CHANNEL_CREATED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val channel = MoeJson.parseChannel(payload)
+                    applyMessageOnEdt(type) {
+                        val current = state
+                        if (current == null) {
+                            log.debug("Ignoring $type message because state is not initialized")
+                            return@applyMessageOnEdt
+                        }
+                        val channels = current.channels.filter { it.id != channel.id } + channel
+                        val newState = current.copy(channels = channels)
+                        state = newState
+                        publishState(newState)
+                    }
+                } catch (e: Exception) {
+                    log.warn("Failed to parse CHANNEL_CREATED payload", e)
+                }
+            }
+            "CHANNEL_DELETED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val channel = MoeJson.parseChannel(payload)
+                    applyMessageOnEdt(type) {
+                        val current = state
+                        if (current == null) {
+                            log.debug("Ignoring $type message because state is not initialized")
+                            return@applyMessageOnEdt
+                        }
+                        val channels = current.channels.filter { it.id != channel.id }
+                        val newState = current.copy(channels = channels)
+                        state = newState
+                        publishState(newState)
+                    }
+                } catch (e: Exception) {
+                    log.warn("Failed to parse CHANNEL_DELETED payload", e)
+                }
+            }
+            "PINS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channel = payload.get("channel").safeAsString() ?: return
+                val pinsArray = payload.get("pins")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
+                try {
+                    val pins = pinsArray.map { MoeJson.parsePinEntry(it.asJsonObject) }
+                    publishPins(channel, pins)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse PINS payload", e)
+                }
+            }
+            "PIN_CREATED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channel = payload.get("channel").safeAsString() ?: return
+                val pinObj = payload.get("pin")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val pin = MoeJson.parsePinEntry(pinObj)
+                    publishPinCreated(channel, pin)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse PIN_CREATED payload", e)
+                }
+            }
+            "PIN_REMOVED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channel = payload.get("channel").safeAsString() ?: return
+                val messageId = payload.get("messageId").safeAsString() ?: return
+                publishPinRemoved(channel, messageId)
+            }
+            "PIN_TOGGLED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val channel = payload.get("channel").safeAsString() ?: return
+                val pinObj = payload.get("pin")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val pin = MoeJson.parsePinEntry(pinObj)
+                    publishPinToggled(channel, pin)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse PIN_TOGGLED payload", e)
+                }
+            }
+            "DECISIONS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                val decisionsArray = payload.get("decisions")?.takeIf { it.isJsonArray }?.asJsonArray ?: return
+                try {
+                    val decisions = decisionsArray.map { MoeJson.parseDecision(it.asJsonObject) }
+                    publishDecisions(decisions)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse DECISIONS payload", e)
+                }
+            }
+            "DECISION_PROPOSED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val decision = MoeJson.parseDecision(payload)
+                    publishDecisionProposed(decision)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse DECISION_PROPOSED payload", e)
+                }
+            }
+            "DECISION_RESOLVED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val decision = MoeJson.parseDecision(payload)
+                    publishDecisionResolved(decision)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse DECISION_RESOLVED payload", e)
                 }
             }
             "DAEMON_SHUTTING_DOWN" -> {
@@ -612,6 +827,84 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         sendMessage("CREATE_EPIC", payload)
     }
 
+    fun requestChannels() {
+        if (!ensureConnected()) return
+        sendMessage("GET_CHANNELS", JsonObject())
+    }
+
+    fun requestMessages(channel: String, limit: Int = 50, sinceId: String? = null) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("channel", channel)
+            addProperty("limit", limit)
+            if (sinceId != null) {
+                addProperty("sinceId", sinceId)
+            }
+        }
+        sendMessage("GET_MESSAGES", payload)
+    }
+
+    fun sendChatMessage(channel: String, content: String) {
+        if (!ensureConnected()) return
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) return
+        val payload = JsonObject().apply {
+            addProperty("channel", channel)
+            addProperty("content", trimmed)
+        }
+        sendMessage("SEND_MESSAGE", payload)
+    }
+
+    fun requestPins(channel: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply { addProperty("channel", channel) }
+        sendMessage("GET_PINS", payload)
+    }
+
+    fun pinMessage(channel: String, messageId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("channel", channel)
+            addProperty("messageId", messageId)
+        }
+        sendMessage("PIN_MESSAGE", payload)
+    }
+
+    fun unpinMessage(channel: String, messageId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("channel", channel)
+            addProperty("messageId", messageId)
+        }
+        sendMessage("UNPIN_MESSAGE", payload)
+    }
+
+    fun togglePinDone(channel: String, messageId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("channel", channel)
+            addProperty("messageId", messageId)
+        }
+        sendMessage("TOGGLE_PIN_DONE", payload)
+    }
+
+    fun requestDecisions() {
+        if (!ensureConnected()) return
+        sendMessage("GET_DECISIONS", JsonObject())
+    }
+
+    fun approveDecision(decisionId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply { addProperty("decisionId", decisionId) }
+        sendMessage("APPROVE_DECISION", payload)
+    }
+
+    fun rejectDecision(decisionId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply { addProperty("decisionId", decisionId) }
+        sendMessage("REJECT_DECISION", payload)
+    }
+
     private fun sendMessage(type: String, payload: JsonObject) {
         val client = wsClient ?: return
         if (!client.isOpen) {
@@ -654,6 +947,60 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     private fun publishError(operation: String, message: String) {
         ApplicationManager.getApplication().invokeLater {
             listeners.forEach { it.onError(operation, message) }
+        }
+    }
+
+    private fun publishChatMessage(message: ChatMessage) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onChatMessage(message) }
+        }
+    }
+
+    private fun publishChatMessages(channel: String, messages: List<ChatMessage>) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onChatMessages(channel, messages) }
+        }
+    }
+
+    private fun publishPins(channel: String, pins: List<PinEntry>) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onPins(channel, pins) }
+        }
+    }
+
+    private fun publishPinCreated(channel: String, pin: PinEntry) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onPinCreated(channel, pin) }
+        }
+    }
+
+    private fun publishPinRemoved(channel: String, messageId: String) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onPinRemoved(channel, messageId) }
+        }
+    }
+
+    private fun publishPinToggled(channel: String, pin: PinEntry) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onPinToggled(channel, pin) }
+        }
+    }
+
+    private fun publishDecisions(decisions: List<Decision>) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onDecisions(decisions) }
+        }
+    }
+
+    private fun publishDecisionProposed(decision: Decision) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onDecisionProposed(decision) }
+        }
+    }
+
+    private fun publishDecisionResolved(decision: Decision) {
+        ApplicationManager.getApplication().invokeLater {
+            listeners.forEach { it.onDecisionResolved(decision) }
         }
     }
 
@@ -1050,8 +1397,20 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             scheduler.shutdownNow()
         }
 
-        // Kill any spawned daemon process we started
-        killSpawnedDaemon()
+        // Only kill daemon if this was the last project using it
+        val pid = connectedDaemonPid
+        if (pid != null) {
+            val isLastUser = MoeProjectRegistry.unregisterDaemon(pid)
+            if (isLastUser) {
+                killSpawnedDaemon()
+            } else {
+                log.info("Daemon PID $pid still in use by other projects, not killing")
+                spawnedDaemonProcess = null // Don't hold the process reference
+            }
+            connectedDaemonPid = null
+        } else {
+            killSpawnedDaemon()
+        }
 
         // Clear state
         state = null
@@ -1166,4 +1525,13 @@ interface MoeStateListener {
     fun onStatus(connected: Boolean, message: String)
     fun onError(operation: String, message: String) {}
     fun onActivityLog(events: List<ActivityEvent>) {}
+    fun onChatMessage(message: ChatMessage) {}
+    fun onChatMessages(channel: String, messages: List<ChatMessage>) {}
+    fun onPins(channel: String, pins: List<PinEntry>) {}
+    fun onPinCreated(channel: String, pin: PinEntry) {}
+    fun onPinRemoved(channel: String, messageId: String) {}
+    fun onPinToggled(channel: String, pin: PinEntry) {}
+    fun onDecisions(decisions: List<Decision>) {}
+    fun onDecisionProposed(decision: Decision) {}
+    fun onDecisionResolved(decision: Decision) {}
 }

@@ -1,0 +1,63 @@
+{
+  "id": "task-0edb9691",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix chat integration bugs: missing await, VS Code type mismatch",
+  "description": "Post-integration bug fixes for the chat system:\\n\\n1. **CRITICAL - Missing `await` in WebSocketServer.ts**: `getMessages()` is async but called without `await` on line 511. This sends a Promise object to plugin clients instead of actual messages, breaking the GET_MESSAGES WebSocket handler.\\n\\n2. **VS Code Worker type mismatch**: The Worker interface in `moe-vscode/src/types/moe.ts` is missing the `chatCursors?: Record<string, string>` field that exists in the daemon schema (`packages/moe-daemon/src/types/schema.ts` line 169). This causes type inconsistency for schema v5.",
+  "definitionOfDone": [
+    "GET_MESSAGES WebSocket handler awaits getMessages() call and returns actual message array to clients",
+    "VS Code Worker interface includes chatCursors field matching daemon schema",
+    "Daemon TypeScript compiles without errors",
+    "VS Code extension compiles without errors"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add missing `await` to the `getMessages()` call in the GET_MESSAGES WebSocket handler. Line 511: change `const messages = this.state.getMessages(channel, {` to `const messages = await this.state.getMessages(channel, {`. The handler is already async so this is safe. Error handling: the existing try/catch in the message handler covers this. Test: verify daemon compiles with `npm run build`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-03-02T20:35:23.508Z",
+      "completedAt": "2026-03-02T20:36:45.990Z",
+      "note": "Added missing await on line 511. Daemon compiles cleanly.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add `chatCursors?: Record<string, string>` to the VS Code Worker interface in `moe-vscode/src/types/moe.ts` (after line 202, the `teamId` field). This aligns the VS Code types with the daemon schema v5 definition at `packages/moe-daemon/src/types/schema.ts:169`. Test: verify VS Code extension compiles with `npm run compile`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "startedAt": "2026-03-02T20:36:47.351Z",
+      "completedAt": "2026-03-02T20:37:00.983Z",
+      "note": "Added chatCursors optional field to Worker interface after teamId. VS Code extension compiles cleanly.",
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T20:30:25.420Z",
+  "updatedAt": "2026-03-02T21:10:56.645Z",
+  "planSubmittedAt": "2026-03-02T20:31:00.455Z",
+  "planApprovedAt": "2026-03-02T20:31:00.457Z",
+  "workStartedAt": "2026-03-02T20:35:23.508Z",
+  "completedAt": "2026-03-02T20:37:05.352Z",
+  "reviewStartedAt": "2026-03-02T20:37:05.352Z",
+  "reviewCompletedAt": "2026-03-02T21:10:56.645Z"
+}
