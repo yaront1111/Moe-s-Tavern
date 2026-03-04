@@ -86,8 +86,13 @@ function safeStdoutWrite(data: string): boolean {
     process.stdout.write(data);
     return true;
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
     const errorMessage = err instanceof Error ? err.message : 'Unknown stdout write error';
     writeLog(`stdout write failed: ${errorMessage}`);
+    if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') {
+      writeLog('stdout pipe broken, exiting');
+      process.exit(1);
+    }
     return false;
   }
 }
@@ -374,13 +379,14 @@ function connect(projectPath: string): void {
     process.stdin.setEncoding('utf-8');
 
     const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer
+    const MAX_LINE_SIZE = 512 * 1024; // 512KB per-line limit
     let buffer = '';
     process.stdin.on('data', (chunk) => {
       buffer += chunk;
 
-      // Prevent unbounded buffer growth if no newlines arrive
-      if (buffer.length > MAX_BUFFER_SIZE && buffer.indexOf('\n') === -1) {
-        writeError('Input buffer overflow: message too large without newline');
+      // Prevent unbounded buffer growth
+      if (buffer.length > MAX_BUFFER_SIZE) {
+        writeError('Input buffer overflow: buffer exceeds 1MB');
         buffer = '';
         return;
       }
@@ -390,6 +396,12 @@ function connect(projectPath: string): void {
         const line = buffer.slice(0, index).trim();
         buffer = buffer.slice(index + 1);
         if (!line) continue;
+
+        // Enforce per-line size limit
+        if (line.length > MAX_LINE_SIZE) {
+          writeLog(`Skipping oversized line (${line.length} bytes, max ${MAX_LINE_SIZE})`);
+          continue;
+        }
 
         // Validate JSON before sending to daemon
         try {
@@ -442,6 +454,15 @@ function connect(projectPath: string): void {
 
 async function main() {
   const projectPath = getProjectPath();
+
+  // Detect broken stdout pipe early
+  process.stdout.on('error', (err) => {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') {
+      writeLog('stdout pipe broken, exiting');
+      process.exit(1);
+    }
+  });
 
   // Handle graceful shutdown
   process.on('SIGTERM', () => {

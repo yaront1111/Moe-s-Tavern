@@ -10,6 +10,7 @@ import type { McpAdapter } from './McpAdapter.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
+import { activeChatWaiters } from '../tools/chatWait.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 
 export type PluginMessage =
@@ -35,7 +36,17 @@ export type PluginMessage =
   | { type: 'ADD_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
   | { type: 'REMOVE_TEAM_MEMBER'; payload: { teamId: string; workerId: string } }
   | { type: 'ARCHIVE_DONE_TASKS'; payload?: { epicId?: string } }
-  | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } };
+  | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } }
+  | { type: 'GET_CHANNELS' }
+  | { type: 'GET_MESSAGES'; payload: { channel: string; limit?: number; sinceId?: string } }
+  | { type: 'SEND_MESSAGE'; payload: { channel: string; content: string } }
+  | { type: 'GET_PINS'; payload: { channel: string } }
+  | { type: 'PIN_MESSAGE'; payload: { channel: string; messageId: string } }
+  | { type: 'UNPIN_MESSAGE'; payload: { channel: string; messageId: string } }
+  | { type: 'TOGGLE_PIN_DONE'; payload: { channel: string; messageId: string } }
+  | { type: 'GET_DECISIONS' }
+  | { type: 'APPROVE_DECISION'; payload: { decisionId: string } }
+  | { type: 'REJECT_DECISION'; payload: { decisionId: string } };
 
 export class MoeWebSocketServer {
   private wss: WSS;
@@ -485,6 +496,140 @@ export class MoeWebSocketServer {
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
+        case 'GET_CHANNELS': {
+          const channels = this.state.getChannels();
+          this.safeSend(ws, JSON.stringify({ type: 'CHANNELS', payload: { channels } }));
+          return;
+        }
+        case 'GET_MESSAGES': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel, limit, sinceId } = message.payload as { channel: string; limit?: number; sinceId?: string };
+          if (!channel || typeof channel !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel' }));
+            return;
+          }
+          const ch = this.state.getChannel(channel);
+          if (!ch) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Channel not found: ${channel}` }));
+            return;
+          }
+          const messages = await this.state.getMessages(channel, {
+            sinceId: sinceId || undefined,
+            limit: typeof limit === 'number' ? limit : 50
+          });
+          this.safeSend(ws, JSON.stringify({ type: 'MESSAGES', payload: { channel, messages } }));
+          return;
+        }
+        case 'SEND_MESSAGE': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel, content } = message.payload as { channel: string; content: string };
+          if (!channel || typeof channel !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel' }));
+            return;
+          }
+          if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty content' }));
+            return;
+          }
+          const { message: msg } = await this.state.sendMessage({ channel, sender: 'human', content });
+          this.safeSend(ws, JSON.stringify({ type: 'MESSAGE_SENT', payload: { message: msg } }));
+          return;
+        }
+        case 'GET_PINS': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel: pinChannel } = message.payload as { channel: string };
+          if (!pinChannel || typeof pinChannel !== 'string') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel' }));
+            return;
+          }
+          const pins = this.state.getPins(pinChannel);
+          this.safeSend(ws, JSON.stringify({ type: 'PINS', payload: { channel: pinChannel, pins } }));
+          return;
+        }
+        case 'PIN_MESSAGE': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel: pinCh, messageId: pinMsgId } = message.payload as { channel: string; messageId: string };
+          if (!pinCh || !pinMsgId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
+            return;
+          }
+          const pin = await this.state.pinMessage(pinCh, pinMsgId, 'human');
+          this.safeSend(ws, JSON.stringify({ type: 'PIN_CREATED', payload: { channel: pinCh, pin } }));
+          return;
+        }
+        case 'UNPIN_MESSAGE': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel: unpinCh, messageId: unpinMsgId } = message.payload as { channel: string; messageId: string };
+          if (!unpinCh || !unpinMsgId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
+            return;
+          }
+          await this.state.unpinMessage(unpinCh, unpinMsgId);
+          this.safeSend(ws, JSON.stringify({ type: 'PIN_REMOVED', payload: { channel: unpinCh, messageId: unpinMsgId } }));
+          return;
+        }
+        case 'TOGGLE_PIN_DONE': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { channel: toggleCh, messageId: toggleMsgId } = message.payload as { channel: string; messageId: string };
+          if (!toggleCh || !toggleMsgId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
+            return;
+          }
+          const toggledPin = await this.state.togglePinDone(toggleCh, toggleMsgId);
+          this.safeSend(ws, JSON.stringify({ type: 'PIN_TOGGLED', payload: { channel: toggleCh, pin: toggledPin } }));
+          return;
+        }
+        case 'GET_DECISIONS': {
+          const decisions = this.state.getDecisions();
+          this.safeSend(ws, JSON.stringify({ type: 'DECISIONS', payload: { decisions } }));
+          return;
+        }
+        case 'APPROVE_DECISION': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { decisionId: approveDecId } = message.payload as { decisionId: string };
+          if (!approveDecId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
+            return;
+          }
+          const approved = await this.state.approveDecision(approveDecId, 'human');
+          this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: approved }));
+          return;
+        }
+        case 'REJECT_DECISION': {
+          if (!message.payload || typeof message.payload !== 'object') {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
+            return;
+          }
+          const { decisionId: rejectDecId } = message.payload as { decisionId: string };
+          if (!rejectDecId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
+            return;
+          }
+          const rejected = await this.state.rejectDecision(rejectDecId);
+          this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: rejected }));
+          return;
+        }
         default:
           this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Unknown message type: ${(message as { type?: string }).type}` }));
       }
@@ -550,7 +695,7 @@ export class MoeWebSocketServer {
   /**
    * Clean up workers owned by a disconnected MCP connection.
    */
-  private cleanupMcpWorkers(ws: WebSocket): void {
+  private async cleanupMcpWorkers(ws: WebSocket): Promise<void> {
     const workerIds = this.mcpWorkerMap.get(ws);
     if (!workerIds || workerIds.size === 0) {
       this.mcpWorkerMap.delete(ws);
@@ -569,10 +714,24 @@ export class MoeWebSocketServer {
         logger.info({ workerId }, 'Cancelled active waiter for disconnected MCP client');
       }
 
+      // Cancel any active chat_wait waiter
+      try {
+        const chatWaiter = activeChatWaiters.get(workerId);
+        if (chatWaiter) {
+          clearTimeout(chatWaiter.timer);
+          chatWaiter.unsubscribe();
+          chatWaiter.resolve({ hasMessage: false, cancelled: true });
+          activeChatWaiters.delete(workerId);
+          logger.info({ workerId }, 'Cancelled active chat waiter for disconnected MCP client');
+        }
+      } catch (err) {
+        logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
+      }
+
       const worker = this.state.getWorker(workerId);
       if (worker) {
         logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
-        this.state.deleteWorker(workerId);
+        await this.state.deleteWorker(workerId);
         deletedCount++;
       }
     }
@@ -597,16 +756,26 @@ export class MoeWebSocketServer {
       return;
     }
 
-    // Mark as closed immediately to prevent new operations
+    // Send shutdown notification BEFORE marking as closed so all code paths still work
+    if (this.pluginClients.size > 0) {
+      const shuttingDownMessage = JSON.stringify({ type: 'DAEMON_SHUTTING_DOWN' });
+      for (const client of this.pluginClients) {
+        try {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(shuttingDownMessage);
+          }
+        } catch {
+          // Client may already be disconnected — don't block shutdown
+        }
+      }
+    }
+
+    // Mark as closed to prevent new operations
     this.isClosed = true;
 
     this.closePromise = (async () => {
+      // Brief delay to let shutdown messages flush
       if (this.pluginClients.size > 0) {
-        const shuttingDownMessage = JSON.stringify({ type: 'DAEMON_SHUTTING_DOWN' });
-        for (const client of this.pluginClients) {
-          this.safeSend(client, shuttingDownMessage);
-        }
-
         await new Promise<void>((resolve) => {
           const delay = setTimeout(resolve, 100);
           if (delay.unref) {

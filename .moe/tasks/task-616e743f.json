@@ -1,0 +1,190 @@
+{
+  "id": "task-616e743f",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix critical chat integration bugs (29 issues found)",
+  "description": "Deep analysis found 29 bugs across the chat integration. This task covers the critical and high-severity fixes.\\n\\nCritical: XSS in VS Code webview, MentionRouter dead code, chat waiter memory leak, deleteChannel wrong event + missing broadcast.\\nHigh: JetBrains duplicate message rendering, duplicate channel creation, chatRead cursor skip, unsafe markdown links.\\nMedium (JetBrains-focused): messagesByChannel unbounded, requestMessages flood on every state update, missing reply rendering, missing chat settings in Kotlin model.",
+  "definitionOfDone": [
+    "BUG-1: escapeHtml applied before highlightMentions in VS Code renderMessage",
+    "BUG-2: MentionRouter integrated into StateManager.sendMessage() replacing naive regex",
+    "BUG-3: activeChatWaiters cleaned up in WebSocketServer.cleanupMcpWorkers()",
+    "BUG-4+5: CHANNEL_DELETED added to schema, deleteChannel emits event + logs correctly",
+    "BUG-6: createChannel checks for duplicate name/linkedEntityId",
+    "BUG-9: chatRead multi-channel cursor tracking fixed to not skip messages",
+    "BUG-11: JetBrains MESSAGE_SENT handler removed (MESSAGE_CREATED handles it)",
+    "BUG-12: Unsafe URLs sanitized in markdown link rendering",
+    "BUG-17: JetBrains messagesByChannel capped at 500 per channel",
+    "BUG-23: JetBrains updateChannels only requests messages when channel actually changes",
+    "BUG-21: JetBrains reply rendering added to createMessageBubble",
+    "npm run build succeeds in packages/moe-daemon",
+    "gradlew buildPlugin succeeds in moe-jetbrains",
+    "npm run compile succeeds in moe-vscode"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BUG-1 (XSS) + BUG-12 (unsafe URLs): In VS Code `ChatViewProvider.ts`, the `highlightMentions()` at line 453 already calls `escapeHtml(text)` before regex. However, when `renderMarkdown` is added (Feature 1 task), it must ensure escapeHtml runs on non-code-block text before any HTML injection. For the current code (before markdown), ensure line 492 passes through escapeHtml: `highlightMentions(msg.content)` must keep using escapeHtml inside. For markdown links, add URL protocol allowlist check: only allow `http:`, `https:`, `mailto:` schemes in rendered `<a>` tags. Error handling: strip disallowed protocols, render as plain text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:28:37.519Z",
+      "completedAt": "2026-03-02T21:29:17.483Z",
+      "note": "BUG-1: XSS already handled by escapeHtml in renderMarkdown. BUG-12: Added URL protocol allowlist (http, https, mailto) to both VS Code and JetBrains markdown link renderers. Disallowed protocols render as plain text.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "BUG-2 (MentionRouter dead code): Integrate MentionRouter into StateManager. In `StateManager.ts`: (1) Import `MentionRouter` from `../util/mentionRouter.js`. (2) Add `private mentionRouter: MentionRouter` field, instantiate in constructor with `this.project?.settings?.chatMaxAgentHops ?? 4`. (3) In `sendMessage()` (line 646-654), replace the naive regex block with: `const allWorkers = Array.from(this.workers.values()); const routingResult = this.mentionRouter.route({...message, mentions: []}, allWorkers); message.mentions = routingResult.targets;`. (4) If `routingResult.paused`, still store message but add a system message warning about loop guard. Error handling: catch MentionRouter errors, fall back to naive regex.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T21:29:21.438Z",
+      "completedAt": "2026-03-02T21:30:29.280Z",
+      "note": "Integrated MentionRouter into StateManager.sendMessage(). Added import, private field (maxHops=4), instantiation in constructor. sendMessage() now uses router.route() with try/catch fallback to naive regex.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "BUG-3 (chat waiter leak): In `WebSocketServer.ts` `cleanupMcpWorkers()` (line 601-634), after the `activeWaiters` cleanup block (line 611-618), add identical cleanup for `activeChatWaiters`: import `activeChatWaiters` from `../tools/chatWait.js`, then `const chatWaiter = activeChatWaiters.get(workerId); if (chatWaiter) { clearTimeout(chatWaiter.timer); chatWaiter.unsubscribe(); chatWaiter.resolve({ hasMessage: false, cancelled: true }); activeChatWaiters.delete(workerId); }`. Error handling: wrap in try/catch to not break worker cleanup if chat waiter cleanup fails.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-03-02T21:30:33.339Z",
+      "completedAt": "2026-03-02T21:31:04.573Z",
+      "note": "Added activeChatWaiters import and cleanup block in cleanupMcpWorkers(), wrapped in try/catch to avoid breaking worker cleanup.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "BUG-4+5 (deleteChannel): (1) In `schema.ts`, add `'CHANNEL_DELETED'` to `ACTIVITY_EVENT_TYPES` array (after `CHANNEL_CREATED` at line 235). (2) In `StateManager.ts`, add `| { type: 'CHANNEL_DELETED'; payload: ChatChannel }` to `StateChangeEvent` union (after line 138). (3) In `deleteChannel()` method (line 782), change `this.appendActivity('CHANNEL_CREATED', ...)` to `this.appendActivity('CHANNEL_DELETED', ...)` and add `this.emit({ type: 'CHANNEL_DELETED', payload: channel })` before the activity log line. Error handling: already has null check for channel existence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T21:31:08.778Z",
+      "completedAt": "2026-03-02T21:31:49.565Z",
+      "note": "Added CHANNEL_DELETED to ACTIVITY_EVENT_TYPES and StateChangeEvent union. Fixed deleteChannel() to emit CHANNEL_DELETED event and log correct activity type instead of CHANNEL_CREATED.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "BUG-6 (duplicate channels): In `StateManager.createChannel()` (line 589-627), add duplicate check after validation: `for (const existing of this.channels.values()) { if (existing.name === name && existing.type === opts.type) throw new Error('Channel with this name and type already exists'); if (opts.linkedEntityId && existing.linkedEntityId === opts.linkedEntityId) throw new Error('Channel already linked to this entity'); }`. Error handling: throw descriptive errors for each duplicate case.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T21:31:53.392Z",
+      "completedAt": "2026-03-02T21:32:11.881Z",
+      "note": "Added duplicate channel check in createChannel() - prevents duplicate name+type and duplicate linkedEntityId.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "BUG-9 (chatRead cursor skip): In `chatRead.ts`, fix multi-channel cursor tracking. After merging messages from all channels (line 61-63), before slicing to limit, build a per-channel last-message-id map from the FULL merged array: `const fullCursorMap: Record<string,string> = {}; for (const msg of allMessages) { fullCursorMap[msg.channel] = msg.id; }`. Then slice to limit for return value. In the cursor update block (line 76-79), use `fullCursorMap` instead of iterating the sliced `messages`. Error handling: skip channels with no messages in cursor map.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ],
+      "startedAt": "2026-03-02T21:32:15.690Z",
+      "completedAt": "2026-03-02T21:33:04.137Z",
+      "note": "Fixed multi-channel cursor tracking. Hoisted fullCursorMap to outer scope, built from FULL allMessages before slicing. Cursor update now uses Object.assign(cursors, fullCursorMap) so channels trimmed by limit still get their cursors updated.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "BUG-11 (JetBrains duplicate messages): In `MoeProjectService.kt`, remove the `publishChatMessage(message)` call from the `MESSAGE_SENT` handler (line 467-475). Add a comment: `// MESSAGE_SENT is the direct response to sender; MESSAGE_CREATED broadcast handles all UI updates`. This matches the VS Code pattern (MoeDaemonClient.ts line 598). Error handling: keep the try/catch wrapper for logging but remove the publish call.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-02T21:33:09.568Z",
+      "completedAt": "2026-03-02T21:33:27.544Z",
+      "note": "Removed publishChatMessage from MESSAGE_SENT handler to prevent duplicate message rendering. MESSAGE_CREATED broadcast handles all UI updates.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "BUG-17+23 (JetBrains perf): (1) In `ChatPanel.kt`, add `private val MAX_MESSAGES_PER_CHANNEL = 500` constant. In `appendMessage()` (line 183), after adding to list, trim: `if (list.size > MAX_MESSAGES_PER_CHANNEL) list.subList(0, list.size - MAX_MESSAGES_PER_CHANNEL).clear()`. (2) In `updateChannels()` (line 160-177), guard `requestMessages` with a channel-change check: `if (toSelect.id != previousId) { service.requestMessages(toSelect.id) }`. Only request on actual channel change or first load. Error handling: null-safe previousId check.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:33:31.687Z",
+      "completedAt": "2026-03-02T21:34:27.671Z",
+      "note": "BUG-17: Added maxMessagesPerChannel=500 cap with trimming in appendMessage(). BUG-23: updateChannels only requests messages when channel actually changes (toSelect.id != previousId).",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "BUG-21 (JetBrains missing replies): In `ChatPanel.kt` `createMessageBubble()`, add reply quote rendering before the header. If `message.replyTo != null`, look up the parent in `messagesByChannel[message.channel]`, and if found, add a quote panel with border-left, showing sender + truncated content (max 100 chars), styled with secondary text color. Error handling: silently skip quote if parent message not found in cache.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:34:33.080Z",
+      "completedAt": "2026-03-02T21:35:00.831Z",
+      "note": "Added reply quote rendering in createMessageBubble(). Looks up parent message in cache, shows sender + truncated content (max 100 chars) with left border and secondary text color. Silently skips if parent not found.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "Test and verify: Run `cd packages/moe-daemon && npm run build` (daemon compiles with MentionRouter integration, CHANNEL_DELETED event, chat waiter cleanup). Run `cd moe-vscode && npm run compile` (VS Code compiles with XSS fix). Run `cd moe-jetbrains && ./gradlew buildPlugin` (JetBrains compiles with all fixes). Run existing tests: `cd packages/moe-daemon && npm test` to verify MentionRouter tests still pass and no regressions.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:35:04.915Z",
+      "completedAt": "2026-03-02T21:35:52.289Z",
+      "note": "All three projects compile cleanly. All 293 daemon tests pass (16 test files, 0 failures). MentionRouter tests still pass with integration."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 10,
+  "comments": [
+    {
+      "id": "comment-d67f895a",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement and test JetBrains fixes FIRST (BUG-11, BUG-17, BUG-23, BUG-21), then VS Code fixes. JetBrains quality must be at least equal to VS Code.",
+      "timestamp": "2026-03-02T21:51:02.298Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:26:44.293Z",
+  "updatedAt": "2026-03-02T21:56:19.035Z",
+  "planSubmittedAt": "2026-03-02T21:27:47.718Z",
+  "planApprovedAt": "2026-03-02T21:27:47.720Z",
+  "workStartedAt": "2026-03-02T21:28:37.519Z",
+  "completedAt": "2026-03-02T21:53:24.872Z",
+  "reviewStartedAt": "2026-03-02T21:53:24.872Z",
+  "reviewCompletedAt": "2026-03-02T21:56:19.035Z"
+}

@@ -1081,7 +1081,7 @@ Run: bash $moe_call --help for full list."
 
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
-        PROMPT="First call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
+        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
@@ -1118,9 +1118,9 @@ Run: bash $moe_call --help for full list."
             *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. Start by calling moe.claim_next_task to get your next task."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
         fi
 
         if [ "$CODEX_EXEC" = true ]; then
@@ -1163,9 +1163,9 @@ Run: bash $moe_call --help for full list."
             *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. Start by calling moe.claim_next_task to get your next task."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
         fi
 
         if [ "$GEMINI_EXEC" = true ]; then

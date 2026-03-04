@@ -8,6 +8,7 @@ import { TaskDetailPanel } from '../panels/TaskDetailPanel';
 export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     public static readonly viewType = 'moe.board';
     private _view?: vscode.WebviewView;
+    private _webviewReady = false;
     private readonly disposables: vscode.Disposable[] = [];
 
     constructor(
@@ -29,7 +30,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
         this.disposables.push(
             daemonClient.onActivityLog((events) => {
-                if (this._view) {
+                if (this._view && this._webviewReady) {
                     this._view.webview.postMessage({
                         type: 'activityLog',
                         events
@@ -50,6 +51,21 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         _token: vscode.CancellationToken
     ): void {
         this._view = webviewView;
+        this._webviewReady = false;
+
+        webviewView.onDidDispose(() => {
+            this._view = undefined;
+            this._webviewReady = false;
+        });
+
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible && this._webviewReady) {
+                this.updateConnectionStatus(this.daemonClient.connectionState);
+                if (this.daemonClient.currentState) {
+                    this.updateBoard(this.daemonClient.currentState);
+                }
+            }
+        });
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -153,11 +169,15 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                     vscode.commands.executeCommand('moe.connect');
                     break;
                 case 'ready':
-                    // Webview is ready, send current state
+                    this._webviewReady = true;
+                    // Send current state immediately
+                    this.updateConnectionStatus(this.daemonClient.connectionState);
                     if (this.daemonClient.currentState) {
                         this.updateBoard(this.daemonClient.currentState);
+                    } else if (this.daemonClient.connectionState === 'connected') {
+                        // State wasn't cached yet — request fresh snapshot from daemon
+                        this.daemonClient.sendMessage('GET_STATE');
                     }
-                    this.updateConnectionStatus(this.daemonClient.connectionState);
                     break;
             }
         });
@@ -190,7 +210,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateBoard(state: StateSnapshot): void {
-        if (this._view) {
+        if (this._view && this._webviewReady) {
             this._view.webview.postMessage({
                 type: 'updateState',
                 state
@@ -199,7 +219,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateConnectionStatus(status: string): void {
-        if (this._view) {
+        if (this._view && this._webviewReady) {
             this._view.webview.postMessage({
                 type: 'connectionStatus',
                 status
@@ -881,15 +901,26 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             'DONE': 'Done'
         };
 
+        // Restore persisted webview state if available
+        const savedState = vscode.getState() || {};
         let currentState = null;
         let draggedTaskId = null;
         let draggedEpicId = null;
-        let selectedEpicFilter = '';
-        const collapsedEpics = new Set();
-        let activeTab = 'board';
+        let selectedEpicFilter = savedState.selectedEpicFilter || '';
+        const collapsedEpics = new Set(savedState.collapsedEpics || []);
+        let activeTab = savedState.activeTab || 'board';
+
+        function persistViewState() {
+            vscode.setState({
+                selectedEpicFilter,
+                collapsedEpics: Array.from(collapsedEpics),
+                activeTab
+            });
+        }
 
         function switchTab(tabName) {
             activeTab = tabName;
+            persistViewState();
             var tabs = document.querySelectorAll('.tab');
             for (var i = 0; i < tabs.length; i++) {
                 tabs[i].classList.toggle('active', tabs[i].getAttribute('data-tab') === tabName);
@@ -1146,6 +1177,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Epic filter and Add Epic button handlers
         document.getElementById('epicFilter').addEventListener('change', function() {
             selectedEpicFilter = this.value;
+            persistViewState();
             if (currentState) { renderBoard(currentState); }
         });
         document.getElementById('addEpicBtn').addEventListener('click', function() {
@@ -1616,6 +1648,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             } else {
                 collapsedEpics.add(epicId);
             }
+            persistViewState();
             if (currentState) {
                 renderBoard(currentState);
             }
@@ -1867,6 +1900,26 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             btn.style.display = status === 'connected' ? 'none' : 'inline-block';
             if (agentsBtn) { agentsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
             if (settingsBtn) { settingsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
+
+            // Update board empty state to reflect connection status
+            if (!currentState) {
+                const board = document.getElementById('board');
+                const emptyState = board ? board.querySelector('.empty-state') : null;
+                if (emptyState) {
+                    const h3 = emptyState.querySelector('h3');
+                    const p = emptyState.querySelector('p');
+                    if (status === 'connected') {
+                        if (h3) { h3.textContent = 'No Tasks'; }
+                        if (p) { p.textContent = 'Create tasks in the IDE'; }
+                    } else if (status === 'connecting') {
+                        if (h3) { h3.textContent = 'Connecting...'; }
+                        if (p) { p.textContent = 'Waiting for daemon'; }
+                    } else {
+                        if (h3) { h3.textContent = 'Not Connected'; }
+                        if (p) { p.textContent = 'Click Connect to start'; }
+                    }
+                }
+            }
         }
 
         window.addEventListener('message', event => {
@@ -1892,6 +1945,11 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
         // Notify extension that webview is ready
         vscode.postMessage({ type: 'ready' });
+
+        // Restore active tab from saved state
+        if (activeTab && activeTab !== 'board') {
+            switchTab(activeTab);
+        }
     </script>
 </body>
 </html>`;

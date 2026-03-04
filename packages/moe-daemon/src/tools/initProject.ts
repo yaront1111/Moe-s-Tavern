@@ -49,7 +49,7 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
       }
 
       // Create directory structure
-      const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles'];
+      const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles', 'channels', 'messages', 'pins', 'decisions'];
       fs.mkdirSync(moePath, { recursive: true });
       for (const dir of dirs) {
         fs.mkdirSync(path.join(moePath, dir), { recursive: true });
@@ -62,6 +62,7 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
       // Create project.json
       const project = {
         id: projectId,
+        schemaVersion: 6,
         name,
         rootPath: projectPath,
         globalRails: {
@@ -78,7 +79,10 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
           autoCreateBranch: true,
           branchPattern: 'moe/{epicId}/{taskId}',
           commitPattern: 'feat({epicId}): {taskTitle}',
-          agentCommand: 'claude'
+          agentCommand: 'claude',
+          enableAgentTeams: false,
+          chatEnabled: true,
+          chatMaxAgentHops: 4,
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -91,6 +95,38 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
 
       // Create empty activity.log
       fs.writeFileSync(path.join(moePath, 'activity.log'), '');
+
+      // Create default "general" chat channel
+      const channelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
+      const generalChannel = {
+        id: channelId,
+        name: 'general',
+        type: 'general',
+        linkedEntityId: null,
+        createdAt: new Date().toISOString()
+      };
+      fs.writeFileSync(
+        path.join(moePath, 'channels', `${channelId}.json`),
+        JSON.stringify(generalChannel, null, 2)
+      );
+      fs.writeFileSync(path.join(moePath, 'messages', `${channelId}.jsonl`), '');
+
+      // Create role-based channels: #workers, #architects, #qa
+      for (const roleName of ['workers', 'architects', 'qa']) {
+        const roleChannelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
+        const roleChannel = {
+          id: roleChannelId,
+          name: roleName,
+          type: 'role',
+          linkedEntityId: null,
+          createdAt: new Date().toISOString()
+        };
+        fs.writeFileSync(
+          path.join(moePath, 'channels', `${roleChannelId}.json`),
+          JSON.stringify(roleChannel, null, 2)
+        );
+        fs.writeFileSync(path.join(moePath, 'messages', `${roleChannelId}.jsonl`), '');
+      }
 
       // Write role docs and .gitignore
       writeInitFiles(moePath);

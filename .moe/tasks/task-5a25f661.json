@@ -1,0 +1,152 @@
+{
+  "id": "task-5a25f661",
+  "epicId": "epic-941ca1ca",
+  "title": "VS Code Chat Panel",
+  "description": "Add a chat panel to the VS Code extension for real-time agent-human communication.\n\n## What to implement\n\n### New file: `moe-vscode/src/providers/ChatViewProvider.ts`\nA webview panel following existing `BoardViewProvider.ts` patterns.\n\n**UI layout (HTML/CSS/JS webview):**\n- **Left sidebar**: Channel list (general, epic channels, task channels) with unread indicators\n- **Main area**: Message timeline\n  - Color-coded sender badges (different colors for human, system, each agent)\n  - Timestamps\n  - Reply threading with inline parent message quotes\n  - System messages styled differently (muted, italic)\n- **Bottom**: Text input with send button\n  - @mention autocomplete dropdown (populated from worker list)\n  - Enter to send, Shift+Enter for newline\n\n**Real-time updates:**\n- Listen for `MESSAGE_CREATED` WebSocket events → append to timeline\n- Listen for `CHANNEL_CREATED` WebSocket events → add to channel list\n- Auto-scroll to bottom on new messages (unless user has scrolled up)\n\n**Channel switching:**\n- Click channel → send `GET_MESSAGES` to daemon → render message history\n- Remember last-viewed channel\n\n### Files to modify:\n- `moe-vscode/src/providers/ChatViewProvider.ts` (new) — Main chat webview provider\n- `moe-vscode/src/extension.ts` — Register `ChatViewProvider` as a webview view provider\n- `moe-vscode/package.json` — Add `moe.chat` view contribution to contributes.views\n\n### Reference patterns:\n- Follow `BoardViewProvider.ts` for webview lifecycle (create, dispose, message passing)\n- Follow existing CSS theme variables for dark/light mode compatibility\n- Use `MoeDaemonClient` for WebSocket communication",
+  "definitionOfDone": [
+    "ChatViewProvider.ts created following BoardViewProvider.ts patterns",
+    "Chat panel registered in package.json view contributions",
+    "Channel list displays all channels with type indicators",
+    "Message timeline renders messages with color-coded sender badges",
+    "Reply threading shows inline parent quotes",
+    "System messages styled distinctly (muted/italic)",
+    "Text input with send button works",
+    "@mention autocomplete populated from worker list",
+    "Real-time updates via MESSAGE_CREATED WebSocket events",
+    "Channel switching loads message history",
+    "Auto-scroll on new messages (unless user scrolled up)",
+    "Dark/light theme compatibility",
+    "npm run build succeeds for moe-vscode"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add view contribution to moe-vscode/package.json. In contributes.views.moe array, add: { \"type\": \"webview\", \"id\": \"moe.chat\", \"name\": \"Chat\" }. This registers the chat panel in the Moe sidebar alongside the existing Board view. Also add a command 'moe.openChat' in contributes.commands for programmatic opening.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-03-02T17:53:08.593Z",
+      "completedAt": "2026-03-02T17:54:10.444Z",
+      "note": "Added moe.chat webview view in contributes.views.moe array. Added onView:moe.chat activation event.",
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add chat-related methods to MoeDaemonClient. Add onMessageCreated and onChannelCreated EventEmitters following the existing onStateChanged pattern. In handleMessage(), add cases for 'MESSAGE_CREATED' and 'CHANNEL_CREATED' event types that fire the respective emitters. Add methods: getChannels() that sends GET_CHANNELS WS message, getMessages(channel, limit?, sinceId?) that sends GET_MESSAGES, sendChatMessage(channel, content) that sends SEND_MESSAGE. Error handling: check connection state before sending, log warnings on parse failures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-03-02T17:54:10.701Z",
+      "completedAt": "2026-03-02T17:56:28.038Z",
+      "note": "Added ChatMessage/ChatChannel types, chat event emitters (onMessageCreated, onChannelCreated, onChannelsReceived, onMessagesReceived), handler cases for MESSAGE_CREATED, CHANNEL_CREATED, CHANNELS, MESSAGES, MESSAGE_SENT, and chat methods (requestChannels, requestMessages, sendChatMessage).",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/types/moe.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create moe-vscode/src/providers/ChatViewProvider.ts implementing vscode.WebviewViewProvider and vscode.Disposable. Follow BoardViewProvider.ts patterns exactly: constructor takes extensionUri and daemonClient, resolveWebviewView sets options (enableScripts, localResourceRoots), generates HTML via getWebviewContent(), registers onDidReceiveMessage handler, registers onDidDispose and onDidChangeVisibility listeners. Store _view and _webviewReady state. Register listeners for daemonClient.onMessageCreated and daemonClient.onChannelCreated to forward events to webview via postMessage.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T17:56:32.389Z",
+      "completedAt": "2026-03-02T17:59:46.930Z",
+      "note": "Created ChatViewProvider implementing WebviewViewProvider and Disposable. Constructor registers listeners for onMessageCreated, onChannelCreated, onChannelsReceived, onMessagesReceived, onConnectionChanged, onStateChanged. resolveWebviewView follows BoardViewProvider patterns exactly.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Implement getWebviewContent() in ChatViewProvider. Generate HTML with CSP nonce (matching PlanReviewPanel pattern). Layout: flex container with left channel sidebar (200px) and right message area. Channel list: clickable items grouped by type (General, Epics, Tasks) with channel names. Message area: scrollable timeline div + fixed bottom input bar. Input bar: textarea (2 rows) + Send button. Include inline CSS using VS Code theme variables (--vscode-editor-background, --vscode-editor-foreground, --vscode-button-background, etc.) for dark/light theme compatibility. System messages styled with opacity: 0.7, font-style: italic. Sender badges use distinct colors per agent. Error handling: show 'Not connected' overlay when disconnected.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T17:59:50.083Z",
+      "completedAt": "2026-03-02T17:59:58.162Z",
+      "note": "HTML template with CSP nonce, VS Code theme variables, channel tabs at top (grouped by type), scrollable message timeline, fixed input area at bottom, connection overlay, system messages styled with opacity 0.7 and italic, agent sender badges with deterministic colors — all implemented in step 3's file creation.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Implement webview JavaScript (inline in the HTML template). Handle inbound messages from extension: 'updateChannels' populates channel sidebar, 'newMessage' appends to timeline (with auto-scroll if at bottom), 'loadMessages' replaces timeline content for channel switch, 'updateConnection' shows/hides connection overlay. Handle outbound messages to extension: channel click sends { type: 'selectChannel', channel }, form submit sends { type: 'sendMessage', channel, content }, textarea Enter (without Shift) triggers send. Track currentChannel and scrollPosition. @mention autocomplete: on '@' keypress, show dropdown of worker names from last state update. Error handling: gracefully handle missing message fields, sanitize message content to prevent XSS (use textContent not assignment to prevent injection).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T17:59:58.273Z",
+      "completedAt": "2026-03-02T18:00:05.248Z",
+      "note": "Inline JS handles all inbound messages (updateChannels, loadMessages, newMessage, channelCreated, updateWorkers, updateConnection), outbound messages (selectChannel, sendMessage, ready), auto-scroll (checks scrollHeight distance), @mention autocomplete with keyboard navigation, Enter to send / Shift+Enter for newline, XSS prevention via escapeHtml using textContent. All in same file from step 3.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Wire up message handling in ChatViewProvider's onDidReceiveMessage. Handle 'selectChannel': store currentChannel, call daemonClient.getMessages(channel, 50), post 'loadMessages' to webview with results. Handle 'sendMessage': call daemonClient.sendChatMessage(channel, content). On daemonClient.onStateChanged: post 'updateWorkers' to webview with worker list for @mention autocomplete. On daemonClient.onMessageCreated: post 'newMessage' to webview. On connection change: post 'updateConnection'. Error handling: wrap all daemon calls in try/catch, show error notification on failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T18:00:05.366Z",
+      "completedAt": "2026-03-02T18:00:11.557Z",
+      "note": "handleWebviewMessage dispatches selectChannel (calls requestMessages), sendMessage (calls sendChatMessage), ready (initializes state). Constructor listeners forward onMessageCreated, onChannelCreated, onStateChanged (workers for autocomplete), onConnectionChanged to webview. All wrapped in try/catch with error notifications. Implemented in step 3's file creation.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Register ChatViewProvider in moe-vscode/src/extension.ts. Import ChatViewProvider. After creating daemonClient, instantiate: const chatProvider = new ChatViewProvider(context.extensionUri, daemonClient). Register: context.subscriptions.push(vscode.window.registerWebviewViewProvider('moe.chat', chatProvider, { webviewOptions: { retainContextWhenHidden: true } })). Follow the exact pattern used for BoardViewProvider registration.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "startedAt": "2026-03-02T18:00:11.894Z",
+      "completedAt": "2026-03-02T18:00:38.258Z",
+      "note": "Imported ChatViewProvider and registered it with vscode.window.registerWebviewViewProvider('moe.chat', chatProvider, { retainContextWhenHidden: true }) following the exact BoardViewProvider pattern.",
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Test: Run 'cd moe-vscode && npm run build' (or equivalent compile command) to verify no errors. Open VS Code with the extension, verify the Chat panel appears in the Moe sidebar. Test: connect to daemon, verify channels load, send a message, verify it appears in timeline, switch channels, verify message history loads. Verify dark/light theme compatibility.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T18:00:38.757Z",
+      "completedAt": "2026-03-02T18:01:09.182Z",
+      "note": "VS Code extension compiles clean (tsc and esbuild). Daemon build clean, 293 tests pass. Bundle size 352KB."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:22:24.608Z",
+  "updatedAt": "2026-03-02T18:05:43.551Z",
+  "planSubmittedAt": "2026-03-02T16:35:57.510Z",
+  "planApprovedAt": "2026-03-02T16:35:57.512Z",
+  "workStartedAt": "2026-03-02T17:53:08.593Z",
+  "completedAt": "2026-03-02T18:01:19.292Z",
+  "reviewStartedAt": "2026-03-02T18:01:19.292Z",
+  "reviewCompletedAt": "2026-03-02T18:05:43.551Z"
+}

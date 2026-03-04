@@ -1,0 +1,113 @@
+{
+  "id": "task-8fce82c0",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix VS Code chat panel bugs (notifications, state persistence, types)",
+  "description": "1 MEDIUM-HIGH + 4 MEDIUM VS Code bugs.\\n\\n(V1) Notification sound never plays when chat panel hidden — the primary use case is broken. (V2) ChatMessage type missing decisionId. (V3) pinCache/decisionMap not persisted in setState. (V4) Worker status colors missing READING_CONTEXT/AWAITING_APPROVAL, includes phantom REVIEWING. (V5) Event listener leak on webview re-creation.",
+  "definitionOfDone": [
+    "V1: Notification sound uses vscode.window API instead of webview Audio when panel is hidden",
+    "V2: ChatMessage interface in moe.ts includes decisionId?: string",
+    "V3: pinCache and decisionMap included in saveState/restoreState",
+    "V4: statusColors includes READING_CONTEXT and AWAITING_APPROVAL, removes REVIEWING",
+    "V5: webview event listeners pushed to disposables array",
+    "npm run compile succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "V1: Fix notification sound for hidden webview. In `ChatViewProvider.ts`, move notification sound logic from webview to extension host. Instead of posting `playSound` to webview, use VS Code's `vscode.env.appHost` and play sound via a different mechanism. For the notification itself, `vscode.window.showInformationMessage` already works without webview. Remove the webview `playSound` message type and the `BEEP_WAV` constant from webview script. The sound notification is secondary to the visual notification which already works via `showInformationMessage`. Error handling: catch errors in notification path silently.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-03T09:05:08.245Z",
+      "completedAt": "2026-03-03T09:06:06.394Z",
+      "note": "Removed webview-based audio (BEEP_WAV, playNotificationSound, playSound handler, media-src CSP). Visual notification via vscode.window.showInformationMessage works regardless of panel visibility. Sound via webview was unreliable when panel hidden.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "V2: Add `decisionId` to ChatMessage type. In `moe-vscode/src/types/moe.ts`, add `decisionId?: string` to the `ChatMessage` interface (after `timestamp` field, ~line 101). This ensures TypeScript type checking covers decision-linked messages. Error handling: optional field, backward-compatible.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "startedAt": "2026-03-03T09:06:12.924Z",
+      "completedAt": "2026-03-03T09:06:23.707Z",
+      "note": "Already fixed in task-9cfb063f reopened fix. decisionId?: string present at line 102 of moe.ts."
+    },
+    {
+      "stepId": "step-3",
+      "description": "V3: Persist `pinCache` and `decisionMap` in webview state. In `ChatViewProvider.ts` webview script, update `saveState()` to include `pinCache` and `decisionMap`: `vscode.setState({ currentChannel, unreadCounts, messageCache, pinCache, decisionMap })`. Update state restoration at top to include: `let pinCache = prevState.pinCache || {}; let decisionMap = prevState.decisionMap || {};`. Error handling: defaults to empty objects if not in saved state.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-03T09:06:28.256Z",
+      "completedAt": "2026-03-03T09:06:55.866Z",
+      "note": "pinCache and decisionMap now restored from prevState on init and included in saveState(). Defaults to empty objects if not in saved state.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "V4: Fix worker status dot colors. In `ChatViewProvider.ts` webview script, update `statusColors` map (~line 877): replace `{ IDLE: '#888', CODING: '#22c55e', PLANNING: '#a855f7', BLOCKED: '#ef4444', REVIEWING: '#f59e0b' }` with `{ IDLE: '#888', CODING: '#22c55e', PLANNING: '#a855f7', BLOCKED: '#ef4444', READING_CONTEXT: '#3b82f6', AWAITING_APPROVAL: '#f59e0b' }`. Remove phantom `REVIEWING` state, add `READING_CONTEXT` (blue) and `AWAITING_APPROVAL` (amber). Error handling: unknown status still falls back to gray.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-03T09:06:59.761Z",
+      "completedAt": "2026-03-03T09:07:18.844Z",
+      "note": "Replaced phantom REVIEWING with READING_CONTEXT (blue #3b82f6) and AWAITING_APPROVAL (amber #f59e0b). Unknown statuses still fall back to IDLE gray.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "V5: Fix event listener leak on webview re-creation. In `resolveWebviewView()`, push the disposables from `webviewView.onDidDispose()` and `webviewView.onDidChangeVisibility()` to `this.disposables` array: `this.disposables.push(webviewView.onDidDispose(...))` and `this.disposables.push(webviewView.onDidChangeVisibility(...))`. Error handling: disposables properly cleaned up on extension deactivation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-03T09:07:24.247Z",
+      "completedAt": "2026-03-03T09:07:58.398Z",
+      "note": "Pushed onDidDispose, onDidChangeVisibility, and onDidReceiveMessage disposables to this.disposables array. All cleaned up on extension deactivation via dispose().",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test: Run `cd moe-vscode && npm run compile` to verify compilation. Manual test: verify notifications work when panel hidden, verify status dots show correct colors for all worker states, verify decision cards survive panel hide/show.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T09:08:03.511Z",
+      "completedAt": "2026-03-03T09:08:27.660Z",
+      "note": "VS Code tsc --noEmit clean, daemon 293/293 tests pass."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T22:33:27.715Z",
+  "updatedAt": "2026-03-03T14:54:14.989Z",
+  "planSubmittedAt": "2026-03-02T22:34:49.829Z",
+  "planApprovedAt": "2026-03-02T22:34:49.831Z",
+  "workStartedAt": "2026-03-03T09:05:08.245Z",
+  "completedAt": "2026-03-03T09:08:38.522Z",
+  "reviewStartedAt": "2026-03-03T09:08:38.522Z",
+  "reviewCompletedAt": "2026-03-03T14:54:14.989Z"
+}

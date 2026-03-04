@@ -18,10 +18,14 @@ import type {
     EpicStatus,
     ProjectSettings,
     Project,
+    ChatMessage,
+    ChatChannel,
+    PinEntry,
+    Decision,
 } from '../types/moe';
 
 // Re-export types for backward compatibility with existing importers.
-export type { Task, Epic, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings };
+export type { Task, Epic, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings, ChatMessage, ChatChannel };
 export type { MoeStateSnapshot as StateSnapshot } from '../types/moe';
 export type { ImplementationStep as Step } from '../types/moe';
 
@@ -48,6 +52,11 @@ export class MoeDaemonClient implements vscode.Disposable {
     private reconnectTimeout: NodeJS.Timeout | undefined;
     private pingInterval: NodeJS.Timeout | undefined;
     private startInProgress = false;
+    private reconnectAttempts = 0;
+    private readonly maxReconnectAttempts = 10;
+    private stateReady = false;
+    private stateReadyResolve: (() => void) | undefined;
+    private stateReadyPromise: Promise<void>;
 
     private readonly _onStateChanged = new vscode.EventEmitter<StateSnapshot>();
     public readonly onStateChanged = this._onStateChanged.event;
@@ -67,6 +76,39 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onActivityLog = new vscode.EventEmitter<ActivityEvent[]>();
     public readonly onActivityLog = this._onActivityLog.event;
 
+    private readonly _onMessageCreated = new vscode.EventEmitter<ChatMessage>();
+    public readonly onMessageCreated = this._onMessageCreated.event;
+
+    private readonly _onChannelCreated = new vscode.EventEmitter<ChatChannel>();
+    public readonly onChannelCreated = this._onChannelCreated.event;
+
+    private readonly _onChannelsReceived = new vscode.EventEmitter<ChatChannel[]>();
+    public readonly onChannelsReceived = this._onChannelsReceived.event;
+
+    private readonly _onMessagesReceived = new vscode.EventEmitter<{ channel: string; messages: ChatMessage[] }>();
+    public readonly onMessagesReceived = this._onMessagesReceived.event;
+
+    private readonly _onPinsReceived = new vscode.EventEmitter<{ channel: string; pins: PinEntry[] }>();
+    public readonly onPinsReceived = this._onPinsReceived.event;
+
+    private readonly _onPinCreated = new vscode.EventEmitter<{ channel: string; pin: PinEntry }>();
+    public readonly onPinCreated = this._onPinCreated.event;
+
+    private readonly _onPinRemoved = new vscode.EventEmitter<{ channel: string; messageId: string }>();
+    public readonly onPinRemoved = this._onPinRemoved.event;
+
+    private readonly _onPinToggled = new vscode.EventEmitter<{ channel: string; pin: PinEntry }>();
+    public readonly onPinToggled = this._onPinToggled.event;
+
+    private readonly _onDecisionsReceived = new vscode.EventEmitter<Decision[]>();
+    public readonly onDecisionsReceived = this._onDecisionsReceived.event;
+
+    private readonly _onDecisionProposed = new vscode.EventEmitter<Decision>();
+    public readonly onDecisionProposed = this._onDecisionProposed.event;
+
+    private readonly _onDecisionResolved = new vscode.EventEmitter<Decision>();
+    public readonly onDecisionResolved = this._onDecisionResolved.event;
+
     private readonly _onError = new vscode.EventEmitter<{ operation?: string; message: string }>();
     public readonly onError = this._onError.event;
 
@@ -76,6 +118,9 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     constructor(extensionPath: string) {
         this.extensionPath = extensionPath;
+        this.stateReadyPromise = new Promise<void>((resolve) => {
+            this.stateReadyResolve = resolve;
+        });
     }
 
     get connectionState(): ConnectionState {
@@ -84,6 +129,19 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     get currentState(): StateSnapshot | undefined {
         return this.state;
+    }
+
+    get isStateReady(): boolean {
+        return this.stateReady;
+    }
+
+    /** Wait for STATE_SNAPSHOT with a timeout. Resolves immediately if already ready. */
+    async waitForState(timeoutMs = 5000): Promise<boolean> {
+        if (this.stateReady) return true;
+        return Promise.race([
+            this.stateReadyPromise.then(() => true),
+            new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs))
+        ]);
     }
 
     async connect(): Promise<void> {
@@ -110,6 +168,7 @@ export class MoeDaemonClient implements vscode.Disposable {
 
                 this.ws.on('open', () => {
                     log('Connected to Moe daemon');
+                    this.reconnectAttempts = 0;
                     this.setConnectionState('connected');
                     this.startPingInterval();
                     this.requestState();
@@ -124,6 +183,11 @@ export class MoeDaemonClient implements vscode.Disposable {
                     log('Disconnected from Moe daemon');
                     this.setConnectionState('disconnected');
                     this.stopPingInterval();
+                    // Reset state readiness — new connection needs fresh STATE_SNAPSHOT
+                    this.stateReady = false;
+                    this.stateReadyPromise = new Promise<void>((resolve) => {
+                        this.stateReadyResolve = resolve;
+                    });
                     this.scheduleReconnect();
                 });
 
@@ -239,6 +303,50 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     requestActivityLog(limit?: number): void {
         this.sendMessage('GET_ACTIVITY_LOG', limit ? { limit } : {});
+    }
+
+    // =========================================================================
+    // Outbound: Chat operations
+    // =========================================================================
+
+    requestChannels(): void {
+        this.sendMessage('GET_CHANNELS');
+    }
+
+    requestMessages(channel: string, limit?: number, sinceId?: string): void {
+        this.sendMessage('GET_MESSAGES', { channel, limit, sinceId });
+    }
+
+    sendChatMessage(channel: string, content: string): void {
+        this.sendMessage('SEND_MESSAGE', { channel, content });
+    }
+
+    requestPins(channel: string): void {
+        this.sendMessage('GET_PINS', { channel });
+    }
+
+    pinMessage(channel: string, messageId: string): void {
+        this.sendMessage('PIN_MESSAGE', { channel, messageId });
+    }
+
+    unpinMessage(channel: string, messageId: string): void {
+        this.sendMessage('UNPIN_MESSAGE', { channel, messageId });
+    }
+
+    togglePinDone(channel: string, messageId: string): void {
+        this.sendMessage('TOGGLE_PIN_DONE', { channel, messageId });
+    }
+
+    requestDecisions(): void {
+        this.sendMessage('GET_DECISIONS');
+    }
+
+    approveDecision(decisionId: string): void {
+        this.sendMessage('APPROVE_DECISION', { decisionId });
+    }
+
+    rejectDecision(decisionId: string): void {
+        this.sendMessage('REJECT_DECISION', { decisionId });
     }
 
     approveProposal(proposalId: string): void {
@@ -434,6 +542,10 @@ export class MoeDaemonClient implements vscode.Disposable {
             switch (type) {
                 case 'STATE_SNAPSHOT':
                     this.state = payload;
+                    if (!this.stateReady) {
+                        this.stateReady = true;
+                        this.stateReadyResolve?.();
+                    }
                     this._onStateChanged.fire(payload);
                     break;
 
@@ -545,6 +657,72 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this._onActivityLog.fire(payload);
                     break;
 
+                case 'MESSAGE_CREATED':
+                    this._onMessageCreated.fire(payload);
+                    break;
+
+                case 'CHANNEL_CREATED':
+                    this._onChannelCreated.fire(payload);
+                    if (this.state) {
+                        if (!this.state.channels) { this.state.channels = []; }
+                        this.state.channels.push(payload);
+                    }
+                    break;
+
+                case 'CHANNELS':
+                    this._onChannelsReceived.fire(payload.channels);
+                    break;
+
+                case 'MESSAGES':
+                    this._onMessagesReceived.fire({ channel: payload.channel, messages: payload.messages });
+                    break;
+
+                case 'PINS':
+                    this._onPinsReceived.fire({ channel: payload.channel, pins: payload.pins });
+                    break;
+
+                case 'PIN_CREATED':
+                    this._onPinCreated.fire({ channel: payload.channel, pin: payload.pin });
+                    break;
+
+                case 'PIN_REMOVED':
+                    this._onPinRemoved.fire({ channel: payload.channel, messageId: payload.messageId });
+                    break;
+
+                case 'PIN_TOGGLED':
+                    this._onPinToggled.fire({ channel: payload.channel, pin: payload.pin });
+                    break;
+
+                case 'DECISIONS':
+                    this._onDecisionsReceived.fire(payload.decisions ?? []);
+                    if (this.state) {
+                        this.state.decisions = payload.decisions ?? [];
+                    }
+                    break;
+
+                case 'DECISION_PROPOSED':
+                    this._onDecisionProposed.fire(payload);
+                    if (this.state) {
+                        if (!this.state.decisions) { this.state.decisions = []; }
+                        this.state.decisions.push(payload);
+                    }
+                    break;
+
+                case 'DECISION_RESOLVED':
+                    this._onDecisionResolved.fire(payload);
+                    if (this.state) {
+                        if (!this.state.decisions) { this.state.decisions = []; }
+                        const idx = this.state.decisions.findIndex(d => d.id === payload.id);
+                        if (idx >= 0) {
+                            this.state.decisions[idx] = payload;
+                        }
+                    }
+                    break;
+
+                case 'MESSAGE_SENT':
+                    // Confirmation of sent message — no action needed, MESSAGE_CREATED broadcast handles UI
+                    break;
+
                 case 'ARCHIVE_DONE_RESULT':
                     log(`Archived ${payload?.archived ?? 0} done tasks`);
                     break;
@@ -606,6 +784,22 @@ export class MoeDaemonClient implements vscode.Disposable {
             return;
         }
 
+        this.reconnectAttempts++;
+        if (this.reconnectAttempts > this.maxReconnectAttempts) {
+            log(`Max reconnect attempts (${this.maxReconnectAttempts}) exhausted`);
+            this.setConnectionState('disconnected');
+            vscode.window.showErrorMessage(
+                `Moe daemon connection failed after ${this.maxReconnectAttempts} retries.`,
+                'Reconnect'
+            ).then((action) => {
+                if (action === 'Reconnect') {
+                    this.reconnectAttempts = 0;
+                    this.connect().catch(() => {});
+                }
+            });
+            return;
+        }
+
         this.reconnectTimeout = setTimeout(() => {
             this.connect().catch(() => {
                 // Will retry via scheduleReconnect on close
@@ -628,6 +822,17 @@ export class MoeDaemonClient implements vscode.Disposable {
         this._onEpicUpdated.dispose();
         this._onTaskDeleted.dispose();
         this._onActivityLog.dispose();
+        this._onMessageCreated.dispose();
+        this._onChannelCreated.dispose();
+        this._onChannelsReceived.dispose();
+        this._onMessagesReceived.dispose();
+        this._onPinsReceived.dispose();
+        this._onPinCreated.dispose();
+        this._onPinRemoved.dispose();
+        this._onPinToggled.dispose();
+        this._onDecisionsReceived.dispose();
+        this._onDecisionProposed.dispose();
+        this._onDecisionResolved.dispose();
         this._onError.dispose();
     }
 }

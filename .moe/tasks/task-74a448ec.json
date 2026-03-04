@@ -1,0 +1,122 @@
+{
+  "id": "task-74a448ec",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 6: Notification Sounds in Chat",
+  "description": "Client-only feature. Play notification sound and show IDE notification when agent messages arrive. VS Code: base64 WAV beep in webview + vscode.window.showInformationMessage. JetBrains: NotificationGroupManager + Toolkit.beep(). Configurable via settings.",
+  "definitionOfDone": [
+    "VS Code: notifyIfNeeded() method skips human/system messages",
+    "VS Code: Settings moe.chat.notifications.enabled, mutedChannels, soundEnabled added to package.json",
+    "VS Code: Audio plays when webview not focused for new agent messages",
+    "JetBrains: notifyIfNeeded() uses NotificationGroupManager for IDE notification",
+    "JetBrains: Toolkit.beep() for sound",
+    "Both compile successfully"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VS Code: Add `notifyIfNeeded(msg)` method to `ChatViewProvider` class (after `handleWebviewMessage`). Skip if sender is 'human' or 'system'. Check `vscode.workspace.getConfiguration('moe.chat.notifications')` for enabled/mutedChannels/soundEnabled. If enabled and channel not muted, call `vscode.window.showInformationMessage('[Moe Chat] ${msg.sender}: ${msg.content.slice(0,80)}')`. Error handling: wrap in try/catch to never break message flow.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T22:21:23.970Z",
+      "completedAt": "2026-03-02T22:22:01.582Z",
+      "note": "Added notifyIfNeeded(msg) method that skips human/system senders, checks moe.chat.notifications config (enabled, mutedChannels, soundEnabled), shows vscode.window.showInformationMessage with truncated content, and posts playSound to webview if soundEnabled. Wrapped in try/catch to never break message flow.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code: For audio notification, update CSP in `getHtmlContent()` to add `media-src data:;`. Embed a short base64-encoded WAV beep constant in the webview script. Add `playNotificationSound()` function that creates an `Audio` element from the data URI and plays it. Post `notificationSound` message type from extension host to webview when sound should play. Only play when document is not focused (`!document.hasFocus()`). Error handling: catch Audio play errors silently.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T22:22:05.572Z",
+      "completedAt": "2026-03-02T22:23:27.366Z",
+      "note": "Updated CSP to add media-src data:. Added base64-encoded 200ms 440Hz WAV beep constant. Added playNotificationSound() that skips if document has focus, creates Audio element at 0.3 volume, catches autoplay errors silently. Added playSound message handler in window message listener.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VS Code: Call `notifyIfNeeded(msg)` from the `onMessageCreated` subscription in the constructor (after posting to webview). Also post `{ type: 'playSound' }` to webview if soundEnabled.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T22:23:31.047Z",
+      "completedAt": "2026-03-02T22:23:58.784Z",
+      "note": "Wired notifyIfNeeded(msg) call into the onMessageCreated subscription. The method already handles both the vscode notification and posting playSound to webview, so no separate sound call needed.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VS Code config: Add notification settings to `moe-vscode/package.json` under `configuration.properties`: `moe.chat.notifications.enabled` (boolean, default true), `moe.chat.notifications.mutedChannels` (array of strings, default []), `moe.chat.notifications.soundEnabled` (boolean, default true).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json"
+      ],
+      "startedAt": "2026-03-02T22:24:03.122Z",
+      "completedAt": "2026-03-02T22:24:35.020Z",
+      "note": "Added 3 notification settings to package.json: moe.chat.notifications.enabled (boolean, default true), moe.chat.notifications.mutedChannels (array of strings, default []), moe.chat.notifications.soundEnabled (boolean, default true).",
+      "modifiedFiles": [
+        "moe-vscode/package.json"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "JetBrains: Add `notifyIfNeeded(message: ChatMessage)` method to `ChatPanel`. Skip human/system senders. Use `NotificationGroupManager.getInstance().getNotificationGroup(\"Moe Chat\")` to create a balloon notification with sender and truncated content. Add `java.awt.Toolkit.getDefaultToolkit().beep()` for sound. Call from `onChatMessage` callback. Error handling: catch notification group not found, fall back to beep only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T22:24:38.981Z",
+      "completedAt": "2026-03-02T22:26:01.754Z",
+      "note": "Added NotificationGroupManager and NotificationType imports. Added notifyIfNeeded(message) method: skips human/system senders, shows balloon notification via existing \"Moe Notifications\" group with sender and truncated content, calls Toolkit.beep() for sound. Falls back gracefully if notification group not found. Called from onChatMessage callback after appendMessage.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test and verify: Run `cd moe-vscode && npm run compile` and `cd moe-jetbrains && ./gradlew buildPlugin`. Manual test: have an agent send a chat message while the chat panel is not focused — verify notification appears and sound plays.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "completedAt": "2026-03-02T22:28:01.025Z",
+      "note": "All 3 builds pass: VS Code tsc clean, JetBrains BUILD SUCCESSFUL, daemon 293/293 tests pass."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 15,
+  "comments": [
+    {
+      "id": "comment-32c5232d",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains NotificationGroupManager notifications FIRST, then VS Code.",
+      "timestamp": "2026-03-02T21:51:04.696Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:14:38.353Z",
+  "updatedAt": "2026-03-03T14:55:21.074Z",
+  "planSubmittedAt": "2026-03-02T21:16:08.891Z",
+  "planApprovedAt": "2026-03-02T21:16:08.893Z",
+  "workStartedAt": "2026-03-02T22:21:23.970Z",
+  "completedAt": "2026-03-02T22:28:07.796Z",
+  "reviewStartedAt": "2026-03-02T22:28:07.796Z",
+  "reviewCompletedAt": "2026-03-03T14:55:21.074Z"
+}

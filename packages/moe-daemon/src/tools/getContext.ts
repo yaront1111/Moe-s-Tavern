@@ -36,6 +36,26 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // Find #general channel for chat context
+      let generalChannelId: string | null = null;
+      let recentChatMessages: Array<{ sender: string; content: string; timestamp: string }> = [];
+      for (const ch of state.channels.values()) {
+        if (ch.type === 'general' || ch.name === 'general') {
+          generalChannelId = ch.id;
+          break;
+        }
+      }
+      if (generalChannelId) {
+        try {
+          const msgs = await state.getMessages(generalChannelId, { limit: 5 });
+          recentChatMessages = msgs.map((m) => ({
+            sender: m.sender,
+            content: m.content,
+            timestamp: m.timestamp
+          }));
+        } catch { /* channel may have no messages yet */ }
+      }
+
       return {
         project: {
           id: state.project.id,
@@ -72,7 +92,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               completedAt: task.completedAt || null,
               reviewStartedAt: task.reviewStartedAt || null,
               reviewCompletedAt: task.reviewCompletedAt || null,
-              comments: task.comments || []
+              comments: task.comments || [],
+              generalChannelId
             }
           : null,
         worker: task?.assignedWorkerId ? state.getWorker(task.assignedWorkerId) ?? null : null,
@@ -80,7 +101,16 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           global: state.project.globalRails.requiredPatterns,
           epic: epic?.epicRails || [],
           task: task?.taskRails || []
-        }
+        },
+        ...(generalChannelId
+          ? {
+              chat: {
+                channelId: generalChannelId,
+                recentMessages: recentChatMessages,
+                hint: 'Use moe.chat_send to post updates/questions. Use moe.chat_read for full history.'
+              }
+            }
+          : {})
       };
     }
   };

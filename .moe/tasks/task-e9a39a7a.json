@@ -1,0 +1,133 @@
+{
+  "id": "task-e9a39a7a",
+  "epicId": "epic-941ca1ca",
+  "title": "Fix JetBrains ChatPanel critical bugs (channel flood, notification spam, stale state)",
+  "description": "3 HIGH + 7 MEDIUM bugs in JetBrains ChatPanel — the primary IDE.\\n\\nHIGH: (J1) No guard flag on updateChannels causes ActionListener to fire during programmatic updates, duplicate requestMessages. (J2) updateChannels called every 3s from onState compounding J1. (J3) Notification spam with no configurable settings.\\n\\nMEDIUM: (J4) File path regex matches URLs. (J5) CRLF breaks code blocks on Windows. (J6) Full O(N) rebuild on every event. (J7) Context menu pin state is stale. (J8) No unread count. (J9) requestPins missing on initial channel. (J10) Unsafe getAsJsonObject on core messages.",
+  "definitionOfDone": [
+    "J1+J2: Add updatingChannels guard flag to prevent ActionListener during programmatic updates, skip updateChannels if channels unchanged",
+    "J3: Add notification settings (enable/disable, mute channels, sound toggle) via PropertiesComponent or project-level config",
+    "J4: File path regex excludes text that looks like URLs (contains :// or starts with http/https)",
+    "J5: Code block regex handles both \\n and \\r\\n line endings",
+    "J6: appendMessage adds incrementally instead of full rebuild when possible",
+    "J7: Context menu checks pin state at click time, not render time",
+    "J9: requestPins called on initial channel selection in updateChannels",
+    "J10: Core message handlers use safe ?.takeIf { it.isJsonObject } pattern",
+    "gradlew buildPlugin succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "J1+J2: Add `updatingChannels` guard flag to ChatPanel.kt. Add `private var updatingChannels = false` field. In `updateChannels()`, set `updatingChannels = true` at start, `false` at end (in finally block). In the `channelCombo.addActionListener`, add `if (updatingChannels) return@addActionListener` at top. Also add channel fingerprinting: compute `channels.map { it.id }.sorted().joinToString()`, compare with stored `lastChannelFingerprint`, skip entire update if unchanged. This follows the pattern from MoeToolWindowPanel.kt `updatingEpicFilter`. Error handling: guard flag reset in finally block.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-03T08:48:47.040Z",
+      "completedAt": "2026-03-03T08:49:28.277Z",
+      "note": "Added updatingChannels guard flag + lastChannelFingerprint. Guard prevents ActionListener firing during programmatic updates. Fingerprint skips redundant updateChannels calls when channels haven't changed. Also added requestPins in the initial channel selection path inside updateChannels.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "J3: Add notification settings to ChatPanel.kt. Add fields: `private var notificationsEnabled = true`, `private var soundEnabled = true`, `private val mutedChannels = mutableSetOf<String>()`. Load/save via `PropertiesComponent.getInstance(project)` with keys `moe.chat.notifications.enabled`, `moe.chat.notifications.soundEnabled`. In `notifyIfNeeded()`, check `notificationsEnabled` first, then check `mutedChannels.contains(message.channel)`, then check if ChatPanel tool window is focused before beeping. Add a small settings gear button in the toolbar to toggle notifications. Error handling: PropertiesComponent defaults if not set.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-03T08:49:33.287Z",
+      "completedAt": "2026-03-03T08:50:42.065Z",
+      "note": "Added notificationsEnabled/soundEnabled/mutedChannels fields. Settings loaded from PropertiesComponent on init. notifyIfNeeded now checks all 3 settings before firing. Added bell toggle button in toolbar that persists to PropertiesComponent.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "J4+J5: Fix markdown regex issues. For file paths (line ~495): add negative lookbehind for `://` to exclude URLs: `(?<!://)(?<![\">/])\\b([\\w.-]+/...)`. For code blocks (line ~442): change `\\n` to `\\r?\\n` in the regex: `Regex(\"```\\\\w*\\\\r?\\\\n([\\\\s\\\\S]*?)```\")`. Also normalize CRLF to LF at start of markdownToHtml: `content.replace(\"\\r\\n\", \"\\n\")`. Error handling: regex changes are backward-compatible.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-03T08:50:47.282Z",
+      "completedAt": "2026-03-03T08:51:15.759Z",
+      "note": "J4: Added (?<!://) negative lookbehind to file path regex to exclude URLs. J5: Added CRLF→LF normalization at start of markdownToHtml so all regex patterns work consistently on Windows.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "J6: Optimize appendMessage to avoid full rebuild. Change `appendMessage()` to add a single message bubble incrementally: remove the `box.createVerticalGlue()`, add the new bubble, re-add glue, then only call `revalidate/repaint` on messagesPanel. Keep `refreshMessages()` for full rebuilds (setMessages, channel switch). For decision updates, only update the specific decision card instead of full rebuild. Error handling: fall back to full refresh if incremental add fails.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-03T08:51:22.596Z",
+      "completedAt": "2026-03-03T08:51:43.024Z",
+      "note": "appendMessage now does incremental add: removes trailing glue (or noMessages label), appends single bubble, re-adds glue, then revalidate/repaint. Falls back to full refreshMessages on any error. refreshMessages still used for full rebuilds (setMessages, channel switch, decision updates).",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "J7+J9: Fix stale pin state and initial pins. For context menu: evaluate `isPinned` inside the ActionListener closure (at click time) instead of at build time. Move the `pinsByChannel` lookup inside the lambda. For initial pins: add `service.requestPins(toSelect.id)` alongside `service.requestMessages(toSelect.id)` in `updateChannels()` when channel changes. Error handling: null-safe pin lookup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-03T08:51:46.738Z",
+      "completedAt": "2026-03-03T08:52:16.298Z",
+      "note": "J7: Context menu now evaluates isPinned at click time by overriding show() and rebuilding menu items. J9: requestPins on initial channel was already added in step 1 via updateChannels.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "J10: Fix unsafe JSON parsing in MoeProjectService.kt. Replace `json.getAsJsonObject(\"payload\")` calls for STATE_SNAPSHOT, TASK_UPDATED, TASK_CREATED, TASK_DELETED, EPIC_UPDATED, EPIC_CREATED, EPIC_DELETED with safe pattern: `val payload = json.get(\"payload\")?.takeIf { it.isJsonObject }?.asJsonObject ?: return`. This matches the pattern already used by chat message handlers. Error handling: log warning on malformed payloads instead of crashing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-03T08:52:21.005Z",
+      "completedAt": "2026-03-03T08:54:13.203Z",
+      "note": "Replaced all 10 unsafe getAsJsonObject(\"payload\") calls with safe pattern: json.get(\"payload\")?.takeIf { it.isJsonObject }?.asJsonObject ?: return. Covers STATE_SNAPSHOT, TASK_UPDATED/CREATED/DELETED, EPIC_UPDATED/CREATED/DELETED, PROPOSAL_UPDATED/CREATED, WORKER_UPDATED/CREATED, TEAM_CREATED/UPDATED/DELETED. Zero remaining unsafe calls confirmed via grep.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Test: Run `cd moe-jetbrains && ./gradlew buildPlugin` to verify compilation. Manual test: open ChatPanel, verify no duplicate requestMessages on state refresh, verify notifications can be toggled, verify CRLF code blocks render correctly, verify pin context menu shows current state.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T08:54:17.043Z",
+      "completedAt": "2026-03-03T08:55:05.396Z",
+      "note": "JetBrains buildPlugin SUCCESS, daemon 293/293 tests pass."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 18,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T22:33:16.118Z",
+  "updatedAt": "2026-03-03T09:32:41.752Z",
+  "planSubmittedAt": "2026-03-02T22:34:01.291Z",
+  "planApprovedAt": "2026-03-02T22:34:01.294Z",
+  "workStartedAt": "2026-03-03T08:48:47.040Z",
+  "completedAt": "2026-03-03T08:55:18.152Z",
+  "reviewStartedAt": "2026-03-03T08:55:18.152Z",
+  "reviewCompletedAt": "2026-03-03T09:32:41.752Z"
+}

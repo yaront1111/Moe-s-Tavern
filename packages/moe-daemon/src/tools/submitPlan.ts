@@ -122,7 +122,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // Delayed auto-approval
         const delayMs = project.settings.speedModeDelayMs || 2000;
         const timeoutId = setTimeout(async () => {
-          speedModeTimeouts.delete(task.id);
           try {
             const currentTask = state.getTask(task.id);
             // Only auto-approve if still in AWAITING_APPROVAL (not manually rejected/approved)
@@ -136,11 +135,18 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
               error: errorMessage,
               reason: 'SPEED mode auto-approval failed'
             }, state.getTask(task.id) ?? undefined);
+          } finally {
+            speedModeTimeouts.delete(task.id);
           }
         }, delayMs);
         speedModeTimeouts.set(task.id, timeoutId);
         message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
       }
+
+      // Post system message to task channel
+      try {
+        await state.postSystemMessage(task.id, `Implementation plan submitted (${implementationPlan.length} steps)`);
+      } catch { /* never block tool */ }
 
       return {
         success: true,

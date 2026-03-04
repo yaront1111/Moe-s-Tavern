@@ -33,6 +33,17 @@ import { listTeamsTool } from './listTeams.js';
 import { waitForTaskTool } from './waitForTask.js';
 import { addCommentTool } from './addComment.js';
 import { getPendingQuestionsTool } from './getPendingQuestions.js';
+import { chatSendTool } from './chatSend.js';
+import { chatReadTool } from './chatRead.js';
+import { chatChannelsTool } from './chatChannels.js';
+import { chatJoinTool } from './chatJoin.js';
+import { chatWhoTool } from './chatWho.js';
+import { chatWaitTool } from './chatWait.js';
+import { chatResyncTool } from './chatResync.js';
+import { chatPinTool } from './chatPin.js';
+import { chatUnpinTool } from './chatUnpin.js';
+import { chatDecisionTool } from './chatDecision.js';
+import { chatCreateChannelTool } from './chatCreateChannel.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -74,6 +85,17 @@ export function getTools(state: StateManager): ToolDefinition[] {
     listTeamsTool(state),
     waitForTaskTool(state),
     addCommentTool(state),
-    getPendingQuestionsTool(state)
+    getPendingQuestionsTool(state),
+    chatSendTool(state),
+    chatReadTool(state),
+    chatChannelsTool(state),
+    chatJoinTool(state),
+    chatWhoTool(state),
+    chatWaitTool(state),
+    chatResyncTool(state),
+    chatPinTool(state),
+    chatUnpinTool(state),
+    chatDecisionTool(state),
+    chatCreateChannelTool(state)
   ];
 }

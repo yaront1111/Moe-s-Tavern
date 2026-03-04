@@ -28,7 +28,8 @@
   "activationEvents": [
     "workspaceContains:.moe",
     "onCommand:moe.connect",
-    "onView:moe.board"
+    "onView:moe.board",
+    "onView:moe.chat"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -47,6 +48,11 @@
           "type": "webview",
           "id": "moe.board",
           "name": "Task Board"
+        },
+        {
+          "type": "webview",
+          "id": "moe.chat",
+          "name": "Chat"
         }
       ]
     },
@@ -153,6 +159,22 @@
           "type": "string",
           "default": "claude",
           "description": "CLI command to launch agents (claude, codex, gemini, or a custom CLI path)"
+        },
+        "moe.chat.notifications.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show IDE notifications when agent chat messages arrive"
+        },
+        "moe.chat.notifications.mutedChannels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of channel IDs to mute notifications for"
+        },
+        "moe.chat.notifications.soundEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play a notification sound for new agent chat messages"
         }
       }
     }

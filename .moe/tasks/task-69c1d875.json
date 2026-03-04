@@ -1,0 +1,173 @@
+{
+  "id": "task-69c1d875",
+  "epicId": "epic-941ca1ca",
+  "title": "Agent Chat Onboarding — Auto-join #general on Startup",
+  "description": "When agents start up, they go straight to claiming tasks without joining chat channels or announcing themselves. The human watching the chat panel sees zero activity — agents are invisible.\n\nRoot causes:\n1. Role docs (workflow step 1) say \"Claim task\" — no mention of joining #general first\n2. Agent scripts (moe-agent.sh/.ps1) PROMPT says \"call moe.claim_next_task\" — no chat step\n3. claimNextTask posts a system message to the task channel but never touches #general\n4. No auto-join exists anywhere in the codebase — joining is entirely manual\n\nFix with two layers (belt & suspenders):\n1. Code: claimNextTask auto-announces new workers to #general (guaranteed, can't be ignored)\n2. Docs: Role docs + agent scripts updated to include chat join as step 1 (agents also self-announce)",
+  "definitionOfDone": [
+    "claimNextTask auto-posts to #general when a new worker is registered",
+    "claimNextTask auto-sets chatCursors for the task channel on the worker",
+    "claimNextTask response includes generalChannelId field",
+    "docs/agent-context.md has a Startup section with chat join instructions",
+    "All 3 role docs (architect/worker/qa) have 'Join #general' as workflow step 1",
+    "initFiles.ts embedded role docs match the external doc changes",
+    "Agent scripts (moe-agent.sh and moe-agent.ps1) PROMPT and SHORT_PROMPT include chat join step",
+    "StateManager tests cover new claimNextTask behavior",
+    "npm run build succeeds with no type errors",
+    "npm test passes with no regressions"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Auto-announce new workers to #general in claimNextTask.ts.\n\nIn `packages/moe-daemon/src/tools/claimNextTask.ts`:\n\n1. After `state.createWorker()` (line 131, inside the `if (!existingWorker)` branch), auto-announce to #general using `state.postToGeneral()`:\n```typescript\ntry {\n  const roleLabel = statuses.includes('PLANNING') ? 'architect'\n    : statuses.includes('REVIEW') ? 'qa' : 'worker';\n  await state.postToGeneral(`${params.workerId} is online (${roleLabel})`);\n} catch { /* never block claim */ }\n```\n\n2. After task channel system message (line 148), auto-set chatCursors for the task channel:\n```typescript\nif (taskChannel && params.workerId) {\n  try {\n    const worker = state.getWorker(params.workerId);\n    if (worker) {\n      const cursors = { ...(worker.chatCursors || {}) };\n      if (!cursors[taskChannel.id]) {\n        cursors[taskChannel.id] = '';\n        await state.updateWorker(params.workerId, { chatCursors: cursors });\n      }\n    }\n  } catch { /* never block tool */ }\n}\n```\n\n3. Before return, find generalChannelId and add it to the response object alongside `channelId`:\n```typescript\nlet generalChannelId: string | null = null;\nfor (const ch of state.channels.values()) {\n  if (ch.type === 'general' || ch.name === 'general') { generalChannelId = ch.id; break; }\n}\n```\n\nError handling: All additions wrapped in try/catch to never block the core claim operation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "startedAt": "2026-03-03T14:57:44.050Z",
+      "completedAt": "2026-03-03T14:58:19.593Z",
+      "note": "Added auto-announce to #general on new worker creation, auto-set chatCursors for task channel, and generalChannelId in response. All additions wrapped in try/catch to never block the core claim operation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update docs/agent-context.md — Add Startup section.\n\nBefore \"## Chat Communication\" (line 38), insert:\n```markdown\n## Startup (Do This First)\n\nBefore claiming tasks, announce yourself in #general:\n1. `moe.chat_channels` — find the channel with `type: \"general\"`\n2. `moe.chat_join { channel: \"<id>\", workerId: \"<your-id>\" }`\n3. `moe.chat_send { channel: \"<id>\", workerId: \"<your-id>\", content: \"Online as <role>. Ready to work.\" }`\n```\n\nUpdate \"## Chat Communication\" intro to:\n```markdown\nThe project has a `#general` channel for cross-role announcements. Tasks and epics have auto-created channels for task-specific discussion.\n```",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/agent-context.md"
+      ],
+      "startedAt": "2026-03-03T14:58:22.884Z",
+      "completedAt": "2026-03-03T14:58:34.915Z",
+      "note": "Added Startup section before Chat Communication with 3-step chat join instructions. Updated Chat Communication intro to mention #general channel.",
+      "modifiedFiles": [
+        "docs/agent-context.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update all 3 role docs — Add 'Join #general' as workflow step 1.\n\n**docs/roles/architect.md** (line 7): Prepend step:\n`1. **Join #general** — moe.chat_channels to find general channel, then moe.chat_join and moe.chat_send to announce yourself`\nRenumber remaining steps (2-6).\n\n**docs/roles/worker.md** (line 7): Same — prepend step 1, renumber rest (2-7).\n\n**docs/roles/qa.md** (line 7): Same — prepend step 1, renumber rest (2-5).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/worker.md",
+        "docs/roles/qa.md"
+      ],
+      "startedAt": "2026-03-03T14:58:37.766Z",
+      "completedAt": "2026-03-03T14:59:06.997Z",
+      "note": "Added 'Join #general' as workflow step 1 in all 3 role docs. Renumbered subsequent steps accordingly.",
+      "modifiedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/worker.md",
+        "docs/roles/qa.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update AGENT_CONTEXT_CONTENT in initFiles.ts to match docs/agent-context.md changes.\n\nIn `packages/moe-daemon/src/util/initFiles.ts`, update the AGENT_CONTEXT_CONTENT string (line 288) to add the Startup section before Chat Communication, and update Chat Communication intro — mirroring exact same text changes from Step 2.\n\nThis ensures `.moe/agent-context.md` created on project init matches the source docs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ],
+      "startedAt": "2026-03-03T14:59:10.770Z",
+      "completedAt": "2026-03-03T14:59:24.381Z",
+      "note": "Updated AGENT_CONTEXT_CONTENT to mirror docs/agent-context.md changes: added Startup section and updated Chat Communication intro.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Update embedded ROLE_DOCS in initFiles.ts to match role doc changes.\n\nIn `packages/moe-daemon/src/util/initFiles.ts`:\n\n1. **ROLE_DOCS['architect.md']** (line 16): Prepend 'Join #general' as step 1 in Workflow, renumber 2-5.\n2. **ROLE_DOCS['worker.md']** (line 106): Prepend 'Join #general' as step 1, renumber 2-4.\n3. **ROLE_DOCS['qa.md']** (line 211): Prepend 'Join #general' as step 1, renumber 2-4.\n\nThis ensures `.moe/roles/*.md` created on project init matches the source docs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ],
+      "startedAt": "2026-03-03T14:59:27.353Z",
+      "completedAt": "2026-03-03T14:59:46.949Z",
+      "note": "Updated all 3 embedded ROLE_DOCS (architect, worker, qa) with 'Join #general' as step 1 and renumbered subsequent steps.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Update agent script PROMPT and SHORT_PROMPT in moe-agent.sh.\n\n1. **PROMPT (line 1084)**: Prepend chat join instruction before the existing text:\n`\"First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.get_pending_questions...\"`\n\n2. **SHORT_PROMPT for Codex (lines 1121, 1123)**: Prepend 'join #general via moe.chat_join + moe.chat_send' before 'call moe.claim_next_task'.\n\n3. **SHORT_PROMPT for Gemini (lines 1166, 1168)**: Same changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "startedAt": "2026-03-03T14:59:50.916Z",
+      "completedAt": "2026-03-03T15:00:19.657Z",
+      "note": "Updated PROMPT with chat join prefix. Updated all 4 SHORT_PROMPT variants (Codex auto/manual, Gemini auto/manual) to include 'join #general' step before claim_next_task.",
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Update agent script prompts in moe-agent.ps1.\n\n1. **$claimPrompt (line 630)**: Prepend chat join instruction before claim_next_task call.\n2. **$shortPrompt for Codex (lines 657, 659)**: Prepend 'join #general' step.\n3. **$shortPrompt for Gemini (lines 691, 693)**: Same changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "startedAt": "2026-03-03T15:00:22.596Z",
+      "completedAt": "2026-03-03T15:00:45.623Z",
+      "note": "Updated $claimPrompt with chat join prefix. Updated all 4 $shortPrompt variants (Codex auto/manual, Gemini auto/manual) to include 'join #general' step before claim_next_task.",
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Add test coverage for new claimNextTask chat behavior.\n\nIn `packages/moe-daemon/src/state/StateManager.test.ts`, add a `describe('claimNextTask chat integration')` block:\n1. Test: posts to #general on new worker creation (spy on postToGeneral, verify called with workerId + role)\n2. Test: does NOT post to #general for existing worker (create worker first, verify postToGeneral not called again)\n3. Test: sets chatCursors for task channel (verify worker.chatCursors includes task channel ID)\n4. Test: response includes generalChannelId (create general channel, verify field in response)\n5. Test: generalChannelId is null when no general channel exists\n\nImport claimNextTaskTool and call handler directly using existing test helper patterns. Error handling: each test should verify the tool returns successfully even if chat operations fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T15:00:48.888Z",
+      "completedAt": "2026-03-03T15:01:31.967Z",
+      "note": "Added 5 tests in 'claimNextTask chat integration' describe block covering: #general announcement on new worker, no duplicate announcement for existing worker, chatCursors auto-set, generalChannelId present/null in response.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Build and run test suite to verify everything compiles and passes.\n\nRun `npx tsc --noEmit` and `npx vitest run` in packages/moe-daemon. Fix any compilation or test failures. Verify no regressions in existing tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/initFiles.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T15:01:35.440Z",
+      "completedAt": "2026-03-03T15:03:46.625Z",
+      "note": "tsc --noEmit passes cleanly. All 303 tests pass across 16 test files. Fixed test helpers to use migration-created channels instead of creating duplicates. No regressions.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 22,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T14:47:33.932Z",
+  "updatedAt": "2026-03-03T15:15:09.967Z",
+  "planSubmittedAt": "2026-03-03T14:50:02.062Z",
+  "planApprovedAt": "2026-03-03T14:50:02.064Z",
+  "workStartedAt": "2026-03-03T14:57:44.050Z",
+  "completedAt": "2026-03-03T15:03:58.041Z",
+  "reviewStartedAt": "2026-03-03T15:03:58.041Z",
+  "reviewCompletedAt": "2026-03-03T15:15:09.967Z"
+}

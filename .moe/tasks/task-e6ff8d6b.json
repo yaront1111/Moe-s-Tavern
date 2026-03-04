@@ -1,0 +1,159 @@
+{
+  "id": "task-e6ff8d6b",
+  "epicId": "epic-941ca1ca",
+  "title": "Auto-Channel Creation & Task Linking",
+  "description": "The killer feature: automatically create chat channels linked to epics/tasks and cross-post status events.\n\n## What to implement\n\n### Auto-channel creation in `packages/moe-daemon/src/state/StateManager.ts`:\n\nHook into existing methods:\n- `createEpic()` → auto-create channel with name `epic-{epicId}`, type `'epic'`, linkedEntityId = epicId\n- `createTask()` → auto-create channel with name `task-{taskId}`, type `'task'`, linkedEntityId = taskId\n- Only when `ProjectSettings.chatAutoCreateChannels` is true\n- Channel name should use a human-readable slug from the epic/task title (e.g., \"epic-auth-system\" not just \"epic-abc123\")\n\n### System messages for task lifecycle events:\n\nPost system messages (sender: \"system\") to the task's linked channel when:\n- Task status changes → \"Task moved to WORKING by worker-abc\"\n- Plan submitted → \"Implementation plan submitted (N steps)\"\n- Plan approved → \"Plan approved — ready for work\"\n- Plan rejected → \"Plan rejected: {reason}\"\n- Step completed → \"Step N completed: {step description}\"\n- QA approved → \"QA approved — task complete\"\n- QA rejected → \"QA rejected: {reason}\"\n- Worker blocked → post to BOTH task channel AND \"general\" channel: \"worker-abc blocked on task-{id}: {reason}\"\n\n### Files to modify:\n- `packages/moe-daemon/src/state/StateManager.ts` — Hook auto-channel creation into createEpic/createTask, add system message posting to status change handlers\n- `packages/moe-daemon/src/tools/reportBlocked.ts` — Cross-post to task channel + general\n- `packages/moe-daemon/src/tools/submitPlan.ts` — Post system message to task channel\n- `packages/moe-daemon/src/tools/completeStep.ts` — Post system message to task channel\n- `packages/moe-daemon/src/tools/completeTask.ts` — Post system message to task channel\n- `packages/moe-daemon/src/tools/qaApprove.ts` — Post system message to task channel\n- `packages/moe-daemon/src/tools/qaReject.ts` — Post system message to task channel",
+  "definitionOfDone": [
+    "Epic creation auto-creates linked chat channel",
+    "Task creation auto-creates linked chat channel",
+    "Channel names use human-readable slugs from epic/task titles",
+    "Auto-creation respects chatAutoCreateChannels setting",
+    "Task status changes post system messages to task channel",
+    "Plan submission/approval/rejection post system messages",
+    "Step completion posts system message",
+    "QA approval/rejection posts system messages",
+    "Worker blocked cross-posts to task channel AND general channel",
+    "npm run build succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add a helper function slugify(title: string): string in packages/moe-daemon/src/util/mentionRouter.ts (or a new util/slugify.ts) that converts a title to a URL-safe channel name slug. Logic: lowercase, replace spaces/special chars with hyphens, truncate to 40 chars, remove trailing hyphens. Example: 'Auth System Redesign' -> 'auth-system-redesign'. Error handling: return fallback slug from the entity ID if title is empty.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/slugify.ts"
+      ],
+      "startedAt": "2026-03-02T17:39:51.178Z",
+      "completedAt": "2026-03-02T17:40:12.717Z",
+      "note": "Created slugify utility: lowercase, remove special chars, spaces to hyphens, collapse/trim hyphens, truncate to 40 chars, fallback to entity ID if title empty.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/slugify.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Hook auto-channel creation into StateManager.createEpic(). After the epic is created and written to disk, check if project.settings.chatAutoCreateChannels is true (default true via nullish coalescing). If so, call this.createChannel({ name: 'epic-' + slugify(epic.title), type: 'epic', linkedEntityId: epic.id }). Wrap in try/catch so channel creation failure doesn't block epic creation — log warning on error handling failure and continue.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:40:13.321Z",
+      "completedAt": "2026-03-02T17:40:57.414Z",
+      "note": "Hooked auto-channel creation into createEpic. Respects chatAutoCreateChannels setting (defaults true via ??). Wrapped in try/catch so channel failure doesn't block epic creation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Hook auto-channel creation into StateManager.createTask(). Same pattern as epic: after task is written, check chatAutoCreateChannels setting, then call this.createChannel({ name: 'task-' + slugify(task.title), type: 'task', linkedEntityId: task.id }). Same error handling: wrap in try/catch, log warning on failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:40:57.751Z",
+      "completedAt": "2026-03-02T17:41:14.181Z",
+      "note": "Hooked auto-channel creation into createTask. Same pattern as epic.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add a private helper method postSystemMessage(channelOrEntityId: string, content: string): Promise<void> to StateManager. This finds the channel linked to the given entityId (epic/task ID) by scanning channels Map for matching linkedEntityId, then calls sendMessage({ channel: foundChannelId, sender: 'system', content }). If no linked channel found, silently skip (error handling: no-throw). This centralizes all system message posting.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:41:14.349Z",
+      "completedAt": "2026-03-02T17:41:36.788Z",
+      "note": "Added postSystemMessage(entityId, content) — finds linked channel by entityId and posts system message. Also added postToGeneral(content) for cross-posting blocked events. Both methods never throw.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Add system message posting to StateManager.updateTask() for status changes. After the task is updated and event emitted, if the task status changed, call postSystemMessage(task.id, 'Task moved to {newStatus} by {assignedWorkerId || \"unknown\"}'). This covers all status transitions in one place. Error handling: wrap in try/catch, never let system message failure block the actual task update.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T17:41:37.347Z",
+      "completedAt": "2026-03-02T17:42:02.835Z",
+      "note": "Added system message posting in updateTask for status changes. Fires after emit, never blocks the update. Uses .catch(() => {}) for fire-and-forget.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add system message posting to existing MCP tool handlers. In submitPlan.ts: after successful plan submission, call state.postSystemMessage(taskId, 'Implementation plan submitted ({N} steps)'). In completeStep.ts: call state.postSystemMessage(taskId, 'Step {N} completed: {description}'). In completeTask.ts: call state.postSystemMessage(taskId, 'Task submitted for review'). In qaApprove.ts: call state.postSystemMessage(taskId, 'QA approved — task complete'). In qaReject.ts: call state.postSystemMessage(taskId, 'QA rejected: {reason}'). All calls wrapped in try/catch for error handling — tool should succeed even if system message fails.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-03-02T17:42:03.471Z",
+      "completedAt": "2026-03-02T17:43:03.680Z",
+      "note": "Added system message posting to all 5 tool handlers. All wrapped in try/catch to never block the tool operation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Add cross-posting for blocked workers in reportBlocked.ts. After updating worker status, call state.postSystemMessage(taskId, 'worker-{id} blocked: {reason}') for the task channel. Also find the 'general' channel (by type or name) and post the same message there. Error handling: wrap both calls in try/catch independently so failure of one doesn't block the other.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "startedAt": "2026-03-02T17:43:04.298Z",
+      "completedAt": "2026-03-02T17:43:21.440Z",
+      "note": "Added cross-posting for blocked workers: posts to both task channel (via postSystemMessage) and general channel (via postToGeneral). Independent try/catch for each.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "Test: Run 'cd packages/moe-daemon && npm run build' to verify compilation. Manually test by creating an epic via MCP and verifying a linked channel appears in .moe/channels/. Create a task, verify its channel. Submit a plan, verify system message appears in .moe/messages/{task-channel}.jsonl.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T17:43:21.827Z",
+      "completedAt": "2026-03-02T17:46:28.318Z",
+      "note": "Fixed event emitter test to expect 3 events (TASK_CREATED + CHANNEL_CREATED + TASK_UPDATED) instead of 2, due to auto-channel creation on createTask. All 293 tests pass.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:22:00.729Z",
+  "updatedAt": "2026-03-02T18:02:21.160Z",
+  "planSubmittedAt": "2026-03-02T16:34:31.027Z",
+  "planApprovedAt": "2026-03-02T16:34:31.029Z",
+  "workStartedAt": "2026-03-02T17:39:51.178Z",
+  "completedAt": "2026-03-02T17:46:35.780Z",
+  "reviewStartedAt": "2026-03-02T17:46:35.780Z",
+  "reviewCompletedAt": "2026-03-02T18:02:21.160Z"
+}

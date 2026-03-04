@@ -37,10 +37,15 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         state.appendActivity('PR_OPENED', { prLink: params.prLink }, updated);
       }
 
+      // Post system message to task channel
+      try {
+        await state.postSystemMessage(task.id, 'Task submitted for review');
+      } catch { /* never block tool */ }
+
       // Safely handle implementationPlan which could be null/undefined or empty
       const implementationPlan = updated.implementationPlan || [];
       const completedSteps = implementationPlan.filter((s) => s.status === 'COMPLETED');
-      const modified = completedSteps.flatMap((s) => s.affectedFiles || []);
+      const modified = completedSteps.flatMap((s) => s.modifiedFiles || s.affectedFiles || []);
 
       return {
         success: true,

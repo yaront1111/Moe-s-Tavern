@@ -1,0 +1,97 @@
+{
+  "id": "task-60e3475f",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 7: chat_resync MCP Tool",
+  "description": "Add moe.chat_resync MCP tool that clears worker chatCursors and returns full message history. 1 new file + registration + docs.",
+  "definitionOfDone": [
+    "New file packages/moe-daemon/src/tools/chatResync.ts implements moe.chat_resync tool",
+    "Tool registered in packages/moe-daemon/src/tools/index.ts",
+    "Tool accepts workerId (required), channel (optional), limit (optional) parameters",
+    "Clears worker chatCursors (all or specified channel)",
+    "Returns full message history from beginning",
+    "Updates cursors to latest after resync",
+    "docs/MCP_SERVER.md updated with tool spec",
+    "npm run build succeeds in packages/moe-daemon"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create new file `packages/moe-daemon/src/tools/chatResync.ts` implementing `moe.chat_resync` tool.\n\nTool name: `moe.chat_resync`\nDescription: 'Clear chat cursors and return full message history for resync. Useful when a worker loses context or wants to re-read all messages.'\n\nInput schema:\n- `workerId` (string, required) — worker whose cursors to reset\n- `channel` (string, optional) — specific channel to resync; omit for all channels\n- `limit` (number, optional, default 50, max 200) — max messages to return per channel\n\nHandler logic:\n1. Validate `workerId` is non-empty string. Get worker via `state.getWorker(workerId)` — if not found, throw `invalidInput('workerId', 'worker not found')`.\n2. Clear cursors: if `channel` specified, delete just `worker.chatCursors[channel]`; otherwise set `chatCursors` to `{}`.\n3. Call `state.updateWorker(workerId, { chatCursors: clearedCursors })`.\n4. Fetch messages: if `channel` specified, call `state.getMessages(channel, { limit })`. If no channel, loop all `state.getChannels()`, call `getMessages(ch.id, { limit })` for each, merge + sort by timestamp, slice to `limit`.\n5. Update cursors to latest: for each message's channel, set `chatCursors[msg.channel] = msg.id` (last per channel). Call `state.updateWorker(workerId, { chatCursors: newCursors })`.\n6. Return `{ success: true, messagesCount: messages.length, messages, cursorsReset: true }`.\n\nFollow same patterns as `chatRead.ts` — import `ToolDefinition` from `./index.js`, `StateManager` from `../state/StateManager.js`, `ChatMessage` from `../types/schema.js`, `invalidInput` from `../util/errors.js`. Export function `chatResyncTool(_state: StateManager): ToolDefinition`.\n\nError handling: wrap handler body in try/catch, rethrow invalidInput errors, catch unexpected errors with descriptive message.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatResync.ts"
+      ],
+      "startedAt": "2026-03-02T21:26:17.324Z",
+      "completedAt": "2026-03-02T21:26:34.419Z",
+      "note": "Created chatResync.ts following chatRead.ts patterns. Clears cursors, fetches full history, updates cursors to latest.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatResync.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Register `chatResyncTool` in `packages/moe-daemon/src/tools/index.ts`.\n\n1. Add import at line 42 (after chatWaitTool import): `import { chatResyncTool } from './chatResync.js';`\n2. Add `chatResyncTool(state)` to the returned array (after `chatWaitTool(state)` at ~line 89).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-03-02T21:26:39.353Z",
+      "completedAt": "2026-03-02T21:27:02.131Z",
+      "note": "Registered chatResyncTool import and added to getTools() array.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add `moe.chat_resync` tool spec to `docs/MCP_SERVER.md` in the Chat Tools section (after `moe.chat_wait` doc, around line 870).\n\nDocument:\n```\n### `moe.chat_resync`\nClear chat cursors and return full message history. Use when a worker loses context or wants to re-read all messages.\n\n**Parameters:**\n| Param | Type | Required | Description |\n|-------|------|----------|-------------|\n| workerId | string | Yes | Worker whose cursors to reset |\n| channel | string | No | Specific channel to resync (omit for all) |\n| limit | number | No | Max messages per channel (default 50, max 200) |\n\n**Returns:** `{ success, messagesCount, messages[], cursorsReset }`\n```",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-03-02T21:27:05.658Z",
+      "completedAt": "2026-03-02T21:27:34.682Z",
+      "note": "Added moe.chat_resync tool spec to docs after moe.chat_wait section.",
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Test: run `cd packages/moe-daemon && npm run build` to verify TypeScript compilation succeeds with no errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:27:38.713Z",
+      "completedAt": "2026-03-02T21:27:49.342Z",
+      "note": "Daemon compiles cleanly with no errors."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 11,
+  "comments": [
+    {
+      "id": "comment-e95adb4b",
+      "author": "architect",
+      "content": "This is daemon-only (no UI), so no JetBrains/VS Code ordering needed. Just ensure npm run build passes.",
+      "timestamp": "2026-03-02T21:51:08.268Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:05:06.841Z",
+  "updatedAt": "2026-03-02T22:08:37.315Z",
+  "planSubmittedAt": "2026-03-02T21:10:45.060Z",
+  "planApprovedAt": "2026-03-02T21:10:45.063Z",
+  "workStartedAt": "2026-03-02T21:26:17.324Z",
+  "completedAt": "2026-03-02T21:27:54.732Z",
+  "reviewStartedAt": "2026-03-02T21:27:54.732Z",
+  "reviewCompletedAt": "2026-03-02T22:08:37.315Z"
+}

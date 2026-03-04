@@ -1,0 +1,110 @@
+{
+  "id": "task-a782e3b1",
+  "epicId": "epic-941ca1ca",
+  "title": "@Mention Router & Loop Guards",
+  "description": "Port agentchattr's routing logic to prevent runaway agent conversations.\n\n## What to implement\n\n### New file: `packages/moe-daemon/src/util/mentionRouter.ts`\n\n**MentionRouter class:**\n\n```typescript\nclass MentionRouter {\n  // Per-channel state (in-memory, resets on daemon restart)\n  private hopCounts: Map<string, number>;      // channelId → current hop count\n  private pausedChannels: Set<string>;          // channels that hit hop limit\n\n  // Parse @mentions from message content\n  parseMentions(content: string, knownWorkerIds: string[]): string[]\n  // Returns list of mentioned workerIds\n  // Supports: @worker-id, @all, @architects, @workers, @qa (team role mentions)\n\n  // Route a message — returns target workerIds to notify\n  route(message: ChatMessage, allWorkers: Worker[]): RoutingResult\n  // RoutingResult: { targets: string[], paused: boolean, hopCount: number }\n  \n  // Logic:\n  // 1. If sender is human → reset hopCount[channel] to 0, clear paused\n  //    - If content contains \"@continue\" → also clear paused\n  //    - If no explicit @mention → return all online workers\n  //    - If explicit @mention → return mentioned workers\n  // 2. If sender is agent:\n  //    - If channel is paused → return empty targets, paused: true\n  //    - If no explicit @mention → return empty (agents must mention to continue)\n  //    - Increment hopCount[channel]\n  //    - If hopCount > maxHops → set paused, return empty\n  //    - Return mentioned workers minus sender (no self-routing)\n\n  // Reset channel state (for testing or manual reset)\n  resetChannel(channelId: string): void\n}\n```\n\n### Integration point:\n- Export `MentionRouter` class for use by `sendMessage()` in StateManager and `chatSend` MCP tool\n- The router determines who gets notified, NOT who can send — messages are always stored regardless of routing\n\n### Key design from agentchattr's `router.py`:\n- Loop guard is per-channel, not global\n- Human messages always reset the hop counter\n- `@continue` keyword in human message clears paused state\n- Agent-to-agent messages increment hop counter\n- Max hops configurable via `ProjectSettings.chatMaxAgentHops` (default: 4)",
+  "definitionOfDone": [
+    "MentionRouter class created in packages/moe-daemon/src/util/mentionRouter.ts",
+    "parseMentions() correctly extracts @worker-id, @all, @architects, @workers, @qa",
+    "route() implements per-channel hop counting with configurable max",
+    "Human messages reset hop counter; @continue clears paused state",
+    "Agent messages without @mentions return empty targets",
+    "Self-routing prevented (agent can't trigger itself)",
+    "Paused channels still store messages but return empty routing targets",
+    "Unit tests or manual verification of routing logic",
+    "npm run build succeeds"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create packages/moe-daemon/src/util/mentionRouter.ts with exported MentionRouter class and RoutingResult interface. RoutingResult: { targets: string[], paused: boolean, hopCount: number }. Constructor takes maxHops: number (default 4). Initialize private hopCounts: Map<string, number> and pausedChannels: Set<string> for per-channel loop guard state (in-memory, resets on daemon restart).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts"
+      ],
+      "startedAt": "2026-03-02T17:37:33.846Z",
+      "completedAt": "2026-03-02T17:38:04.489Z",
+      "note": "Created MentionRouter class with RoutingResult interface, hopCounts Map, pausedChannels Set, configurable maxHops constructor.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement parseMentions(content: string, knownWorkerIds: string[]): string[]. Use regex /@([\\w][\\w-]*)/g to extract all @mentions. Match against knownWorkerIds for direct mentions. Handle special group mentions: @all returns all workerIds, @architects returns workers with teamRole 'architect', @workers returns workers with teamRole 'worker', @qa returns workers with teamRole 'qa'. Return deduplicated array of matched workerIds. Error handling: return empty array if content is empty or no matches found.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts"
+      ],
+      "startedAt": "2026-03-02T17:38:05.111Z",
+      "completedAt": "2026-03-02T17:38:10.473Z",
+      "note": "parseMentions already implemented in step-1. Extracts @mentions via regex, handles @all/@architects/@workers/@qa group mentions, deduplicates results, returns empty array for empty content."
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement route(message: ChatMessage, allWorkers: Worker[], maxHops: number): RoutingResult. Determine if sender is human (sender === 'human' or sender not in worker IDs). HUMAN SENDER PATH: reset hopCounts.set(channel, 0), pausedChannels.delete(channel). If content includes '@continue', also clear paused. If no @mentions, return all workers as targets. If explicit @mentions, return matched workers. AGENT SENDER PATH: if channel is paused, return { targets: [], paused: true, hopCount }. If no @mentions, return empty targets. Otherwise increment hopCounts, check if > maxHops (pause channel if so), filter out self from targets. Error handling: handle edge cases where worker list is empty, message has no channel.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts"
+      ],
+      "startedAt": "2026-03-02T17:38:13.762Z",
+      "completedAt": "2026-03-02T17:38:18.300Z",
+      "note": "route() already implemented in step-1 with human/agent paths, hop counting, pause logic, self-routing prevention, @continue handling."
+    },
+    {
+      "stepId": "step-4",
+      "description": "Implement resetChannel(channelId: string): void to clear hop count and paused state for a channel. Add getChannelState(channelId: string): { hopCount: number, paused: boolean } for debugging/testing. Export the MentionRouter class as default export.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.ts"
+      ],
+      "startedAt": "2026-03-02T17:38:18.837Z",
+      "completedAt": "2026-03-02T17:38:22.915Z",
+      "note": "resetChannel and getChannelState already implemented in step-1. Class is a named export (not default) following project conventions."
+    },
+    {
+      "stepId": "step-5",
+      "description": "Write unit test file packages/moe-daemon/src/util/mentionRouter.test.ts using vitest. Test cases: (1) parseMentions extracts @worker-id correctly, (2) parseMentions handles @all/@architects/@workers/@qa, (3) human message resets hop counter, (4) @continue clears paused state, (5) agent message increments hop counter, (6) channel pauses after maxHops exceeded, (7) paused channel returns empty targets, (8) self-routing prevented, (9) agent without @mention returns empty targets, (10) error handling for empty content/empty worker list.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.test.ts"
+      ],
+      "startedAt": "2026-03-02T17:38:23.541Z",
+      "completedAt": "2026-03-02T17:39:04.658Z",
+      "note": "Created comprehensive test suite with 16 test cases covering: parseMentions (direct, multiple, unknown, @all, empty), human routing (reset, all-workers, specific, @continue), agent routing (increment, no-mentions, self-routing, pause, blocked), resetChannel, and edge cases (empty workers, per-channel isolation).",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/mentionRouter.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test: Run 'cd packages/moe-daemon && npm run build' for compilation check, then 'npx vitest run src/util/mentionRouter.test.ts' to run the unit tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T17:39:05.187Z",
+      "completedAt": "2026-03-02T17:39:35.611Z",
+      "note": "Build clean. 18/18 mentionRouter tests pass. Full suite: 293/293 tests pass across 16 files (18 new tests added)."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T15:21:24.454Z",
+  "updatedAt": "2026-03-02T18:01:43.133Z",
+  "planSubmittedAt": "2026-03-02T16:34:01.118Z",
+  "planApprovedAt": "2026-03-02T16:34:01.121Z",
+  "workStartedAt": "2026-03-02T17:37:33.846Z",
+  "completedAt": "2026-03-02T17:39:42.085Z",
+  "reviewStartedAt": "2026-03-02T17:39:42.085Z",
+  "reviewCompletedAt": "2026-03-02T18:01:43.133Z"
+}

@@ -7,11 +7,18 @@ import path from 'path';
 import type {
   ActivityEvent,
   ActivityEventType,
+  ChatChannel,
+  ChatMessage,
+  Decision,
+  DecisionStatus,
   Epic,
+  ImplementationStep,
   MoeStateSnapshot,
+  PinEntry,
   Project,
   ProjectSettings,
   RailProposal,
+  StepStatus,
   Task,
   TaskComment,
   TaskPriority,
@@ -27,6 +34,7 @@ import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
+import { MentionRouter } from '../util/mentionRouter.js';
 import {
   sanitizeString,
   sanitizeNumber,
@@ -130,7 +138,13 @@ export type StateChangeEvent =
   | { type: 'SETTINGS_UPDATED'; payload: Project }
   | { type: 'TEAM_CREATED'; payload: Team }
   | { type: 'TEAM_UPDATED'; payload: Team }
-  | { type: 'TEAM_DELETED'; payload: Team };
+  | { type: 'TEAM_DELETED'; payload: Team }
+  | { type: 'MESSAGE_CREATED'; payload: ChatMessage; routingTargets?: string[] }
+  | { type: 'CHANNEL_CREATED'; payload: ChatChannel }
+  | { type: 'CHANNEL_DELETED'; payload: ChatChannel }
+  | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
+  | { type: 'DECISION_PROPOSED'; payload: Decision }
+  | { type: 'DECISION_RESOLVED'; payload: Decision };
 
 type StateSubscriber = (event: StateChangeEvent) => void;
 
@@ -150,12 +164,15 @@ export class StateManager {
   workers = new Map<string, Worker>();
   proposals = new Map<string, RailProposal>();
   teams = new Map<string, Team>();
+  channels = new Map<string, ChatChannel>();
+  decisions = new Map<string, Decision>();
 
   private emitter?: (event: StateChangeEvent) => void;
   private subscribers = new Set<StateSubscriber>();
   private subscriberErrorCounts = new Map<StateSubscriber, number>();
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
+  private readonly messageMutexes = new Map<string, AsyncMutex>();
   private logRotator?: LogRotator;
   private pendingActivityWrites = 0;
   private activityFlushResolvers: Array<() => void> = [];
@@ -163,16 +180,23 @@ export class StateManager {
   private proposalPurgeInterval?: NodeJS.Timeout;
   private readonly blockedTimeoutMs: number;
   private readonly staleWorkerTimeoutMs: number;
+  private mentionRouter: MentionRouter;
+  private fileWatcher?: import('./FileWatcher.js').FileWatcher;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
     this.moePath = path.join(this.projectPath, '.moe');
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
+    this.mentionRouter = new MentionRouter(4);
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
     this.emitter = fn;
+  }
+
+  setFileWatcher(watcher: import('./FileWatcher.js').FileWatcher) {
+    this.fileWatcher = watcher;
   }
 
   /**
@@ -195,6 +219,14 @@ export class StateManager {
       this.subscribers.delete(fn);
       this.subscriberErrorCounts.delete(fn);
     };
+  }
+
+  /**
+   * Expose mutex for external callers that need atomic multi-step operations
+   * (e.g. claimNextTask read-then-write).
+   */
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.mutex.runExclusive(fn);
   }
 
   /**
@@ -296,7 +328,7 @@ export class StateManager {
 
       if (now - lastActivity > this.staleWorkerTimeoutMs) {
         logger.info({ workerId: worker.id, lastActivityAt: worker.lastActivityAt }, 'Deleting stale worker (exceeded timeout)');
-        this.deleteWorker(worker.id);
+        await this.deleteWorker(worker.id);
         deletedCount++;
       }
     }
@@ -373,9 +405,29 @@ export class StateManager {
     if (this.pendingActivityWrites === 0) {
       return;
     }
+    const FLUSH_TIMEOUT_MS = 5000;
     return new Promise((resolve) => {
-      this.activityFlushResolvers.push(resolve);
+      const timer = setTimeout(() => {
+        // Safety timeout — don't block shutdown forever
+        const idx = this.activityFlushResolvers.indexOf(resolve);
+        if (idx >= 0) this.activityFlushResolvers.splice(idx, 1);
+        logger.warn({ pending: this.pendingActivityWrites }, 'Activity log flush timed out');
+        resolve();
+      }, FLUSH_TIMEOUT_MS);
+      this.activityFlushResolvers.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
+  }
+
+  private getMessageMutex(channelId: string): AsyncMutex {
+    let m = this.messageMutexes.get(channelId);
+    if (!m) {
+      m = new AsyncMutex();
+      this.messageMutexes.set(channelId, m);
+    }
+    return m;
   }
 
   private notifyActivityFlushed(): void {
@@ -430,6 +482,29 @@ export class StateManager {
     return comments.slice(-MAX_COMMENTS_PER_TASK);
   }
 
+  private sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
+    if (!Array.isArray(plan)) return [];
+    const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
+    const capped = plan.slice(0, 50);
+    const result: ImplementationStep[] = [];
+    for (const step of capped) {
+      if (!step || typeof step !== 'object') continue;
+      const s = step as Record<string, unknown>;
+      if (!s.description || typeof s.description !== 'string') continue;
+      result.push({
+        stepId: typeof s.stepId === 'string' ? s.stepId : `step-${result.length + 1}`,
+        description: s.description.slice(0, 5000),
+        status: (typeof s.status === 'string' && VALID_STEP_STATUSES.includes(s.status) ? s.status : 'PENDING') as StepStatus,
+        affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [],
+        ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
+        ...(typeof s.note === 'string' ? { note: s.note.slice(0, 5000) } : {}),
+        ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),
+        ...(typeof s.completedAt === 'string' ? { completedAt: s.completedAt } : {}),
+      });
+    }
+    return result;
+  }
+
   async load(): Promise<void> {
     // Wrap the entire load operation with a timeout to prevent hangs on corrupted files
     const loadOperation = this.mutex.runExclusive(async () => {
@@ -452,6 +527,16 @@ export class StateManager {
           to: migrationResult.toVersion,
           migrations: migrationResult.migrationsApplied
         }, 'Schema migrations applied');
+
+        // Post-migration file system operations for v5 (chat support)
+        if (migrationResult.fromVersion < 5) {
+          this.migrateToV5FileSystem();
+        }
+
+        // Post-migration file system operations for v6 (role-based channels)
+        if (migrationResult.fromVersion < 6) {
+          this.migrateToV6FileSystem();
+        }
       }
 
       const normalized = this.normalizeProject(rawProject as Partial<Project>);
@@ -479,6 +564,8 @@ export class StateManager {
         }
       }
       this.teams = this.loadEntities<Team>(path.join(this.moePath, 'teams'));
+      this.channels = this.loadEntities<ChatChannel>(path.join(this.moePath, 'channels'));
+      this.decisions = this.loadEntities<Decision>(path.join(this.moePath, 'decisions'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
       try {
         await this.purgeResolvedProposals();
@@ -489,6 +576,9 @@ export class StateManager {
       // Initialize log rotator
       const activityLogPath = path.join(this.moePath, 'activity.log');
       this.logRotator = new LogRotator(activityLogPath);
+
+      // Re-initialize MentionRouter with project-configured maxHops
+      this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
 
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
@@ -512,7 +602,13 @@ export class StateManager {
       proposals: Array.from(this.proposals.values()).filter(
         (proposal) => !this.isStaleResolvedProposal(proposal, PROPOSAL_SNAPSHOT_RETENTION_MS, nowMs)
       ),
-      teams: Array.from(this.teams.values())
+      teams: Array.from(this.teams.values()),
+      channels: Array.from(this.channels.values()).sort(
+        (a, b) => a.createdAt.localeCompare(b.createdAt)
+      ),
+      decisions: Array.from(this.decisions.values()).sort(
+        (a, b) => a.createdAt.localeCompare(b.createdAt)
+      )
     };
   }
 
@@ -550,6 +646,479 @@ export class StateManager {
     return Array.from(workerIds)
       .map((id) => this.workers.get(id))
       .filter((w): w is Worker => w !== undefined);
+  }
+
+  // ---- Chat methods ----
+
+  getChannel(channelId: string): ChatChannel | null {
+    return this.channels.get(channelId) || null;
+  }
+
+  getChannels(): ChatChannel[] {
+    return Array.from(this.channels.values()).sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt)
+    );
+  }
+
+
+
+  async createChannel(opts: {
+    name: string;
+    type: ChatChannel['type'];
+    linkedEntityId?: string;
+  }): Promise<ChatChannel> {
+    if (!this.project) throw new Error('Project not loaded');
+
+    const name = opts.name?.trim();
+    if (!name) throw new Error('Channel name is required');
+
+    const validTypes = ['general', 'role', 'custom'] as const;
+    if (!validTypes.includes(opts.type)) {
+      throw new Error(`Invalid channel type: ${opts.type}`);
+    }
+
+    // Check for duplicate channels
+    for (const existing of this.channels.values()) {
+      if (existing.name === name && existing.type === opts.type) {
+        throw new Error('Channel with this name and type already exists');
+      }
+    }
+
+    const channel: ChatChannel = {
+      id: generateId('chan'),
+      name,
+      type: opts.type,
+      linkedEntityId: opts.linkedEntityId ?? null,
+      createdAt: new Date().toISOString()
+    };
+
+    await this.writeEntity('channels', channel.id, channel);
+
+    // Create empty messages JSONL file
+    const messagesDir = path.join(this.moePath, 'messages');
+    if (!fs.existsSync(messagesDir)) {
+      fs.mkdirSync(messagesDir, { recursive: true });
+    }
+    const messagesFile = path.join(messagesDir, `${channel.id}.jsonl`);
+    fs.writeFileSync(messagesFile, '');
+
+    this.channels.set(channel.id, channel);
+    this.emit({ type: 'CHANNEL_CREATED', payload: channel });
+    this.appendActivity('CHANNEL_CREATED', { channelId: channel.id, name: channel.name, channelType: channel.type });
+
+    return channel;
+  }
+
+  async sendMessage(opts: {
+    channel: string;
+    sender: string;
+    content: string;
+    replyTo?: string;
+    decisionId?: string;
+  }): Promise<{ message: ChatMessage; routingTargets: string[] }> {
+    const channel = this.channels.get(opts.channel);
+    if (!channel) throw new Error(`Channel not found: ${opts.channel}`);
+
+    const content = opts.content;
+    if (!content || typeof content !== 'string') {
+      throw new Error('Message content is required');
+    }
+    if (Buffer.byteLength(content, 'utf-8') > 10240) {
+      throw new Error('Message content exceeds 10KB limit');
+    }
+
+    // Parse raw @mentions from text content
+    const rawMentions: string[] = [];
+    const mentionRegex = /@(\w[\w-]*)/g;
+    let match: RegExpExecArray | null;
+    while ((match = mentionRegex.exec(content)) !== null) {
+      if (!rawMentions.includes(match[1])) {
+        rawMentions.push(match[1]);
+      }
+    }
+
+    // Compute routing targets via MentionRouter (expands @all, applies loop guards)
+    let routingTargets: string[];
+    try {
+      const allWorkers = Array.from(this.workers.values());
+      const allTeams = Array.from(this.teams.values());
+      const tempMessage: ChatMessage = {
+        id: '', channel: opts.channel, sender: opts.sender,
+        content, replyTo: opts.replyTo ?? null, mentions: rawMentions, timestamp: ''
+      };
+      const routingResult = this.mentionRouter.route(tempMessage, allWorkers, allTeams);
+      routingTargets = routingResult.targets;
+    } catch {
+      // Fall back to raw mentions on MentionRouter errors
+      routingTargets = rawMentions;
+    }
+
+    const message: ChatMessage = {
+      id: generateId('msg'),
+      channel: opts.channel,
+      sender: opts.sender,
+      content,
+      replyTo: opts.replyTo ?? null,
+      mentions: rawMentions,
+      timestamp: new Date().toISOString(),
+      ...(opts.decisionId ? { decisionId: opts.decisionId } : {})
+    };
+
+    const messagesFile = path.join(this.moePath, 'messages', `${opts.channel}.jsonl`);
+    const channelMutex = this.getMessageMutex(opts.channel);
+    await channelMutex.runExclusive(async () => {
+      try {
+        fs.appendFileSync(messagesFile, JSON.stringify(message) + '\n');
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        throw new Error(`Failed to write message: ${err.message}`);
+      }
+    });
+
+    this.emit({ type: 'MESSAGE_CREATED', payload: message, routingTargets });
+    this.appendActivity('MESSAGE_CREATED', {
+      channelId: opts.channel,
+      messageId: message.id,
+      sender: opts.sender
+    });
+
+    return { message, routingTargets };
+  }
+
+  async getMessages(
+    channelId: string,
+    opts?: { sinceId?: string; limit?: number }
+  ): Promise<ChatMessage[]> {
+    const channel = this.channels.get(channelId);
+    if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+    const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
+    if (!fs.existsSync(messagesFile)) return [];
+
+    let raw: string;
+    try {
+      raw = fs.readFileSync(messagesFile, 'utf-8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return [];
+      throw error;
+    }
+
+    const lines = raw.split('\n').filter((line) => line.trim());
+    const messages: ChatMessage[] = [];
+    for (const line of lines) {
+      try {
+        messages.push(JSON.parse(line) as ChatMessage);
+      } catch {
+        logger.warn({ channelId, line: line.substring(0, 100) }, 'Skipping malformed message line');
+      }
+    }
+
+    let result = messages;
+    if (opts?.sinceId) {
+      const idx = messages.findIndex((m) => m.id === opts.sinceId);
+      if (idx >= 0) {
+        result = messages.slice(idx + 1);
+      } else {
+        // Stale/invalid cursor — return empty so clients re-sync explicitly
+        result = [];
+      }
+    }
+
+    const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
+    return result.slice(-limit);
+  }
+
+  /**
+   * Check if a message exists in a channel's JSONL file.
+   * Scans line-by-line and returns early on match.
+   */
+  messageExistsInChannel(channelId: string, messageId: string): boolean {
+    const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
+    if (!fs.existsSync(messagesFile)) return false;
+
+    let raw: string;
+    try {
+      raw = fs.readFileSync(messagesFile, 'utf-8');
+    } catch {
+      return false;
+    }
+
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line) as ChatMessage;
+        if (msg.id === messageId) return true;
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Post a system message to the #general channel.
+   * Silently skips if no general channel is found. Never throws.
+   */
+  async postSystemMessage(_entityId: string, content: string): Promise<void> {
+    await this.postToGeneral(content);
+  }
+
+  /**
+   * Post a system message to the 'general' channel. Never throws.
+   */
+  async postToGeneral(content: string): Promise<void> {
+    try {
+      let generalChannel: ChatChannel | null = null;
+      for (const ch of this.channels.values()) {
+        if (ch.type === 'general' || ch.name === 'general') {
+          generalChannel = ch;
+          break;
+        }
+      }
+      if (!generalChannel) return;
+      await this.sendMessage({ channel: generalChannel.id, sender: 'system', content });
+    } catch (error) {
+      logger.warn({ error }, 'Failed to post to general channel');
+    }
+  }
+
+  async deleteChannel(channelId: string): Promise<void> {
+    const channel = this.channels.get(channelId);
+    if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+    // Remove channel JSON file
+    const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
+    try {
+      fs.unlinkSync(channelFile);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') throw error;
+    }
+
+    // Remove messages JSONL file
+    const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
+    try {
+      fs.unlinkSync(messagesFile);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') throw error;
+    }
+
+    // Remove pins file for this channel
+    const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
+    try {
+      if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
+    } catch {
+      // Silently ignore if pins file doesn't exist
+    }
+
+    this.channels.delete(channelId);
+    this.emit({ type: 'CHANNEL_DELETED', payload: channel });
+    this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
+  }
+
+  // ---- Pin methods ----
+
+  private getPinsFilePath(channelId: string): string {
+    return path.join(this.moePath, 'pins', `${channelId}.json`);
+  }
+
+  private readPins(channelId: string): PinEntry[] {
+    try {
+      const filePath = this.getPinsFilePath(channelId);
+      if (!fs.existsSync(filePath)) return [];
+      const data = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(data) as PinEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  private writePins(channelId: string, pins: PinEntry[]): void {
+    const pinsDir = path.join(this.moePath, 'pins');
+    if (!fs.existsSync(pinsDir)) {
+      fs.mkdirSync(pinsDir, { recursive: true });
+    }
+    fs.writeFileSync(this.getPinsFilePath(channelId), JSON.stringify(pins, null, 2));
+  }
+
+  getPins(channelId: string): PinEntry[] {
+    return this.readPins(channelId);
+  }
+
+  async pinMessage(channelId: string, messageId: string, pinnedBy: string): Promise<PinEntry> {
+    return this.mutex.runExclusive(async () => {
+      const channel = this.channels.get(channelId);
+      if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+      // Validate messageId exists in channel (scans full JSONL, no limit)
+      if (!this.messageExistsInChannel(channelId, messageId)) {
+        throw new Error(`Message not found in channel: ${messageId}`);
+      }
+
+      const pins = this.readPins(channelId);
+      if (pins.some(p => p.messageId === messageId)) {
+        throw new Error('Message already pinned');
+      }
+
+      const pin: PinEntry = {
+        messageId,
+        pinnedBy,
+        pinnedAt: new Date().toISOString(),
+        done: false,
+        doneAt: null
+      };
+      pins.push(pin);
+      this.writePins(channelId, pins);
+      this.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
+      this.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy });
+      return pin;
+    });
+  }
+
+  async unpinMessage(channelId: string, messageId: string): Promise<void> {
+    await this.mutex.runExclusive(async () => {
+      const channel = this.channels.get(channelId);
+      if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+      const pins = this.readPins(channelId);
+      const idx = pins.findIndex(p => p.messageId === messageId);
+      if (idx === -1) throw new Error('Pin not found');
+
+      pins.splice(idx, 1);
+      this.writePins(channelId, pins);
+      this.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
+      this.appendActivity('PIN_REMOVED', { channelId, messageId });
+    });
+  }
+
+  async togglePinDone(channelId: string, messageId: string): Promise<PinEntry> {
+    return this.mutex.runExclusive(async () => {
+      const channel = this.channels.get(channelId);
+      if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+      const pins = this.readPins(channelId);
+      const pin = pins.find(p => p.messageId === messageId);
+      if (!pin) throw new Error('Pin not found');
+
+      pin.done = !pin.done;
+      pin.doneAt = pin.done ? new Date().toISOString() : null;
+      this.writePins(channelId, pins);
+      this.emit({ type: 'PINS_UPDATED', payload: { channel: channelId, pins } });
+      this.appendActivity('PIN_TOGGLED', { channelId, messageId, done: pin.done });
+      return pin;
+    });
+  }
+
+  // ---- Decision methods ----
+
+  getDecision(id: string): Decision | null {
+    return this.decisions.get(id) || null;
+  }
+
+  getDecisions(): Decision[] {
+    return Array.from(this.decisions.values()).sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt)
+    );
+  }
+
+  async createDecision(opts: {
+    content: string;
+    proposedBy: string;
+    channel?: string;
+  }): Promise<Decision> {
+    const content = sanitizeString(opts.content, 'content', 10240);
+    if (!content) throw new Error('Decision content is required');
+
+    const decision: Decision = {
+      id: generateId('dec'),
+      proposedBy: opts.proposedBy,
+      content,
+      status: 'proposed',
+      approvedBy: null,
+      channel: opts.channel ?? null,
+      messageId: null,
+      createdAt: new Date().toISOString(),
+      resolvedAt: null
+    };
+
+    const decisionsDir = path.join(this.moePath, 'decisions');
+    fs.mkdirSync(decisionsDir, { recursive: true });
+    const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
+    fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+    this.decisions.set(decision.id, decision);
+
+    // Post a system message to the channel if provided
+    if (opts.channel && this.channels.has(opts.channel)) {
+      const { message: msg } = await this.sendMessage({
+        channel: opts.channel,
+        sender: opts.proposedBy,
+        content: `[Decision Proposed] ${content}`,
+        decisionId: decision.id
+      });
+      decision.messageId = msg.id;
+      // Re-write with messageId linked
+      fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+      this.decisions.set(decision.id, decision);
+    }
+
+    this.emit({ type: 'DECISION_PROPOSED', payload: decision });
+    this.appendActivity('DECISION_PROPOSED', {
+      decisionId: decision.id,
+      proposedBy: decision.proposedBy,
+      content: decision.content
+    });
+
+    return decision;
+  }
+
+  async approveDecision(id: string, approvedBy: string): Promise<Decision> {
+    const decision = this.decisions.get(id);
+    if (!decision) throw new Error(`Decision not found: ${id}`);
+    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+
+    const updated: Decision = {
+      ...decision,
+      status: 'approved' as DecisionStatus,
+      approvedBy,
+      resolvedAt: new Date().toISOString()
+    };
+
+    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+    this.decisions.set(id, updated);
+
+    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+    this.appendActivity('DECISION_APPROVED', {
+      decisionId: id,
+      approvedBy
+    });
+
+    return updated;
+  }
+
+  async rejectDecision(id: string): Promise<Decision> {
+    const decision = this.decisions.get(id);
+    if (!decision) throw new Error(`Decision not found: ${id}`);
+    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+
+    const updated: Decision = {
+      ...decision,
+      status: 'rejected' as DecisionStatus,
+      resolvedAt: new Date().toISOString()
+    };
+
+    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+    this.decisions.set(id, updated);
+
+    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+    this.appendActivity('DECISION_REJECTED', {
+      decisionId: id
+    });
+
+    return updated;
   }
 
   // ---- Team methods ----
@@ -764,7 +1333,7 @@ export class StateManager {
       description,
       definitionOfDone,
       taskRails: Array.isArray(input.taskRails) ? input.taskRails.slice(0, 100) : [],
-      implementationPlan: Array.isArray(input.implementationPlan) ? input.implementationPlan : [],
+      implementationPlan: this.sanitizeImplementationPlan(input.implementationPlan),
       status: input.status || 'BACKLOG',
       assignedWorkerId: input.assignedWorkerId || null,
       branch: input.branch || null,
@@ -785,6 +1354,7 @@ export class StateManager {
     this.tasks.set(task.id, task);
     this.appendActivity('TASK_CREATED', { title: task.title }, task);
     this.emit({ type: 'TASK_CREATED', payload: task });
+
     return task;
   }
 
@@ -818,6 +1388,7 @@ export class StateManager {
     await this.writeEntity('epics', epic.id, epic);
     this.epics.set(epic.id, epic);
     this.emit({ type: 'EPIC_CREATED', payload: epic });
+
     return epic;
   }
 
@@ -827,10 +1398,35 @@ export class StateManager {
       throw new Error(`Task not found: ${taskId}`);
     }
 
-    const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(updates, 'comments');
-    let normalizedUpdates: Partial<Task> = updates;
+    // Sanitize provided fields (B27)
+    const sanitized: Partial<Task> = { ...updates };
+    if (sanitized.title !== undefined) {
+      sanitized.title = sanitizeString(sanitized.title, 'title', 500);
+    }
+    if (sanitized.description !== undefined) {
+      sanitized.description = sanitizeString(sanitized.description, 'description', 10000);
+    }
+    if (sanitized.priority !== undefined) {
+      if (!['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(sanitized.priority)) {
+        throw new Error(`Invalid priority: ${sanitized.priority}`);
+      }
+    }
+    if (sanitized.reopenCount !== undefined) {
+      if (typeof sanitized.reopenCount !== 'number' || sanitized.reopenCount < 0 || !Number.isInteger(sanitized.reopenCount)) {
+        throw new Error('reopenCount must be a non-negative integer');
+      }
+    }
+    if (sanitized.definitionOfDone !== undefined) {
+      sanitized.definitionOfDone = sanitizeStringArray(sanitized.definitionOfDone, 50, 1000);
+    }
+    if (sanitized.implementationPlan !== undefined) {
+      sanitized.implementationPlan = this.sanitizeImplementationPlan(sanitized.implementationPlan);
+    }
+
+    const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(sanitized, 'comments');
+    let normalizedUpdates: Partial<Task> = sanitized;
     if (hasCommentsUpdate) {
-      const rawComments = (updates as Partial<Task> & { comments?: TaskComment[] | null }).comments;
+      const rawComments = (sanitized as Partial<Task> & { comments?: TaskComment[] | null }).comments;
       const rawCommentCount = Array.isArray(rawComments) ? rawComments.length : 0;
       const trimmedComments = this.trimComments(rawComments);
       if (rawCommentCount > trimmedComments.length) {
@@ -845,12 +1441,23 @@ export class StateManager {
           'Trimmed task comments to configured maximum'
         );
       }
-      normalizedUpdates = { ...updates, comments: trimmedComments };
+      normalizedUpdates = { ...sanitized, comments: trimmedComments };
     }
 
-    // Clear assignedWorkerId on any status change so the appropriate role can claim it
+    // Optimistic concurrency check: prevent double-assignment
+    if (normalizedUpdates.assignedWorkerId && normalizedUpdates.assignedWorkerId !== task.assignedWorkerId) {
+      // Re-read from in-memory map to catch races
+      const freshTask = this.tasks.get(taskId);
+      if (freshTask && freshTask.assignedWorkerId && freshTask.assignedWorkerId !== normalizedUpdates.assignedWorkerId) {
+        throw new Error(`Task already assigned to ${freshTask.assignedWorkerId}`);
+      }
+    }
+
+    // Only clear assignedWorkerId on transitions where a new role should claim the task (B29)
+    const CLEAR_WORKER_STATUSES = new Set(['BACKLOG', 'PLANNING', 'ARCHIVED']);
     const statusChanged = normalizedUpdates.status !== undefined && normalizedUpdates.status !== task.status;
-    const finalUpdates = statusChanged && normalizedUpdates.assignedWorkerId === undefined
+    const shouldClearWorker = statusChanged && CLEAR_WORKER_STATUSES.has(normalizedUpdates.status!) && normalizedUpdates.assignedWorkerId === undefined;
+    const finalUpdates = shouldClearWorker
       ? { ...normalizedUpdates, assignedWorkerId: null }
       : normalizedUpdates;
 
@@ -868,6 +1475,13 @@ export class StateManager {
       this.appendActivity('TASK_UPDATED', updates, updated);
     }
     this.emit({ type: 'TASK_UPDATED', payload: updated });
+
+    // Post system message for status changes
+    if (updates.status && updates.status !== task.status) {
+      const actor = updated.assignedWorkerId || 'unknown';
+      this.postSystemMessage(taskId, `Task moved to ${updates.status} by ${actor}`).catch(() => {});
+    }
+
     return updated;
   }
 
@@ -896,6 +1510,19 @@ export class StateManager {
     }
 
     this.tasks.delete(taskId);
+
+    // Clear orphaned parentTaskId references (B30)
+    for (const t of this.tasks.values()) {
+      if (t.parentTaskId === taskId) {
+        try {
+          const updated = { ...t, parentTaskId: null, updatedAt: new Date().toISOString() };
+          this.tasks.set(t.id, updated);
+          await this.writeEntity('tasks', t.id, updated);
+        } catch (error) {
+          logger.warn({ taskId: t.id, parentTaskId: taskId, error }, 'Failed to clear orphaned parentTaskId');
+        }
+      }
+    }
 
     for (const worker of this.workers.values()) {
       if (worker.currentTaskId === taskId) {
@@ -1063,132 +1690,146 @@ export class StateManager {
   }
 
   /**
+   * Atomically merge cursor updates into a worker's chatCursors.
+   * Reads current cursors, merges, and writes back within the mutex.
+   */
+  async updateWorkerCursors(workerId: string, cursorUpdates: Record<string, string>): Promise<void> {
+    await this.mutex.runExclusive(async () => {
+      const worker = this.workers.get(workerId);
+      if (!worker) return; // Silently skip if worker doesn't exist
+
+      const merged = { ...(worker.chatCursors || {}), ...cursorUpdates };
+      const updated: Worker = {
+        ...worker,
+        chatCursors: merged,
+        lastActivityAt: new Date().toISOString()
+      };
+
+      await this.writeEntity('workers', workerId, updated);
+      this.workers.set(workerId, updated);
+      this.emit({ type: 'WORKER_UPDATED', payload: updated });
+    });
+  }
+
+  /**
    * Delete a worker: remove from memory, disk, clear references on tasks and teams.
    */
-  deleteWorker(workerId: string): void {
-    const worker = this.workers.get(workerId);
-    if (!worker) return;
+  async deleteWorker(workerId: string): Promise<void> {
+    await this.mutex.runExclusive(async () => {
+      const worker = this.workers.get(workerId);
+      if (!worker) return;
 
-    // Remove from memory
-    this.workers.delete(workerId);
+      // Remove from memory
+      this.workers.delete(workerId);
 
-    // Remove from disk
-    const filePath = path.join(this.moePath, 'workers', `${workerId}.json`);
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      // Remove from disk
+      const filePath = path.join(this.moePath, 'workers', `${workerId}.json`);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (error) {
+        logger.error({ error, workerId }, 'Failed to delete worker file');
       }
-    } catch (error) {
-      logger.error({ error, workerId }, 'Failed to delete worker file');
-    }
 
-    // Clear assignedWorkerId on tasks referencing this worker (don't change task status)
-    for (const task of this.tasks.values()) {
-      if (task.assignedWorkerId === workerId) {
-        const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
-        this.tasks.set(task.id, updated);
-        try {
-          fs.writeFileSync(
-            path.join(this.moePath, 'tasks', `${task.id}.json`),
-            JSON.stringify(updated, null, 2)
-          );
-        } catch (error) {
-          logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
+      // Clear assignedWorkerId on tasks referencing this worker (don't change task status)
+      for (const task of this.tasks.values()) {
+        if (task.assignedWorkerId === workerId) {
+          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+          this.tasks.set(task.id, updated);
+          try {
+            await this.writeEntity('tasks', task.id, updated);
+          } catch (error) {
+            logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
+          }
         }
       }
-    }
 
-    // Remove from team memberIds
-    for (const team of this.teams.values()) {
-      if (team.memberIds.includes(workerId)) {
-        const updated = {
-          ...team,
-          memberIds: team.memberIds.filter((id) => id !== workerId),
-          updatedAt: new Date().toISOString()
-        };
-        this.teams.set(team.id, updated);
-        try {
-          fs.writeFileSync(
-            path.join(this.moePath, 'teams', `${team.id}.json`),
-            JSON.stringify(updated, null, 2)
-          );
-        } catch (error) {
-          logger.error({ error, teamId: team.id }, 'Failed to update team after worker deletion');
+      // Remove from team memberIds
+      for (const team of this.teams.values()) {
+        if (team.memberIds.includes(workerId)) {
+          const updated = {
+            ...team,
+            memberIds: team.memberIds.filter((id) => id !== workerId),
+            updatedAt: new Date().toISOString()
+          };
+          this.teams.set(team.id, updated);
+          try {
+            await this.writeEntity('teams', team.id, updated);
+          } catch (error) {
+            logger.error({ error, teamId: team.id }, 'Failed to update team after worker deletion');
+          }
         }
       }
-    }
 
-    this.appendActivity('WORKER_DISCONNECTED', { workerId: worker.id }, undefined, worker);
-    this.emit({ type: 'WORKER_DELETED', payload: worker });
+      this.appendActivity('WORKER_DISCONNECTED', { workerId: worker.id }, undefined, worker);
+      this.emit({ type: 'WORKER_DELETED', payload: worker });
+    });
   }
 
   /**
    * Purge all workers at startup. Since the daemon is (re)starting,
    * no workers are connected yet — all existing files are guaranteed stale.
    */
-  purgeAllWorkers(): void {
-    const workersDir = path.join(this.moePath, 'workers');
-    let deletedCount = 0;
+  async purgeAllWorkers(): Promise<void> {
+    await this.mutex.runExclusive(async () => {
+      const workersDir = path.join(this.moePath, 'workers');
+      let deletedCount = 0;
 
-    // Delete all worker files from disk
-    try {
-      if (fs.existsSync(workersDir)) {
-        const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
-        for (const file of files) {
-          try {
-            fs.unlinkSync(path.join(workersDir, file));
-            deletedCount++;
-          } catch (error) {
-            logger.error({ error, file }, 'Failed to delete worker file during purge');
+      // Delete all worker files from disk
+      try {
+        if (fs.existsSync(workersDir)) {
+          const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
+          for (const file of files) {
+            try {
+              fs.unlinkSync(path.join(workersDir, file));
+              deletedCount++;
+            } catch (error) {
+              logger.error({ error, file }, 'Failed to delete worker file during purge');
+            }
+          }
+        }
+      } catch (error) {
+        logger.error({ error }, 'Failed to read workers directory during purge');
+      }
+
+      // Clear stale assignedWorkerId references on tasks
+      const workerIds = new Set(Array.from(this.workers.keys()));
+      if (workerIds.size > 0) {
+        for (const task of this.tasks.values()) {
+          if (task.assignedWorkerId && workerIds.has(task.assignedWorkerId)) {
+            const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+            this.tasks.set(task.id, updated);
+            try {
+              await this.writeEntity('tasks', task.id, updated);
+            } catch (error) {
+              logger.error({ error, taskId: task.id }, 'Failed to clear task assignedWorkerId during purge');
+            }
+          }
+        }
+
+        // Clear stale memberIds from teams
+        for (const team of this.teams.values()) {
+          const cleanedMembers = team.memberIds.filter((id) => !workerIds.has(id));
+          if (cleanedMembers.length !== team.memberIds.length) {
+            const updated = { ...team, memberIds: cleanedMembers, updatedAt: new Date().toISOString() };
+            this.teams.set(team.id, updated);
+            try {
+              await this.writeEntity('teams', team.id, updated);
+            } catch (error) {
+              logger.error({ error, teamId: team.id }, 'Failed to clear team memberIds during purge');
+            }
           }
         }
       }
-    } catch (error) {
-      logger.error({ error }, 'Failed to read workers directory during purge');
-    }
 
-    // Clear stale assignedWorkerId references on tasks
-    const workerIds = new Set(Array.from(this.workers.keys()));
-    if (workerIds.size > 0) {
-      for (const task of this.tasks.values()) {
-        if (task.assignedWorkerId && workerIds.has(task.assignedWorkerId)) {
-          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
-          this.tasks.set(task.id, updated);
-          try {
-            fs.writeFileSync(
-              path.join(this.moePath, 'tasks', `${task.id}.json`),
-              JSON.stringify(updated, null, 2)
-            );
-          } catch (error) {
-            logger.error({ error, taskId: task.id }, 'Failed to clear task assignedWorkerId during purge');
-          }
-        }
+      // Clear workers map
+      this.workers.clear();
+
+      if (deletedCount > 0) {
+        logger.info({ count: deletedCount }, 'Purged stale workers from previous run');
       }
-
-      // Clear stale memberIds from teams
-      for (const team of this.teams.values()) {
-        const cleanedMembers = team.memberIds.filter((id) => !workerIds.has(id));
-        if (cleanedMembers.length !== team.memberIds.length) {
-          const updated = { ...team, memberIds: cleanedMembers, updatedAt: new Date().toISOString() };
-          this.teams.set(team.id, updated);
-          try {
-            fs.writeFileSync(
-              path.join(this.moePath, 'teams', `${team.id}.json`),
-              JSON.stringify(updated, null, 2)
-            );
-          } catch (error) {
-            logger.error({ error, teamId: team.id }, 'Failed to clear team memberIds during purge');
-          }
-        }
-      }
-    }
-
-    // Clear workers map
-    this.workers.clear();
-
-    if (deletedCount > 0) {
-      logger.info({ count: deletedCount }, 'Purged stale workers from previous run');
-    }
+    });
   }
 
   async createProposal(input: RailProposal): Promise<RailProposal> {
@@ -1355,7 +1996,14 @@ export class StateManager {
     worker?: Worker,
     proposal?: RailProposal
   ): void {
-    if (!this.project) return;
+    // Track pending writes so flush can wait for all writes to complete
+    this.pendingActivityWrites++;
+
+    if (!this.project) {
+      this.pendingActivityWrites--;
+      this.notifyActivityFlushed();
+      return;
+    }
 
     const activity: ActivityEvent = {
       id: generateId('evt'),
@@ -1373,8 +2021,6 @@ export class StateManager {
 
     // Fire-and-forget but serialized through mutex
     // We don't await here intentionally - activity logging shouldn't block operations
-    // Track pending writes so we can flush on shutdown
-    this.pendingActivityWrites++;
     void this.activityMutex.runExclusive(async () => {
       try {
         // Rotate log if needed before appending
@@ -1539,8 +2185,8 @@ export class StateManager {
         if (id) {
           map.set(id, entity);
         }
-      } catch {
-        // Ignore invalid files for now
+      } catch (error) {
+        logger.warn({ error, file: fullPath }, 'Failed to load entity file, skipping');
       }
     }
 
@@ -1550,6 +2196,128 @@ export class StateManager {
   private readJson<T>(filePath: string): T {
     const raw = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(raw) as T;
+  }
+
+  /**
+   * Post-migration file system setup for v5 (chat channels and messages).
+   * Creates directories, default general channel, and backfills worker chatCursors.
+   */
+  private migrateToV5FileSystem(): void {
+    // Create channels/ and messages/ directories
+    try {
+      fs.mkdirSync(path.join(this.moePath, 'channels'), { recursive: true });
+      fs.mkdirSync(path.join(this.moePath, 'messages'), { recursive: true });
+    } catch (error) {
+      logger.warn({ error }, 'Failed to create chat directories during migration');
+    }
+
+    // Create default general channel if no channels exist yet
+    const channelsDir = path.join(this.moePath, 'channels');
+    try {
+      const existing = fs.readdirSync(channelsDir).filter(f => f.endsWith('.json'));
+      if (existing.length === 0) {
+        const channelId = generateId('chan');
+        const generalChannel = {
+          id: channelId,
+          name: 'general',
+          type: 'general',
+          linkedEntityId: null,
+          createdAt: new Date().toISOString()
+        };
+        fs.writeFileSync(
+          path.join(channelsDir, `${channelId}.json`),
+          JSON.stringify(generalChannel, null, 2)
+        );
+        // Create empty JSONL message file
+        fs.writeFileSync(path.join(this.moePath, 'messages', `${channelId}.jsonl`), '');
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to create general channel during migration');
+    }
+
+
+    // Backfill chatCursors on existing worker files
+    const workersDir = path.join(this.moePath, 'workers');
+    try {
+      if (fs.existsSync(workersDir)) {
+        const workerFiles = fs.readdirSync(workersDir).filter(f => f.endsWith('.json'));
+        for (const file of workerFiles) {
+          try {
+            const filePath = path.join(workersDir, file);
+            const worker = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+            if (!worker.chatCursors) {
+              worker.chatCursors = {};
+              fs.writeFileSync(filePath, JSON.stringify(worker, null, 2));
+            }
+          } catch (error) {
+            logger.warn({ error, file }, 'Failed to backfill chatCursors for worker');
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to backfill worker chatCursors during migration');
+    }
+  }
+
+  /**
+   * Post-migration file system setup for v6 (role-based channels).
+   * Deletes task/epic channels and creates role channels (#workers, #architects, #qa).
+   */
+  private migrateToV6FileSystem(): void {
+    const channelsDir = path.join(this.moePath, 'channels');
+    const messagesDir = path.join(this.moePath, 'messages');
+
+    // Delete task/epic channels and their message files
+    try {
+      if (fs.existsSync(channelsDir)) {
+        for (const file of fs.readdirSync(channelsDir).filter(f => f.endsWith('.json'))) {
+          try {
+            const filePath = path.join(channelsDir, file);
+            const channel = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+            if (channel.type === 'task' || channel.type === 'epic') {
+              fs.unlinkSync(filePath);
+              const msgFile = path.join(messagesDir, `${channel.id}.jsonl`);
+              if (fs.existsSync(msgFile)) {
+                fs.unlinkSync(msgFile);
+              }
+            }
+          } catch (error) {
+            logger.warn({ error, file }, 'Failed to delete task/epic channel during v6 migration');
+          }
+        }
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to clean up task/epic channels during v6 migration');
+    }
+
+    // Create role channels if they don't already exist
+    const existingNames = new Set<string>();
+    try {
+      for (const file of fs.readdirSync(channelsDir).filter(f => f.endsWith('.json'))) {
+        try {
+          const channel = JSON.parse(fs.readFileSync(path.join(channelsDir, file), 'utf-8'));
+          existingNames.add(channel.name);
+        } catch { /* skip unreadable */ }
+      }
+    } catch { /* directory may not exist */ }
+
+    for (const roleName of ['workers', 'architects', 'qa']) {
+      if (existingNames.has(roleName)) continue;
+      try {
+        const channelId = generateId('chan');
+        const channel = {
+          id: channelId,
+          name: roleName,
+          type: 'role',
+          linkedEntityId: null,
+          createdAt: new Date().toISOString()
+        };
+        fs.writeFileSync(path.join(channelsDir, `${channelId}.json`), JSON.stringify(channel, null, 2));
+        fs.writeFileSync(path.join(messagesDir, `${channelId}.jsonl`), '');
+      } catch (error) {
+        logger.warn({ error, roleName }, 'Failed to create role channel during v6 migration');
+      }
+    }
   }
 
   /**
@@ -1597,7 +2365,9 @@ export class StateManager {
         commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
         agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude'),
         enableAgentTeams: sanitizeBoolean(project.settings?.enableAgentTeams, false),
-        columnLimits: project.settings?.columnLimits as Record<string, number> | undefined
+        columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
+        chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
+        chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now
@@ -1621,6 +2391,30 @@ export class StateManager {
       throw new Error(`Path traversal detected: ${id}`);
     }
 
+    if (this.fileWatcher) {
+      this.fileWatcher.ignorePath(filePath);
+    }
     fs.writeFileSync(filePath, JSON.stringify(entity, null, 2));
+  }
+
+  /**
+   * Fallback: try loading a worker directly from disk when not found in memory.
+   * Handles race conditions where the in-memory state hasn't reloaded yet.
+   */
+  tryLoadWorkerFromDisk(workerId: string): Worker | null {
+    try {
+      validateEntityId(workerId);
+      const filePath = path.join(this.moePath, 'workers', `${workerId}.json`);
+      if (fs.existsSync(filePath)) {
+        const worker = this.readJson<Worker>(filePath);
+        if (worker && worker.id) {
+          this.workers.set(worker.id, worker);
+          return worker;
+        }
+      }
+    } catch {
+      // Fall through to null
+    }
+    return null;
   }
 }

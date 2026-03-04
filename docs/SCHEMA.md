@@ -20,20 +20,28 @@ Implementation notes (current):
 └──────┬──────┘
        │ 1:many
        ▼
-┌─────────────┐
-│    Epic     │
-│             │
-│ epicRails   │
-└──────┬──────┘
-       │ 1:many
-       ▼
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│    Task     │ ◀───▶ │   Worker    │ ────▶ │    Team     │
-│             │       │             │       │             │
-│ taskRails   │       │   status    │       │   role      │
-│ plan        │       │   branch    │       │   members   │
-│ status      │       │   teamId    │       └─────────────┘
-└─────────────┘       └─────────────┘
+┌─────────────┐       ┌─────────────┐
+│    Epic     │──────▶│  Channel    │◀──────┐
+│             │ auto  │             │ auto  │
+│ epicRails   │       │ messages[]  │       │
+└──────┬──────┘       └─────────────┘       │
+       │ 1:many                             │
+       ▼                                    │
+┌─────────────┐       ┌─────────────┐       │
+│    Task     │ ◀───▶ │   Worker    │       │
+│             │       │             │       │
+│ taskRails   │       │ chatCursors │       │
+│ plan        │       │   branch    │       │
+│ status      │───────┘   teamId    │       │
+└──────┬──────┘       └──────┬──────┘       │
+       │ auto                │              │
+       └─────────────────────┼──────────────┘
+                             ▼
+                      ┌─────────────┐
+                      │    Team     │
+                      │   role      │
+                      │   members   │
+                      └─────────────┘
 ```
 
 ---
@@ -100,6 +108,11 @@ interface ProjectSettings {
   // Key is TaskStatus, value is max tasks allowed in that column
   // Example: { "REVIEW": 2 } limits review to 2 tasks at a time
   columnLimits?: Record<string, number>;
+
+  // Chat settings (all optional, defaults applied at runtime)
+  chatEnabled?: boolean;              // default: true — enable/disable chat system
+  chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
+  chatAutoCreateChannels?: boolean;   // default: true — auto-create channels for epics/tasks
 }
 ```
 
@@ -391,6 +404,9 @@ interface Worker {
 
   // Team membership
   teamId: string | null;         // Reference to Team (null = solo worker)
+
+  // Chat cursors — per-channel last-read message ID
+  chatCursors?: Record<string, string>;  // { channelId: lastReadMessageId }
 }
 
 type WorkerType =
@@ -480,6 +496,163 @@ interface Team {
 ```
 
 **Key behavior:** When a worker belongs to a team, `claim_next_task` allows them to claim tasks in an epic that already has another team member working on it (same status). Solo workers (no team) retain the existing one-worker-per-status-per-epic constraint.
+
+---
+
+## Chat Channel
+
+**File:** `.moe/channels/{channel-id}.json`
+
+Channels organize chat messages by topic. Channels can be auto-created for epics and tasks when `chatAutoCreateChannels` is enabled.
+
+```typescript
+interface ChatChannel {
+  // Identity
+  id: string;                    // "chan-{uuid}"
+  name: string;                  // "general", "epic-auth", "task-login"
+
+  // Type and linking
+  type: 'general' | 'epic' | 'task' | 'custom';
+  linkedEntityId: string | null; // epicId or taskId (if type is epic/task)
+
+  // Timestamps
+  createdAt: string;             // ISO 8601
+}
+```
+
+**Example:**
+
+```json
+{
+  "id": "chan-a1b2c3d4",
+  "name": "epic-auth",
+  "type": "epic",
+  "linkedEntityId": "epic-e1f2g3h4",
+  "createdAt": "2025-02-01T10:00:00Z"
+}
+```
+
+---
+
+## Chat Message
+
+**File:** `.moe/messages/{channel-id}.jsonl` (append-only, one JSON per line)
+
+Messages use JSONL (JSON Lines) format for high-volume append-only writes. Each channel has its own message file. Messages are fetched on-demand per channel and are NOT included in `STATE_SNAPSHOT`.
+
+```typescript
+interface ChatMessage {
+  // Identity
+  id: string;                    // "msg-{uuid}"
+  channel: string;               // channel ID
+
+  // Content
+  sender: string;                // workerId, "human", or "system"
+  content: string;               // message text (max 10KB)
+
+  // Threading and mentions
+  replyTo: string | null;        // parent message ID for threading
+  mentions: string[];            // parsed @mentions (workerId strings)
+
+  // Decision linking (optional)
+  decisionId?: string;           // Links to a Decision entity (set by chat_decision tool)
+
+  // Timestamps
+  timestamp: string;             // ISO 8601
+}
+```
+
+**Example (one line per message in `.moe/messages/chan-a1b2c3d4.jsonl`):**
+
+```jsonl
+{"id":"msg-f1e2d3c4","channel":"chan-a1b2c3d4","sender":"worker-w1x2y3z4","content":"Starting work on the login form","replyTo":null,"mentions":[],"timestamp":"2025-02-02T14:00:00Z"}
+{"id":"msg-a5b6c7d8","channel":"chan-a1b2c3d4","sender":"human","content":"@worker-w1x2y3z4 make sure to add validation","replyTo":"msg-f1e2d3c4","mentions":["worker-w1x2y3z4"],"timestamp":"2025-02-02T14:05:00Z"}
+```
+
+### @Mention Routing
+
+Messages with `@workerId` mentions are parsed and stored in the `mentions` array. The chat router uses per-channel hop counters to prevent runaway agent-to-agent conversations:
+
+- Each agent-to-agent routed message increments the hop counter for that channel
+- When `chatMaxAgentHops` (default 4) is exceeded, routing pauses until a human message resets the counter
+- Human messages always reset the hop counter to 0
+
+### Storage Layout
+
+```
+.moe/
+├── channels/
+│   ├── chan-a1b2c3d4.json      # Channel metadata (general)
+│   ├── chan-e5f6g7h8.json      # Channel metadata (epic-linked)
+│   └── chan-i9j0k1l2.json      # Channel metadata (task-linked)
+├── messages/
+│   ├── chan-a1b2c3d4.jsonl     # Messages for general channel
+│   ├── chan-e5f6g7h8.jsonl     # Messages for epic channel
+│   └── chan-i9j0k1l2.jsonl     # Messages for task channel
+```
+
+**Note:** Schema version will be bumped to 5 in the migration task to create `channels/` and `messages/` directories.
+
+---
+
+## Decision
+
+**File:** `.moe/decisions/{decision-id}.json`
+
+Decisions are proposals that require human approval. Agents can propose decisions during chat conversations, and humans approve or reject them from the IDE UI.
+
+```typescript
+interface Decision {
+  // Identity
+  id: string;                    // "dec-{uuid}"
+
+  // Content
+  proposedBy: string;            // workerId who proposed the decision
+  content: string;               // Decision text (max 10KB)
+
+  // Status
+  status: DecisionStatus;
+  approvedBy: string | null;     // Who approved/rejected (workerId or "human")
+
+  // Channel linking (optional)
+  channel: string | null;        // Channel where decision was proposed
+  messageId: string | null;      // System message posted to channel
+
+  // Timestamps
+  createdAt: string;             // ISO 8601
+  resolvedAt: string | null;     // When approved/rejected
+}
+
+type DecisionStatus =
+  | 'proposed'    // Awaiting human decision
+  | 'approved'    // Human approved
+  | 'rejected';   // Human rejected
+```
+
+**Example:**
+
+```json
+{
+  "id": "dec-a1b2c3d4",
+  "proposedBy": "worker-w1x2y3z4",
+  "content": "Should we use Redis for session storage instead of in-memory?",
+  "status": "proposed",
+  "approvedBy": null,
+  "channel": "chan-e5f6g7h8",
+  "messageId": "msg-m1n2o3p4",
+  "createdAt": "2025-02-02T14:00:00Z",
+  "resolvedAt": null
+}
+```
+
+### Storage Layout
+
+```
+.moe/
+├── decisions/
+│   ├── dec-a1b2c3d4.json       # Individual decision files
+│   └── dec-e5f6g7h8.json
+```
 
 ---
 
@@ -611,7 +784,16 @@ type ActivityEventType =
   | 'TEAM_UPDATED'
   | 'TEAM_DELETED'
   | 'TEAM_MEMBER_ADDED'
-  | 'TEAM_MEMBER_REMOVED';
+  | 'TEAM_MEMBER_REMOVED'
+
+  // Chat
+  | 'MESSAGE_CREATED'
+  | 'CHANNEL_CREATED'
+
+  // Decisions
+  | 'DECISION_PROPOSED'
+  | 'DECISION_APPROVED'
+  | 'DECISION_REJECTED';
 ```
 
 **Example (one line per event):**
@@ -694,13 +876,16 @@ function generateId(prefix: string): string {
 }
 
 // Examples:
-// Project: "proj-a1b2c3d4"
-// Epic:    "epic-e1f2g3h4"
-// Task:    "task-t1u2v3w4"
-// Worker:  "worker-w1x2y3z4"
-// Step:    "step-s1t2u3v4"
+// Project:  "proj-a1b2c3d4"
+// Epic:     "epic-e1f2g3h4"
+// Task:     "task-t1u2v3w4"
+// Worker:   "worker-w1x2y3z4"
+// Step:     "step-s1t2u3v4"
 // Proposal: "prop-p1q2r3s4"
-// Event:   "evt-e1f2g3h4"
+// Event:    "evt-e1f2g3h4"
+// Channel:  "chan-c1d2e3f4"
+// Message:  "msg-m1n2o3p4"
+// Decision: "dec-d1e2f3g4"
 ```
 
 ---

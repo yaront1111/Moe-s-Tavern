@@ -1,0 +1,77 @@
+{
+  "id": "task-c3e6fa79",
+  "epicId": "epic-7e26d221",
+  "title": "Fix completeTask wrong field + WebSocket shutdown notification (B24, B25)",
+  "description": "**B24 (HIGH): completeTask uses affectedFiles instead of modifiedFiles**\\n- File: packages/moe-daemon/src/tools/completeTask.ts:48\\n- `completedSteps.flatMap((s) => s.affectedFiles || [])` reads plan-time field, not the actual modifiedFiles set by workers during step completion\\n- Impact: filesModified count always 0 in activity logs even when worker tracked files\\n- Fix: Change to `completedSteps.flatMap((s) => s.modifiedFiles || s.affectedFiles || [])`\\n\\n**B25 (HIGH): DAEMON_SHUTTING_DOWN notification never reaches plugins**\\n- File: packages/moe-daemon/src/server/WebSocketServer.ts:760\\n- `isClosed = true` is set BEFORE sending the shutdown message. safeSend() checks isClosed and skips the send.\\n- Impact: Plugin clients never receive shutdown notification, causing them to see unexpected disconnects instead of clean shutdown\\n- Fix: Send DAEMON_SHUTTING_DOWN to all plugin clients BEFORE setting isClosed = true. Move the broadcast loop above the flag set.",
+  "definitionOfDone": [
+    "completeTask collects modifiedFiles (falling back to affectedFiles)",
+    "DAEMON_SHUTTING_DOWN message actually reaches plugin clients before close",
+    "npm run build && npm test pass",
+    "Regression tests for both fixes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B24 Fix: In packages/moe-daemon/src/tools/completeTask.ts line 48, change `completedSteps.flatMap((s) => s.affectedFiles || [])` to `completedSteps.flatMap((s) => s.modifiedFiles || s.affectedFiles || [])`. This prefers the actual files modified during execution (set by completeStep), falling back to the planned affected files. Also deduplicate with `[...new Set(modified)]` since both arrays may overlap. Error handling: both fields are optional arrays, the `|| []` fallback handles undefined.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "startedAt": "2026-03-03T23:06:01.625Z",
+      "completedAt": "2026-03-03T23:06:18.048Z",
+      "note": "Changed line 48 to prefer s.modifiedFiles (runtime) over s.affectedFiles (plan-time). Array.from(new Set(...)) on line 57 already deduplicates.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B25 Fix: In packages/moe-daemon/src/server/WebSocketServer.ts close() method (~line 760), move the DAEMON_SHUTTING_DOWN broadcast loop ABOVE the `this.isClosed = true` line. Currently isClosed is set at ~line 760 and the broadcast is at ~line 765. Swap them so the broadcast happens first, then set isClosed. Use direct `ws.send()` instead of `safeSend()` for the shutdown message since safeSend checks isClosed. Wrap each send in try/catch to handle already-closed connections. Error handling: individual send failures should not block the shutdown sequence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "startedAt": "2026-03-03T23:06:18.738Z",
+      "completedAt": "2026-03-03T23:07:00.161Z",
+      "note": "Moved DAEMON_SHUTTING_DOWN broadcast before isClosed=true. Uses direct client.send() with try/catch instead of safeSend. Brief delay for message flush moved inside closePromise.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add tests: (1) In completeTask test, verify that filesModified count includes modifiedFiles from steps, not just affectedFiles. Create a task with steps that have both fields and verify the output. (2) For WebSocket shutdown, verify that broadcast is called before close by checking message order. Run `npm run build && npm test`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T23:07:00.551Z",
+      "completedAt": "2026-03-03T23:10:29.663Z",
+      "note": "Added regression test for B24: verifies completeTask prefers modifiedFiles over affectedFiles in stats output. Step with both fields uses modifiedFiles; step with only affectedFiles falls back correctly. 320 tests pass, build clean.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:58:33.493Z",
+  "updatedAt": "2026-03-03T23:20:22.483Z",
+  "planSubmittedAt": "2026-03-03T22:59:20.125Z",
+  "planApprovedAt": "2026-03-03T22:59:20.128Z",
+  "workStartedAt": "2026-03-03T23:06:01.625Z",
+  "completedAt": "2026-03-03T23:10:34.444Z",
+  "reviewStartedAt": "2026-03-03T23:10:34.444Z",
+  "reviewCompletedAt": "2026-03-03T23:20:22.483Z"
+}

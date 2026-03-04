@@ -1,0 +1,121 @@
+{
+  "id": "task-517c7699",
+  "epicId": "epic-7e26d221",
+  "title": "Fix updateTask/createTask input validation gaps (B27, B28, B29, B30, B31)",
+  "description": "**B27 (HIGH): updateTask() doesn't validate/sanitize inputs**\\n- File: packages/moe-daemon/src/state/StateManager.ts:1370\\n- Unlike createTask() which sanitizes title/description/priority/definitionOfDone, updateTask() accepts raw Partial<Task> without any validation. Allows oversized titles, invalid priorities, negative reopenCount.\\n- Fix: Add sanitization in updateTask() for title (max 500), description (max 10000), priority (valid enum), reopenCount (non-negative integer), definitionOfDone (max 50 items, max 1000 chars each). Reuse existing sanitize* helpers from createTask.\\n\\n**B28 (HIGH): createTask() accepts implementationPlan without validation**\\n- File: packages/moe-daemon/src/state/StateManager.ts:1311\\n- implementationPlan array is accepted as-is without validating step structure, count limits, or field values.\\n- Fix: Validate implementationPlan: max 50 steps, each step must have description (string), status must be valid enum.\\n\\n**B29 (MEDIUM): assignedWorkerId cleared on ALL status changes**\\n- File: packages/moe-daemon/src/state/StateManager.ts:1406-1410\\n- When status changes and assignedWorkerId is not explicitly provided, it's set to null. This loses the audit trail of which worker completed a task (e.g. WORKING -> REVIEW).\\n- Fix: Only clear assignedWorkerId on specific transitions where it makes sense (e.g. back to BACKLOG/PLANNING). Preserve it on WORKING->REVIEW and REVIEW->DONE.\\n\\n**B30 (MEDIUM): deleteTask() orphans child tasks**\\n- File: packages/moe-daemon/src/state/StateManager.ts:1436-1471\\n- When a task with parentTaskId children is deleted, child tasks still reference the deleted parent.\\n- Fix: In deleteTask(), scan all tasks and clear parentTaskId where it matches the deleted taskId.\\n\\n**B31 (MEDIUM): loadEntities() silently ignores corrupted files**\\n- File: packages/moe-daemon/src/state/StateManager.ts:2110-2128\\n- Corrupted JSON files are silently skipped with empty catch block — no logging.\\n- Fix: Add logger.warn in the catch block with the filename and error message.",
+  "definitionOfDone": [
+    "updateTask() validates title, description, priority, reopenCount, definitionOfDone",
+    "createTask() validates implementationPlan structure",
+    "assignedWorkerId preserved on WORKING->REVIEW and REVIEW->DONE transitions",
+    "deleteTask() clears orphaned parentTaskId references",
+    "loadEntities() logs warnings for corrupted files",
+    "npm run build && npm test pass",
+    "Tests for validation rejecting invalid inputs"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B27 Fix: Add input sanitization to updateTask() in StateManager.ts (~line 1370). Before merging updates, sanitize provided fields using existing helpers: if `updates.title` is provided, call `sanitizeString(updates.title, 'title', 500)`. If `updates.description`, call `sanitizeString(updates.description, 'description', 10000)`. If `updates.priority`, validate against TaskPriority enum values. If `updates.reopenCount`, ensure it's a non-negative integer. If `updates.definitionOfDone`, run through `sanitizeStringArray()` with max 50 items, 1000 chars each. Build a `normalizedUpdates` object with sanitized values. Error handling: throw descriptive errors for invalid values (consistent with createTask).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T23:12:54.752Z",
+      "completedAt": "2026-03-03T23:14:46.997Z",
+      "note": "Added input sanitization to updateTask(): title (max 500), description (max 10000), priority (enum validation), reopenCount (non-negative integer), definitionOfDone (max 50 items, 1000 chars each), implementationPlan (via new sanitizeImplementationPlan helper). All using existing sanitize* helpers where possible.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B28 Fix: Add implementationPlan validation to createTask() in StateManager.ts (~line 1311). Before accepting the plan array, validate: (1) max 50 steps, (2) each step must have a `description` string (non-empty), (3) if `status` is present it must be a valid step status ('PENDING', 'IN_PROGRESS', 'COMPLETED'). Add a helper `sanitizeImplementationPlan(plan: unknown[]): ImplementationStep[]` that strips invalid entries and truncates descriptions to 5000 chars. Also apply this validation in updateTask when implementationPlan is in the update payload. Error handling: invalid steps are stripped with a warning log, not rejected outright (to be lenient with agent input).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T23:14:49.903Z",
+      "completedAt": "2026-03-03T23:15:03.337Z",
+      "note": "Applied sanitizeImplementationPlan() to createTask(). Reuses the same helper added in step-1: max 50 steps, description required, status validated, affected/modified files capped at 50 each.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B29 Fix: In updateTask() (~line 1406-1410), change the assignedWorkerId clearing logic. Instead of clearing on ALL status changes, only clear when transitioning to BACKLOG, PLANNING, or ARCHIVED. Define a set: `const CLEAR_WORKER_STATUSES = new Set(['BACKLOG', 'PLANNING', 'ARCHIVED'])`. Change the condition to: `const shouldClearWorker = statusChanged && CLEAR_WORKER_STATUSES.has(normalizedUpdates.status!) && normalizedUpdates.assignedWorkerId === undefined`. This preserves the worker reference on WORKING->REVIEW and REVIEW->DONE transitions. Error handling: no change needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T23:15:06.793Z",
+      "completedAt": "2026-03-03T23:15:27.885Z",
+      "note": "assignedWorkerId now only cleared on transitions to BACKLOG, PLANNING, or ARCHIVED. Preserved on WORKING->REVIEW and REVIEW->DONE to maintain audit trail.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "B30 Fix: In deleteTask() (~line 1436-1471), after deleting the task file and removing from memory, scan all remaining tasks for orphaned parentTaskId references. Add: `for (const t of this.tasks.values()) { if (t.parentTaskId === taskId) { const updated = { ...t, parentTaskId: null, updatedAt: new Date().toISOString() }; this.tasks.set(t.id, updated); await this.writeEntity('tasks', t.id, updated); } }`. Error handling: wrap in try/catch per child task so one failure doesn't block others.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T23:15:31.250Z",
+      "completedAt": "2026-03-03T23:15:50.306Z",
+      "note": "deleteTask now scans remaining tasks and clears parentTaskId references to deleted task. Each child update is wrapped in try/catch so one failure doesn't block others.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "B31 Fix: In loadEntities() (~line 2110-2128), replace the empty `catch {}` block with `catch (error) { logger.warn({ error, file: fullPath }, 'Failed to load entity file, skipping'); }`. This logs corrupted/invalid files so operators can diagnose data issues. Error handling: still skip the file (don't crash), just log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-03T23:15:53.282Z",
+      "completedAt": "2026-03-03T23:16:13.449Z",
+      "note": "loadEntities() now logs a warning with file path and error for corrupted/invalid JSON files instead of silently ignoring them.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Add tests: (1) updateTask with oversized title throws. (2) updateTask with invalid priority throws. (3) createTask with 60-step plan gets truncated to 50. (4) Verify assignedWorkerId preserved on WORKING->REVIEW transition. (5) Verify assignedWorkerId cleared on transition to BACKLOG. (6) deleteTask clears child parentTaskId. Run `npm run build && npm test`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "startedAt": "2026-03-03T23:16:16.934Z",
+      "completedAt": "2026-03-03T23:17:56.946Z",
+      "note": "Added 6 regression tests: updateTask truncates oversized title, rejects invalid priority, createTask truncates plan to 50 steps, assignedWorkerId preserved on WORKING->REVIEW, cleared on ->BACKLOG, deleteTask clears orphaned parentTaskId. 327 tests pass, build clean.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ]
+    }
+  ],
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:58:52.398Z",
+  "updatedAt": "2026-03-03T23:18:03.668Z",
+  "planSubmittedAt": "2026-03-03T22:59:59.866Z",
+  "planApprovedAt": "2026-03-03T22:59:59.868Z",
+  "workStartedAt": "2026-03-03T23:12:54.752Z",
+  "completedAt": "2026-03-03T23:18:03.668Z",
+  "reviewStartedAt": "2026-03-03T23:18:03.668Z"
+}

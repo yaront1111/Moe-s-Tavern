@@ -1,0 +1,85 @@
+{
+  "id": "task-72d88a9b",
+  "epicId": "epic-7e26d221",
+  "title": "Fix VS Code extension bugs (B5, B6, B20)",
+  "description": "Fix VS Code extension stability bugs:\\n\\n**B5 (CRITICAL): Reconnection shows indefinite 'reconnecting' with no max-retry feedback**\\n- File: moe-vscode/src/services/MoeDaemonClient.ts:746-761\\n- After max retries exhausted, no error shown. Status bar stays 'reconnecting' forever.\\n- Fix: After max retries, show explicit error and offer manual reconnect action.\\n\\n**B6 (CRITICAL): State not loaded before UI responds to commands**\\n- File: MoeDaemonClient.ts:148-158\\n- requestState() on WebSocket open not awaited. Commands silently fail if user interacts before STATE_SNAPSHOT.\\n- Fix: Block UI commands until first STATE_SNAPSHOT received.\\n\\n**B20 (MEDIUM): Webview state lost on hide/show**\\n- File: moe-vscode/src/providers/BoardViewProvider.ts:48-61\\n- _webviewReady not reset on re-show. All client-side state (scroll, filters) lost.\\n- Fix: Persist webview state via getState()/setState().",
+  "definitionOfDone": [
+    "Max reconnect retries shows explicit error with manual reconnect button",
+    "UI commands blocked/queued until STATE_SNAPSHOT received",
+    "Webview state persisted across hide/show cycles",
+    "npm run build succeeds in moe-vscode"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "B5 Fix: Add max-retry error state to MoeDaemonClient.ts. In scheduleReconnect() (~line 746-761), after exhausting max retries, call `vscode.window.showErrorMessage('Moe daemon connection failed after N retries', 'Reconnect')` and provide a 'Reconnect' button that resets the counter and calls connect(). Update the status bar to show a red error icon instead of infinite 'reconnecting'. Error handling: if showErrorMessage is dismissed, keep error state visible in status bar.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-03-03T22:44:16.310Z",
+      "completedAt": "2026-03-03T22:46:19.040Z",
+      "note": "Added reconnectAttempts counter and maxReconnectAttempts=10. scheduleReconnect() now shows error message with 'Reconnect' button after max retries. Counter reset on successful open.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "B6 Fix: Block UI commands until STATE_SNAPSHOT received. Add a `private stateReady = false` flag and a `private stateReadyPromise: Promise<void>` with resolver to MoeDaemonClient. Set `stateReady = true` when STATE_SNAPSHOT is received. In command handlers (board actions, chat actions), await `stateReadyPromise` before processing, with a 5s timeout. If timeout, show error 'Waiting for daemon state...'. Also set `stateReady = false` on disconnect so reconnections also block until fresh state arrives. Error handling: timeout produces user-visible error, not silent failure.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "completedAt": "2026-03-03T22:46:21.249Z",
+      "note": "Added stateReady flag, stateReadyPromise, and waitForState(timeout) method. STATE_SNAPSHOT handler resolves the promise. Reset on close for fresh reconnections. isStateReady getter exposed for sync checks.",
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "B20 Fix: Persist webview state across hide/show in BoardViewProvider.ts. In the webview HTML, use `vscode.getState()` / `vscode.setState()` to persist scroll position, selected epic filter, and search text. On webview re-show, check for saved state and restore it via a postMessage from the provider. Reset `_webviewReady` flag in resolveWebviewView so fresh state is sent. Error handling: if saved state is corrupted or missing, fall back to default view.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "startedAt": "2026-03-03T22:46:21.873Z",
+      "completedAt": "2026-03-03T22:48:52.905Z",
+      "note": "Added vscode.getState()/setState() persistence for selectedEpicFilter, collapsedEpics, and activeTab. persistViewState() called on tab switch, epic filter change, and epic collapse toggle. Saved state restored on webview init and activeTab restored after ready.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Build and verify: Run `cd moe-vscode && npm run build`. Test reconnection by stopping daemon mid-session — verify error message appears after retries. Test that clicking 'Reconnect' works. Test that commands are blocked during initial load.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-03T22:48:53.675Z",
+      "completedAt": "2026-03-03T22:49:26.275Z",
+      "note": "VS Code extension compiles cleanly (npm run compile). Daemon tests pass (319). No runtime errors in build."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-03T22:16:50.827Z",
+  "updatedAt": "2026-03-03T22:50:10.987Z",
+  "planSubmittedAt": "2026-03-03T22:19:09.247Z",
+  "planApprovedAt": "2026-03-03T22:19:09.249Z",
+  "workStartedAt": "2026-03-03T22:44:16.310Z",
+  "completedAt": "2026-03-03T22:49:33.880Z",
+  "reviewStartedAt": "2026-03-03T22:49:33.880Z",
+  "reviewCompletedAt": "2026-03-03T22:50:10.987Z"
+}

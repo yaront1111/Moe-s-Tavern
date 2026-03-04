@@ -10,35 +10,6 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   LOW: 3
 };
 
-/**
- * Simple mutex to serialize claim operations.
- * Prevents race conditions where two workers try to claim the same task.
- */
-class ClaimMutex {
-  private locked = false;
-  private queue: Array<() => void> = [];
-
-  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.locked) {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
-    }
-    this.locked = true;
-    try {
-      return await fn();
-    } finally {
-      const next = this.queue.shift();
-      if (next) {
-        next();
-      } else {
-        this.locked = false;
-      }
-    }
-  }
-}
-
-// Single mutex instance shared across all claim operations
-const claimMutex = new ClaimMutex();
-
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
@@ -55,8 +26,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      // Wrap entire claim operation in mutex to prevent race conditions
-      return claimMutex.runExclusive(async () => {
+      // Use StateManager's mutex to prevent race conditions with plugin assignments
+      return state.runExclusive(async () => {
         const params = (args || {}) as { statuses?: string[]; epicId?: string; workerId?: string; replaceExisting?: boolean };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -78,67 +49,119 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           return a.order - b.order;
         });
 
-      const task = tasks[0];
-      if (!task) {
+      if (tasks.length === 0) {
         return { hasNext: false };
       }
 
-      // Enforce single worker per epic constraint - but allow different roles to work in parallel
-      // Architects (claiming PLANNING) can work alongside workers (on WORKING)
-      if (params.workerId) {
-        const tasksInEpic = Array.from(state.tasks.values())
-          .filter((t) => t.epicId === task.epicId && t.assignedWorkerId && t.assignedWorkerId !== params.workerId);
+      // Try each candidate task in priority order; fall through on concurrency conflicts
+      let task = tasks[0];
+      let claimed = false;
+      for (const candidate of tasks) {
+        task = candidate;
 
-        // Only block if another worker is active on the SAME status type
-        // This allows architects (PLANNING) and workers (WORKING) to work in parallel
-        const claimingStatus = task.status;
-        const activeWorkerOnSameStatus = tasksInEpic.find(
-          (t) => t.status === claimingStatus
-        );
+        // Enforce single worker per epic constraint - but allow different roles to work in parallel
+        if (params.workerId) {
+          const tasksInEpic = Array.from(state.tasks.values())
+            .filter((t) => t.epicId === candidate.epicId && t.assignedWorkerId && t.assignedWorkerId !== params.workerId);
 
-        if (activeWorkerOnSameStatus && !params.replaceExisting) {
-          // Team members can work in parallel on different tasks in the same epic
-          const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
-          if (!claimingWorkerTeam) {
-            // Solo worker -> keep original constraint
-            throw notAllowed(
-              'claim_next_task',
-              `Epic already has an active worker (${activeWorkerOnSameStatus.assignedWorkerId}) on ${claimingStatus} tasks. Use replaceExisting:true to take over.`
-            );
+          const claimingStatus = candidate.status;
+          const activeWorkerOnSameStatus = tasksInEpic.find(
+            (t) => t.status === claimingStatus
+          );
+
+          if (activeWorkerOnSameStatus && !params.replaceExisting) {
+            const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
+            if (!claimingWorkerTeam) {
+              // Solo worker -> skip this epic's tasks, try next candidate
+              continue;
+            }
           }
-          // Team member -> allow parallel claims (same-task conflicts already
-          // prevented by the !t.assignedWorkerId filter on line 73)
+
+          // If replaceExisting is true, clear the previous worker's assignment
+          if (activeWorkerOnSameStatus && params.replaceExisting) {
+            await state.updateTask(activeWorkerOnSameStatus.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+          }
+
+          try {
+            await state.updateTask(candidate.id, { assignedWorkerId: params.workerId });
+          } catch (err: unknown) {
+            // Optimistic concurrency failure — task was claimed between filter and assign
+            if (err instanceof Error && err.message.startsWith('Task already assigned')) {
+              continue; // Try next candidate
+            }
+            throw err; // Unexpected error — propagate
+          }
+
+          // Auto-register or update worker entity
+          const existingWorker = state.getWorker(params.workerId);
+          if (!existingWorker) {
+            const workerType: WorkerType = 'CLAUDE';
+            await state.createWorker({
+              id: params.workerId,
+              type: workerType,
+              projectId: state.project!.id,
+              epicId: candidate.epicId,
+              currentTaskId: candidate.id,
+              status: 'READING_CONTEXT'
+            });
+
+            try {
+              const roleLabel = statuses.includes('PLANNING') ? 'architect'
+                : statuses.includes('REVIEW') ? 'qa' : 'worker';
+              await state.postToGeneral(`${params.workerId} is online (${roleLabel})`);
+            } catch { /* never block claim */ }
+          } else {
+            await state.updateWorker(params.workerId, {
+              currentTaskId: candidate.id,
+              epicId: candidate.epicId,
+              status: 'READING_CONTEXT'
+            });
+          }
         }
 
-        // If replaceExisting is true, clear the previous worker's assignment
-        if (activeWorkerOnSameStatus && params.replaceExisting) {
-          await state.updateTask(activeWorkerOnSameStatus.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
-        }
+        // Successfully claimed this task
+        claimed = true;
+        break;
+      }
 
-        await state.updateTask(task.id, { assignedWorkerId: params.workerId });
-
-        // Auto-register or update worker entity
-        const existingWorker = state.getWorker(params.workerId);
-        if (!existingWorker) {
-          const workerType: WorkerType = 'CLAUDE'; // Default; future: pass type from agent
-          await state.createWorker({
-            id: params.workerId,
-            type: workerType,
-            projectId: state.project!.id,
-            epicId: task.epicId,
-            currentTaskId: task.id,
-            status: 'READING_CONTEXT'
-          });
-        } else {
-          await state.updateWorker(params.workerId, {
-            currentTaskId: task.id,
-            epicId: task.epicId,
-            status: 'READING_CONTEXT'
-          });
-        }
+      if (!claimed) {
+        return { hasNext: false };
       }
 
       const epic = state.getEpic(task.epicId);
+
+      // Post system message to #general so the team sees who claimed it
+      if (params.workerId) {
+        try {
+          await state.postToGeneral(`${params.workerId} claimed task: ${task.title}`);
+        } catch { /* never block tool */ }
+      }
+
+      // Find #general and role channel IDs for the response
+      let generalChannelId: string | null = null;
+      let roleChannelId: string | null = null;
+      const roleLabel = statuses.includes('PLANNING') ? 'architects'
+        : statuses.includes('REVIEW') ? 'qa' : 'workers';
+      for (const ch of state.channels.values()) {
+        if (ch.type === 'general' || ch.name === 'general') {
+          generalChannelId = ch.id;
+        }
+        if (ch.type === 'role' && ch.name === roleLabel) {
+          roleChannelId = ch.id;
+        }
+      }
+
+      // Build chat hint pointing to the role channel
+      let chatHint: string | undefined;
+      const hintChannel = roleChannelId || generalChannelId;
+      if (hintChannel) {
+        if (task.reopenCount > 0) {
+          chatHint = `REOPENED TASK — check #${roleLabel} for context and coordinate with your team: moe.chat_read { channel: "${hintChannel}", workerId: "${params.workerId || 'your-id'}" }`;
+        } else {
+          chatHint = `Join #${roleLabel} to coordinate with your team: moe.chat_read { channel: "${hintChannel}", workerId: "${params.workerId || 'your-id'}" }`;
+        }
+      }
+
       return {
         hasNext: true,
         project: {
@@ -169,13 +192,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           implementationPlan: task.implementationPlan,
           reopenCount: task.reopenCount,
           reopenReason: task.reopenReason,
-          rejectionDetails: task.rejectionDetails || null
+          rejectionDetails: task.rejectionDetails || null,
+          roleChannelId,
+          generalChannelId
         },
         ...(task.reopenCount > 0
           ? {
               reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`
             }
           : {}),
+        ...(chatHint ? { chatHint } : {}),
         allRails: {
           global: state.project.globalRails.requiredPatterns,
           epic: epic?.epicRails || [],

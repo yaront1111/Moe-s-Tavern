@@ -32,6 +32,11 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');
       }
 
+      // Cross-post blocked message to task channel and general channel
+      const blockedMsg = `${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
+      try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
+      try { await state.postToGeneral(blockedMsg); } catch { /* never block tool */ }
+
       return {
         success: true,
         taskId: task.id,

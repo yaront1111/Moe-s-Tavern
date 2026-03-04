@@ -1,0 +1,126 @@
+{
+  "id": "task-13e4995f",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 2: Clickable File Paths in Chat Messages",
+  "description": "Make file paths in chat messages clickable, opening the file in the editor at the specified line. Builds on Feature 1 markdown rendering.",
+  "definitionOfDone": [
+    "VS Code: linkifyFilePaths() detects paths with 2+ segments and optional :lineNumber",
+    "VS Code: Click handler posts openFile message to extension host",
+    "VS Code: handleWebviewMessage handles openFile type, opens file at line",
+    "VS Code: CSS for .file-link with dotted underline",
+    "JetBrains: File path linkification in markdownToHtml()",
+    "JetBrains: HyperlinkListener handles file:// and http(s):// links",
+    "JetBrains: openFileFromPath() uses OpenFileDescriptor to open files",
+    "npm run compile succeeds in moe-vscode",
+    "gradlew buildPlugin succeeds in moe-jetbrains"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VS Code: Add `linkifyFilePaths(html)` function in webview `<script>` of `ChatViewProvider.ts`, after `renderMarkdown()`. Regex detects file paths with 2+ path segments (e.g. `src/foo/bar.ts`, `packages/moe-daemon/src/index.ts:42`), optional `:lineNumber` suffix. Skips content already inside `<a>` or `<code>` tags. Wraps matches in `<a class=\"file-link\" data-path=\"...\" data-line=\"...\">`. Call this in `renderContent()` after `renderMarkdown()` but before `highlightMentions()`. Error handling: regex is conservative to avoid false positives; try/catch wraps the function.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:21:33.516Z",
+      "completedAt": "2026-03-02T21:21:57.460Z",
+      "note": "Added linkifyFilePaths() that detects paths with 2+ segments and optional :lineNumber. Skips HTML tags via alternation pattern. Updated renderContent() pipeline to: renderMarkdown -> linkifyFilePaths -> highlightMentions.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code: Add delegated click handler on `messagesEl` for `.file-link` clicks. In the webview script's init section, add: `messagesEl.addEventListener('click', (e) => { const link = e.target.closest('.file-link'); if (link) { e.preventDefault(); vscode.postMessage({ type: 'openFile', path: link.dataset.path, line: parseInt(link.dataset.line || '0') }); } });`. Add CSS for `.file-link` with dotted underline and link color.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:22:02.920Z",
+      "completedAt": "2026-03-02T21:22:42.186Z",
+      "note": "Added delegated click handler on messagesEl for .file-link elements. Posts openFile message with path and line to extension host. Added CSS for .file-link with dotted underline and hover solid underline.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VS Code: Add `case 'openFile'` in `handleWebviewMessage()` (after line 122). New method `openFileAtPath(filePath, line)`: resolves path relative to workspace root using `path.resolve(workspaceRoot, filePath)`, calls `vscode.workspace.openTextDocument(uri)` then `vscode.window.showTextDocument(doc, { selection: new vscode.Range(line-1, 0, line-1, 0) })`. Add `import * as path from 'path'` at top. Error handling: catch file-not-found, show `vscode.window.showWarningMessage()`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:22:45.641Z",
+      "completedAt": "2026-03-02T21:23:28.134Z",
+      "note": "Added path import, openFile case in handleWebviewMessage, and openFileAtPath() method that resolves relative paths against workspace root, opens the document, and positions cursor at the specified line. Error handling with warning message on file-not-found.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "JetBrains: Add file path linkification in `markdownToHtml()` method — after markdown processing, regex-replace file paths (2+ segments, optional `:line`) with `<a href='file://path:line'>` links. Add `HyperlinkListener` to `contentArea` JEditorPane in `createMessageBubble()`: `file://` links call `openFileFromPath()`, `http(s)://` links call `BrowserUtil.browse()`. Error handling: catch exceptions in listener.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:23:31.546Z",
+      "completedAt": "2026-03-02T21:24:21.929Z",
+      "note": "Added file path regex linkification in markdownToHtml() converting paths to file:// links. Added HyperlinkListener to JEditorPane that handles file:// and http(s):// links. Added HyperlinkEvent import.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "JetBrains: Add `openFileFromPath(pathWithLine)` method to ChatPanel. Parses path and optional `:line` suffix. Uses `LocalFileSystem.getInstance().findFileByPath(absPath)` (resolve relative to project basePath). Creates `OpenFileDescriptor(project, vFile, line-1, 0)` and calls `FileEditorManager.getInstance(project).openTextEditor(descriptor, true)`. Add imports: `FileEditorManager`, `OpenFileDescriptor`, `LocalFileSystem` from `com.intellij.*`, `HyperlinkEvent` from `javax.swing.event`, `BrowserUtil` from `com.intellij.ide`. Error handling: null checks on vFile, show notification if file not found.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:24:25.409Z",
+      "completedAt": "2026-03-02T21:25:15.717Z",
+      "note": "Added openFileFromPath() that parses path:line, resolves relative to project basePath, opens via OpenFileDescriptor. Added imports for FileEditorManager, OpenFileDescriptor, LocalFileSystem, BrowserUtil. Shows warning dialog if file not found.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test and verify: Run `cd moe-vscode && npm run compile` and `cd moe-jetbrains && ./gradlew buildPlugin`. Manual test: paste a file path like `src/tools/index.ts:42` in chat, verify it renders as a clickable link that opens the file at line 42.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:25:21.900Z",
+      "completedAt": "2026-03-02T21:25:47.016Z",
+      "note": "VS Code compiles cleanly. JetBrains BUILD SUCCESSFUL. No additional files modified in this step."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 13,
+  "comments": [
+    {
+      "id": "comment-d21d56a3",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains file path clicking (HyperlinkListener + OpenFileDescriptor) FIRST, then VS Code.",
+      "timestamp": "2026-03-02T21:51:02.814Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:05:18.380Z",
+  "updatedAt": "2026-03-02T22:08:41.754Z",
+  "planSubmittedAt": "2026-03-02T21:14:21.234Z",
+  "planApprovedAt": "2026-03-02T21:14:21.237Z",
+  "workStartedAt": "2026-03-02T21:21:33.516Z",
+  "completedAt": "2026-03-02T21:25:55.126Z",
+  "reviewStartedAt": "2026-03-02T21:25:55.126Z",
+  "reviewCompletedAt": "2026-03-02T22:08:41.754Z"
+}

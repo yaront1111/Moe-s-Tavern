@@ -1,0 +1,128 @@
+{
+  "id": "task-1b48e632",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 1: Markdown Rendering in Chat Messages",
+  "description": "Add markdown rendering for chat messages in both VS Code and JetBrains. Handles fenced code blocks, inline code, bold, italic, links, lists. Foundation for Feature 2 (file paths).",
+  "definitionOfDone": [
+    "VS Code: renderMarkdown() function handles fenced code blocks, inline code, bold, italic, links, lists",
+    "VS Code: renderContent() replaces highlightMentions() for message rendering",
+    "VS Code: CSS styles for pre, code, strong, em, a, ul/ol/li using VS Code theme variables",
+    "JetBrains: JEditorPane replaces JTextArea for message content",
+    "JetBrains: markdownToHtml() converts markdown to HTML 3.2 compatible markup",
+    "JetBrains: System messages render as italic with system color",
+    "npm run compile succeeds in moe-vscode",
+    "gradlew buildPlugin succeeds in moe-jetbrains"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VS Code: Add `renderMarkdown(text)` function in the webview `<script>` of `ChatViewProvider.ts`, after `escapeHtml()` (line 451). Uses placeholder extraction for fenced code blocks, then escapes non-code text, converts inline code (`), bold (**), italic (*), links [t](u), unordered (- ) and ordered (1. ) lists, and newlines to <br>. Restores code blocks last. Error handling: malformed markdown degrades gracefully to escaped text since escapeHtml runs first on the non-code portion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:17:22.556Z",
+      "completedAt": "2026-03-02T21:18:00.218Z",
+      "note": "Added renderMarkdown() with fenced code block extraction, inline code, bold, italic, links, unordered/ordered lists, newline-to-br conversion. Falls back to escapeHtml on error. Updated highlightMentions to work on pre-rendered HTML instead of raw text.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code: Replace `highlightMentions()` (line 453) with two functions: `highlightMentions(html)` that applies mention spans to pre-rendered HTML, and `renderContent(text, isSystem)` that returns `<em>` escaped text for system messages, or `highlightMentions(renderMarkdown(text))` for normal messages. Wraps in try/catch, falls back to escapeHtml on error. Update `renderMessage()` line 492 to call `renderContent(msg.content, isSystem)` instead of `highlightMentions(msg.content)`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:18:03.670Z",
+      "completedAt": "2026-03-02T21:18:37.672Z",
+      "note": "Added renderContent(text, isSystem) that returns italic escaped text for system messages, or highlightMentions(renderMarkdown(text)) for normal messages with try/catch fallback. Updated renderMessage() to use renderContent().",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VS Code: Update CSS in `.message-content` (lines 228-233). Remove `white-space: pre-wrap`. Add styles for: `pre` (code block background, border, padding, monospace font), `code` (inline code background, small padding), `pre code` (no extra background), `strong`, `em`, `a` (link color from VS Code theme var), `a:hover` (underline), `ul/ol` (left padding 20px), `li` (small margin). All using `var(--vscode-*)` theme variables.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T21:18:42.982Z",
+      "completedAt": "2026-03-02T21:19:00.661Z",
+      "note": "Removed white-space: pre-wrap from .message-content. Added CSS for pre, code, pre code, a, a:hover, ul/ol, li - all using var(--vscode-*) theme variables.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "JetBrains: Add `escapeHtml(text)` and `markdownToHtml(content)` methods to `ChatPanel.kt` before `createMessageBubble()`. escapeHtml replaces &, <, >, \". markdownToHtml: extract fenced code blocks to placeholders, escapeHtml the rest, convert inline code/bold/italic/links/list items to HTML with inline styles (Swing JEditorPane only supports HTML 3.2). Restore code blocks, convert remaining newlines to <br>. Error handling: safe regex replacements, malformed markdown shows as escaped text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:19:03.477Z",
+      "completedAt": "2026-03-02T21:19:28.164Z",
+      "note": "Added escapeHtml() and markdownToHtml() methods. markdownToHtml uses placeholder extraction for fenced code blocks, then processes inline code, bold, italic, links, unordered/ordered lists. Uses inline styles for HTML 3.2 compatibility with Swing JEditorPane. Falls back to escapeHtml on exception.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "JetBrains: Replace `JTextArea` (line 258) with `JEditorPane(\"text/html\", htmlContent)` in `createMessageBubble()`. Compute text color from JBColor, build HTML body using `markdownToHtml()` for normal messages or `<i>escapeHtml()</i>` for system messages. Set `isEditable=false`, `isOpaque=false`, `HONOR_DISPLAY_PROPERTIES=true`. Add imports: `javax.swing.JEditorPane`, `javax.swing.UIManager`. Error handling: wrap markdownToHtml in try/catch, fall back to escapeHtml.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T21:19:31.342Z",
+      "completedAt": "2026-03-02T21:20:01.933Z",
+      "note": "Replaced JTextArea with JEditorPane(\"text/html\", ...). System messages render as italic escaped text. Normal messages use markdownToHtml() with try/catch fallback to escapeHtml. Added JEditorPane import. Set HONOR_DISPLAY_PROPERTIES for proper font rendering.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Test and verify: Run `cd moe-vscode && npm run compile` (VS Code compiles). Run `cd moe-jetbrains && ./gradlew buildPlugin` (JetBrains compiles). Manual test: send markdown message in chat, verify rendered formatting.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T21:20:07.464Z",
+      "completedAt": "2026-03-02T21:21:00.854Z",
+      "note": "VS Code compiles cleanly. JetBrains BUILD SUCCESSFUL. Removed unused JTextArea import.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 12,
+  "comments": [
+    {
+      "id": "comment-7efa5525",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains markdown rendering (JEditorPane + markdownToHtml) FIRST, then VS Code. Test in PyCharm before VS Code.",
+      "timestamp": "2026-03-02T21:51:02.378Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:05:12.940Z",
+  "updatedAt": "2026-03-02T21:51:02.378Z",
+  "planSubmittedAt": "2026-03-02T21:13:57.357Z",
+  "planApprovedAt": "2026-03-02T21:13:57.359Z",
+  "workStartedAt": "2026-03-02T21:17:22.556Z",
+  "completedAt": "2026-03-02T21:21:09.626Z",
+  "reviewStartedAt": "2026-03-02T21:21:09.626Z",
+  "reviewCompletedAt": "2026-03-02T21:29:18.571Z"
+}

@@ -1,0 +1,226 @@
+{
+  "id": "task-9cfb063f",
+  "epicId": "epic-941ca1ca",
+  "title": "Feature 4: Decisions System in Chat",
+  "description": "Full-stack new entity: Decision type in schema, StateManager methods, MCP tool (moe.chat_decision), WebSocket handlers, .moe/decisions/ storage, UI with approve/reject buttons in both VS Code and JetBrains, docs update.",
+  "definitionOfDone": [
+    "DecisionStatus and Decision types in schema.ts",
+    "StateManager: .moe/decisions/ storage, createDecision/approveDecision/rejectDecision/getDecisions methods",
+    "MCP tool moe.chat_decision registered and working",
+    "WebSocket: APPROVE_DECISION, REJECT_DECISION, GET_DECISIONS handlers",
+    "VS Code: Decisions rendered inline with approve/reject buttons, gold/yellow styling",
+    "JetBrains: Decisions inline with approve/reject JButtons",
+    "decisions/ directory created on init",
+    "FileWatcher watches decisions/*.json",
+    "docs/SCHEMA.md and docs/MCP_SERVER.md updated",
+    "Activity events for DECISION_PROPOSED/APPROVED/REJECTED",
+    "Both compile successfully"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Schema: Add to `packages/moe-daemon/src/types/schema.ts`: `DecisionStatus = 'proposed' | 'approved' | 'rejected'` type alias. `Decision` interface: `{ id, proposedBy, content, status: DecisionStatus, approvedBy: string|null, channel: string|null, messageId: string|null, createdAt, resolvedAt: string|null }`. Add optional `decisionId?: string` to `ChatMessage`. Add `DECISION_PROPOSED`, `DECISION_APPROVED`, `DECISION_REJECTED` to ACTIVITY_EVENT_TYPES. Error handling: types enforce non-null constraints on required fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "startedAt": "2026-03-02T22:00:52.889Z",
+      "completedAt": "2026-03-02T22:01:54.239Z",
+      "note": "Added DecisionStatus type alias, Decision interface, optional decisionId to ChatMessage, DECISION_PROPOSED/APPROVED/REJECTED activity events, decisions[] to MoeStateSnapshot. Compile error in StateManager expected - fixed in step 2.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "StateManager: Add `decisions` Map field, load from `.moe/decisions/` in `loadState()` using `loadEntities<Decision>()`. Include decisions array in `getSnapshot()`. Add `DECISION_PROPOSED` and `DECISION_RESOLVED` to StateChangeEvent union. Add methods: `createDecision(opts)` generates `dec-{uuid}` id, writes to `decisions/`, optionally posts system message to channel with decisionId linked, emits event + logs activity. `approveDecision(id, approvedBy)` and `rejectDecision(id)` update status/resolvedAt, emit + log. `getDecision(id)` and `getDecisions()`. Error handling: validate decision exists before approve/reject.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-02T22:01:58.444Z",
+      "completedAt": "2026-03-02T22:04:42.391Z",
+      "note": "Added Decision import, decisions Map field, loadEntities in load, decisions array in getSnapshot, DECISION_PROPOSED/DECISION_RESOLVED StateChangeEvent types. CRUD methods: getDecision, getDecisions, createDecision (with optional channel system message + messageId linking), approveDecision, rejectDecision. All validate state before mutation.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MCP tool: Create `packages/moe-daemon/src/tools/chatDecision.ts`. Tool `moe.chat_decision` with params: `content` (required string), `channel` (optional string), `workerId` (optional string). Validates content non-empty, calls `state.createDecision()`. Returns `{ success, decision }`. Follow existing tool patterns. Register in `index.ts`. Error handling: throw invalidInput for empty content.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "startedAt": "2026-03-02T22:04:46.864Z",
+      "completedAt": "2026-03-02T22:05:42.348Z",
+      "note": "Created chatDecision.ts MCP tool with content (required), channel (optional), workerId (optional) params. Validates content non-empty, calls state.createDecision(). Registered in index.ts.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "WebSocket + Init + FileWatcher: Add `APPROVE_DECISION`, `REJECT_DECISION`, `GET_DECISIONS` to PluginMessage union in WebSocketServer.ts. Handlers: GET_DECISIONS returns `state.getDecisions()`, APPROVE_DECISION calls `state.approveDecision(id, 'human')`, REJECT_DECISION calls `state.rejectDecision(id)`. Broadcast DECISION events. Add `'decisions'` to dirs in initProject.ts. Add `decisions/*.json` to FileWatcher patterns. Error handling: validate payload, return ERROR for missing fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ],
+      "startedAt": "2026-03-02T22:05:46.495Z",
+      "completedAt": "2026-03-02T22:07:36.678Z",
+      "note": "Added GET_DECISIONS/APPROVE_DECISION/REJECT_DECISION to PluginMessage union and handlers in WebSocketServer. Decision events auto-broadcast via emitter. Added 'decisions' dir to init, decisions/*.json to FileWatcher patterns.",
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/state/FileWatcher.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VS Code types + client: Add `Decision` interface + `DecisionStatus` to moe.ts. Add `DaemonInboundMessage` types: DECISIONS, DECISION_PROPOSED, DECISION_RESOLVED. Add `PluginOutboundMessage` types: GET_DECISIONS, APPROVE_DECISION, REJECT_DECISION. In MoeDaemonClient.ts: add `onDecisionsReceived`, `onDecisionCreated`, `onDecisionResolved` emitters. Add `requestDecisions()`, `approveDecision(id)`, `rejectDecision(id)` outbound methods. Handle inbound messages. Error handling: null-safe event handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "startedAt": "2026-03-02T22:07:40.397Z",
+      "completedAt": "2026-03-02T22:11:36.687Z",
+      "note": "Added Decision/DecisionStatus types to moe.ts, decision WebSocket message types (GET_DECISIONS, APPROVE_DECISION, REJECT_DECISION outbound; DECISIONS, DECISION_PROPOSED, DECISION_RESOLVED inbound), DAEMON_MESSAGE_TYPES entries. Added 3 decision emitters, message switch handlers with state cache updates, requestDecisions/approveDecision/rejectDecision outbound methods, and dispose cleanup in MoeDaemonClient.",
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "VS Code webview: Render decisions inline in chat messages. When a message has `decisionId`, render a decision card with gold/amber border, decision content, and approve/reject buttons (if status is 'proposed'). Approved decisions show green checkmark, rejected show red X. Buttons post `approveDecision`/`rejectDecision` messages to extension host. Add corresponding handlers in `handleWebviewMessage()`. CSS: `.decision-card` with gold border, `.decision-actions` button styles. Error handling: gracefully handle missing decision data.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ],
+      "startedAt": "2026-03-02T22:11:40.459Z",
+      "completedAt": "2026-03-02T22:14:25.697Z",
+      "note": "Added Decision import, 3 decision event listeners in constructor, approveDecision/rejectDecision webview message handlers, requestDecisions on ready. CSS: .decision-card with gold/amber border, approve/reject button styles, status colors. JavaScript: decisionMap state, inline decision card rendering in renderMessage (checks msg.decisionId), click handlers for approve/reject buttons, loadDecisions/decisionProposed/decisionResolved inbound handlers with in-place card updates.",
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ChatViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "JetBrains types + service: Add `Decision` data class to Models.kt with all fields. Add `parseDecision()` to MoeJson.kt. In MoeProjectService.kt: add handlers for DECISIONS/DECISION_PROPOSED/DECISION_RESOLVED inbound messages. Add `requestDecisions()`, `approveDecision(id)`, `rejectDecision(id)` outbound methods. Add listener callbacks. Error handling: safe JSON parsing with defaults.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "startedAt": "2026-03-02T22:14:29.136Z",
+      "completedAt": "2026-03-02T22:16:51.455Z",
+      "note": "Added Decision data class to Models.kt with all 9 fields. Added parseDecision() to MoeJson.kt. In MoeProjectService: added Decision import, DECISIONS/DECISION_PROPOSED/DECISION_RESOLVED handlers in message switch, requestDecisions()/approveDecision()/rejectDecision() outbound methods, 3 publish methods, 3 listener callbacks in MoeStateListener interface.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "JetBrains UI: In ChatPanel.kt, render decisions inline in message bubbles. When message has decisionId, add a panel with gold/amber border containing decision content + approve/reject JButtons (for 'proposed' status). Approved shows green label, rejected shows red. Buttons call `service.approveDecision(id)` / `service.rejectDecision(id)`. Store decisions in a local map, refresh on DECISION events. Error handling: null checks on decision lookup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ],
+      "startedAt": "2026-03-02T22:16:55.753Z",
+      "completedAt": "2026-03-02T22:18:54.113Z",
+      "note": "Added decisionId field to ChatMessage model and parser. Added Decision import, decisionsMap field, 3 decision listener callbacks (onDecisions, onDecisionProposed, onDecisionResolved) to ChatPanel stateListener. Added createDecisionCard() method rendering gold-bordered panel with decision content, approve/reject JButtons for proposed status, green/red status labels for resolved decisions. Requests decisions on init.",
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ChatPanel.kt"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "Docs: Add Decision entity to `docs/SCHEMA.md` — document fields, status values, storage location `.moe/decisions/{id}.json`. Add `moe.chat_decision` tool spec to `docs/MCP_SERVER.md` with params/returns table.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-03-02T22:18:57.515Z",
+      "completedAt": "2026-03-02T22:20:15.684Z",
+      "note": "Added Decision entity to SCHEMA.md with full type definition, example JSON, storage layout. Added decisionId optional field to ChatMessage. Added DECISION_PROPOSED/APPROVED/REJECTED to ActivityEventType. Added dec- prefix to ID generation. Added moe.chat_decision tool spec to MCP_SERVER.md with params, returns, and notes.",
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "Test and verify: Run `cd packages/moe-daemon && npm run build`, `cd moe-vscode && npm run compile`, `cd moe-jetbrains && ./gradlew buildPlugin`. Manual test: create decision via MCP, verify inline rendering with approve/reject buttons, approve a decision, verify status updates.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-02T22:20:19.919Z",
+      "completedAt": "2026-03-02T22:20:56.791Z",
+      "note": "All builds pass: daemon (tsc clean), VS Code (tsc --noEmit clean), JetBrains (buildPlugin SUCCESS). All 293 daemon tests pass (16 test files). No regressions."
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Inline decision rendering is broken — decisionId is never set on ChatMessage, so decision cards never appear in the message stream.\n\nROOT CAUSE: `sendMessage()` (StateManager.ts:654) accepts `{ channel, sender, content, replyTo? }` but does NOT accept a `decisionId` parameter. In `createDecision()` (line 943-947), the system message is posted without decisionId, so the resulting ChatMessage has no decision link. The UI code checks `msg.decisionId` to render inline cards — this is always undefined, so cards never render.\n\nFIX NEEDED (3 changes):\n1. **StateManager.ts:654** — Add `decisionId?: string` to sendMessage() opts type. In the message construction, include `decisionId: opts.decisionId` when present.\n2. **StateManager.ts:943** — Pass `decisionId: decision.id` in the sendMessage() call inside createDecision().\n3. **moe-vscode/src/types/moe.ts** — Add `decisionId: string | null;` to the ChatMessage interface (JetBrains Models.kt already has it at line 138, but VS Code is missing it).\n\nDoD items failing:\n- \"VS Code: Decisions rendered inline with approve/reject buttons, gold/yellow styling\" — cards never render\n- \"JetBrains: Decisions inline with approve/reject JButtons\" — cards never render",
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 17,
+  "comments": [
+    {
+      "id": "comment-6e07f273",
+      "author": "architect",
+      "content": "PRIORITY: User's primary IDE is PyCharm/JetBrains. Implement JetBrains decision UI (inline approve/reject JButtons) FIRST, then VS Code.",
+      "timestamp": "2026-03-02T21:51:06.704Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-03-02T21:14:51.283Z",
+  "updatedAt": "2026-03-03T14:53:34.695Z",
+  "planSubmittedAt": "2026-03-02T21:17:08.589Z",
+  "planApprovedAt": "2026-03-02T21:17:08.592Z",
+  "workStartedAt": "2026-03-02T22:00:52.889Z",
+  "completedAt": "2026-03-03T09:04:17.580Z",
+  "reviewStartedAt": "2026-03-03T09:04:17.580Z",
+  "reviewCompletedAt": "2026-03-03T14:53:34.695Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "VS Code: Decisions rendered inline with approve/reject buttons, gold/yellow styling",
+      "JetBrains: Decisions inline with approve/reject JButtons"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "sendMessage() doesn't accept decisionId param, so ChatMessage never links to Decision. Inline decision cards in both VS Code and JetBrains never render.",
+        "file": "packages/moe-daemon/src/state/StateManager.ts",
+        "line": 654
+      },
+      {
+        "type": "missing_feature",
+        "description": "createDecision() sendMessage call at line 943 doesn't pass decisionId",
+        "file": "packages/moe-daemon/src/state/StateManager.ts",
+        "line": 943
+      },
+      {
+        "type": "missing_feature",
+        "description": "ChatMessage interface missing decisionId field (JetBrains Models.kt has it at line 138)",
+        "file": "moe-vscode/src/types/moe.ts",
+        "line": 94
+      }
+    ]
+  }
+}
