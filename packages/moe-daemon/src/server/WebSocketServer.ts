@@ -11,6 +11,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
+import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 
 export type PluginMessage =
@@ -772,7 +773,12 @@ export class MoeWebSocketServer {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
       }
 
+      // Cancel any pending SPEED mode timeout for tasks this worker was working on
       const worker = this.state.getWorker(workerId);
+      if (worker?.currentTaskId) {
+        cancelSpeedModeTimeout(worker.currentTaskId);
+      }
+
       if (worker) {
         logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
         await this.state.deleteWorker(workerId);

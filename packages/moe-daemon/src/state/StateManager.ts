@@ -34,6 +34,7 @@ import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
+import { cleanupStaleChatWaiters } from '../tools/chatWait.js';
 import { MentionRouter } from '../util/mentionRouter.js';
 import {
   sanitizeString,
@@ -347,6 +348,15 @@ export class StateManager {
     } catch (error) {
       logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
     }
+
+    try {
+      const staleChatWaiters = cleanupStaleChatWaiters(this);
+      if (staleChatWaiters > 0) {
+        logger.info({ staleChatWaiters }, 'Cleaned stale chat waiters');
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to clean stale chat waiters');
+    }
   }
 
   private isStaleResolvedProposal(proposal: RailProposal, ageMs: number, nowMs: number): boolean {
@@ -451,6 +461,7 @@ export class StateManager {
         logger.error({ error }, 'Error in state emitter');
       }
     }
+    const toRemove: StateSubscriber[] = [];
     for (const sub of this.subscribers) {
       try {
         sub(event);
@@ -461,15 +472,14 @@ export class StateManager {
         logger.error({ error, consecutiveErrors }, 'Error in subscriber');
 
         if (consecutiveErrors >= 3) {
-          try {
-            this.subscribers.delete(sub);
-            this.subscriberErrorCounts.delete(sub);
-            logger.warn({ consecutiveErrors }, 'Removed subscriber after repeated errors');
-          } catch (removalError) {
-            logger.error({ error: removalError }, 'Failed to remove broken subscriber');
-          }
+          toRemove.push(sub);
         }
       }
+    }
+    for (const sub of toRemove) {
+      this.subscribers.delete(sub);
+      this.subscriberErrorCounts.delete(sub);
+      logger.warn('Removed subscriber after repeated errors');
     }
   }
 
@@ -1084,51 +1094,55 @@ export class StateManager {
   }
 
   async approveDecision(id: string, approvedBy: string): Promise<Decision> {
-    const decision = this.decisions.get(id);
-    if (!decision) throw new Error(`Decision not found: ${id}`);
-    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+    return this.mutex.runExclusive(async () => {
+      const decision = this.decisions.get(id);
+      if (!decision) throw new Error(`Decision not found: ${id}`);
+      if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
 
-    const updated: Decision = {
-      ...decision,
-      status: 'approved' as DecisionStatus,
-      approvedBy,
-      resolvedAt: new Date().toISOString()
-    };
+      const updated: Decision = {
+        ...decision,
+        status: 'approved' as DecisionStatus,
+        approvedBy,
+        resolvedAt: new Date().toISOString()
+      };
 
-    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
-    this.decisions.set(id, updated);
+      const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+      fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+      this.decisions.set(id, updated);
 
-    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
-    this.appendActivity('DECISION_APPROVED', {
-      decisionId: id,
-      approvedBy
+      this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+      this.appendActivity('DECISION_APPROVED', {
+        decisionId: id,
+        approvedBy
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   async rejectDecision(id: string): Promise<Decision> {
-    const decision = this.decisions.get(id);
-    if (!decision) throw new Error(`Decision not found: ${id}`);
-    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+    return this.mutex.runExclusive(async () => {
+      const decision = this.decisions.get(id);
+      if (!decision) throw new Error(`Decision not found: ${id}`);
+      if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
 
-    const updated: Decision = {
-      ...decision,
-      status: 'rejected' as DecisionStatus,
-      resolvedAt: new Date().toISOString()
-    };
+      const updated: Decision = {
+        ...decision,
+        status: 'rejected' as DecisionStatus,
+        resolvedAt: new Date().toISOString()
+      };
 
-    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
-    this.decisions.set(id, updated);
+      const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+      fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+      this.decisions.set(id, updated);
 
-    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
-    this.appendActivity('DECISION_REJECTED', {
-      decisionId: id
+      this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+      this.appendActivity('DECISION_REJECTED', {
+        decisionId: id
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   // ---- Team methods ----
