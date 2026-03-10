@@ -280,7 +280,8 @@ type TaskStatus =
   | 'AWAITING_APPROVAL' // Plan ready for human review
   | 'WORKING'           // Worker executing plan
   | 'REVIEW'            // Work done, PR ready
-  | 'DONE';             // Merged, complete
+  | 'DONE'              // Merged, complete
+  | 'ARCHIVED';         // Completed and archived
 
 interface ImplementationStep {
   stepId: string;                // "step-1"
@@ -289,6 +290,8 @@ interface ImplementationStep {
   affectedFiles: string[];       // ["src/components/LoginForm.tsx"]
   startedAt?: string;            // When step started
   completedAt?: string;          // When step finished
+  note?: string;                 // Worker notes on completion
+  modifiedFiles?: string[];      // Files actually modified during step
 }
 
 type StepStatus =
@@ -512,8 +515,8 @@ interface ChatChannel {
   name: string;                  // "general", "epic-auth", "task-login"
 
   // Type and linking
-  type: 'general' | 'epic' | 'task' | 'custom';
-  linkedEntityId: string | null; // epicId or taskId (if type is epic/task)
+  type: 'general' | 'role' | 'custom';
+  linkedEntityId: string | null; // linked entity (if applicable)
 
   // Timestamps
   createdAt: string;             // ISO 8601
@@ -525,9 +528,9 @@ interface ChatChannel {
 ```json
 {
   "id": "chan-a1b2c3d4",
-  "name": "epic-auth",
-  "type": "epic",
-  "linkedEntityId": "epic-e1f2g3h4",
+  "name": "architects",
+  "type": "role",
+  "linkedEntityId": null,
   "createdAt": "2025-02-01T10:00:00Z"
 }
 ```

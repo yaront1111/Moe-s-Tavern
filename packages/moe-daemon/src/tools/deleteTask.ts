@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound } from '../util/errors.js';
+import { cancelSpeedModeTimeout } from './submitPlan.js';
 
 export function deleteTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -25,6 +26,9 @@ export function deleteTaskTool(_state: StateManager): ToolDefinition {
       if (!task) {
         throw notFound('Task', params.taskId);
       }
+
+      // Cancel any pending SPEED mode auto-approval timeout for this task
+      cancelSpeedModeTimeout(params.taskId);
 
       const deleted = await state.deleteTask(params.taskId);
 

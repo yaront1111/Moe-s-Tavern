@@ -34,6 +34,7 @@ import { runMigrations } from '../migrations/index.js';
 import { LogRotator } from '../util/LogRotator.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
+import { cleanupStaleChatWaiters } from '../tools/chatWait.js';
 import { MentionRouter } from '../util/mentionRouter.js';
 import {
   sanitizeString,
@@ -170,6 +171,9 @@ export class StateManager {
   private emitter?: (event: StateChangeEvent) => void;
   private subscribers = new Set<StateSubscriber>();
   private subscriberErrorCounts = new Map<StateSubscriber, number>();
+  // Lock ordering: this.mutex → channelMutex (via getMessageMutex).
+  // Never acquire this.mutex while holding channelMutex.
+  // activityMutex is independent and may be acquired in any order.
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
   private readonly messageMutexes = new Map<string, AsyncMutex>();
@@ -344,6 +348,15 @@ export class StateManager {
     } catch (error) {
       logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
     }
+
+    try {
+      const staleChatWaiters = cleanupStaleChatWaiters(this);
+      if (staleChatWaiters > 0) {
+        logger.info({ staleChatWaiters }, 'Cleaned stale chat waiters');
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to clean stale chat waiters');
+    }
   }
 
   private isStaleResolvedProposal(proposal: RailProposal, ageMs: number, nowMs: number): boolean {
@@ -448,6 +461,7 @@ export class StateManager {
         logger.error({ error }, 'Error in state emitter');
       }
     }
+    const toRemove: StateSubscriber[] = [];
     for (const sub of this.subscribers) {
       try {
         sub(event);
@@ -458,15 +472,14 @@ export class StateManager {
         logger.error({ error, consecutiveErrors }, 'Error in subscriber');
 
         if (consecutiveErrors >= 3) {
-          try {
-            this.subscribers.delete(sub);
-            this.subscriberErrorCounts.delete(sub);
-            logger.warn({ consecutiveErrors }, 'Removed subscriber after repeated errors');
-          } catch (removalError) {
-            logger.error({ error: removalError }, 'Failed to remove broken subscriber');
-          }
+          toRemove.push(sub);
         }
       }
+    }
+    for (const sub of toRemove) {
+      this.subscribers.delete(sub);
+      this.subscriberErrorCounts.delete(sub);
+      logger.warn('Removed subscriber after repeated errors');
     }
   }
 
@@ -667,46 +680,48 @@ export class StateManager {
     type: ChatChannel['type'];
     linkedEntityId?: string;
   }): Promise<ChatChannel> {
-    if (!this.project) throw new Error('Project not loaded');
+    return this.mutex.runExclusive(async () => {
+      if (!this.project) throw new Error('Project not loaded');
 
-    const name = opts.name?.trim();
-    if (!name) throw new Error('Channel name is required');
+      const name = opts.name?.trim();
+      if (!name) throw new Error('Channel name is required');
 
-    const validTypes = ['general', 'role', 'custom'] as const;
-    if (!validTypes.includes(opts.type)) {
-      throw new Error(`Invalid channel type: ${opts.type}`);
-    }
-
-    // Check for duplicate channels
-    for (const existing of this.channels.values()) {
-      if (existing.name === name && existing.type === opts.type) {
-        throw new Error('Channel with this name and type already exists');
+      const validTypes = ['general', 'role', 'custom'] as const;
+      if (!validTypes.includes(opts.type)) {
+        throw new Error(`Invalid channel type: ${opts.type}`);
       }
-    }
 
-    const channel: ChatChannel = {
-      id: generateId('chan'),
-      name,
-      type: opts.type,
-      linkedEntityId: opts.linkedEntityId ?? null,
-      createdAt: new Date().toISOString()
-    };
+      // Check for duplicate channels (inside mutex to prevent TOCTOU race)
+      for (const existing of this.channels.values()) {
+        if (existing.name === name && existing.type === opts.type) {
+          throw new Error('Channel with this name and type already exists');
+        }
+      }
 
-    await this.writeEntity('channels', channel.id, channel);
+      const channel: ChatChannel = {
+        id: generateId('chan'),
+        name,
+        type: opts.type,
+        linkedEntityId: opts.linkedEntityId ?? null,
+        createdAt: new Date().toISOString()
+      };
 
-    // Create empty messages JSONL file
-    const messagesDir = path.join(this.moePath, 'messages');
-    if (!fs.existsSync(messagesDir)) {
-      fs.mkdirSync(messagesDir, { recursive: true });
-    }
-    const messagesFile = path.join(messagesDir, `${channel.id}.jsonl`);
-    fs.writeFileSync(messagesFile, '');
+      await this.writeEntity('channels', channel.id, channel);
 
-    this.channels.set(channel.id, channel);
-    this.emit({ type: 'CHANNEL_CREATED', payload: channel });
-    this.appendActivity('CHANNEL_CREATED', { channelId: channel.id, name: channel.name, channelType: channel.type });
+      // Create empty messages JSONL file
+      const messagesDir = path.join(this.moePath, 'messages');
+      if (!fs.existsSync(messagesDir)) {
+        fs.mkdirSync(messagesDir, { recursive: true });
+      }
+      const messagesFile = path.join(messagesDir, `${channel.id}.jsonl`);
+      fs.writeFileSync(messagesFile, '');
 
-    return channel;
+      this.channels.set(channel.id, channel);
+      this.emit({ type: 'CHANNEL_CREATED', payload: channel });
+      this.appendActivity('CHANNEL_CREATED', { channelId: channel.id, name: channel.name, channelType: channel.type });
+
+      return channel;
+    });
   }
 
   async sendMessage(opts: {
@@ -884,38 +899,40 @@ export class StateManager {
   }
 
   async deleteChannel(channelId: string): Promise<void> {
-    const channel = this.channels.get(channelId);
-    if (!channel) throw new Error(`Channel not found: ${channelId}`);
+    await this.mutex.runExclusive(async () => {
+      const channel = this.channels.get(channelId);
+      if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
-    // Remove channel JSON file
-    const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
-    try {
-      fs.unlinkSync(channelFile);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') throw error;
-    }
+      // Remove channel JSON file
+      const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
+      try {
+        fs.unlinkSync(channelFile);
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') throw error;
+      }
 
-    // Remove messages JSONL file
-    const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
-    try {
-      fs.unlinkSync(messagesFile);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') throw error;
-    }
+      // Remove messages JSONL file
+      const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
+      try {
+        fs.unlinkSync(messagesFile);
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') throw error;
+      }
 
-    // Remove pins file for this channel
-    const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
-    try {
-      if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
-    } catch {
-      // Silently ignore if pins file doesn't exist
-    }
+      // Remove pins file for this channel
+      const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
+      try {
+        if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
+      } catch {
+        // Silently ignore if pins file doesn't exist
+      }
 
-    this.channels.delete(channelId);
-    this.emit({ type: 'CHANNEL_DELETED', payload: channel });
-    this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
+      this.channels.delete(channelId);
+      this.emit({ type: 'CHANNEL_DELETED', payload: channel });
+      this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
+    });
   }
 
   // ---- Pin methods ----
@@ -1028,97 +1045,104 @@ export class StateManager {
     proposedBy: string;
     channel?: string;
   }): Promise<Decision> {
-    const content = sanitizeString(opts.content, 'content', 10240);
-    if (!content) throw new Error('Decision content is required');
+    // Lock ordering: this.mutex → channelMutex (via sendMessage). Safe.
+    return this.mutex.runExclusive(async () => {
+      const content = sanitizeString(opts.content, 'content', 10240);
+      if (!content) throw new Error('Decision content is required');
 
-    const decision: Decision = {
-      id: generateId('dec'),
-      proposedBy: opts.proposedBy,
-      content,
-      status: 'proposed',
-      approvedBy: null,
-      channel: opts.channel ?? null,
-      messageId: null,
-      createdAt: new Date().toISOString(),
-      resolvedAt: null
-    };
+      const decision: Decision = {
+        id: generateId('dec'),
+        proposedBy: opts.proposedBy,
+        content,
+        status: 'proposed',
+        approvedBy: null,
+        channel: opts.channel ?? null,
+        messageId: null,
+        createdAt: new Date().toISOString(),
+        resolvedAt: null
+      };
 
-    const decisionsDir = path.join(this.moePath, 'decisions');
-    fs.mkdirSync(decisionsDir, { recursive: true });
-    const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
-    this.decisions.set(decision.id, decision);
-
-    // Post a system message to the channel if provided
-    if (opts.channel && this.channels.has(opts.channel)) {
-      const { message: msg } = await this.sendMessage({
-        channel: opts.channel,
-        sender: opts.proposedBy,
-        content: `[Decision Proposed] ${content}`,
-        decisionId: decision.id
-      });
-      decision.messageId = msg.id;
-      // Re-write with messageId linked
+      const decisionsDir = path.join(this.moePath, 'decisions');
+      fs.mkdirSync(decisionsDir, { recursive: true });
+      const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
       fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
       this.decisions.set(decision.id, decision);
-    }
 
-    this.emit({ type: 'DECISION_PROPOSED', payload: decision });
-    this.appendActivity('DECISION_PROPOSED', {
-      decisionId: decision.id,
-      proposedBy: decision.proposedBy,
-      content: decision.content
+      // Post a system message to the channel if provided
+      if (opts.channel && this.channels.has(opts.channel)) {
+        const { message: msg } = await this.sendMessage({
+          channel: opts.channel,
+          sender: opts.proposedBy,
+          content: `[Decision Proposed] ${content}`,
+          decisionId: decision.id
+        });
+        decision.messageId = msg.id;
+        // Re-write with messageId linked
+        fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+        this.decisions.set(decision.id, decision);
+      }
+
+      this.emit({ type: 'DECISION_PROPOSED', payload: decision });
+      this.appendActivity('DECISION_PROPOSED', {
+        decisionId: decision.id,
+        proposedBy: decision.proposedBy,
+        content: decision.content
+      });
+
+      return decision;
     });
-
-    return decision;
   }
 
   async approveDecision(id: string, approvedBy: string): Promise<Decision> {
-    const decision = this.decisions.get(id);
-    if (!decision) throw new Error(`Decision not found: ${id}`);
-    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+    return this.mutex.runExclusive(async () => {
+      const decision = this.decisions.get(id);
+      if (!decision) throw new Error(`Decision not found: ${id}`);
+      if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
 
-    const updated: Decision = {
-      ...decision,
-      status: 'approved' as DecisionStatus,
-      approvedBy,
-      resolvedAt: new Date().toISOString()
-    };
+      const updated: Decision = {
+        ...decision,
+        status: 'approved' as DecisionStatus,
+        approvedBy,
+        resolvedAt: new Date().toISOString()
+      };
 
-    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
-    this.decisions.set(id, updated);
+      const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+      fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+      this.decisions.set(id, updated);
 
-    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
-    this.appendActivity('DECISION_APPROVED', {
-      decisionId: id,
-      approvedBy
+      this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+      this.appendActivity('DECISION_APPROVED', {
+        decisionId: id,
+        approvedBy
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   async rejectDecision(id: string): Promise<Decision> {
-    const decision = this.decisions.get(id);
-    if (!decision) throw new Error(`Decision not found: ${id}`);
-    if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
+    return this.mutex.runExclusive(async () => {
+      const decision = this.decisions.get(id);
+      if (!decision) throw new Error(`Decision not found: ${id}`);
+      if (decision.status !== 'proposed') throw new Error(`Decision is already ${decision.status}`);
 
-    const updated: Decision = {
-      ...decision,
-      status: 'rejected' as DecisionStatus,
-      resolvedAt: new Date().toISOString()
-    };
+      const updated: Decision = {
+        ...decision,
+        status: 'rejected' as DecisionStatus,
+        resolvedAt: new Date().toISOString()
+      };
 
-    const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
-    this.decisions.set(id, updated);
+      const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
+      fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+      this.decisions.set(id, updated);
 
-    this.emit({ type: 'DECISION_RESOLVED', payload: updated });
-    this.appendActivity('DECISION_REJECTED', {
-      decisionId: id
+      this.emit({ type: 'DECISION_RESOLVED', payload: updated });
+      this.appendActivity('DECISION_REJECTED', {
+        decisionId: id
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   // ---- Team methods ----

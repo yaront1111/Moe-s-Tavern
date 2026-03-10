@@ -1340,4 +1340,133 @@ describe('StateManager', () => {
       expect(child!.parentTaskId).toBeNull();
     });
   });
+
+  describe('createChannel/deleteChannel mutex concurrency', () => {
+    it('concurrent createChannel with same name - only one succeeds', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      const results = await Promise.allSettled([
+        stateManager.createChannel({ name: 'dup-test', type: 'custom' }),
+        stateManager.createChannel({ name: 'dup-test', type: 'custom' })
+      ]);
+
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      // Only one channel should exist
+      const channels = stateManager.getChannels().filter(c => c.name === 'dup-test');
+      expect(channels.length).toBe(1);
+    });
+
+    it('concurrent createChannel + deleteChannel do not corrupt state', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      // Create initial channel
+      const channel = await stateManager.createChannel({ name: 'ephemeral', type: 'custom' });
+
+      // Concurrently delete it and create another
+      const results = await Promise.allSettled([
+        stateManager.deleteChannel(channel.id),
+        stateManager.createChannel({ name: 'concurrent-new', type: 'custom' })
+      ]);
+
+      // Both should succeed since they're serialized by the mutex
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      expect(fulfilled.length).toBe(2);
+
+      // Deleted channel should be gone
+      expect(stateManager.getChannel(channel.id)).toBeNull();
+
+      // New channel should exist
+      const newCh = stateManager.getChannels().find(c => c.name === 'concurrent-new');
+      expect(newCh).toBeDefined();
+    });
+  });
+
+  describe('plugin WebSocket handler mutex concurrency', () => {
+    it('concurrent updateTask and claimNextTask via runExclusive do not corrupt state', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'BACKLOG' });
+      await stateManager.load();
+
+      await stateManager.createWorker({
+        id: 'claimer', type: 'CLAUDE', projectId: 'proj-test123',
+        epicId: 'epic-test123', currentTaskId: null, status: 'IDLE'
+      });
+
+      // Simulate concurrent plugin UPDATE_TASK and MCP claimNextTask
+      const results = await Promise.allSettled([
+        stateManager.runExclusive(async () =>
+          stateManager.updateTask('task-test123', { status: 'PLANNING' })
+        ),
+        stateManager.runExclusive(async () => {
+          // claimNextTask reads task list then assigns — simulate that pattern
+          const tasks = Array.from(stateManager.tasks.values()).filter(t => t.status === 'BACKLOG');
+          if (tasks.length === 0) return null;
+          return stateManager.updateTask(tasks[0].id, {
+            status: 'WORKING',
+            assignedWorkerId: 'claimer'
+          });
+        })
+      ]);
+
+      // One should succeed, possibly both if serialized correctly
+      const task = stateManager.getTask('task-test123')!;
+      // Task must be in a valid state — either PLANNING or WORKING, not torn
+      expect(['PLANNING', 'WORKING']).toContain(task.status);
+      // If WORKING, it should have the worker assigned
+      if (task.status === 'WORKING') {
+        expect(task.assignedWorkerId).toBe('claimer');
+      }
+    });
+
+    it('concurrent ARCHIVE_DONE_TASKS and CREATE_TASK do not interleave', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      // Create several DONE tasks
+      createTestTask({ id: 'task-done-1', status: 'DONE' });
+      createTestTask({ id: 'task-done-2', status: 'DONE' });
+      createTestTask({ id: 'task-done-3', status: 'DONE' });
+      await stateManager.load();
+
+      // Simulate concurrent archive loop and task creation inside runExclusive
+      const results = await Promise.allSettled([
+        stateManager.runExclusive(async () => {
+          // Archive loop (same pattern as ARCHIVE_DONE_TASKS handler)
+          const snapshot = stateManager.getSnapshot();
+          const doneTasks = snapshot.tasks.filter(t => t.status === 'DONE');
+          let archived = 0;
+          for (const t of doneTasks) {
+            await stateManager.updateTask(t.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+            archived++;
+          }
+          return archived;
+        }),
+        stateManager.runExclusive(async () =>
+          stateManager.createTask({ epicId: 'epic-test123', title: 'New task during archive' })
+        )
+      ]);
+
+      // Both should succeed since they're serialized by the mutex
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      expect(fulfilled.length).toBe(2);
+
+      // All DONE tasks should be archived
+      const archivedTasks = Array.from(stateManager.tasks.values()).filter(t => t.status === 'ARCHIVED');
+      expect(archivedTasks.length).toBe(3);
+
+      // New task should exist and not be archived
+      const allTasks = Array.from(stateManager.tasks.values());
+      const newTask = allTasks.find(t => t.title === 'New task during archive');
+      expect(newTask).toBeDefined();
+      expect(newTask!.status).not.toBe('ARCHIVED');
+    });
+  });
 });

@@ -11,6 +11,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
+import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 
 export type PluginMessage =
@@ -165,7 +166,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const task = await this.state.createTask(message.payload as Record<string, unknown>);
+          const task = await this.state.runExclusive(async () =>
+            this.state.createTask(message.payload as Record<string, unknown>)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_CREATED', payload: task }));
           return;
         }
@@ -179,49 +182,45 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          // Validate status transitions when status is being changed
-          if (updates && typeof updates === 'object' && 'status' in updates) {
-            const existing = this.state.getTask(taskId);
-            if (existing) {
-              const VALID_TRANSITIONS: Record<string, string[]> = {
-                BACKLOG: ['PLANNING', 'WORKING'],
-                PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
-                AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
-                DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
-                ARCHIVED: ['BACKLOG', 'WORKING']
-              };
-              const newStatus = (updates as { status: string }).status;
-              if (newStatus !== existing.status) {
-                const allowed = VALID_TRANSITIONS[existing.status];
-                if (!allowed || !allowed.includes(newStatus)) {
-                  this.safeSend(ws, JSON.stringify({
-                    type: 'ERROR',
-                    message: `Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`,
-                    operation: 'UPDATE_TASK'
-                  }));
-                  return;
-                }
-                // Enforce WIP column limits
-                const columnLimits = this.state.project?.settings?.columnLimits;
-                if (columnLimits && typeof columnLimits[newStatus] === 'number') {
-                  const limit = columnLimits[newStatus];
-                  const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
-                  if (currentCount >= limit) {
-                    this.safeSend(ws, JSON.stringify({
-                      type: 'ERROR',
-                      message: `Column ${newStatus} is at its WIP limit of ${limit}`,
-                      operation: 'UPDATE_TASK'
-                    }));
-                    return;
+          // Validation + update inside mutex to prevent TOCTOU races
+          const updateResult = await this.state.runExclusive(async () => {
+            if (updates && typeof updates === 'object' && 'status' in updates) {
+              const existing = this.state.getTask(taskId);
+              if (existing) {
+                const VALID_TRANSITIONS: Record<string, string[]> = {
+                  BACKLOG: ['PLANNING', 'WORKING'],
+                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+                  AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
+                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
+                  DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
+                  ARCHIVED: ['BACKLOG', 'WORKING']
+                };
+                const newStatus = (updates as { status: string }).status;
+                if (newStatus !== existing.status) {
+                  const allowed = VALID_TRANSITIONS[existing.status];
+                  if (!allowed || !allowed.includes(newStatus)) {
+                    return { error: `Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}` };
+                  }
+                  const columnLimits = this.state.project?.settings?.columnLimits;
+                  if (columnLimits && typeof columnLimits[newStatus] === 'number') {
+                    const limit = columnLimits[newStatus];
+                    const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
+                    if (currentCount >= limit) {
+                      return { error: `Column ${newStatus} is at its WIP limit of ${limit}` };
+                    }
                   }
                 }
               }
             }
+            const task = await this.state.updateTask(taskId, updates as Record<string, unknown>);
+            return { task };
+          });
+          if ('error' in updateResult) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: updateResult.error, operation: 'UPDATE_TASK' }));
+            return;
           }
-          const task = await this.state.updateTask(taskId, updates as Record<string, unknown>);
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: updateResult.task }));
           return;
         }
         case 'DELETE_TASK': {
@@ -234,7 +233,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.deleteTask(taskId);
+          const task = await this.state.runExclusive(async () =>
+            this.state.deleteTask(taskId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_DELETED', payload: task }));
           return;
         }
@@ -243,7 +244,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const epic = await this.state.createEpic(message.payload as Record<string, unknown>);
+          const epic = await this.state.runExclusive(async () =>
+            this.state.createEpic(message.payload as Record<string, unknown>)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_CREATED', payload: epic }));
           return;
         }
@@ -257,7 +260,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.updateEpic(epicId, updates as Record<string, unknown>);
+          const epic = await this.state.runExclusive(async () =>
+            this.state.updateEpic(epicId, updates as Record<string, unknown>)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
@@ -271,7 +276,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.deleteEpic(epicId);
+          const epic = await this.state.runExclusive(async () =>
+            this.state.deleteEpic(epicId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_DELETED', payload: epic }));
           return;
         }
@@ -285,7 +292,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.reorderTask(taskId, beforeId, afterId);
+          const task = await this.state.runExclusive(async () =>
+            this.state.reorderTask(taskId, beforeId, afterId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -294,7 +303,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.approveTask(message.payload.taskId);
+          const task = await this.state.runExclusive(async () =>
+            this.state.approveTask(message.payload.taskId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -308,7 +319,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.rejectTask(message.payload.taskId, reason);
+          const task = await this.state.runExclusive(async () =>
+            this.state.rejectTask(message.payload.taskId, reason)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -322,7 +335,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.reopenTask(message.payload.taskId, reopenReason);
+          const task = await this.state.runExclusive(async () =>
+            this.state.reopenTask(message.payload.taskId, reopenReason)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -331,7 +346,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.approveProposal(message.payload.proposalId);
+          const proposal = await this.state.runExclusive(async () =>
+            this.state.approveProposal(message.payload.proposalId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -340,7 +357,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.rejectProposal(message.payload.proposalId);
+          const proposal = await this.state.runExclusive(async () =>
+            this.state.rejectProposal(message.payload.proposalId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -349,7 +368,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const project = await this.state.updateSettings(message.payload as Record<string, unknown>);
+          const project = await this.state.runExclusive(async () =>
+            this.state.updateSettings(message.payload as Record<string, unknown>)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'SETTINGS_UPDATED', payload: project }));
           return;
         }
@@ -363,7 +384,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
             return;
           }
-          const team = await this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize });
+          const team = await this.state.runExclusive(async () =>
+            this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize })
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
           return;
         }
@@ -377,7 +400,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.updateTeam(teamId, updates as Record<string, unknown>);
+          const team = await this.state.runExclusive(async () =>
+            this.state.updateTeam(teamId, updates as Record<string, unknown>)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -391,7 +416,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.deleteTeam(teamId);
+          const team = await this.state.runExclusive(async () =>
+            this.state.deleteTeam(teamId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_DELETED', payload: team }));
           return;
         }
@@ -405,7 +432,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.addTeamMember(teamId, workerId);
+          const team = await this.state.runExclusive(async () =>
+            this.state.addTeamMember(teamId, workerId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -419,29 +448,30 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.removeTeamMember(teamId, workerId);
+          const team = await this.state.runExclusive(async () =>
+            this.state.removeTeamMember(teamId, workerId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
         case 'ARCHIVE_DONE_TASKS': {
           const epicFilter = (message as { payload?: { epicId?: string } }).payload?.epicId;
-          const snapshot = this.state.getSnapshot();
-          const doneTasks = snapshot.tasks.filter(t =>
-            t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
-          );
-          if (doneTasks.length === 0) {
-            this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived: 0 } }));
-            return;
-          }
-          let archived = 0;
-          for (const task of doneTasks) {
-            try {
-              await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
-              archived++;
-            } catch (err) {
-              logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+          const archived = await this.state.runExclusive(async () => {
+            const snapshot = this.state.getSnapshot();
+            const doneTasks = snapshot.tasks.filter(t =>
+              t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
+            );
+            let count = 0;
+            for (const task of doneTasks) {
+              try {
+                await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+                count++;
+              } catch (err) {
+                logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+              }
             }
-          }
+            return count;
+          });
           this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived } }));
           return;
         }
@@ -472,28 +502,34 @@ export class MoeWebSocketServer {
             }));
             return;
           }
-          const existing = this.state.getTask(taskId);
-          if (!existing) {
-            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Task not found: ${taskId}` }));
+          const commentResult = await this.state.runExclusive(async () => {
+            const existing = this.state.getTask(taskId);
+            if (!existing) {
+              return { error: `Task not found: ${taskId}` };
+            }
+            const comment = {
+              id: generateId('comment'),
+              author: author || 'human',
+              content: trimmedContent,
+              timestamp: new Date().toISOString()
+            };
+            const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
+            const comments = [...existingComments, comment];
+            const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
+              ? comments.slice(-MAX_COMMENTS_PER_TASK)
+              : comments;
+            const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
+            if (comment.author === 'human') {
+              updates.hasPendingQuestion = true;
+            }
+            const task = await this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+            return { task };
+          });
+          if ('error' in commentResult) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: commentResult.error }));
             return;
           }
-          const comment = {
-            id: generateId('comment'),
-            author: author || 'human',
-            content: trimmedContent,
-            timestamp: new Date().toISOString()
-          };
-          const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
-          const comments = [...existingComments, comment];
-          const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
-            ? comments.slice(-MAX_COMMENTS_PER_TASK)
-            : comments;
-          const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
-          if (comment.author === 'human') {
-            updates.hasPendingQuestion = true;
-          }
-          const task = await this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: commentResult.task }));
           return;
         }
         case 'GET_CHANNELS': {
@@ -537,7 +573,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty content' }));
             return;
           }
-          const { message: msg } = await this.state.sendMessage({ channel, sender: 'human', content });
+          const { message: msg } = await this.state.runExclusive(async () =>
+            this.state.sendMessage({ channel, sender: 'human', content })
+          );
           this.safeSend(ws, JSON.stringify({ type: 'MESSAGE_SENT', payload: { message: msg } }));
           return;
         }
@@ -565,6 +603,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
             return;
           }
+          // pinMessage already acquires this.mutex internally — no outer lock needed
           const pin = await this.state.pinMessage(pinCh, pinMsgId, 'human');
           this.safeSend(ws, JSON.stringify({ type: 'PIN_CREATED', payload: { channel: pinCh, pin } }));
           return;
@@ -579,6 +618,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
             return;
           }
+          // unpinMessage already acquires this.mutex internally — no outer lock needed
           await this.state.unpinMessage(unpinCh, unpinMsgId);
           this.safeSend(ws, JSON.stringify({ type: 'PIN_REMOVED', payload: { channel: unpinCh, messageId: unpinMsgId } }));
           return;
@@ -593,6 +633,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing channel or messageId' }));
             return;
           }
+          // togglePinDone already acquires this.mutex internally — no outer lock needed
           const toggledPin = await this.state.togglePinDone(toggleCh, toggleMsgId);
           this.safeSend(ws, JSON.stringify({ type: 'PIN_TOGGLED', payload: { channel: toggleCh, pin: toggledPin } }));
           return;
@@ -612,7 +653,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const approved = await this.state.approveDecision(approveDecId, 'human');
+          const approved = await this.state.runExclusive(async () =>
+            this.state.approveDecision(approveDecId, 'human')
+          );
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: approved }));
           return;
         }
@@ -626,7 +669,9 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const rejected = await this.state.rejectDecision(rejectDecId);
+          const rejected = await this.state.runExclusive(async () =>
+            this.state.rejectDecision(rejectDecId)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: rejected }));
           return;
         }
@@ -728,7 +773,12 @@ export class MoeWebSocketServer {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
       }
 
+      // Cancel any pending SPEED mode timeout for tasks this worker was working on
       const worker = this.state.getWorker(workerId);
+      if (worker?.currentTaskId) {
+        cancelSpeedModeTimeout(worker.currentTaskId);
+      }
+
       if (worker) {
         logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
         await this.state.deleteWorker(workerId);

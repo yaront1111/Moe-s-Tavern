@@ -77,9 +77,10 @@ export class MentionRouter {
             if (id.toLowerCase().includes(searchTerm)) result.add(id);
           }
         }
-      } else if (knownWorkerIds.includes(mention)) {
-        // Direct worker ID mention
-        result.add(mention);
+      } else {
+        // Direct worker ID mention (case-insensitive match)
+        const matched = knownWorkerIds.find(id => id.toLowerCase() === lower);
+        if (matched) result.add(matched);
       }
     }
 

@@ -68,6 +68,8 @@ export interface ProjectSettings {
   agentCommand: string;
   enableAgentTeams: boolean;
   columnLimits?: Record<string, number>;
+  chatEnabled?: boolean;
+  chatMaxAgentHops?: number;
 }
 
 export interface Project {
@@ -81,7 +83,7 @@ export interface Project {
   updatedAt: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export interface ChatChannel {
   id: string;
