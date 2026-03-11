@@ -44,6 +44,7 @@ import { chatPinTool } from './chatPin.js';
 import { chatUnpinTool } from './chatUnpin.js';
 import { chatDecisionTool } from './chatDecision.js';
 import { chatCreateChannelTool } from './chatCreateChannel.js';
+import { waitForApprovalTool } from './waitForApproval.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -96,6 +97,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatPinTool(state),
     chatUnpinTool(state),
     chatDecisionTool(state),
-    chatCreateChannelTool(state)
+    chatCreateChannelTool(state),
+    waitForApprovalTool(state)
   ];
 }
