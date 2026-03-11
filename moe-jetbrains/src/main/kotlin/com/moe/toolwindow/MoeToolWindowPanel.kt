@@ -162,6 +162,16 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         }
                     }
                     popup.add(teamCheckbox)
+                    val agentTeamCheckbox = object : JCheckBoxMenuItem(
+                        MoeBundle.message("moe.panel.agentsMenu.agentTeams"),
+                        TerminalAgentLauncher.isAgentTeamModeEnabled(project)
+                    ) {
+                        override fun doClick(pressTime: Int) {
+                            isSelected = !isSelected
+                            TerminalAgentLauncher.setAgentTeamModeEnabled(project, isSelected)
+                        }
+                    }
+                    popup.add(agentTeamCheckbox)
                     popup.add(JSeparator())
 
                     fun launchWithProvider(role: String?, provider: TerminalAgentLauncher.AgentProvider) {
@@ -185,6 +195,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         }
                         if (role != null) {
                             TerminalAgentLauncher.startAgent(project, role, command)
+                        } else if (TerminalAgentLauncher.isAgentTeamModeEnabled(project) && provider == TerminalAgentLauncher.AgentProvider.CLAUDE) {
+                            TerminalAgentLauncher.launchAgentTeam(project, command)
                         } else {
                             TerminalAgentLauncher.startAgents(project, command)
                         }
@@ -258,12 +270,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val proposalPanel = ProposalPanel(project)
         val activityLogPanel = ActivityLogPanel(project)
         val chatPanel = ChatPanel(project)
+        val boardSettingsPanel = BoardSettingsPanel(project)
 
         val tabbedPane = JTabbedPane().apply {
             addTab(MoeBundle.message("moe.tab.board"), scroll)
             addTab(MoeBundle.message("moe.tab.proposals"), proposalPanel)
             addTab(MoeBundle.message("moe.tab.activityLog"), activityLogPanel)
             addTab(MoeBundle.message("moe.tab.chat"), chatPanel)
+            addTab(MoeBundle.message("moe.tab.boardSettings"), boardSettingsPanel)
         }
         add(tabbedPane, BorderLayout.CENTER)
 
@@ -271,6 +285,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         Disposer.register(this, proposalPanel)
         Disposer.register(this, activityLogPanel)
         Disposer.register(this, chatPanel)
+        Disposer.register(this, boardSettingsPanel)
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
@@ -445,13 +460,18 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             }
 
             val workflowOrder = listOf("BACKLOG", "PLANNING", "AWAITING_APPROVAL", "WORKING", "REVIEW", "DONE")
+            // Display-aware column order: AWAITING_APPROVAL is shown in PLANNING column,
+            // so navigation should treat it as if it's in the PLANNING position.
+            val displayColumnOrder = listOf("BACKLOG", "PLANNING", "WORKING", "REVIEW", "DONE")
             fun getNextStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx >= 0 && idx < workflowOrder.size - 1) workflowOrder[idx + 1] else null
+                val displayPos = if (current == "AWAITING_APPROVAL") "PLANNING" else current
+                val idx = displayColumnOrder.indexOf(displayPos)
+                return if (idx >= 0 && idx < displayColumnOrder.size - 1) displayColumnOrder[idx + 1] else null
             }
             fun getPreviousStatus(current: String): String? {
-                val idx = workflowOrder.indexOf(current)
-                return if (idx > 0) workflowOrder[idx - 1] else null
+                val displayPos = if (current == "AWAITING_APPROVAL") "PLANNING" else current
+                val idx = displayColumnOrder.indexOf(displayPos)
+                return if (idx > 0) displayColumnOrder[idx - 1] else null
             }
 
             fun handleNext(task: Task) {

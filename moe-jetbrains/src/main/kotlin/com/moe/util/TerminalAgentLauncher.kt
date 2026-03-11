@@ -88,6 +88,7 @@ object TerminalAgentLauncher {
     private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
     private const val CUSTOM_COMMAND_KEY = "moe.customAgentCommand"
     private const val TEAM_MODE_KEY = "moe.teamModeEnabled"
+    private const val AGENT_TEAM_MODE_KEY = "moe.agentTeamMode"
 
     fun getLastUsedProvider(project: Project): AgentProvider {
         val stored = PropertiesComponent.getInstance(project).getValue(LAST_PROVIDER_KEY, AgentProvider.CLAUDE.name)
@@ -115,6 +116,13 @@ object TerminalAgentLauncher {
 
     fun setTeamModeEnabled(project: Project, enabled: Boolean) {
         PropertiesComponent.getInstance(project).setValue(TEAM_MODE_KEY, enabled)
+    }
+
+    fun isAgentTeamModeEnabled(project: Project): Boolean =
+        PropertiesComponent.getInstance(project).getBoolean(AGENT_TEAM_MODE_KEY, false)
+
+    fun setAgentTeamModeEnabled(project: Project, enabled: Boolean) {
+        PropertiesComponent.getInstance(project).setValue(AGENT_TEAM_MODE_KEY, enabled)
     }
 
     fun resolveAgentCommand(project: Project, provider: AgentProvider): String {
@@ -224,6 +232,55 @@ object TerminalAgentLauncher {
     fun startAgent(project: Project, role: String, agentCommand: String? = null) {
         val ctx = resolveContext(project, agentCommand) ?: return
         launchRole(project, ctx, role)
+    }
+
+    fun launchAgentTeam(project: Project, agentCommand: String? = null) {
+        val ctx = resolveContext(project, agentCommand) ?: return
+        val tabName = MoeBundle.message("moe.panel.agentsMenu.leadTab")
+        val workerId = "lead-${UUID.randomUUID().toString().substring(0, 4)}"
+        val command = when (ctx.script.kind) {
+            ScriptKind.BASH -> {
+                val envPrefix = if (ctx.envOverrides.isNotEmpty()) {
+                    ctx.envOverrides.entries.joinToString(" ") { (key, value) ->
+                        "$key=${shQuote(value)}"
+                    } + " "
+                } else {
+                    ""
+                }
+                "${envPrefix}CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 bash ${shQuote(ctx.script.file.absolutePath)} --lead --project ${shQuote(ctx.basePath)} --worker-id ${shQuote(workerId)} --command ${shQuote(ctx.agentCommand)}"
+            }
+            ScriptKind.POWERSHELL -> {
+                val envSet = if (ctx.envOverrides.isNotEmpty()) {
+                    ctx.envOverrides.entries.joinToString("; ") { (key, value) ->
+                        "\$env:$key=${psQuote(value)}"
+                    } + "; "
+                } else {
+                    ""
+                }
+                val psCommand = "${envSet}\$env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS='1'; & ${psQuote(ctx.script.file.absolutePath)} -Lead -Project ${psQuote(ctx.basePath)} -WorkerId ${psQuote(workerId)} -Command ${psQuote(ctx.agentCommand)}"
+                val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
+                "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
+            }
+        }
+        try {
+            val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
+            if (widget != null) {
+                sendCommand(widget, command)
+            } else {
+                LOG.warn("Failed to create terminal widget for tab \"$tabName\"")
+                Messages.showWarningDialog(
+                    project,
+                    "Failed to create terminal for \"$tabName\". Ensure the Terminal plugin is enabled.",
+                    "Moe"
+                )
+            }
+        } catch (ex: Exception) {
+            Messages.showErrorDialog(
+                project,
+                "Failed to start terminal \"$tabName\": ${ex.message}",
+                "Moe"
+            )
+        }
     }
 
     private fun buildCommand(

@@ -45,6 +45,8 @@ export interface ProjectSettings {
   agentCommand: string;
   enableAgentTeams: boolean;
   columnLimits?: Record<string, number>;
+  columnAgents?: Record<string, string>;
+  agentTeamMode?: boolean;
   chatEnabled?: boolean;              // default: true
   chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
 }

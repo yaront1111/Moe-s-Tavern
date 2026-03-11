@@ -86,6 +86,10 @@ class TaskCard(
             meta.add(chip(humanizeStatus(task.status), subtle = true))
         }
 
+        if (task.assignedWorkerId?.startsWith("team-") == true) {
+            meta.add(chip(MoeBundle.message("moe.worker.teamIndicator"), subtle = true))
+        }
+
         // Step progress chip (e.g. "3/7 steps")
         if (task.implementationPlan.isNotEmpty()) {
             val completed = task.implementationPlan.count { it.status == "COMPLETED" }
