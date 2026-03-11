@@ -132,6 +132,7 @@ POLL_INTERVAL=30
 NO_LOOP=false
 TEAM=""
 CODEX_EXEC=false
+LEAD_MODE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -180,6 +181,10 @@ while [[ $# -gt 0 ]]; do
             TEAM="$2"
             shift 2
             ;;
+        --lead)
+            LEAD_MODE=true
+            shift
+            ;;
         --codex-exec)
             CODEX_EXEC=true
             shift
@@ -201,12 +206,14 @@ while [[ $# -gt 0 ]]; do
             echo "  --poll-interval SECS     Seconds between task polls (default: 30)"
             echo "  --no-loop                Run once and exit (no polling)"
             echo "  -t, --team NAME          Team name for parallel same-role agents"
+            echo "  --lead                   Launch as lead agent using Claude Agent Teams"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
             echo "  $0 --role architect --project ~/myproject"
             echo "  $0 -r worker -n myproject"
+            echo "  $0 --lead --project ~/myproject"
             echo "  $0 --list-projects"
             exit 0
             ;;
@@ -218,8 +225,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate role
-if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
+# Validate role (skip when in lead mode)
+if [ "$LEAD_MODE" = false ] && [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
     echo -e "${RED}Invalid role: $ROLE${NC}"
     echo "Valid roles: architect, worker, qa"
     exit 1
@@ -384,7 +391,11 @@ fi
 export MOE_PROJECT_PATH="$PROJECT"
 if [ -z "$WORKER_ID" ]; then
     SHORT_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 4)
-    WORKER_ID="${ROLE}-${SHORT_ID}"
+    if [ "$LEAD_MODE" = true ]; then
+        WORKER_ID="lead-${SHORT_ID}"
+    else
+        WORKER_ID="${ROLE}-${SHORT_ID}"
+    fi
 fi
 export MOE_WORKER_ID="$WORKER_ID"
 
@@ -774,25 +785,34 @@ except:
     fi
 fi
 
-# Determine status filter based on role
-case $ROLE in
-    architect)
-        STATUSES='["PLANNING"]'
-        ;;
-    worker)
-        STATUSES='["WORKING"]'
-        ;;
-    qa)
-        STATUSES='["REVIEW"]'
-        ;;
-esac
+# Determine status filter based on role (not needed for lead mode)
+STATUSES='[]'
+if [ "$LEAD_MODE" = false ]; then
+    case $ROLE in
+        architect)
+            STATUSES='["PLANNING"]'
+            ;;
+        worker)
+            STATUSES='["WORKING"]'
+            ;;
+        qa)
+            STATUSES='["REVIEW"]'
+            ;;
+    esac
+fi
 
 echo ""
 echo -e "${BLUE}================================${NC}"
-echo -e "Role:      ${GREEN}$ROLE${NC}"
+if [ "$LEAD_MODE" = true ]; then
+    echo -e "Mode:      ${GREEN}LEAD (Agent Teams)${NC}"
+else
+    echo -e "Role:      ${GREEN}$ROLE${NC}"
+fi
 echo -e "Project:   $PROJECT"
 echo -e "WorkerId:  $WORKER_ID"
-echo -e "AutoClaim: $AUTO_CLAIM"
+if [ "$LEAD_MODE" = false ]; then
+    echo -e "AutoClaim: $AUTO_CLAIM"
+fi
 if [ -n "$TEAM" ]; then
     echo -e "Team:      ${GREEN}$TEAM${NC}"
 fi
@@ -842,6 +862,142 @@ if [ -f "$KNOWN_ISSUES_PATH" ]; then
     KNOWN_ISSUES=$(cat "$KNOWN_ISSUES_PATH")
     echo -e "${GREEN}[OK]${NC} Loaded known issues from: $KNOWN_ISSUES_PATH"
 fi
+
+# Build lead agent prompt by querying board state via MCP proxy
+build_lead_prompt() {
+    # Query board state using moe-call.sh if available, otherwise via proxy directly
+    local board_state=""
+    local context_state=""
+    local moe_call="$SCRIPT_DIR/moe-call.sh"
+
+    if [ -f "$moe_call" ]; then
+        board_state=$(bash "$moe_call" list_tasks '{}' --project "$PROJECT" 2>/dev/null || echo "(failed to fetch board state)")
+        context_state=$(bash "$moe_call" get_context '{}' --project "$PROJECT" 2>/dev/null || echo "(failed to fetch context)")
+    else
+        # Fall back to direct proxy invocation
+        local list_rpc='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.list_tasks","arguments":{}}}'
+        local ctx_rpc='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.get_context","arguments":{}}}'
+
+        if [ -n "$PROXY_ARGS" ]; then
+            board_state=$(echo "$list_rpc" | MOE_PROJECT_PATH="$PROJECT" "$NODE_CMD" "$PROXY_ARGS" 2>/dev/null || echo "(failed to fetch board state)")
+            context_state=$(echo "$ctx_rpc" | MOE_PROJECT_PATH="$PROJECT" "$NODE_CMD" "$PROXY_ARGS" 2>/dev/null || echo "(failed to fetch context)")
+        elif [ -n "$PROXY_CMD" ]; then
+            board_state=$(echo "$list_rpc" | MOE_PROJECT_PATH="$PROJECT" "$PROXY_CMD" 2>/dev/null || echo "(failed to fetch board state)")
+            context_state=$(echo "$ctx_rpc" | MOE_PROJECT_PATH="$PROJECT" "$PROXY_CMD" 2>/dev/null || echo "(failed to fetch context)")
+        fi
+    fi
+
+    # Extract columnAgents and columnLimits from context if available
+    local column_agents_section=""
+    local column_limits_section=""
+    if [ -n "$context_state" ] && [ "$context_state" != "(failed to fetch context)" ]; then
+        column_agents_section=$($PYTHON_CMD -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    settings = None
+    if isinstance(data, dict):
+        proj = data.get('project', {})
+        settings = proj.get('settings', {})
+    if settings:
+        ca = settings.get('columnAgents', {})
+        if ca:
+            lines = ['Column-to-agent role mappings from project settings:']
+            for col, role in ca.items():
+                lines.append(f'  - {col}: spawn {role} teammate')
+            print('\n'.join(lines))
+except:
+    pass
+" <<< "$context_state" 2>/dev/null || true)
+
+        column_limits_section=$($PYTHON_CMD -c "
+import json, sys
+try:
+    data = json.loads(sys.stdin.read())
+    settings = None
+    if isinstance(data, dict):
+        proj = data.get('project', {})
+        settings = proj.get('settings', {})
+    if settings:
+        cl = settings.get('columnLimits', {})
+        if cl:
+            lines = ['WIP limits from project settings:']
+            for col, limit in cl.items():
+                lines.append(f'  - {col}: max {limit} tasks')
+            print('\n'.join(lines))
+except:
+    pass
+" <<< "$context_state" 2>/dev/null || true)
+    fi
+
+    # Build the dynamic sections
+    local column_agents_block=""
+    if [ -n "$column_agents_section" ]; then
+        column_agents_block="
+## Column Agent Mappings
+$column_agents_section
+Use these mappings instead of the defaults below when spawning teammates."
+    fi
+
+    local wip_limits_block=""
+    if [ -n "$column_limits_section" ]; then
+        wip_limits_block="
+## WIP Limits
+$column_limits_section
+Before spawning a teammate for column X, check that the number of assigned tasks in that column is less than the WIP limit. If at limit, skip spawning for that column."
+    fi
+
+    cat << LEADPROMPTEOF
+You are the lead agent for a Moe AI Workforce session. You coordinate teammates using Claude Agent Teams.
+
+## Your Role
+- You are in DELEGATE MODE: coordinate only, do NOT implement code yourself
+- Spawn teammates for each role needed based on the board state below
+- Monitor progress and re-scan the board periodically
+
+## Current Board State
+$board_state
+
+## Project Context
+$context_state
+$column_agents_block
+$wip_limits_block
+
+## Teammate Spawn Instructions
+For each task needing work, spawn a teammate with the appropriate role:
+- BACKLOG/PLANNING tasks: spawn architect teammate with prompt "You are an architect agent. Claim task {taskId} using moe.claim_next_task, read context with moe.get_context, create a plan, submit with moe.submit_plan, then call moe.wait_for_approval to wait for human approval."
+- WORKING tasks: spawn worker teammate with prompt "You are a worker agent. Claim task {taskId} using moe.claim_next_task, implement the plan step by step using moe.start_step and moe.complete_step, then call moe.complete_task when done."
+- REVIEW tasks: spawn QA teammate with prompt "You are a QA agent. Claim task {taskId} using moe.claim_next_task, review the implementation, run tests, then call moe.qa_approve or moe.qa_reject."
+
+## Moe MCP Tools Reference
+- moe.get_context: Get project, epic, task context
+- moe.claim_next_task: Claim the next available task for your role
+- moe.submit_plan: Submit implementation plan for architect review
+- moe.wait_for_approval: Wait for human to approve/reject your plan
+- moe.start_step: Mark a plan step as in-progress
+- moe.complete_step: Mark a plan step as completed
+- moe.complete_task: Mark task as done
+- moe.qa_approve: QA approves a completed task
+- moe.qa_reject: QA rejects with feedback
+- moe.report_blocked: Report that you are blocked
+- moe.list_tasks: List tasks filtered by status
+- moe.get_pending_questions: Check for unanswered human questions
+- moe.add_comment: Add a comment to a task
+
+All teammates have access to Moe MCP tools via the proxy.
+
+## Periodic Re-scan
+After initial teammate spawning, periodically call moe.list_tasks to check for new work. If tasks have moved between columns, spawn additional teammates as needed. Use moe.list_tasks with different status filters to get a comprehensive view of the board.
+
+## Lifecycle Management
+When all tasks are completed or no more work is available, gracefully shut down all teammates and exit. If new tasks appear on the board after teammates have finished, spawn fresh teammates to handle them.
+
+## Rules
+- Respect WIP limits from project settings
+- Re-scan the board after teammates complete work to find new tasks
+- Shut down teammates when no work remains
+LEADPROMPTEOF
+}
 
 LOOP_ENABLED=true
 if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
@@ -967,7 +1123,19 @@ Run: bash $moe_call --help for full list."
         echo ""
     fi
 
-    if [ "$CLI_TYPE" = "codex" ]; then
+    if [ "$LEAD_MODE" = true ]; then
+        # Lead mode: build lead prompt and launch with Agent Teams
+        echo -e "${BLUE}Building lead agent prompt...${NC}"
+        LEAD_PROMPT=$(build_lead_prompt)
+        export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+        unset CLAUDECODE
+
+        AGENT_CMD="$COMMAND"
+        echo -e "Starting ${CLI_TYPE} in lead mode (Agent Teams)..."
+        echo ""
+        LEAD_KICK="You are the Moe Lead agent. Start by calling moe.list_tasks to scan the board, then spawn architect teammates for BACKLOG tasks (highest priority first). Monitor progress and spawn worker/QA teammates as tasks move through columns."
+        (cd "$PROJECT" && $AGENT_CMD "$LEAD_KICK" --append-system-prompt "$LEAD_PROMPT" --allowedTools "mcp__moe__*,Bash,Read,Write,Edit,Glob,Grep,Task" --verbose) || true
+    elif [ "$CLI_TYPE" = "codex" ]; then
         # Check codex is available
         if ! command -v "$COMMAND" &> /dev/null; then
             echo -e "${RED}[ERROR]${NC} Codex command not found: $COMMAND. Install codex CLI first."
@@ -994,6 +1162,7 @@ Run: bash $moe_call --help for full list."
             $COMMAND -C "$PROJECT" "$FULL_PROMPT" || true
         fi
     else
+        unset CLAUDECODE
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""

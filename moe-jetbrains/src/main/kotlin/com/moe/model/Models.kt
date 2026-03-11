@@ -22,7 +22,9 @@ data class ProjectSettings(
     val branchPattern: String = "moe/{epicId}/{taskId}",
     val commitPattern: String = "feat({epicId}): {taskTitle}",
     val agentCommand: String = "claude",
-    val columnLimits: Map<String, Int>? = null
+    val columnLimits: Map<String, Int>? = null,
+    val columnAgents: Map<String, String>? = null,
+    val agentTeamMode: Boolean = false
 )
 
 data class Epic(

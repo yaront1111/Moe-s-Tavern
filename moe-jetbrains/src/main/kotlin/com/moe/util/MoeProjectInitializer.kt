@@ -69,6 +69,19 @@ object MoeProjectInitializer {
             activity.writeText("")
         }
 
+        // Create CLAUDE.md with agent instructions if not present
+        val claudeMd = File(moeDir, "CLAUDE.md")
+        if (!claudeMd.exists()) {
+            claudeMd.writeText(buildString {
+                appendLine("# Moe Project Instructions")
+                appendLine()
+                appendLine("# Agent Teams")
+                appendLine("# When using Claude Agent Teams mode, teammates coordinate through Moe MCP tools.")
+                appendLine("# See docs/MCP_SERVER.md for tool documentation.")
+                appendLine()
+            })
+        }
+
         MoeProjectRegistry.registerProject(root.absolutePath, projectName ?: root.name)
     }
 

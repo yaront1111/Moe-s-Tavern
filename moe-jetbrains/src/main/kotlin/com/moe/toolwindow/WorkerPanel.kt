@@ -42,6 +42,12 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
             }
 
             // Render team sections
+            if (teamWorkers.isNotEmpty()) {
+                add(JBLabel(MoeBundle.message("moe.worker.teamSection")).apply {
+                    foreground = BoardStyles.textPrimary
+                    font = font.deriveFont(Font.BOLD, font.size - 1f)
+                })
+            }
             for ((teamId, members) in teamWorkers) {
                 val team = teamMap[teamId] ?: continue
                 add(JBLabel("[${team.name}]").apply {
@@ -55,7 +61,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
 
             // Render solo workers
             if (soloWorkers.isNotEmpty() && teamWorkers.isNotEmpty()) {
-                add(JBLabel("[Solo]").apply {
+                add(JBLabel(MoeBundle.message("moe.worker.soloSection")).apply {
                     foreground = JBColor.GRAY
                     font = font.deriveFont(Font.BOLD, font.size - 1f)
                 })

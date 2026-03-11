@@ -399,6 +399,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             addProperty("branchPattern", settings.branchPattern)
             addProperty("commitPattern", settings.commitPattern)
             addProperty("agentCommand", settings.agentCommand)
+            settings.columnLimits?.let { limits ->
+                val limitsObj = JsonObject()
+                limits.forEach { (k, v) -> limitsObj.addProperty(k, v) }
+                add("columnLimits", limitsObj)
+            }
+            settings.columnAgents?.let { agents ->
+                val agentsObj = JsonObject()
+                agents.forEach { (k, v) -> agentsObj.addProperty(k, v) }
+                add("columnAgents", agentsObj)
+            }
+            addProperty("agentTeamMode", settings.agentTeamMode)
         }
         sendMessage("UPDATE_SETTINGS", payload)
     }

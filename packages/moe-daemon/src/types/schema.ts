@@ -45,6 +45,8 @@ export interface ProjectSettings {
   commitPattern: string;
   agentCommand: string;
   columnLimits?: Record<string, number>;
+  columnAgents?: Record<string, string>;
+  agentTeamMode?: boolean;
 }
 
 export interface Project {

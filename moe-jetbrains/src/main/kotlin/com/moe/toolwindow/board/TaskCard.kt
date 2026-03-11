@@ -86,6 +86,10 @@ class TaskCard(
             meta.add(chip(humanizeStatus(task.status), subtle = true))
         }
 
+        if (task.assignedWorkerId?.startsWith("team-") == true) {
+            meta.add(chip(MoeBundle.message("moe.worker.teamIndicator"), subtle = true))
+        }
+
         meta.add(chip(task.id.takeLast(4).uppercase(), subtle = true))
 
         val content = JBPanel<JBPanel<*>>(BorderLayout()).apply {
