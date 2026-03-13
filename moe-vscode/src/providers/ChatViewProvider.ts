@@ -137,13 +137,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             localResourceRoots: [this.extensionUri]
         };
 
-        webviewView.webview.html = this.getHtmlContent(webviewView.webview);
-
+        // Register message handler BEFORE setting HTML to avoid race condition
         this.disposables.push(
             webviewView.webview.onDidReceiveMessage((message) => {
                 this.handleWebviewMessage(message);
             })
         );
+
+        webviewView.webview.html = this.getHtmlContent(webviewView.webview);
     }
 
     private handleWebviewMessage(message: { type: string; [key: string]: unknown }): void {

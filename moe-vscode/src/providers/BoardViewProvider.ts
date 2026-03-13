@@ -72,9 +72,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             localResourceRoots: [this.extensionUri]
         };
 
-        webviewView.webview.html = this.getHtmlContent(webviewView.webview);
-
-        // Handle messages from the webview
+        // Register message handler BEFORE setting HTML to avoid race condition
+        // where the webview sends 'ready' before the handler is in place.
         webviewView.webview.onDidReceiveMessage((message) => {
             switch (message.type) {
                 case 'updateTaskStatus':
@@ -181,6 +180,22 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                     break;
             }
         });
+
+        // Set HTML after handler is registered
+        webviewView.webview.html = this.getHtmlContent(webviewView.webview);
+
+        // Safety net: if 'ready' was lost, force-sync after a short delay
+        setTimeout(() => {
+            if (this._view && !this._webviewReady) {
+                this._webviewReady = true;
+                this.updateConnectionStatus(this.daemonClient.connectionState);
+                if (this.daemonClient.currentState) {
+                    this.updateBoard(this.daemonClient.currentState);
+                } else if (this.daemonClient.connectionState === 'connected') {
+                    this.daemonClient.sendMessage('GET_STATE');
+                }
+            }
+        }, 1000);
     }
 
     refresh(): void {
