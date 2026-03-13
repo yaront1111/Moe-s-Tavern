@@ -59,7 +59,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
 
         webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible && this._webviewReady) {
+            if (webviewView.visible) {
                 this.updateConnectionStatus(this.daemonClient.connectionState);
                 if (this.daemonClient.currentState) {
                     this.updateBoard(this.daemonClient.currentState);
@@ -183,19 +183,6 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
         // Set HTML after handler is registered
         webviewView.webview.html = this.getHtmlContent(webviewView.webview);
-
-        // Safety net: if 'ready' was lost, force-sync after a short delay
-        setTimeout(() => {
-            if (this._view && !this._webviewReady) {
-                this._webviewReady = true;
-                this.updateConnectionStatus(this.daemonClient.connectionState);
-                if (this.daemonClient.currentState) {
-                    this.updateBoard(this.daemonClient.currentState);
-                } else if (this.daemonClient.connectionState === 'connected') {
-                    this.daemonClient.sendMessage('GET_STATE');
-                }
-            }
-        }, 1000);
     }
 
     refresh(): void {
@@ -225,7 +212,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateBoard(state: StateSnapshot): void {
-        if (this._view && this._webviewReady) {
+        if (this._view) {
             this._view.webview.postMessage({
                 type: 'updateState',
                 state
@@ -234,7 +221,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateConnectionStatus(status: string): void {
-        if (this._view && this._webviewReady) {
+        if (this._view) {
             this._view.webview.postMessage({
                 type: 'connectionStatus',
                 status
@@ -1939,10 +1926,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             }
         }
 
+        // Track whether we've received any state from the extension
+        var stateReceived = false;
+
         window.addEventListener('message', event => {
             const message = event.data;
             switch (message.type) {
                 case 'updateState':
+                    stateReceived = true;
                     currentState = message.state;
                     var tabBarEl = document.getElementById('tabBar');
                     if (tabBarEl) { tabBarEl.style.display = 'flex'; }
@@ -1952,6 +1943,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                     }
                     break;
                 case 'connectionStatus':
+                    stateReceived = true;
                     updateConnectionStatus(message.status);
                     break;
                 case 'activityLog':
@@ -1962,6 +1954,18 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
         // Notify extension that webview is ready
         vscode.postMessage({ type: 'ready' });
+
+        // Retry: if no state received within 2s, re-send ready
+        var retryInterval = setInterval(function() {
+            if (stateReceived) {
+                clearInterval(retryInterval);
+            } else {
+                vscode.postMessage({ type: 'ready' });
+            }
+        }, 2000);
+
+        // Stop retrying after 30 seconds
+        setTimeout(function() { clearInterval(retryInterval); }, 30000);
 
         // Restore active tab from saved state
         if (activeTab && activeTab !== 'board') {
