@@ -14,6 +14,7 @@ function escapeHtml(text: string): string {
 export class SettingsPanel {
     public static currentPanel: SettingsPanel | undefined;
     private readonly panel: vscode.WebviewPanel;
+    private readonly extensionUri: vscode.Uri;
     private readonly daemonClient: MoeDaemonClient;
     private disposed = false;
 
@@ -31,18 +32,20 @@ export class SettingsPanel {
             'moe.settings',
             'Moe Settings',
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { enableScripts: true, localResourceRoots: [extensionUri] }
         );
 
-        SettingsPanel.currentPanel = new SettingsPanel(panel, client, state);
+        SettingsPanel.currentPanel = new SettingsPanel(panel, extensionUri, client, state);
     }
 
     private constructor(
         panel: vscode.WebviewPanel,
+        extensionUri: vscode.Uri,
         client: MoeDaemonClient,
         state: MoeStateSnapshot
     ) {
         this.panel = panel;
+        this.extensionUri = extensionUri;
         this.daemonClient = client;
 
         const nonce = this.getNonce();
@@ -103,7 +106,9 @@ export class SettingsPanel {
         return text;
     }
 
-    private getWebviewContent(nonce: string, settings: ProjectSettings | undefined): string {
+    private getWebviewContent(_nonce: string, settings: ProjectSettings | undefined): string {
+        const webview = this.panel.webview;
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'settings.js'));
         const approvalMode = escapeHtml(settings?.approvalMode ?? 'CONTROL');
         const speedModeDelayMs = settings?.speedModeDelayMs ?? 2000;
         const agentCommand = escapeHtml(settings?.agentCommand ?? 'claude');
@@ -116,7 +121,7 @@ export class SettingsPanel {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${webview.cspSource};">
     <title>Moe Settings</title>
     <style>
         * {
@@ -272,34 +277,7 @@ export class SettingsPanel {
         <button class="btn-secondary" id="cancelBtn">Cancel</button>
     </div>
 
-    <script nonce="${nonce}">
-        var vscode = acquireVsCodeApi();
-
-        var approvalModeEl = document.getElementById('approvalMode');
-        var speedModeDelayMsEl = document.getElementById('speedModeDelayMs');
-        var agentCommandEl = document.getElementById('agentCommand');
-        var autoCreateBranchEl = document.getElementById('autoCreateBranch');
-        var branchPatternEl = document.getElementById('branchPattern');
-        var commitPatternEl = document.getElementById('commitPattern');
-        var saveBtn = document.getElementById('saveBtn');
-        var cancelBtn = document.getElementById('cancelBtn');
-
-        saveBtn.addEventListener('click', function() {
-            vscode.postMessage({
-                type: 'save',
-                approvalMode: approvalModeEl.value,
-                speedModeDelayMs: parseInt(speedModeDelayMsEl.value, 10) || 2000,
-                agentCommand: agentCommandEl.value.trim(),
-                autoCreateBranch: autoCreateBranchEl.checked,
-                branchPattern: branchPatternEl.value.trim(),
-                commitPattern: commitPatternEl.value.trim()
-            });
-        });
-
-        cancelBtn.addEventListener('click', function() {
-            vscode.postMessage({ type: 'cancel' });
-        });
-    </script>
+    <script src="${scriptUri}"></script>
 </body>
 </html>`;
     }

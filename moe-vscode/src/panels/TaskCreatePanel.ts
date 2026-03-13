@@ -14,6 +14,7 @@ function escapeHtml(text: string): string {
 export class TaskCreatePanel {
     public static currentPanel: TaskCreatePanel | undefined;
     private readonly panel: vscode.WebviewPanel;
+    private readonly extensionUri: vscode.Uri;
     private readonly daemonClient: MoeDaemonClient;
     private readonly state: MoeStateSnapshot;
     private disposed = false;
@@ -32,18 +33,20 @@ export class TaskCreatePanel {
             'moe.createTask',
             'Create Task',
             vscode.ViewColumn.One,
-            { enableScripts: true }
+            { enableScripts: true, localResourceRoots: [extensionUri] }
         );
 
-        TaskCreatePanel.currentPanel = new TaskCreatePanel(panel, client, state);
+        TaskCreatePanel.currentPanel = new TaskCreatePanel(panel, extensionUri, client, state);
     }
 
     private constructor(
         panel: vscode.WebviewPanel,
+        extensionUri: vscode.Uri,
         client: MoeDaemonClient,
         state: MoeStateSnapshot
     ) {
         this.panel = panel;
+        this.extensionUri = extensionUri;
         this.daemonClient = client;
         this.state = state;
 
@@ -125,6 +128,8 @@ export class TaskCreatePanel {
     }
 
     private getWebviewContent(nonce: string, epics: Epic[]): string {
+        const webview = this.panel.webview;
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'taskCreate.js'));
         const epicOptions = epics
             .map(e => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.title)}</option>`)
             .join('\n');
@@ -134,7 +139,7 @@ export class TaskCreatePanel {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${webview.cspSource};">
     <title>Create Task</title>
     <style>
         * {
@@ -287,132 +292,11 @@ export class TaskCreatePanel {
     </div>
 
     <div class="button-row">
-        <button class="btn-primary" id="submitBtn" onclick="submitForm()" disabled>Create Task</button>
-        <button class="btn-secondary" onclick="cancelForm()">Cancel</button>
+        <button class="btn-primary" id="submitBtn" disabled>Create Task</button>
+        <button class="btn-secondary" id="cancelBtn">Cancel</button>
     </div>
 
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-
-        const epicEl = document.getElementById('epic');
-        const titleEl = document.getElementById('title');
-        const descriptionEl = document.getElementById('description');
-        const dodEl = document.getElementById('dod');
-        const priorityEl = document.getElementById('priority');
-        const titleCharCount = document.getElementById('titleCharCount');
-        const titleError = document.getElementById('titleError');
-        const epicError = document.getElementById('epicError');
-        const submitBtn = document.getElementById('submitBtn');
-
-        function updateButtonState() {
-            const hasEpic = !!epicEl.value;
-            const hasTitle = !!titleEl.value.trim();
-            const titleInRange = titleEl.value.trim().length <= 500;
-            submitBtn.disabled = !(hasEpic && hasTitle && titleInRange);
-        }
-
-        titleEl.addEventListener('input', function() {
-            const len = titleEl.value.length;
-            titleCharCount.textContent = len + ' / 500';
-            titleCharCount.className = len > 500 ? 'char-count over' : 'char-count';
-            if (len > 0) {
-                titleEl.classList.remove('error');
-                titleError.classList.remove('visible');
-            }
-            updateButtonState();
-        });
-
-        epicEl.addEventListener('change', function() {
-            if (epicEl.value) {
-                epicEl.classList.remove('error');
-                epicError.classList.remove('visible');
-            }
-            updateButtonState();
-        });
-
-        // Initial state: button disabled until form is valid
-        updateButtonState();
-
-        function validate() {
-            let valid = true;
-
-            if (!epicEl.value) {
-                epicEl.classList.add('error');
-                epicError.classList.add('visible');
-                valid = false;
-            } else {
-                epicEl.classList.remove('error');
-                epicError.classList.remove('visible');
-            }
-
-            const title = titleEl.value.trim();
-            if (!title) {
-                titleEl.classList.add('error');
-                titleError.textContent = 'Title is required.';
-                titleError.classList.add('visible');
-                valid = false;
-            } else if (title.length > 500) {
-                titleEl.classList.add('error');
-                titleError.textContent = 'Title must be 500 characters or fewer.';
-                titleError.classList.add('visible');
-                valid = false;
-            } else {
-                titleEl.classList.remove('error');
-                titleError.classList.remove('visible');
-            }
-
-            return valid;
-        }
-
-        function submitForm() {
-            if (!validate()) {
-                return;
-            }
-
-            const dodText = dodEl.value || '';
-            const dodItems = dodText.split('\\n').map(function(line) { return line.trim(); }).filter(function(line) { return line.length > 0; });
-
-            vscode.postMessage({
-                type: 'submit',
-                epicId: epicEl.value,
-                title: titleEl.value.trim(),
-                description: descriptionEl.value.trim(),
-                definitionOfDone: dodItems,
-                priority: priorityEl.value
-            });
-        }
-
-        function cancelForm() {
-            vscode.postMessage({ type: 'cancel' });
-        }
-
-        // Handle init message from extension
-        window.addEventListener('message', function(event) {
-            const message = event.data;
-            if (message.type === 'init' && message.epics) {
-                // Re-populate epics if sent after panel creation
-                const epics = message.epics;
-                while (epicEl.options.length > 1) {
-                    epicEl.remove(1);
-                }
-                for (let i = 0; i < epics.length; i++) {
-                    const opt = document.createElement('option');
-                    opt.value = epics[i].id;
-                    opt.textContent = epics[i].title;
-                    epicEl.appendChild(opt);
-                }
-                updateButtonState();
-            }
-        });
-
-        // Allow Enter in title to submit
-        titleEl.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                submitForm();
-            }
-        });
-    </script>
+    <script src="${scriptUri}"></script>
 </body>
 </html>`;
     }
