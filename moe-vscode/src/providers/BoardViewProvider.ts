@@ -873,8 +873,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         <div class="worker-panel" id="workerPanel"></div>
         <div class="board" id="board">
             <div class="empty-state">
-                <h3>Not Connected</h3>
-                <p>Click Connect to start</p>
+                <h3>Connecting...</h3>
+                <p>Waiting for daemon</p>
             </div>
         </div>
     </div>
@@ -1889,20 +1889,20 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         }
 
         function updateConnectionStatus(status) {
-            const dot = document.getElementById('statusDot');
-            const text = document.getElementById('statusText');
-            const btn = document.getElementById('connectBtn');
-            const agentsBtn = document.getElementById('agentsBtn');
-            const settingsBtn = document.getElementById('settingsBtn');
+            try {
+                const dot = document.getElementById('statusDot');
+                const text = document.getElementById('statusText');
+                const btn = document.getElementById('connectBtn');
+                const agentsBtn = document.getElementById('agentsBtn');
+                const settingsBtn = document.getElementById('settingsBtn');
 
-            dot.className = 'status-dot ' + status;
-            text.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-            btn.style.display = status === 'connected' ? 'none' : 'inline-block';
-            if (agentsBtn) { agentsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
-            if (settingsBtn) { settingsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
+                if (dot) { dot.className = 'status-dot ' + status; }
+                if (text) { text.textContent = status.charAt(0).toUpperCase() + status.slice(1); }
+                if (btn) { btn.style.display = status === 'connected' ? 'none' : 'inline-block'; }
+                if (agentsBtn) { agentsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
+                if (settingsBtn) { settingsBtn.style.display = status === 'connected' ? 'inline-block' : 'none'; }
 
-            // Update board empty state to reflect connection status
-            if (!currentState) {
+                // Update board empty state to reflect connection status
                 const board = document.getElementById('board');
                 const emptyState = board ? board.querySelector('.empty-state') : null;
                 if (emptyState) {
@@ -1919,6 +1919,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                         if (p) { p.textContent = 'Click Connect to start'; }
                     }
                 }
+            } catch (e) {
+                // Prevent partial updates from breaking the UI
             }
         }
 
