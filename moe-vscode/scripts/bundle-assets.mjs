@@ -64,6 +64,32 @@ async function main() {
     await copyDir(asset.dist, distOut);
     await copyDir(asset.deps, depsOut, { excludeBin: true });
   }
+
+  // Copy agent scripts
+  const scriptsOut = path.join(outputRoot, 'scripts');
+  await mkdir(scriptsOut, { recursive: true });
+  const agentScripts = ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh'];
+  for (const script of agentScripts) {
+    const src = path.join(repoRoot, 'scripts', script);
+    if (await exists(src)) {
+      await cp(src, path.join(scriptsOut, script));
+    }
+  }
+
+  // Copy role docs and agent-context (fallback for uninitialised projects)
+  const rolesOut = path.join(outputRoot, 'docs', 'roles');
+  await mkdir(rolesOut, { recursive: true });
+  const roleDocs = ['architect.md', 'qa.md', 'worker.md'];
+  for (const doc of roleDocs) {
+    const src = path.join(repoRoot, 'docs', 'roles', doc);
+    if (await exists(src)) {
+      await cp(src, path.join(rolesOut, doc));
+    }
+  }
+  const agentContextSrc = path.join(repoRoot, 'docs', 'agent-context.md');
+  if (await exists(agentContextSrc)) {
+    await cp(agentContextSrc, path.join(outputRoot, 'docs', 'agent-context.md'));
+  }
 }
 
 main().catch((err) => {
