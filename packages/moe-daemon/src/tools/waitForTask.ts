@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { TaskPriority } from '../types/schema.js';
+import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 
@@ -166,6 +166,26 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
         }
 
         const unsubscribe = state.subscribe((event) => {
+          // Wake on chat messages targeting this worker
+          if (event.type === 'MESSAGE_CREATED') {
+            const message = event.payload as ChatMessage;
+            const targets = (event as { routingTargets?: string[] }).routingTargets ?? message.mentions ?? [];
+            if (targets.includes(workerId) || message.sender === 'human') {
+              cleanup();
+              logger.info({ workerId, channel: message.channel, sender: message.sender }, 'Chat message received, waking worker');
+              resolve({
+                hasNext: false,
+                hasChatMessage: true,
+                chatMessage: {
+                  channel: message.channel,
+                  sender: message.sender,
+                  preview: message.content.substring(0, 200)
+                }
+              });
+            }
+            return;
+          }
+
           // Only react to task creation/update events
           if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;
 

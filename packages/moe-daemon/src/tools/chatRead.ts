@@ -89,6 +89,15 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // Clear unread notification counts only when messages were actually read
+      if (params.workerId && messages.length > 0) {
+        if (params.channel) {
+          state.clearUnread(params.workerId, params.channel);
+        } else {
+          state.clearUnread(params.workerId);
+        }
+      }
+
       return {
         messages,
         cursor

@@ -11,6 +11,7 @@ import { TaskCreatePanel } from './panels/TaskCreatePanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { TaskDetailPanel } from './panels/TaskDetailPanel';
 import { launchAgent, launchAllAgents, AgentProvider, AgentRole } from './util/AgentLauncher';
+import { isAntigravity, registerMcpServer } from './util/AntigravityIntegration';
 
 let daemonClient: MoeDaemonClient | undefined;
 let statusBar: ConnectionStatusBar | undefined;
@@ -393,6 +394,15 @@ export function activate(context: vscode.ExtensionContext) {
         daemonClient.connect().catch((err) => {
             outputChannel.appendLine(`Auto-connect failed: ${err.message}`);
         });
+    }
+
+    // Antigravity-specific integrations (no-op on vanilla VS Code)
+    if (isAntigravity()) {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && daemonClient) {
+            const projectPath = workspaceFolders[0].uri.fsPath;
+            registerMcpServer(context.extensionPath, projectPath, outputChannel);
+        }
     }
 
     outputChannel.appendLine('Moe extension activated');

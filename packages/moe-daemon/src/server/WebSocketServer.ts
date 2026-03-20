@@ -92,6 +92,14 @@ export class MoeWebSocketServer {
     }
   }
 
+  /**
+   * Execute a state-mutating operation under the StateManager mutex.
+   * Prevents races between plugin WS handlers and MCP tool handlers.
+   */
+  private async withMutex<T>(fn: () => Promise<T>): Promise<T> {
+    return this.state.runExclusive(fn);
+  }
+
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
@@ -165,7 +173,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const task = await this.state.createTask(message.payload as Record<string, unknown>);
+          const task = await this.withMutex(() => this.state.createTask(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_CREATED', payload: task }));
           return;
         }
@@ -179,48 +187,39 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          // Validate status transitions when status is being changed
-          if (updates && typeof updates === 'object' && 'status' in updates) {
-            const existing = this.state.getTask(taskId);
-            if (existing) {
-              const VALID_TRANSITIONS: Record<string, string[]> = {
-                BACKLOG: ['PLANNING', 'WORKING'],
-                PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
-                AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
-                DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
-                ARCHIVED: ['BACKLOG', 'WORKING']
-              };
-              const newStatus = (updates as { status: string }).status;
-              if (newStatus !== existing.status) {
-                const allowed = VALID_TRANSITIONS[existing.status];
-                if (!allowed || !allowed.includes(newStatus)) {
-                  this.safeSend(ws, JSON.stringify({
-                    type: 'ERROR',
-                    message: `Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`,
-                    operation: 'UPDATE_TASK'
-                  }));
-                  return;
-                }
-                // Enforce WIP column limits
-                const columnLimits = this.state.project?.settings?.columnLimits;
-                if (columnLimits && typeof columnLimits[newStatus] === 'number') {
-                  const limit = columnLimits[newStatus];
-                  const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
-                  if (currentCount >= limit) {
-                    this.safeSend(ws, JSON.stringify({
-                      type: 'ERROR',
-                      message: `Column ${newStatus} is at its WIP limit of ${limit}`,
-                      operation: 'UPDATE_TASK'
-                    }));
-                    return;
+          // Validation + update inside mutex to prevent TOCTOU race
+          const task = await this.withMutex(async () => {
+            if (updates && typeof updates === 'object' && 'status' in updates) {
+              const existing = this.state.getTask(taskId);
+              if (existing) {
+                const VALID_TRANSITIONS: Record<string, string[]> = {
+                  BACKLOG: ['PLANNING', 'WORKING'],
+                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+                  AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
+                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
+                  DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
+                  ARCHIVED: ['BACKLOG', 'WORKING']
+                };
+                const newStatus = (updates as { status: string }).status;
+                if (newStatus !== existing.status) {
+                  const allowed = VALID_TRANSITIONS[existing.status];
+                  if (!allowed || !allowed.includes(newStatus)) {
+                    throw new Error(`Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`);
+                  }
+                  const columnLimits = this.state.project?.settings?.columnLimits;
+                  if (columnLimits && typeof columnLimits[newStatus] === 'number') {
+                    const limit = columnLimits[newStatus];
+                    const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
+                    if (currentCount >= limit) {
+                      throw new Error(`Column ${newStatus} is at its WIP limit of ${limit}`);
+                    }
                   }
                 }
               }
             }
-          }
-          const task = await this.state.updateTask(taskId, updates as Record<string, unknown>);
+            return this.state.updateTask(taskId, updates as Record<string, unknown>);
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -234,7 +233,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.deleteTask(taskId);
+          const task = await this.withMutex(() => this.state.deleteTask(taskId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_DELETED', payload: task }));
           return;
         }
@@ -243,7 +242,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const epic = await this.state.createEpic(message.payload as Record<string, unknown>);
+          const epic = await this.withMutex(() => this.state.createEpic(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_CREATED', payload: epic }));
           return;
         }
@@ -257,7 +256,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.updateEpic(epicId, updates as Record<string, unknown>);
+          const epic = await this.withMutex(() => this.state.updateEpic(epicId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
@@ -271,7 +270,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.deleteEpic(epicId);
+          const epic = await this.withMutex(() => this.state.deleteEpic(epicId));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_DELETED', payload: epic }));
           return;
         }
@@ -285,7 +284,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.reorderTask(taskId, beforeId, afterId);
+          const task = await this.withMutex(() => this.state.reorderTask(taskId, beforeId, afterId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -294,7 +293,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.approveTask(message.payload.taskId);
+          const task = await this.withMutex(() => this.state.approveTask(message.payload.taskId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -308,7 +307,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.rejectTask(message.payload.taskId, reason);
+          const task = await this.withMutex(() => this.state.rejectTask(message.payload.taskId, reason));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -322,7 +321,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.reopenTask(message.payload.taskId, reopenReason);
+          const task = await this.withMutex(() => this.state.reopenTask(message.payload.taskId, reopenReason));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -331,7 +330,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.approveProposal(message.payload.proposalId);
+          const proposal = await this.withMutex(() => this.state.approveProposal(message.payload.proposalId));
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -340,7 +339,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.rejectProposal(message.payload.proposalId);
+          const proposal = await this.withMutex(() => this.state.rejectProposal(message.payload.proposalId));
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -349,7 +348,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const project = await this.state.updateSettings(message.payload as Record<string, unknown>);
+          const project = await this.withMutex(() => this.state.updateSettings(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'SETTINGS_UPDATED', payload: project }));
           return;
         }
@@ -363,7 +362,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
             return;
           }
-          const team = await this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize });
+          const team = await this.withMutex(() => this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize }));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
           return;
         }
@@ -377,7 +376,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.updateTeam(teamId, updates as Record<string, unknown>);
+          const team = await this.withMutex(() => this.state.updateTeam(teamId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -391,7 +390,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.deleteTeam(teamId);
+          const team = await this.withMutex(() => this.state.deleteTeam(teamId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_DELETED', payload: team }));
           return;
         }
@@ -405,7 +404,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.addTeamMember(teamId, workerId);
+          const team = await this.withMutex(() => this.state.addTeamMember(teamId, workerId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -419,29 +418,28 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.removeTeamMember(teamId, workerId);
+          const team = await this.withMutex(() => this.state.removeTeamMember(teamId, workerId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
         case 'ARCHIVE_DONE_TASKS': {
           const epicFilter = (message as { payload?: { epicId?: string } }).payload?.epicId;
-          const snapshot = this.state.getSnapshot();
-          const doneTasks = snapshot.tasks.filter(t =>
-            t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
-          );
-          if (doneTasks.length === 0) {
-            this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived: 0 } }));
-            return;
-          }
-          let archived = 0;
-          for (const task of doneTasks) {
-            try {
-              await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
-              archived++;
-            } catch (err) {
-              logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+          const archived = await this.withMutex(async () => {
+            const snapshot = this.state.getSnapshot();
+            const doneTasks = snapshot.tasks.filter(t =>
+              t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
+            );
+            let count = 0;
+            for (const task of doneTasks) {
+              try {
+                await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+                count++;
+              } catch (err) {
+                logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+              }
             }
-          }
+            return count;
+          });
           this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived } }));
           return;
         }
@@ -472,27 +470,28 @@ export class MoeWebSocketServer {
             }));
             return;
           }
-          const existing = this.state.getTask(taskId);
-          if (!existing) {
-            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Task not found: ${taskId}` }));
-            return;
-          }
-          const comment = {
-            id: generateId('comment'),
-            author: author || 'human',
-            content: trimmedContent,
-            timestamp: new Date().toISOString()
-          };
-          const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
-          const comments = [...existingComments, comment];
-          const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
-            ? comments.slice(-MAX_COMMENTS_PER_TASK)
-            : comments;
-          const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
-          if (comment.author === 'human') {
-            updates.hasPendingQuestion = true;
-          }
-          const task = await this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+          const task = await this.withMutex(async () => {
+            const existing = this.state.getTask(taskId);
+            if (!existing) {
+              throw new Error(`Task not found: ${taskId}`);
+            }
+            const comment = {
+              id: generateId('comment'),
+              author: author || 'human',
+              content: trimmedContent,
+              timestamp: new Date().toISOString()
+            };
+            const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
+            const comments = [...existingComments, comment];
+            const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
+              ? comments.slice(-MAX_COMMENTS_PER_TASK)
+              : comments;
+            const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
+            if (comment.author === 'human') {
+              updates.hasPendingQuestion = true;
+            }
+            return this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -612,7 +611,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const approved = await this.state.approveDecision(approveDecId, 'human');
+          const approved = await this.withMutex(() => this.state.approveDecision(approveDecId, 'human'));
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: approved }));
           return;
         }
@@ -626,7 +625,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const rejected = await this.state.rejectDecision(rejectDecId);
+          const rejected = await this.withMutex(() => this.state.rejectDecision(rejectDecId));
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: rejected }));
           return;
         }

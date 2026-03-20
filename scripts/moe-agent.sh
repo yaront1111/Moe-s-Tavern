@@ -292,14 +292,14 @@ get_moe_install_path() {
     install_path=$($PYTHON_CMD -c "
 import json, sys
 try:
-    with open('$config_file') as f:
+    with open(sys.argv[1]) as f:
         config = json.load(f)
     path = config.get('installPath', '')
     if path:
         print(path)
 except:
     pass
-" 2>/dev/null)
+" "$config_file" 2>/dev/null)
     if [ -z "$install_path" ]; then
         echo ""
         return
@@ -440,46 +440,31 @@ ensure_mcp_config() {
 
     # Create or update config
     if [ ! -f "$config_file" ]; then
-        # Create new config
-        if [ -n "$PROXY_ARGS" ]; then
-            cat > "$config_file" << EOF
-{
-  "mcpServers": {
-    "moe": {
-      "command": "$PROXY_CMD",
-      "args": ["$PROXY_ARGS"],
-      "env": {
-        "MOE_PROJECT_PATH": "$PROJECT"
-      }
-    }
-  }
-}
+        # Create new config using python for safe JSON generation
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'EOF'
+import json, sys
+config_file = sys.argv[1]
+project_path = sys.argv[2]
+proxy_cmd = sys.argv[3]
+proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
+entry = {'command': proxy_cmd, 'env': {'MOE_PROJECT_PATH': project_path}}
+if proxy_args:
+    entry['args'] = [proxy_args]
+config = {'mcpServers': {'moe': entry}}
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
 EOF
-        else
-            cat > "$config_file" << EOF
-{
-  "mcpServers": {
-    "moe": {
-      "command": "$PROXY_CMD",
-      "env": {
-        "MOE_PROJECT_PATH": "$PROJECT"
-      }
-    }
-  }
-}
-EOF
-        fi
         echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
     else
-        # Update existing config using python3
-        $PYTHON_CMD << EOF
+        # Update existing config using python3 (pass vars via argv to prevent injection)
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'EOF'
 import json
 import sys
 
-config_file = "$config_file"
-project_path = "$PROJECT"
-proxy_cmd = "$PROXY_CMD"
-proxy_args = "$PROXY_ARGS"
+config_file = sys.argv[1]
+project_path = sys.argv[2]
+proxy_cmd = sys.argv[3]
+proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
 
 try:
     with open(config_file, 'r') as f:
@@ -511,13 +496,14 @@ EOF
     # regardless of working directory or global config issues
     local project_mcp="$PROJECT/.mcp.json"
     if [ -n "$PROXY_CMD" ]; then
-        $PYTHON_CMD << MCPEOF
+        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" << 'MCPEOF'
 import json
+import sys
 
-project_mcp = "$project_mcp"
-proxy_cmd = "$PROXY_CMD"
-proxy_args = "$PROXY_ARGS"
-project_path = "$PROJECT"
+project_mcp = sys.argv[1]
+proxy_cmd = sys.argv[2]
+proxy_args = sys.argv[3] if len(sys.argv) > 3 else ""
+project_path = sys.argv[4] if len(sys.argv) > 4 else ""
 
 entry = {
     'command': proxy_cmd,
@@ -663,14 +649,14 @@ if [ "$CLI_TYPE" = "gemini" ]; then
     if [ -z "$PROXY_CMD" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
     else
-        $PYTHON_CMD << GEMINIEOF
+        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'GEMINIEOF'
 import json
 import sys
 
-config_file = "$GEMINI_CONFIG_FILE"
-project_path = "$PROJECT"
-proxy_cmd = "$PROXY_CMD"
-proxy_args = "$PROXY_ARGS"
+config_file = sys.argv[1]
+project_path = sys.argv[2]
+proxy_cmd = sys.argv[3]
+proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
 
 # Build the desired moe MCP server entry
 moe_entry = {
@@ -681,13 +667,6 @@ moe_entry = {
 }
 if proxy_args:
     moe_entry['args'] = [proxy_args]
-
-# New config to merge in
-new_config = {
-    'mcpServers': {
-        'moe': moe_entry
-    }
-}
 
 # Merge with existing settings.json if present
 try:
@@ -766,7 +745,6 @@ if [ "$NO_START_DAEMON" = false ]; then
             DAEMON_SCRIPT="$ROOT_DIR/packages/moe-daemon/dist/index.js"
             if [ ! -f "$DAEMON_SCRIPT" ]; then
                 # Fall back to global install config
-                local global_install
                 global_install=$(get_moe_install_path)
                 if [ -n "$global_install" ]; then
                     DAEMON_SCRIPT="$global_install/packages/moe-daemon/dist/index.js"
@@ -818,8 +796,16 @@ if [ "$NO_START_DAEMON" = false ]; then
     fi
 fi
 
-# Auto-create/join team if --team specified
+# Auto-join role's default team (required for chat_send to accept the workerId)
+# If --team not specified, use role-based default name
 TEAM_CONTEXT=""
+if [ -z "$TEAM" ]; then
+    case $ROLE in
+        architect) TEAM="Architects" ;;
+        worker)    TEAM="Workers" ;;
+        qa)        TEAM="QA" ;;
+    esac
+fi
 if [ -n "$TEAM" ]; then
     echo -e "${BLUE}Setting up team '$TEAM' for role '$ROLE'...${NC}"
 
@@ -840,8 +826,9 @@ if [ -n "$TEAM" ]; then
         fi
     fi
 
-    TEAM_CREATE_JSON="{\"name\":\"$TEAM\"}"
-    TEAM_CREATE_RPC="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"moe.create_team\",\"arguments\":$TEAM_CREATE_JSON}}"
+    # Use python to safely construct JSON (prevents injection from special chars in team name)
+    TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1]}))" "$TEAM" 2>/dev/null)
+    TEAM_CREATE_RPC=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'moe.create_team','arguments':json.loads(sys.argv[1])}}))" "$TEAM_CREATE_JSON" 2>/dev/null)
 
     TEAM_RESULT=""
     if [ -n "$TEAM_PROXY" ]; then
@@ -865,8 +852,8 @@ except:
         if [ -n "$TEAM_ID" ]; then
             echo -e "${GREEN}[OK]${NC} Team '$TEAM' ready (id: $TEAM_ID)"
 
-            TEAM_JOIN_JSON="{\"teamId\":\"$TEAM_ID\",\"workerId\":\"$WORKER_ID\"}"
-            TEAM_JOIN_RPC="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"moe.join_team\",\"arguments\":$TEAM_JOIN_JSON}}"
+            TEAM_JOIN_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'teamId':sys.argv[1],'workerId':sys.argv[2]}))" "$TEAM_ID" "$WORKER_ID" 2>/dev/null)
+            TEAM_JOIN_RPC=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'moe.join_team','arguments':json.loads(sys.argv[1])}}))" "$TEAM_JOIN_JSON" 2>/dev/null)
 
             if [ -n "$TEAM_PROXY" ]; then
                 echo "$TEAM_JOIN_RPC" | "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null > /dev/null || true
@@ -981,8 +968,9 @@ if [ "$LOOP_ENABLED" = true ]; then
 fi
 
 # Trap SIGINT/SIGTERM to exit cleanly from the loop
+# exit 0 triggers the EXIT trap which runs cleanup_temp
 LOOP_RUNNING=true
-trap 'echo ""; echo "Agent stopped."; LOOP_RUNNING=false; exit 0' INT TERM
+trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
 
 FIRST_RUN=true
 
@@ -1081,7 +1069,7 @@ Run: bash $moe_call --help for full list."
 
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
-        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
+        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
@@ -1112,15 +1100,15 @@ Run: bash $moe_call --help for full list."
         # Claude equivalent: --append-system-prompt carries all context in a single system message
         ROLE_WORKFLOW=""
         case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: claim task → get_context → explore codebase → submit_plan for approval" ;;
-            worker)    ROLE_WORKFLOW="Workflow: claim task → get_context → start_step → implement → complete_step → complete_task" ;;
-            qa)        ROLE_WORKFLOW="Workflow: claim task → get_context → review code and tests → qa_approve or qa_reject" ;;
+            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → explore codebase → submit_plan → announce in chat" ;;
+            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → start_step → implement → complete_step → complete_task → announce in chat" ;;
+            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → review code and tests → qa_approve or qa_reject → announce in chat" ;;
             *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
         fi
 
         if [ "$CODEX_EXEC" = true ]; then
@@ -1157,15 +1145,15 @@ Run: bash $moe_call --help for full list."
         # 3. SHORT_PROMPT below → the initial user message (role-aware first action)
         ROLE_WORKFLOW=""
         case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: claim task → get_context → explore codebase → submit_plan for approval" ;;
-            worker)    ROLE_WORKFLOW="Workflow: claim task → get_context → start_step → implement → complete_step → complete_task" ;;
-            qa)        ROLE_WORKFLOW="Workflow: claim task → get_context → review code and tests → qa_approve or qa_reject" ;;
+            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → explore codebase → submit_plan → announce in chat" ;;
+            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → start_step → implement → complete_step → complete_task → announce in chat" ;;
+            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → review code and tests → qa_approve or qa_reject → announce in chat" ;;
             *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
+            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
         fi
 
         if [ "$GEMINI_EXEC" = true ]; then
@@ -1189,12 +1177,17 @@ Run: bash $moe_call --help for full list."
             echo -e "${GREEN}[OK]${NC} Agent Teams enabled for this worker session"
         fi
 
+        # Write system prompt to a temp file to avoid command-line size/quoting issues
+        # (system prompt contains XML tags, backticks, and JSON that can break arg passing)
+        SYSTEM_PROMPT_FILE=$(create_secure_temp)/system-prompt.md
+        printf '%s' "$SYSTEM_APPEND" > "$SYSTEM_PROMPT_FILE"
+
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""
-            (cd "$PROJECT" && $COMMAND --append-system-prompt "$SYSTEM_APPEND" "$PROMPT") || true
+            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "$PROMPT") || true
         else
-            (cd "$PROJECT" && $COMMAND) || true
+            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE") || true
         fi
     fi
 

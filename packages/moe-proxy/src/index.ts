@@ -138,7 +138,7 @@ function safeSend(ws: WebSocket, data: string): boolean {
 function getRequestTimeout(parsed: Record<string, unknown>): number {
   if (parsed.method === 'tools/call') {
     const params = parsed.params as { name?: string } | undefined;
-    if (params?.name === 'moe.wait_for_task') {
+    if (params?.name === 'moe.wait_for_task' || params?.name === 'moe.chat_wait') {
       return WAIT_FOR_TASK_TIMEOUT_MS;
     }
   }

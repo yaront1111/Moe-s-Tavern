@@ -1340,4 +1340,58 @@ describe('StateManager', () => {
       expect(child!.parentTaskId).toBeNull();
     });
   });
+
+  describe('createChannel concurrency', () => {
+    it('concurrent createChannel with same name creates exactly one channel', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      // Fire two concurrent createChannel calls with the same name
+      const results = await Promise.allSettled([
+        stateManager.createChannel({ name: 'dup-test', type: 'custom' }),
+        stateManager.createChannel({ name: 'dup-test', type: 'custom' }),
+      ]);
+
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      const rejected = results.filter(r => r.status === 'rejected');
+
+      // Exactly one should succeed, one should fail with 'already exists'
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already exists');
+
+      // Verify only one channel exists
+      const channels = stateManager.getChannels().filter(c => c.name === 'dup-test');
+      expect(channels).toHaveLength(1);
+    });
+  });
+
+  describe('runExclusive serialization', () => {
+    it('concurrent runExclusive calls on same task produce consistent state', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-1' });
+      await stateManager.load();
+
+      // Simulate concurrent plugin updateTask + MCP updateTask via runExclusive
+      // Both try to update the same task's description concurrently
+      const results = await Promise.allSettled([
+        stateManager.runExclusive(async () => {
+          return stateManager.updateTask('task-test123', { description: 'Updated by plugin' });
+        }),
+        stateManager.runExclusive(async () => {
+          return stateManager.updateTask('task-test123', { description: 'Updated by MCP' });
+        }),
+      ]);
+
+      // Both should succeed (serialized, not racing)
+      expect(results.every(r => r.status === 'fulfilled')).toBe(true);
+
+      // The task should have one consistent description (whichever ran last wins)
+      const task = stateManager.getTask('task-test123');
+      expect(task).not.toBeNull();
+      expect(['Updated by plugin', 'Updated by MCP']).toContain(task!.description);
+    });
+  });
 });

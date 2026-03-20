@@ -99,9 +99,18 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
+/** Tools where piggybacked chat notifications are skipped (agent is already dealing with chat). */
+const SKIP_NOTIFICATION_TOOLS = new Set([
+  'moe.chat_read', 'moe.chat_send', 'moe.chat_wait', 'moe.chat_resync'
+]);
+
+/** Minimum interval between piggybacked chat notifications per worker (ms). */
+const NOTIFICATION_COOLDOWN_MS = 30_000;
+
 export class McpAdapter {
   private readonly tools = new Map<string, ReturnType<typeof getTools>[number]>();
   private readonly rateLimiter: RateLimiter | null;
+  private readonly notificationCooldowns = new Map<string, number>();
 
   constructor(private readonly state: StateManager) {
     for (const tool of getTools(state)) {
@@ -206,17 +215,34 @@ export class McpAdapter {
         try {
           const result = await tool.handler(params.arguments, this.state);
 
+          // Build response content with optional chat notification
+          const content: Array<{ type: string; text: string }> = [
+            { type: 'text', text: JSON.stringify(result, null, 2) }
+          ];
+
+          // Piggyback unread chat notifications onto tool responses
+          // Skip for chat tools (agent is already dealing with chat) and respect cooldown
+          const toolArgs = params.arguments as Record<string, unknown> | undefined;
+          const callerId = typeof toolArgs?.workerId === 'string' ? toolArgs.workerId : null;
+          if (callerId && !SKIP_NOTIFICATION_TOOLS.has(params.name)) {
+            const now = Date.now();
+            const lastNotified = this.notificationCooldowns.get(callerId) ?? 0;
+            if (now - lastNotified >= NOTIFICATION_COOLDOWN_MS) {
+              const unread = this.state.getUnreadSummary(callerId);
+              if (unread && unread.total > 0) {
+                this.notificationCooldowns.set(callerId, now);
+                content.push({
+                  type: 'text',
+                  text: `[MOE_CHAT_NOTIFICATION] You have ${unread.total} unread chat message(s). Channels: ${JSON.stringify(unread.channels)}. Call moe.chat_read { workerId: "${callerId}" } to read them.`
+                });
+              }
+            }
+          }
+
           return {
             jsonrpc: '2.0',
             id,
-            result: {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(result, null, 2)
-                }
-              ]
-            }
+            result: { content }
           };
         } catch (toolError) {
           const message = toolError instanceof Error ? toolError.message : 'Tool execution failed';

@@ -213,7 +213,9 @@ $mcpConfigObj = @{
     }
 }
 # Use unique temp file to prevent collision when multiple agents run
-$mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$PID.json"
+# $PID is only available in PowerShell 7+; fall back for Windows PowerShell 5.1
+$myPid = if ($PID) { $PID } else { [System.Diagnostics.Process]::GetCurrentProcess().Id }
+$mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$myPid.json"
 $mcpConfigObj | ConvertTo-Json -Depth 4 | Set-Content -Path $mcpConfigFile -Encoding UTF8
 
 if (-not $NoStartDaemon) {
@@ -326,6 +328,7 @@ if ($agentContextPath -and (Test-Path $agentContextPath)) {
 
 # Read approval mode from project.json
 $approvalMode = ""
+$projConfig = $null
 $projectJsonPath = Join-Path $moeDir "project.json"
 if (Test-Path $projectJsonPath) {
     try {
@@ -527,8 +530,13 @@ if ($Delay -gt 0) {
     Start-Sleep -Seconds $Delay
 }
 
-# Auto-create/join team if -Team specified
+# Auto-join role's default team (required for chat_send to accept the workerId)
+# If -Team not specified, use role-based default name
 $teamContext = ""
+if (-not $Team) {
+    $defaultTeams = @{ architect = "Architects"; worker = "Workers"; qa = "QA" }
+    $Team = $defaultTeams[$Role]
+}
 if ($Team) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
     $nodeExe = "node"
@@ -633,7 +641,7 @@ do {
     $firstRun = $false
 
     $claimPrompt = if ($AutoClaim) {
-        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
     } else { $null }
 
     if ($cliType -eq "codex") {
@@ -653,25 +661,25 @@ do {
         #
         # Claude equivalent: --append-system-prompt carries all context in a single system message
         $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: claim task -> get_context -> explore codebase -> submit_plan for approval" }
-            "worker"    { "Workflow: claim task -> get_context -> start_step -> implement -> complete_step -> complete_task" }
-            "qa"        { "Workflow: claim task -> get_context -> review code and tests -> qa_approve or qa_reject" }
+            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> explore codebase -> submit_plan -> announce in chat" }
+            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> start_step -> implement -> complete_step -> complete_task -> announce in chat" }
+            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> review code and tests -> qa_approve or qa_reject -> announce in chat" }
             default     { "Workflow: claim task -> get_context -> complete task" }
         }
         if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
         }
 
         if ($CodexExec) {
             # Non-interactive exec mode: codex exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
             Write-Host "Command: $Command exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
-            & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write $shortPrompt
+            & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
         } else {
             # Interactive TUI mode: codex -C <project> "<prompt>"
             Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
-            & $Command @CommandArgs -C "$projectPath" $shortPrompt
+            & $Command @CommandArgs -C "$projectPath" "$shortPrompt"
         }
     } elseif ($cliType -eq "gemini") {
         # Check gemini is available
@@ -687,29 +695,25 @@ do {
         # 2. .gemini/GEMINI.md -> loaded as project-level context (full role doc + agent context)
         # 3. $shortPrompt below -> the initial user message (role-aware first action)
         $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: claim task -> get_context -> explore codebase -> submit_plan for approval" }
-            "worker"    { "Workflow: claim task -> get_context -> start_step -> implement -> complete_step -> complete_task" }
-            "qa"        { "Workflow: claim task -> get_context -> review code and tests -> qa_approve or qa_reject" }
+            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> explore codebase -> submit_plan -> announce in chat" }
+            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> start_step -> implement -> complete_step -> complete_task -> announce in chat" }
+            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> review code and tests -> qa_approve or qa_reject -> announce in chat" }
             default     { "Workflow: claim task -> get_context -> complete task" }
         }
         if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then call moe.claim_next_task to get your next task."
+            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
         }
 
         if ($GeminiExec) {
             # Non-interactive headless mode
             Write-Host "Command: $Command --prompt `"<prompt>`" --yolo"
-            Push-Location $projectPath
-            & $Command @CommandArgs --prompt $shortPrompt --yolo
-            Pop-Location
+            try { Push-Location $projectPath; & $Command @CommandArgs --prompt "$shortPrompt" --yolo } finally { Pop-Location }
         } else {
             # Interactive mode
             Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
-            Push-Location $projectPath
-            & $Command @CommandArgs --prompt-interactive $shortPrompt
-            Pop-Location
+            try { Push-Location $projectPath; & $Command @CommandArgs --prompt-interactive "$shortPrompt" } finally { Pop-Location }
         }
     } else {
         # Clean slate for agent teams env var
@@ -722,19 +726,29 @@ do {
             Write-Host "Agent Teams enabled for this worker session"
         }
 
-        # Claude Code: use --mcp-config and --append-system-prompt
+        # Claude Code: use --mcp-config and --append-system-prompt-file
+        # Write system prompt to a temp file to avoid command-line quoting issues
+        # (the system prompt contains XML tags, backticks, JSON, and newlines that
+        # break PowerShell's argument passing to native commands)
+        $systemPromptFile = Join-Path $env:TEMP "moe-system-prompt-$Role-$myPid.md"
+        [System.IO.File]::WriteAllText($systemPromptFile, $systemAppend, [System.Text.UTF8Encoding]::new($false))
         if ($claimPrompt) {
-            Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...> `"$claimPrompt`""
-            & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend $claimPrompt
+            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" `"<prompt>`""
+            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" "$claimPrompt"
         } else {
-            Write-Host "Command: $Command --mcp-config $mcpConfigFile --append-system-prompt <...>"
-            & $Command @CommandArgs --mcp-config $mcpConfigFile --append-system-prompt $systemAppend
+            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`""
+            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile"
         }
     }
 } while ($loopEnabled)
 } finally {
-    # Clean up temp MCP config file (B34)
+    # Clean up temp files
     if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) {
         Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue
     }
+    if ($systemPromptFile -and (Test-Path $systemPromptFile)) {
+        Remove-Item -Path $systemPromptFile -Force -ErrorAction SilentlyContinue
+    }
+    # Clean up agent teams env var so it doesn't leak to parent session
+    Remove-Item Env:\CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS -ErrorAction SilentlyContinue
 }

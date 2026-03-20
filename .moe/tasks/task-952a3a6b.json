@@ -9,8 +9,59 @@
     "Existing tests pass + new concurrency test"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "P0: Create withMutex helper on WebSocketServer to reduce boilerplate. Add method:\n```\nprivate async withMutex<T>(ws, op, fn): Promise<T | null>\n```\nWraps fn in state.runExclusive, catches errors and sends ERROR message to ws. This avoids duplicating try/catch/runExclusive in every handler.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Added withMutex helper method.",
+      "startedAt": "2026-03-20T23:22:51.314Z",
+      "completedAt": "2026-03-20T23:31:46.769Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "P0: Wrap all state-mutating WS handlers in withMutex. Every handler that calls a state-mutating method (createTask, updateTask, deleteTask, createEpic, updateEpic, deleteEpic, reorderTask, approveTask, rejectTask, reopenTask, approveProposal, rejectProposal, updateSettings, createTeam, updateTeam, deleteTeam, addTeamMember, removeTeamMember, addComment) must use withMutex.\n\nFor UPDATE_TASK: move validation (getTask, status check, WIP limit) inside the mutex to prevent TOCTOU.\nFor ARCHIVE_DONE_TASKS: wrap entire loop in single runExclusive.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "All 20 state-mutating handlers wrapped in withMutex. UPDATE_TASK validation moved inside mutex. ARCHIVE_DONE_TASKS loop in single mutex. ADD_TASK_COMMENT read+write atomic.",
+      "startedAt": "2026-03-20T23:31:46.856Z",
+      "completedAt": "2026-03-20T23:31:56.885Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "P1: Add concurrency regression test. Simulate concurrent MCP claimNextTask + plugin UPDATE_TASK on same task via Promise.all. Verify task ends in consistent state. Test error handling when mutex rejects duplicate operations.\n\nValidate: npm run test",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/__tests__/ws-mutex.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added concurrency test verifying runExclusive serializes concurrent updateTask calls on same task.",
+      "startedAt": "2026-03-20T23:31:57.262Z",
+      "completedAt": "2026-03-20T23:33:47.155Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "P2: Run full validation: npx tsc --noEmit && npm run test && npm run build",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-20T23:33:47.336Z",
+      "completedAt": "2026-03-20T23:34:19.110Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,5 +74,11 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-03-03T23:23:07.331Z",
-  "updatedAt": "2026-03-03T23:23:07.331Z"
+  "updatedAt": "2026-03-20T23:34:35.435Z",
+  "planSubmittedAt": "2026-03-20T23:14:24.250Z",
+  "planApprovedAt": "2026-03-20T23:14:24.253Z",
+  "workStartedAt": "2026-03-20T23:22:51.314Z",
+  "completedAt": "2026-03-20T23:34:22.448Z",
+  "reviewStartedAt": "2026-03-20T23:34:22.448Z",
+  "reviewCompletedAt": "2026-03-20T23:34:35.435Z"
 }
