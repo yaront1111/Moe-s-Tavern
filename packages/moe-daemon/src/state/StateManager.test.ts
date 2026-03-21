@@ -1306,14 +1306,26 @@ describe('StateManager', () => {
       expect(task.implementationPlan.length).toBe(50);
     });
 
-    it('preserves assignedWorkerId on WORKING->REVIEW (B29)', async () => {
+    it('clears assignedWorkerId on any status change unless explicitly set', async () => {
       setupMoeFolder();
       createTestEpic();
       createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-1' });
       await stateManager.load();
 
+      // Moving columns clears worker so a new role can claim
       const updated = await stateManager.updateTask('task-test123', { status: 'REVIEW' });
-      expect(updated.assignedWorkerId).toBe('worker-1');
+      expect(updated.assignedWorkerId).toBeNull();
+    });
+
+    it('preserves assignedWorkerId when explicitly set during status change', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'PLANNING', assignedWorkerId: null });
+      await stateManager.load();
+
+      // claimNextTask sets both status and assignedWorkerId together
+      const updated = await stateManager.updateTask('task-test123', { status: 'WORKING', assignedWorkerId: 'worker-2' });
+      expect(updated.assignedWorkerId).toBe('worker-2');
     });
 
     it('clears assignedWorkerId on transition to BACKLOG (B29)', async () => {

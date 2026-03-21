@@ -1512,10 +1512,10 @@ export class StateManager {
       }
     }
 
-    // Only clear assignedWorkerId on transitions where a new role should claim the task (B29)
-    const CLEAR_WORKER_STATUSES = new Set(['BACKLOG', 'PLANNING', 'ARCHIVED']);
+    // Clear assignedWorkerId on any status change unless the caller explicitly sets a new one.
+    // When a task moves between columns, a different agent role should claim it.
     const statusChanged = normalizedUpdates.status !== undefined && normalizedUpdates.status !== task.status;
-    const shouldClearWorker = statusChanged && CLEAR_WORKER_STATUSES.has(normalizedUpdates.status!) && normalizedUpdates.assignedWorkerId === undefined;
+    const shouldClearWorker = statusChanged && normalizedUpdates.assignedWorkerId === undefined;
     const finalUpdates = shouldClearWorker
       ? { ...normalizedUpdates, assignedWorkerId: null }
       : normalizedUpdates;
