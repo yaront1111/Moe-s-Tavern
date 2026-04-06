@@ -65,13 +65,17 @@ Use when a constraint needs updating (ADD_RAIL, MODIFY_RAIL, REMOVE_RAIL).
 - **Real-time updates** - Dashboard data should reflect current state via WebSocket/polling where appropriate
 - **Performance** - Large lists must be paginated or virtualized; avoid blocking the UI thread
 
-### Documentation (Always Include)
+### Documentation (Always Evaluate — Add Step If Needed)
+Every plan must include a docs-check. Ask: **"Does this change affect anything a user, developer, or operator would need to know?"** If yes, add an explicit plan step for documentation updates. Do not assume docs are optional or "can be done later."
+
 - **API docs** - Every new/changed endpoint needs request/response documentation
 - **Architecture decision records** - Non-obvious choices must be documented with rationale
 - **README updates** - If the feature changes setup, usage, or configuration, update the relevant README
+- **CLAUDE.md / SCHEMA.md** - If the change adds tools, types, or modifies the daemon API, update the project docs
 - **Inline documentation** - Complex logic needs comments explaining *why*, not *what*
 - **Cross-platform notes** - All docs must work for Windows, Mac, and Linux users
 - **Migration/upgrade notes** - If the change is breaking, document the upgrade path
+- **Role docs** - If agent workflows change, update the relevant role doc in `docs/roles/`
 
 ### Backend (Always Consider)
 - **Error handling** - Every external call (DB, API, file I/O) must have proper error handling with meaningful messages
