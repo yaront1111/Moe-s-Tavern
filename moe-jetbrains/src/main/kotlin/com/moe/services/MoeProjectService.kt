@@ -326,6 +326,24 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             "STATE_SNAPSHOT" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val newState = MoeJson.parseState(payload)
+                val basePath = project.basePath
+                if (basePath != null && newState.project.rootPath.isNotEmpty()) {
+                    try {
+                        val daemonPath = File(newState.project.rootPath).canonicalPath
+                        val expectedPath = File(basePath).canonicalPath
+                        if (daemonPath != expectedPath) {
+                            log.warn("STATE_SNAPSHOT project mismatch: expected $expectedPath, got $daemonPath. Disconnecting.")
+                            val daemonJson = File(basePath, ".moe/daemon.json")
+                            try { daemonJson.delete() } catch (_: Exception) {}
+                            disconnect()
+                            wsLock.withLock { isManualDisconnect = false }
+                            scheduleReconnect()
+                            return
+                        }
+                    } catch (_: java.io.IOException) {
+                        log.debug("Could not resolve canonical paths for project mismatch check, skipping")
+                    }
+                }
                 applyMessageOnEdt(type) {
                     state = newState
                     publishState(newState)
@@ -1033,7 +1051,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         val file = File(base, ".moe/daemon.json")
         if (!file.exists()) return null
         return try {
-            gson.fromJson(file.readText(), DaemonInfo::class.java)
+            val info = gson.fromJson(file.readText(), DaemonInfo::class.java)
+            if (info.projectPath.isNotEmpty()) {
+                val daemonPath = File(info.projectPath).canonicalPath
+                val expectedPath = File(base).canonicalPath
+                if (daemonPath != expectedPath) {
+                    log.warn("Stale daemon.json: expected project $expectedPath, found $daemonPath")
+                    file.delete()
+                    return null
+                }
+            }
+            info
         } catch (ex: Exception) {
             log.debug("Failed to read daemon.json: ${ex.message}")
             null

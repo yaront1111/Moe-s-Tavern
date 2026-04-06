@@ -45,6 +45,14 @@ function log(message: string): void {
     getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
+function pathsMatch(a: string, b: string): boolean {
+    const na = path.resolve(a);
+    const nb = path.resolve(b);
+    return process.platform === 'win32'
+        ? na.toLowerCase() === nb.toLowerCase()
+        : na === nb;
+}
+
 export class MoeDaemonClient implements vscode.Disposable {
     private readonly extensionPath: string;
     private ws: WebSocket | undefined;
@@ -378,6 +386,13 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = fs.readFileSync(daemonJsonPath, 'utf-8');
             const daemonInfo = JSON.parse(content);
+            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+                log(
+                    `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
+                );
+                try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                return undefined;
+            }
             return { host: configHost, port: daemonInfo.port };
         } catch {
             return undefined;
@@ -446,6 +461,14 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = fs.readFileSync(daemonInfoPath, 'utf-8');
             const daemonInfo = JSON.parse(content);
+            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+                log(
+                    `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
+                );
+                try { fs.unlinkSync(daemonInfoPath); } catch { /* ignore */ }
+                await this.startDaemon('start', projectPath);
+                return;
+            }
             const host = config.get<string>('daemon.host', '127.0.0.1');
             const port = Number(daemonInfo.port);
             if (!Number.isNaN(port)) {
@@ -540,7 +563,18 @@ export class MoeDaemonClient implements vscode.Disposable {
             const { type, payload } = message;
 
             switch (type) {
-                case 'STATE_SNAPSHOT':
+                case 'STATE_SNAPSHOT': {
+                    const expectedPath = this.getWorkspacePath();
+                    if (expectedPath && payload?.project?.rootPath &&
+                        !pathsMatch(payload.project.rootPath, expectedPath)) {
+                        log(
+                            `STATE_SNAPSHOT project mismatch: expected ${expectedPath}, got ${payload.project.rootPath}. Disconnecting.`
+                        );
+                        const daemonJsonPath = path.join(expectedPath, '.moe', 'daemon.json');
+                        try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                        this.disconnect();
+                        break;
+                    }
                     this.state = payload;
                     if (!this.stateReady) {
                         this.stateReady = true;
@@ -548,6 +582,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                     }
                     this._onStateChanged.fire(payload);
                     break;
+                }
 
                 case 'TASK_UPDATED':
                 case 'TASK_CREATED':

@@ -46,7 +46,8 @@ object MoeJson {
             ?: JsonObject()
         val project = Project(
             id = projectJson.getStringOrDefault("id", "unknown"),
-            name = projectJson.getStringOrDefault("name", "Unknown")
+            name = projectJson.getStringOrDefault("name", "Unknown"),
+            rootPath = projectJson.getStringOrDefault("rootPath", "")
         )
 
         val epicsArray = payload.get("epics")
