@@ -6,11 +6,21 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const repoRoot = path.resolve(import.meta.dirname, '..', '..', '..');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const rolesDir = path.join(repoRoot, 'docs', 'roles');
 const agentContextPath = path.join(repoRoot, 'docs', 'agent-context.md');
-const outPath = path.join(import.meta.dirname, '..', 'src', 'util', 'initFiles.ts');
+const outPath = path.join(__dirname, '..', 'src', 'util', 'initFiles.ts');
+
+// Skip regeneration when docs dir is not available (e.g. Docker builds
+// where the build context is only packages/moe-daemon). The committed
+// initFiles.ts is used as-is in that case.
+if (!fs.existsSync(rolesDir)) {
+  console.log('docs/roles not found — skipping initFiles.ts regeneration (using committed version)');
+  process.exit(0);
+}
 
 function escapeTemplateLiteral(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
