@@ -25,7 +25,9 @@ data class ProjectSettings(
     val commitPattern: String = "feat({epicId}): {taskTitle}",
     val agentCommand: String = "claude",
     val enableAgentTeams: Boolean = false,
-    val columnLimits: Map<String, Int>? = null
+    val columnLimits: Map<String, Int>? = null,
+    val columnAgents: Map<String, String>? = null,
+    val agentTeamMode: Boolean = false
 )
 
 data class Epic(

@@ -1631,10 +1631,26 @@ export class StateManager {
       columnLimits = merged;
     }
 
+    // Sanitize columnAgents: merge with existing, validate values are valid role strings
+    let columnAgents = this.project.settings.columnAgents;
+    if (settings.columnAgents !== undefined) {
+      const incoming = settings.columnAgents || {};
+      const merged: Record<string, string> = { ...(columnAgents || {}) };
+      const validRoles = ['architect', 'worker', 'qa'];
+      for (const [key, value] of Object.entries(incoming)) {
+        if (typeof value !== 'string' || !validRoles.includes(value)) {
+          throw new Error(`Invalid column agent for ${key}: must be one of ${validRoles.join(', ')}`);
+        }
+        merged[key] = value;
+      }
+      columnAgents = merged;
+    }
+
     const updatedSettings: ProjectSettings = {
       ...this.project.settings,
       ...settings,
-      columnLimits
+      columnLimits,
+      columnAgents
     };
 
     const updatedProject: Project = {
@@ -2428,6 +2444,8 @@ export class StateManager {
         agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude'),
         enableAgentTeams: sanitizeBoolean(project.settings?.enableAgentTeams, false),
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
+        columnAgents: project.settings?.columnAgents as Record<string, string> | undefined,
+        agentTeamMode: sanitizeBoolean(project.settings?.agentTeamMode, false),
         chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
         chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
       },
