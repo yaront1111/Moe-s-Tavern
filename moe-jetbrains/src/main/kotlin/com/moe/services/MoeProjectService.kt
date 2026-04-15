@@ -62,6 +62,8 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     private val disposed = AtomicBoolean(false)
     @Volatile private var isManualDisconnect = false
     @Volatile private var reconnectAttempts = 0
+    @Volatile private var daemonSpawnAttempts = 0
+    private val maxDaemonSpawnAttempts = 3
     @Volatile private var spawnedDaemonProcess: Process? = null
     @Volatile private var connectedDaemonPid: Int? = null
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -87,7 +89,6 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
         // If daemon was just started, poll for readiness with backoff
         if (startAttempted) {
-            reconnectAttempts = 0  // Reset counter for fresh spawn
             publishStatus(false, "Starting daemon...")
             scheduleRetryAttempt(maxAttempts = 10, delayMs = 500, attempt = 1)
             return
@@ -188,6 +189,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                         connecting = false
                         connected = true
                         reconnectAttempts = 0
+                        daemonSpawnAttempts = 0
                         isManualDisconnect = false
                         connectedDaemonPid = daemonInfo.pid
                     }
@@ -1091,11 +1093,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
         }
 
+        if (daemonSpawnAttempts >= maxDaemonSpawnAttempts) {
+            log.info("Max daemon spawn attempts ($maxDaemonSpawnAttempts) reached, not retrying")
+            return false
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastDaemonStartAttemptAt < daemonStartCooldownMs) {
             return false
         }
         lastDaemonStartAttemptAt = now
+        daemonSpawnAttempts++
 
         val basePath = project.basePath ?: return false
         val direct = buildDirectDaemonCommand(basePath)
@@ -1134,9 +1142,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
             spawnedDaemonProcess = process
             // Drain stdout/stderr to prevent Windows pipe deadlock (buffer is ~4KB)
+            // Log the first few lines for diagnostics if daemon fails to start
             Thread({
                 try {
-                    process.inputStream.bufferedReader().forEachLine { /* discard */ }
+                    var lineCount = 0
+                    process.inputStream.bufferedReader().forEachLine { line ->
+                        if (lineCount < 20) {
+                            log.info("Daemon output: $line")
+                        }
+                        lineCount++
+                    }
                 } catch (_: Exception) { }
             }, "Moe-DaemonDrain").apply { isDaemon = true }.start()
             log.info("Started Moe daemon for $basePath using ${direct?.joinToString(" ") ?: "shell command"} (pid tracking enabled)")
@@ -1535,6 +1550,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         }
         lastDaemonStartAttemptAt = 0  // Reset cooldown
         reconnectAttempts = 0
+        daemonSpawnAttempts = 0
         connect()
     }
 

@@ -94,6 +94,7 @@ Follow this order (security-first, Trail of Bits pattern). Do NOT skip to style 
 - Comments explain *why*, not *what*
 - API docs updated if contracts changed
 - README updated if setup/usage changed
+- **Docs check** — If the change adds/modifies tools, APIs, config, or workflows: are CLAUDE.md, SCHEMA.md, role docs, or READMEs updated? Reject if docs are stale.
 </review-order>
 
 ### 6. Production Readiness (Senior Engineer Lens)

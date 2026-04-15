@@ -316,3 +316,67 @@ export interface DaemonInfo {
   startedAt: string;
   projectPath: string;
 }
+
+// =============================================================================
+// Memory System
+// =============================================================================
+
+export type MemoryType = 'convention' | 'gotcha' | 'pattern' | 'decision' | 'procedure' | 'insight';
+
+export const MEMORY_TYPES: MemoryType[] = ['convention', 'gotcha', 'pattern', 'decision', 'procedure', 'insight'];
+
+export interface MemorySource {
+  files: string[];
+  taskId: string | null;
+  epicId: string | null;
+  workerId: string | null;
+}
+
+export interface MemoryEntry {
+  id: string;
+  type: MemoryType;
+  content: string;
+  tags: string[];
+  source: MemorySource;
+  confidence: number;
+  accessCount: number;
+  helpfulCount: number;
+  unhelpfulCount: number;
+  createdAt: string;
+  lastAccessedAt: string;
+  supersededBy: string | null;
+  contentHash: string;
+}
+
+export interface SessionSummary {
+  id: string;
+  workerId: string;
+  taskId: string;
+  role: string;
+  summary: string;
+  memoriesCreated: string[];
+  completedSteps?: string[];
+  createdAt: string;
+}
+
+export interface PlanningNotes {
+  approachesConsidered?: string;
+  codebaseInsights?: string;
+  risks?: string;
+  keyFiles?: string[];
+}
+
+export interface MemoryQuery {
+  query?: string;
+  types?: MemoryType[];
+  tags?: string[];
+  epicId?: string;
+  files?: string[];
+  limit?: number;
+  minConfidence?: number;
+}
+
+export interface MemorySearchResult {
+  entry: MemoryEntry;
+  score: number;
+}

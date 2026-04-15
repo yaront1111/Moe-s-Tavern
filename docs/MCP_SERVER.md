@@ -922,3 +922,88 @@ Clear chat cursors and return full message history for resync. Useful when a wor
 - Clears the worker's chatCursors for the specified channel (or all channels)
 - Returns messages from the beginning of history
 - Updates cursors to the latest message after resync
+
+## Memory Tools
+
+Persistent project knowledge base that grows smarter with every task. See [Memory System Guide](MEMORY.md) for architecture details.
+
+### moe.remember
+
+Save a learning to the project knowledge base.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `content` | string | Yes | The knowledge to save (max 2000 chars) |
+| `type` | string | Yes | `convention`, `gotcha`, `pattern`, `decision`, `procedure`, or `insight` |
+| `tags` | string[] | No | Searchable tags (auto-generated from content if omitted) |
+| `workerId` | string | Yes | Your worker ID |
+| `taskId` | string | No | Current task ID |
+| `files` | string[] | No | Related file paths |
+
+**Returns:** `{ memoryId, message, wasDuplicate, mergedWith?, tags }`
+
+**Notes:**
+- Automatically deduplicates: if similar content exists (>70% Jaccard similarity), merges instead of creating a new entry
+- Auto-generates tags from content using tokenization if none provided
+- Memories start with confidence 1.0
+
+### moe.recall
+
+Search the project knowledge base for relevant memories.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Natural language search query |
+| `types` | string[] | No | Filter by memory type |
+| `tags` | string[] | No | Filter by tags |
+| `epicId` | string | No | Scope to memories from a specific epic |
+| `files` | string[] | No | Match by related file paths (boosts relevance) |
+| `limit` | number | No | Max results (default 10, max 30) |
+| `minConfidence` | number | No | Minimum confidence threshold (default 0.3) |
+
+**Returns:** `{ memories: [{ id, type, content, tags, confidence, score, source, createdAt }], totalCount }`
+
+**Notes:**
+- Uses BM25 ranking algorithm with composite scoring (text relevance + tags + file overlap + recency + quality)
+- Automatically updates access counts on returned memories
+- Memories also auto-surface in `moe.get_context` responses (top 5 relevant)
+
+### moe.reflect
+
+Rate a memory as helpful or unhelpful. Adjusts confidence for future relevance.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `memoryId` | string | Yes | The memory ID to rate |
+| `helpful` | boolean | Yes | `true` if useful, `false` if not |
+| `workerId` | string | Yes | Your worker ID |
+
+**Returns:** `{ memoryId, helpful, newConfidence, message }`
+
+**Notes:**
+- Helpful: confidence +0.15 (capped at 2.0)
+- Unhelpful: confidence -0.25 (floor at 0.0)
+- Memories below 0.3 confidence are excluded from search results
+- Over time, the best knowledge rises and bad knowledge fades
+
+### moe.save_session_summary
+
+Save a summary of your session before ending. The next agent on this task will see it.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `workerId` | string | Yes | Your worker ID |
+| `taskId` | string | Yes | The task ID you worked on |
+| `summary` | string | Yes | What you accomplished and key findings (max 5000 chars) |
+| `memoriesCreated` | string[] | No | IDs of memories saved this session |
+
+**Returns:** `{ sessionId, message }`
+
+**Notes:**
+- Stored in `.moe/memory/sessions/{workerId}_{taskId}.json`
+- Visible in `moe.get_context` response as `memory.lastSession`
+- Enables session continuity when agents are relaunched

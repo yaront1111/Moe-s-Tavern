@@ -93,7 +93,7 @@ JetBrains Plugin ── WS (/ws) ──▶ Moe Daemon ◀── WS (/mcp) ──
 - **Plugin → Server**: `PING`, `GET_STATE`, `CREATE_TASK`, `UPDATE_TASK`, `REORDER_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `REOPEN_TASK`
 
 ### MCP (`/mcp`)
-MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approval`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.report_blocked`, `moe.propose_rail`, `moe.list_tasks`, `moe.get_next_task`, `moe.claim_next_task`, `moe.create_task`, `moe.create_epic`, `moe.update_epic`, `moe.delete_epic`, `moe.delete_task`, `moe.set_task_status`, `moe.search_tasks`, `moe.qa_approve`, `moe.qa_reject`, `moe.init_project`, `moe.get_activity_log`, `moe.unblock_worker`, `moe.create_team`, `moe.join_team`, `moe.leave_team`, `moe.list_teams`
+MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approval`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.report_blocked`, `moe.propose_rail`, `moe.list_tasks`, `moe.get_next_task`, `moe.claim_next_task`, `moe.create_task`, `moe.create_epic`, `moe.update_epic`, `moe.delete_epic`, `moe.delete_task`, `moe.set_task_status`, `moe.search_tasks`, `moe.qa_approve`, `moe.qa_reject`, `moe.init_project`, `moe.get_activity_log`, `moe.unblock_worker`, `moe.create_team`, `moe.join_team`, `moe.leave_team`, `moe.list_teams`, `moe.wait_for_task`, `moe.add_comment`, `moe.get_pending_questions`, `moe.chat_send`, `moe.chat_read`, `moe.chat_channels`, `moe.chat_join`, `moe.chat_who`, `moe.chat_wait`, `moe.chat_resync`, `moe.chat_pin`, `moe.chat_unpin`, `moe.chat_decision`, `moe.chat_create_channel`, `moe.remember`, `moe.recall`, `moe.reflect`, `moe.save_session_summary`
 
 ## Data Files
 
@@ -105,6 +105,11 @@ MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approv
 ├── tasks/*.json     # Task definitions with status, plan, steps
 ├── workers/*.json   # Worker registrations
 ├── proposals/*.json # Pending proposals
+├── channels/*.json  # Chat channel metadata
+├── messages/*.jsonl # Chat messages (append-only per channel)
+├── memory/
+│   ├── knowledge.jsonl  # Persistent knowledge base (BM25-indexed)
+│   └── sessions/*.json  # Agent session summaries
 └── activity.log     # Append-only event log
 ```
 

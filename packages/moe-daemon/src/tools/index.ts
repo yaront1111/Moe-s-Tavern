@@ -44,6 +44,10 @@ import { chatPinTool } from './chatPin.js';
 import { chatUnpinTool } from './chatUnpin.js';
 import { chatDecisionTool } from './chatDecision.js';
 import { chatCreateChannelTool } from './chatCreateChannel.js';
+import { rememberTool } from './remember.js';
+import { recallTool } from './recall.js';
+import { reflectTool } from './reflect.js';
+import { saveSessionSummaryTool } from './saveSessionSummary.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -96,6 +100,10 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatPinTool(state),
     chatUnpinTool(state),
     chatDecisionTool(state),
-    chatCreateChannelTool(state)
+    chatCreateChannelTool(state),
+    rememberTool(state),
+    recallTool(state),
+    reflectTool(state),
+    saveSessionSummaryTool(state),
   ];
 }

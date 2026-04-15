@@ -46,6 +46,7 @@ import {
   validateEntityId
 } from '../util/sanitize.js';
 import { readLastLines } from '../util/reverseReader.js';
+import { MemoryManager } from '../knowledge/MemoryManager.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -189,6 +190,7 @@ export class StateManager {
   private fileWatcher?: import('./FileWatcher.js').FileWatcher;
   /** In-memory per-worker per-channel unread message counts */
   private unreadCounts = new Map<string, Map<string, number>>();
+  private memoryManager: MemoryManager;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -196,6 +198,11 @@ export class StateManager {
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
     this.mentionRouter = new MentionRouter(4);
+    this.memoryManager = new MemoryManager(this.moePath);
+  }
+
+  getMemoryManager(): MemoryManager {
+    return this.memoryManager;
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
@@ -587,7 +594,11 @@ export class StateManager {
       const normalized = this.normalizeProject(rawProject as Partial<Project>);
       this.project = normalized;
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
-        fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
+        try {
+          fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
+        } catch (error) {
+          logger.error({ error, projectFile }, 'Failed to write normalized project.json');
+        }
       }
 
       this.epics = this.loadEntities<Epic>(path.join(this.moePath, 'epics'));
@@ -624,6 +635,9 @@ export class StateManager {
 
       // Re-initialize MentionRouter with project-configured maxHops
       this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
+
+      // Load knowledge base
+      await this.memoryManager.load();
 
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();

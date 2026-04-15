@@ -29,8 +29,11 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 
 - **Visibility** - See what AI agents are doing in a Kanban board
 - **Control** - Approve or reject AI plans before code gets written
+- **Persistent Memory** - Agents learn from every task and share knowledge across sessions
+- **Self-Healing** - Daemon auto-restarts on crash with exponential backoff
 - **Traceability** - Full audit log of every action
-- **Flexibility** - Works with Claude, GPT, and any MCP-compatible agent
+- **Agent Chat** - Agents communicate, coordinate, and share context in real-time
+- **Flexibility** - Works with Claude, Codex, Gemini, and any MCP-compatible agent
 
 > *"Let AI do the coding, but keep humans in the loop."*
 
@@ -42,8 +45,12 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 |---------|-------------|
 | **Kanban Board** | Visual task management in your IDE |
 | **Plan Approval** | Review AI implementation plans before execution |
-| **Multi-Agent** | Run architect, worker, and reviewer agents |
-| **MCP Protocol** | Standard interface for AI agent integration |
+| **Persistent Memory** | Project knowledge base that grows smarter with every task ([details](docs/MEMORY.md)) |
+| **Self-Healing Daemon** | Auto-restart on crash with exponential backoff and supervision |
+| **Agent Chat** | Real-time messaging between agents with @mentions and channels |
+| **Multi-Agent** | Run architect, worker, and QA agents (Claude, Codex, Gemini) |
+| **Plan Mode** | Agents enter deep exploration mode for complex tasks |
+| **MCP Protocol** | Standard interface for AI agent integration (37+ tools) |
 | **Real-time Sync** | Live updates via WebSocket |
 | **Activity Log** | Complete audit trail with log rotation |
 | **Rails System** | Define constraints AI must follow |
@@ -207,24 +214,27 @@ graph LR
     end
 
     subgraph Backend
-        Daemon[Moe Daemon]
-        Files[.moe/ files]
+        Supervisor[Supervisor] --> Daemon[Moe Daemon]
+        Daemon --> Files[".moe/ state"]
+        Daemon --> Memory["Knowledge Base"]
     end
 
     subgraph Agents
         Claude[Claude Code]
-        GPT[GPT Agent]
-        Other[Other MCP Agents]
+        Codex[Codex]
+        Gemini[Gemini]
     end
 
     Plugin <-->|WebSocket| Daemon
-    Daemon <-->|Read/Write| Files
     Claude <-->|MCP| Daemon
-    GPT <-->|MCP| Daemon
-    Other <-->|MCP| Daemon
+    Codex <-->|MCP| Daemon
+    Gemini <-->|MCP| Daemon
 ```
 
-**Key Principle:** The `.moe/` folder is the source of truth. The daemon is the sole writer. All clients (plugin, agents) communicate through the daemon.
+**Key Principles:**
+- The `.moe/` folder is the source of truth. The daemon is the sole writer.
+- The **supervisor** auto-restarts the daemon on crash with exponential backoff.
+- The **knowledge base** persists agent learnings across sessions with BM25 search and confidence scoring.
 
 ---
 
@@ -234,21 +244,29 @@ graph LR
 moe/
 ├── packages/
 │   ├── moe-daemon/      # Node.js daemon (TypeScript)
+│   │   └── src/
+│   │       ├── knowledge/   # Memory system (BM25, tokenizer, scoring)
+│   │       ├── tools/       # 37+ MCP tool implementations
+│   │       ├── state/       # State management + file watcher
+│   │       └── server/      # WebSocket + MCP adapter
 │   └── moe-proxy/       # MCP stdio proxy for agents
 ├── moe-jetbrains/       # JetBrains IDE plugin (Kotlin)
+├── moe-vscode/          # VS Code / Antigravity extension
 ├── docs/                # Documentation
 │   ├── ARCHITECTURE.md  # System design
-│   ├── MCP_SERVER.md    # MCP tool reference
+│   ├── MCP_SERVER.md    # MCP tool reference (37+ tools)
 │   ├── SCHEMA.md        # Data schema
+│   ├── MEMORY.md        # Memory system guide
 │   ├── DEVELOPMENT.md   # Dev guide
 │   ├── TROUBLESHOOTING.md # Common issues & solutions
-│   └── roles/           # Agent role guides (bundled with plugin)
-│       ├── architect.md
+│   └── roles/           # Agent role guides
+│       ├── architect.md # Includes plan mode + memory guidance
 │       ├── worker.md
 │       └── qa.md
 └── scripts/             # Agent launcher & install scripts
-    ├── moe-agent.ps1    # Windows agent launcher
     ├── moe-agent.sh     # Mac/Linux agent launcher
+    ├── moe-agent.ps1    # Windows agent launcher
+    ├── moe-team.sh      # Launch full agent team
     └── install-all.ps1  # Windows full install
 ```
 
@@ -279,7 +297,8 @@ Configure in `.moe/project.json`:
 ## Documentation
 
 - [Architecture Overview](docs/ARCHITECTURE.md)
-- [MCP Server API](docs/MCP_SERVER.md)
+- [MCP Server API](docs/MCP_SERVER.md) - 37+ tools
+- [Memory System](docs/MEMORY.md) - How agent memory works
 - [Data Schema](docs/SCHEMA.md)
 - [Development Guide](docs/DEVELOPMENT.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)

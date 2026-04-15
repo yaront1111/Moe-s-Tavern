@@ -42,6 +42,17 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             required: ['description'],
             additionalProperties: false
           }
+        },
+        planningNotes: {
+          type: 'object',
+          description: 'Architect reasoning notes for the worker (approaches considered, codebase insights, risks, key files)',
+          properties: {
+            approachesConsidered: { type: 'string', description: 'What alternatives were evaluated and why rejected' },
+            codebaseInsights: { type: 'string', description: 'Patterns, conventions, architecture discovered' },
+            risks: { type: 'string', description: 'Edge cases and potential issues the worker should watch for' },
+            keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
+          },
+          additionalProperties: false
         }
       },
       required: ['taskId', 'steps'],
@@ -51,6 +62,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       const params = args as {
         taskId: string;
         steps: { description: string; affectedFiles?: string[] }[];
+        planningNotes?: {
+          approachesConsidered?: string;
+          codebaseInsights?: string;
+          risks?: string;
+          keyFiles?: string[];
+        };
       };
 
       const task = state.getTask(params.taskId);
@@ -103,11 +120,20 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         affectedFiles: step.affectedFiles || []
       }));
 
-      await state.updateTask(task.id, {
+      const updatePayload: Record<string, unknown> = {
         implementationPlan,
         status: 'AWAITING_APPROVAL',
         planSubmittedAt: new Date().toISOString(),
-      }, 'PLAN_SUBMITTED');
+      };
+      if (params.planningNotes) {
+        updatePayload.planningNotes = {
+          approachesConsidered: params.planningNotes.approachesConsidered?.slice(0, 5000),
+          codebaseInsights: params.planningNotes.codebaseInsights?.slice(0, 5000),
+          risks: params.planningNotes.risks?.slice(0, 5000),
+          keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
+        };
+      }
+      await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED');
 
       const approvalMode = project.settings.approvalMode;
       let finalStatus = 'AWAITING_APPROVAL';

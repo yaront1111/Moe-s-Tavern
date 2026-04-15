@@ -56,6 +56,42 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         } catch { /* channel may have no messages yet */ }
       }
 
+      // Auto-surface relevant memories from the knowledge base
+      let memoryContext: {
+        relevant: Array<{ id: string; type: string; content: string; confidence: number }>;
+        lastSession: unknown;
+      } = { relevant: [], lastSession: null };
+
+      if (task) {
+        try {
+          const mm = state.getMemoryManager();
+          // Build search query from task context
+          const searchTerms = [task.title, task.description].filter(Boolean).join(' ');
+          const affectedFiles = task.implementationPlan
+            ?.flatMap(s => s.affectedFiles || []) || [];
+
+          if (searchTerms) {
+            const memories = await mm.search({
+              query: searchTerms,
+              files: affectedFiles,
+              limit: 5,
+              minConfidence: 0.3,
+            });
+            memoryContext.relevant = memories.map(r => ({
+              id: r.entry.id,
+              type: r.entry.type,
+              content: r.entry.content,
+              confidence: Math.round(r.entry.confidence * 100) / 100,
+            }));
+          }
+
+          memoryContext.lastSession = mm.getLastSession(task.id);
+        } catch { /* memory system failure should not break get_context */ }
+      }
+
+      // Read planningNotes from task if present
+      const planningNotes = task ? (task as unknown as Record<string, unknown>).planningNotes ?? null : null;
+
       return {
         project: {
           id: state.project.id,
@@ -110,7 +146,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
                 hint: 'Use moe.chat_send to post updates/questions. Use moe.chat_read for full history.'
               }
             }
-          : {})
+          : {}),
+        memory: memoryContext,
+        planningNotes,
       };
     }
   };

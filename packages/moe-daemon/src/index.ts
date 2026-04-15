@@ -9,6 +9,7 @@ import path from 'path';
 import net from 'net';
 import http from 'http';
 import crypto from 'crypto';
+import { spawn, type ChildProcess } from 'child_process';
 import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
@@ -30,6 +31,12 @@ const PORT_READY_TIMEOUT_MS = parseInt(process.env.MOE_PORT_READY_TIMEOUT_MS || 
 const LOCK_RETRY_DELAY_MS = parseInt(process.env.MOE_LOCK_RETRY_DELAY_MS || '2000', 10);
 const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.MOE_SHUTDOWN_TIMEOUT_MS || '10000', 10);
 const HTTP_CLOSE_TIMEOUT_MS = parseInt(process.env.MOE_HTTP_CLOSE_TIMEOUT_MS || '5000', 10);
+
+// Supervisor constants
+const SUPERVISOR_MAX_RESTARTS = 5;
+const SUPERVISOR_RESTART_WINDOW_MS = 60_000;
+const SUPERVISOR_MAX_BACKOFF_MS = 30_000;
+const SUPERVISOR_CHILD_KILL_TIMEOUT_MS = 10_000;
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -215,6 +222,25 @@ function removeDaemonInfo(projectPath: string): void {
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
   }
+}
+
+function stopSentinelPath(projectPath: string): string {
+  return path.join(projectPath, '.moe', 'daemon.stop');
+}
+
+function writeStopSentinel(projectPath: string): void {
+  try {
+    fs.writeFileSync(stopSentinelPath(projectPath), String(Date.now()));
+  } catch { /* best effort */ }
+}
+
+function consumeStopSentinel(projectPath: string): boolean {
+  const sentinelPath = stopSentinelPath(projectPath);
+  if (fs.existsSync(sentinelPath)) {
+    try { fs.unlinkSync(sentinelPath); } catch { /* ignore */ }
+    return true;
+  }
+  return false;
 }
 
 function writeGlobalConfig(): void {
@@ -472,6 +498,114 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   logger.info({ endpoint: `ws://localhost:${port}/mcp` }, 'MCP bridge');
 }
 
+async function superviseDaemon(projectPath: string, preferredPort?: number): Promise<void> {
+  // Check if daemon is already running
+  const existing = readDaemonInfo(projectPath);
+  if (existing && isProcessAlive(existing.pid)) {
+    logger.info({ port: existing.port, pid: existing.pid }, 'Moe daemon already running');
+    return;
+  }
+
+  // Clean up stale stop sentinel from previous runs
+  consumeStopSentinel(projectPath);
+
+  const scriptPath = process.argv[1];
+  const childArgs = ['_run', '--project', projectPath];
+  if (preferredPort !== undefined) {
+    childArgs.push('--port', String(preferredPort));
+  }
+
+  let restartTimestamps: number[] = [];
+  let child: ChildProcess | null = null;
+  let shuttingDown = false;
+
+  function spawnChild(): void {
+    child = spawn(process.execPath, [scriptPath, ...childArgs], {
+      stdio: 'inherit',
+      env: process.env,
+    });
+
+    const childPid = child.pid;
+    logger.info({ childPid }, 'Supervisor spawned daemon process');
+
+    child.on('exit', (code, signal) => {
+      child = null;
+
+      if (shuttingDown) {
+        process.exit(0);
+        return;
+      }
+
+      // Check if stop was requested via sentinel file
+      if (consumeStopSentinel(projectPath)) {
+        logger.info('Daemon stopped by stop command');
+        process.exit(0);
+        return;
+      }
+
+      if (code === 0) {
+        logger.info('Daemon exited cleanly');
+        process.exit(0);
+        return;
+      }
+
+      logger.warn({ code, signal }, 'Daemon crashed');
+
+      // Track restart timestamps within the window
+      const now = Date.now();
+      restartTimestamps.push(now);
+      restartTimestamps = restartTimestamps.filter(t => now - t < SUPERVISOR_RESTART_WINDOW_MS);
+
+      if (restartTimestamps.length > SUPERVISOR_MAX_RESTARTS) {
+        logger.error(
+          { restarts: restartTimestamps.length, windowMs: SUPERVISOR_RESTART_WINDOW_MS },
+          'Too many restarts, supervisor giving up'
+        );
+        process.exit(1);
+        return;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+      const backoffMs = Math.min(
+        SUPERVISOR_MAX_BACKOFF_MS,
+        1000 * Math.pow(2, restartTimestamps.length - 1)
+      );
+      logger.info(
+        { backoffMs, attempt: restartTimestamps.length, maxRestarts: SUPERVISOR_MAX_RESTARTS },
+        'Restarting daemon after backoff'
+      );
+      setTimeout(spawnChild, backoffMs);
+    });
+  }
+
+  // Forward signals to child for graceful shutdown
+  const forwardSignal = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (child && child.pid) {
+      try {
+        child.kill(signal);
+      } catch { /* child may have already exited */ }
+      // Force kill if child doesn't exit in time
+      const forceTimeout = setTimeout(() => {
+        if (child && child.pid) {
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        }
+        process.exit(1);
+      }, SUPERVISOR_CHILD_KILL_TIMEOUT_MS);
+      forceTimeout.unref();
+    } else {
+      process.exit(0);
+    }
+  };
+
+  process.on('SIGTERM', () => forwardSignal('SIGTERM'));
+  process.on('SIGINT', () => forwardSignal('SIGINT'));
+
+  logger.info({ projectPath }, 'Supervisor starting');
+  spawnChild();
+}
+
 function stopDaemon(projectPath: string): void {
   const info = readDaemonInfo(projectPath);
   if (!info) {
@@ -490,6 +624,8 @@ function stopDaemon(projectPath: string): void {
   }
 
   if (isProcessAlive(info.pid)) {
+    // Write stop sentinel so the supervisor doesn't restart the child
+    writeStopSentinel(projectPath);
     process.kill(info.pid, 'SIGTERM');
     logger.info({ pid: info.pid }, 'Sent SIGTERM to daemon');
   } else {
@@ -542,7 +678,7 @@ function initProject(projectPath: string, projectName?: string): InitResult {
   }
 
   // Create directory structure
-  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles'];
+  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles', 'memory', 'memory/sessions'];
   fs.mkdirSync(moePath, { recursive: true });
   for (const dir of dirs) {
     fs.mkdirSync(path.join(moePath, dir), { recursive: true });
@@ -600,6 +736,10 @@ async function main() {
 
   switch (command) {
     case 'start':
+      await superviseDaemon(projectPath, port);
+      break;
+    case '_run':
+      // Internal: called by supervisor to run the actual daemon process
       await startDaemon(projectPath, port);
       break;
     case 'stop':
@@ -610,7 +750,7 @@ async function main() {
       break;
     case 'init':
       initProject(projectPath, name);
-      await startDaemon(projectPath, port);
+      await superviseDaemon(projectPath, port);
       break;
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init] [--project <path>] [--port <port>] [--name <name>]');

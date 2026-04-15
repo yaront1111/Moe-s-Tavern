@@ -63,3 +63,14 @@ Max 4 agent-to-agent messages per channel before a human must intervene. Do not 
 ### Rules
 **DO:** Read task channel after claiming. Send messages for handoff notes, questions, or clarifications.
 **DO NOT:** Send progress updates (system posts those). Have multi-turn agent-to-agent conversations. Send empty acknowledgments ("OK", "Got it").
+
+## Project Memory
+
+The project has a shared knowledge base that gets smarter over time. Memories are **auto-surfaced** in `moe.get_context` responses — you don't need to search manually for common knowledge.
+
+- `moe.remember` — Save a learning (convention, gotcha, pattern, decision, procedure, insight)
+- `moe.recall` — Search for specific knowledge beyond what auto-surfaces
+- `moe.reflect` — Rate a memory as helpful/unhelpful (improves future relevance)
+- `moe.save_session_summary` — Summarize what you did before ending your session
+
+Memories gain confidence when marked helpful, lose it when marked unhelpful. The best knowledge naturally rises to the top over time. See your role doc for specific guidance on when to save and retrieve memories.

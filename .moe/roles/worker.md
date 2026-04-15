@@ -23,6 +23,40 @@ You are a worker. Your job is to execute approved implementation plans.
 - Review `affectedFiles` in each step to scope your work
 - Check `definitionOfDone` - you must satisfy every item
 
+## Plan Mode for Complex Tasks
+
+For complex tasks, enter Claude Code's plan mode to explore affected code and plan your implementation approach before writing code.
+
+### When to Enter Plan Mode
+
+After reading the `implementationPlan` in Prerequisites, assess the task. **Enter Plan Mode if 2 or more apply:**
+
+- Approved plan has 5+ implementation steps
+- Steps span 4+ distinct files across different directories
+- Steps modify shared infrastructure (types, utilities, core modules)
+- Task is reopened with non-trivial rejection (`reopenCount > 0` and complex issues)
+- Implementation requires understanding multiple subsystem interactions
+
+**Skip plan mode for:** simple well-defined steps (add a field, rename a variable), steps with 1-2 affected files and clear instructions, test-only steps, single-step tasks.
+
+### Plan Mode Workflow
+
+1. Claim task and call `moe.get_context` **before** entering plan mode
+2. Read the `implementationPlan` and assess complexity
+3. If complex, run:
+   - `/plan` — enter plan mode (read-only)
+4. **In plan mode, explore focused:**
+   - Read all files listed in `affectedFiles` across plan steps
+   - Understand the current state of code that will be modified
+   - Identify types, interfaces, and patterns to match
+   - Note potential issues (type mismatches, missing imports, circular deps)
+5. `/plan` — exit plan mode (plan auto-approves, no human action needed)
+6. Proceed with `moe.start_step` and implementation
+
+> **CRITICAL:** MCP tools (`moe.start_step`, `moe.complete_step`, etc.) are state-modifying and **blocked in plan mode**. Always claim task and call `get_context` BEFORE entering plan mode. Implement AFTER exiting.
+
+> **Do NOT use `/effort max`** — plan mode for workers is brief and focused on understanding the implementation plan, not deep architectural analysis. That is the architect's job.
+
 ## Tools
 
 ### Get Context (Always call first)

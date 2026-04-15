@@ -104,22 +104,34 @@ export class MoeWebSocketServer {
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
       this.mcpClients.add(ws);
-      ws.on('message', (data: WebSocket.RawData) => this.handleMcpMessage(ws, data.toString()));
+      ws.on('message', (data: WebSocket.RawData) => {
+        this.handleMcpMessage(ws, data.toString()).catch((err) => {
+          logger.error({ error: err, endpoint: 'mcp' }, 'Unhandled error in MCP message handler');
+        });
+      });
       ws.on('close', () => {
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup');
+        });
       });
       ws.on('error', (error) => {
         logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
+        });
       });
       return;
     }
 
     this.pluginClients.add(ws);
     this.sendStateSnapshot(ws);
-    ws.on('message', (data: WebSocket.RawData) => this.handlePluginMessage(ws, data.toString()));
+    ws.on('message', (data: WebSocket.RawData) => {
+      this.handlePluginMessage(ws, data.toString()).catch((err) => {
+        logger.error({ error: err, endpoint: 'plugin' }, 'Unhandled error in plugin message handler');
+      });
+    });
     ws.on('close', () => this.pluginClients.delete(ws));
     ws.on('error', (error) => {
       logger.error({ error, endpoint: 'plugin' }, 'Plugin client WebSocket error');
