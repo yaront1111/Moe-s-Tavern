@@ -2424,7 +2424,7 @@ export class StateManager {
       id: project.id || generateId('proj'),
       schemaVersion: project.schemaVersion || CURRENT_SCHEMA_VERSION,
       name: sanitizeString(project.name, 'projectName', 256, path.basename(this.projectPath)),
-      rootPath: project.rootPath || this.projectPath,
+      rootPath: this.projectPath,
       globalRails: {
         techStack: sanitizeStringArray(project.globalRails?.techStack, 50, 256),
         forbiddenPatterns: sanitizeStringArray(project.globalRails?.forbiddenPatterns, 100, 1000),

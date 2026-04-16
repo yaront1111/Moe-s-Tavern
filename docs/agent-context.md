@@ -64,13 +64,20 @@ Max 4 agent-to-agent messages per channel before a human must intervene. Do not 
 **DO:** Read task channel after claiming. Send messages for handoff notes, questions, or clarifications.
 **DO NOT:** Send progress updates (system posts those). Have multi-turn agent-to-agent conversations. Send empty acknowledgments ("OK", "Got it").
 
-## Project Memory
+## Project Memory (Required)
 
-The project has a shared knowledge base that gets smarter over time. Memories are **auto-surfaced** in `moe.get_context` responses — you don't need to search manually for common knowledge.
+You MUST use the shared knowledge base on every task. This is not optional.
 
+**Required actions every task:**
+1. **Recall** — After `moe.get_context`, check `memory.relevant` in the response. Use `moe.recall` for deeper search if needed.
+2. **Reflect** — If a surfaced memory was helpful, call `moe.reflect { memoryId, helpful: true }`. If wrong/outdated, `moe.reflect { memoryId, helpful: false }`.
+3. **Remember** — When you discover conventions, gotchas, patterns, or decisions, save them with `moe.remember` immediately.
+4. **Summarize** — Before calling `moe.wait_for_task`, call `moe.save_session_summary` with what you accomplished and discovered.
+
+**Tools:**
 - `moe.remember` — Save a learning (convention, gotcha, pattern, decision, procedure, insight)
 - `moe.recall` — Search for specific knowledge beyond what auto-surfaces
 - `moe.reflect` — Rate a memory as helpful/unhelpful (improves future relevance)
 - `moe.save_session_summary` — Summarize what you did before ending your session
 
-Memories gain confidence when marked helpful, lose it when marked unhelpful. The best knowledge naturally rises to the top over time. See your role doc for specific guidance on when to save and retrieve memories.
+Memories gain confidence when marked helpful, lose it when marked unhelpful. The best knowledge naturally rises to the top over time. See your role doc for specific guidance.

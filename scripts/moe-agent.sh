@@ -1069,7 +1069,7 @@ Run: bash $moe_call --help for full list."
 
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
-        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. Keep waiting until you get a task."
+        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
@@ -1100,10 +1100,10 @@ Run: bash $moe_call --help for full list."
         # Claude equivalent: --append-system-prompt carries all context in a single system message
         ROLE_WORKFLOW=""
         case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → explore codebase → submit_plan → announce in chat" ;;
-            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → start_step → implement → complete_step → complete_task → announce in chat" ;;
-            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → review code and tests → qa_approve or qa_reject → announce in chat" ;;
-            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
+            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
+            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
+            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
+            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
             SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
@@ -1145,10 +1145,10 @@ Run: bash $moe_call --help for full list."
         # 3. SHORT_PROMPT below → the initial user message (role-aware first action)
         ROLE_WORKFLOW=""
         case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → explore codebase → submit_plan → announce in chat" ;;
-            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → start_step → implement → complete_step → complete_task → announce in chat" ;;
-            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → review code and tests → qa_approve or qa_reject → announce in chat" ;;
-            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → complete task" ;;
+            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
+            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
+            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
+            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
         esac
         if [ "$AUTO_CLAIM" = true ]; then
             SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."

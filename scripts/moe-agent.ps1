@@ -641,7 +641,7 @@ do {
     $firstRun = $false
 
     $claimPrompt = if ($AutoClaim) {
-        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. If hasNext is false, say: 'No tasks in $Role queue' and wait."
     } else { $null }
 
     if ($cliType -eq "codex") {
@@ -661,10 +661,10 @@ do {
         #
         # Claude equivalent: --append-system-prompt carries all context in a single system message
         $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> explore codebase -> submit_plan -> announce in chat" }
-            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> start_step -> implement -> complete_step -> complete_task -> announce in chat" }
-            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> review code and tests -> qa_approve or qa_reject -> announce in chat" }
-            default     { "Workflow: claim task -> get_context -> complete task" }
+            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
+            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
+            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
+            default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
         }
         if ($claimPrompt) {
             $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
@@ -695,10 +695,10 @@ do {
         # 2. .gemini/GEMINI.md -> loaded as project-level context (full role doc + agent context)
         # 3. $shortPrompt below -> the initial user message (role-aware first action)
         $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> explore codebase -> submit_plan -> announce in chat" }
-            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> start_step -> implement -> complete_step -> complete_task -> announce in chat" }
-            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> review code and tests -> qa_approve or qa_reject -> announce in chat" }
-            default     { "Workflow: claim task -> get_context -> complete task" }
+            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
+            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
+            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
+            default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
         }
         if ($claimPrompt) {
             $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
