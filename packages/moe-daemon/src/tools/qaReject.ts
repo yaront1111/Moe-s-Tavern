@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { QAIssue, QAIssueType, RejectionDetails } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
+import { assertWorkerOwns } from '../util/enforcement.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -37,7 +38,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
             required: ['type', 'description']
           },
           description: 'Structured list of issues found during review'
-        }
+        },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId', 'reason'],
       additionalProperties: false
@@ -48,6 +50,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reason?: string;
         failedDodItems?: string[];
         issues?: QAIssue[];
+        workerId?: string;
       };
 
       if (!params.taskId) {
@@ -96,6 +99,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'REVIEW');
       }
 
+      assertWorkerOwns(task, params.workerId);
+
       // Build rejection details (only if structured feedback provided)
       let rejectionDetails: RejectionDetails | undefined;
       if (params.failedDodItems?.length || params.issues?.length) {
@@ -129,6 +134,40 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
       } catch { /* never block tool */ }
 
+      // Auto-extract memory: every rejection issue becomes a gotcha the next
+      // worker (or even the same one fixing the rejection) will see via recall.
+      // This is the single highest-leverage memory source — rejections encode
+      // exactly the kind of non-obvious knowledge we want to preserve.
+      if (params.workerId) {
+        try {
+          const mm = state.getMemoryManager();
+          const reasonCapped = params.reason.slice(0, 2000);
+          const issueSummary = (params.issues || [])
+            .slice(0, 10)
+            .map((i) => `[${i.type}] ${i.description.slice(0, 500)}${i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : ''}`)
+            .join('\n');
+          const failedDod = (params.failedDodItems || []).slice(0, 10).join('\n').slice(0, 2000);
+          const bodyParts = [
+            `Task "${updated.title}" was rejected by QA (reopen #${updated.reopenCount}).`,
+            `Reason: ${reasonCapped}`,
+            failedDod ? `Failed DoD items:\n${failedDod}` : '',
+            issueSummary ? `Issues:\n${issueSummary}` : '',
+          ].filter(Boolean);
+          await mm.addEntry({
+            workerId: params.workerId,
+            type: 'gotcha',
+            content: bodyParts.join('\n\n').slice(0, 5000),
+            // epicId stays out of tags — dedicated field handles epic filtering.
+            tags: ['qa-rejection'],
+            files: Array.from(new Set((params.issues || []).map(i => i.file).filter((f): f is string => !!f))).slice(0, 20),
+            taskId: updated.id,
+            epicId: updated.epicId,
+          });
+        } catch (err) {
+          console.warn(`[qaReject] memory auto-extract failed for ${updated.id}:`, err);
+        }
+      }
+
       return {
         success: true,
         taskId: updated.id,
@@ -136,7 +175,16 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reopenCount: updated.reopenCount,
         reason: params.reason,
         rejectionDetails: rejectionDetails || null,
-        message: `Task ${updated.id} rejected and moved to WORKING. Worker should address: ${params.reason}`
+        message: `Task ${updated.id} rejected and moved to WORKING. Worker should address: ${params.reason}`,
+        nextAction: {
+          tool: 'moe.save_session_summary',
+          args: {
+            workerId: params.workerId,
+            taskId: updated.id,
+            summary: `Rejected task ${updated.id}: ${params.reason}`
+          },
+          reason: 'Record your review findings; next QA rotation will benefit.'
+        }
       };
     }
   };

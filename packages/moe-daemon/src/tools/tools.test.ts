@@ -211,6 +211,42 @@ describe('MCP Tools', () => {
       expect(result.worker).toBeNull();
     });
 
+    it('records contextFetchedBy when workerId provided and task is claimed', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ assignedWorkerId: 'worker-ctx' });
+      await state.load();
+      const tool = getContextTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-ctx' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx']);
+
+      // Duplicate call does not produce duplicate entries
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-ctx' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx']);
+
+      // Different worker is appended
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-qa' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx', 'worker-qa']);
+    });
+
+    it('does not record contextFetchedBy when workerId is missing', async () => {
+      const prev = process.env.MOE_WORKER_ID;
+      delete process.env.MOE_WORKER_ID;
+      try {
+        setupMoeFolder();
+        createEpic();
+        createTask({ assignedWorkerId: 'worker-ctx' });
+        await state.load();
+        const tool = getContextTool(state);
+        await tool.handler({ taskId: 'task-1' }, state);
+        expect(state.getTask('task-1')?.contextFetchedBy).toBeUndefined();
+      } finally {
+        if (prev === undefined) delete process.env.MOE_WORKER_ID;
+        else process.env.MOE_WORKER_ID = prev;
+      }
+    });
+
     it('returns step notes in implementationPlan', async () => {
       setupMoeFolder();
       createEpic();

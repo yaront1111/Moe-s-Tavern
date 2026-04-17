@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidState } from '../util/errors.js';
+import { logger } from '../util/logger.js';
 
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
@@ -9,13 +10,15 @@ export function getContextTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        taskId: { type: 'string' }
+        taskId: { type: 'string' },
+        workerId: { type: 'string' }
       },
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { taskId?: string };
+      const params = (args || {}) as { taskId?: string; workerId?: string };
       const taskId = params.taskId || process.env.MOE_TASK_ID || '';
+      const callerWorkerId = params.workerId || process.env.MOE_WORKER_ID || '';
 
       if (!state.project) {
         throw invalidState('Project', 'not loaded', 'loaded');
@@ -65,8 +68,28 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       if (task) {
         try {
           const mm = state.getMemoryManager();
-          // Build search query from task context
-          const searchTerms = [task.title, task.description].filter(Boolean).join(' ');
+          // Build a richer search query. In addition to title+description, include
+          // signals that boost recall precision for reopened and constrained tasks:
+          //   - reopenReason: explicit failure patterns from last QA rejection
+          //   - rejectionDetails.failedDodItems: which DoD items failed
+          //   - task rails: constraints that shape the solution space
+          //   - epic architecture notes + epic rails: architectural context
+          // All trimmed so the query stays bounded.
+          const failedDod = (task.rejectionDetails?.failedDodItems || []).join(' ');
+          const epicBits = epic
+            ? [epic.architectureNotes || '', ...(epic.epicRails || [])].join(' ')
+            : '';
+          const searchTerms = [
+            task.title,
+            task.description,
+            task.reopenReason || '',
+            failedDod,
+            ...(task.taskRails || []),
+            epicBits,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .slice(0, 4000); // cap to keep BM25 bounded
           const affectedFiles = task.implementationPlan
             ?.flatMap(s => s.affectedFiles || []) || [];
 
@@ -91,6 +114,23 @@ export function getContextTool(_state: StateManager): ToolDefinition {
 
       // Read planningNotes from task if present
       const planningNotes = task ? (task as unknown as Record<string, unknown>).planningNotes ?? null : null;
+
+      // Record ownership bookkeeping so start_step can enforce context-fetched ordering.
+      if (task && callerWorkerId) {
+        const existing = Array.isArray(task.contextFetchedBy) ? task.contextFetchedBy : [];
+        if (!existing.includes(callerWorkerId)) {
+          try {
+            await state.updateTask(task.id, {
+              contextFetchedBy: [...existing, callerWorkerId],
+            });
+          } catch (err) {
+            logger.warn(
+              { err, taskId: task.id, workerId: callerWorkerId },
+              'Failed to record contextFetchedBy; continuing'
+            );
+          }
+        }
+      }
 
       return {
         project: {
@@ -149,6 +189,42 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           : {}),
         memory: memoryContext,
         planningNotes,
+        // Suggest the role-appropriate next action based on the task's current column.
+        ...(task
+          ? {
+              nextAction: (() => {
+                if (task.status === 'PLANNING') {
+                  return {
+                    tool: 'moe.submit_plan',
+                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
+                    reason: 'Plan this task and submit for approval.'
+                  };
+                }
+                if (task.status === 'WORKING') {
+                  const nextStep = (task.implementationPlan || []).find(s => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
+                  return nextStep
+                    ? {
+                        tool: 'moe.start_step',
+                        args: { taskId: task.id, stepId: nextStep.stepId, workerId: callerWorkerId || undefined },
+                        reason: `Begin step: ${nextStep.description.slice(0, 80)}`
+                      }
+                    : {
+                        tool: 'moe.complete_task',
+                        args: { taskId: task.id, workerId: callerWorkerId || undefined },
+                        reason: 'All steps complete; hand task off to QA.'
+                      };
+                }
+                if (task.status === 'REVIEW') {
+                  return {
+                    tool: 'moe.qa_approve',
+                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
+                    reason: 'Verify DoD + rails; approve or moe.qa_reject with actionable issues.'
+                  };
+                }
+                return undefined;
+              })()
+            }
+          : {}),
       };
     }
   };

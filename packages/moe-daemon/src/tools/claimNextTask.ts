@@ -50,7 +50,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         });
 
       if (tasks.length === 0) {
-        return { hasNext: false };
+        return {
+          hasNext: false,
+          nextAction: {
+            tool: 'moe.wait_for_task',
+            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            reason: 'No claimable task right now; block until one appears.'
+          }
+        };
       }
 
       // Try each candidate task in priority order; fall through on concurrency conflicts
@@ -125,7 +132,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       if (!claimed) {
-        return { hasNext: false };
+        return {
+          hasNext: false,
+          nextAction: {
+            tool: 'moe.wait_for_task',
+            args: { statuses, workerId: params.workerId, epicId: params.epicId },
+            reason: 'All candidate tasks were taken by concurrent workers; wait and retry.'
+          }
+        };
       }
 
       const epic = state.getEpic(task.epicId);
@@ -206,6 +220,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           global: state.project.globalRails.requiredPatterns,
           epic: epic?.epicRails || [],
           task: task.taskRails
+        },
+        nextAction: {
+          tool: 'moe.get_context',
+          args: { taskId: task.id },
+          reason: 'Always fetch full task context (rails, DoD, memory) before acting.'
         }
       };
       });

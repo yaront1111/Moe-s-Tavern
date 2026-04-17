@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { writeInitFiles } from '../util/initFiles.js';
+import { writeClaudeHookFiles } from '../util/claudeHook.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
   return {
@@ -131,6 +132,27 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
       // Write role docs and .gitignore
       writeInitFiles(moePath);
 
+      // Write Claude Code PreToolUse hook (.claude/settings.json + hooks/moe-require-claim.js).
+      // Gates Edit/Write/Bash behind an active claim so agents can't skip claim_next_task.
+      // Preserves user's existing settings.json / customized hook.js.
+      const hookResult = writeClaudeHookFiles(projectPath);
+
+      // Build a hook-status line for the success message so the user knows
+      // whether the hook is active and how to opt out.
+      const hookNotes: string[] = [];
+      if (hookResult.settingsWritten || hookResult.hookWritten) {
+        hookNotes.push(`Claude Code PreToolUse hook installed at ${projectPath}/.claude/`);
+      }
+      if (hookResult.settingsSkippedReason === 'user-existing') {
+        hookNotes.push(`Preserved existing .claude/settings.json — merge the Moe hook manually if you want claim-gating`);
+      }
+      if (hookResult.hookSkippedReason === 'user-modified') {
+        hookNotes.push(`Preserved user-modified .claude/hooks/moe-require-claim.js — delete to accept the Moe-canonical version`);
+      }
+      if (hookNotes.length === 0) {
+        hookNotes.push(`Claude Code hook already up-to-date`);
+      }
+
       return {
         success: true,
         alreadyInitialized: false,
@@ -139,7 +161,9 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
           name,
           rootPath: projectPath
         },
-        message: `Project initialized at ${projectPath}`
+        message: `Project initialized at ${projectPath}`,
+        claudeHook: hookResult,
+        notes: hookNotes
       };
     }
   };

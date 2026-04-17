@@ -704,7 +704,19 @@ export class MoeWebSocketServer {
   }
 
   /**
-   * Clean up workers owned by a disconnected MCP connection.
+   * Clean up per-connection state for a disconnected MCP WebSocket.
+   *
+   * We deliberately do NOT delete the worker entity here. The proxy (moe-proxy)
+   * is a stdio bridge that opens one WebSocket per RPC invocation for short-lived
+   * callers (wrapper pre-flight, moe-call.sh, external scripts). Deleting the
+   * worker on every disconnect would evaporate the worker — and its claim, via
+   * deleteWorker's task cascade — milliseconds after it was created, causing
+   * subsequent RPCs to fail with "Unknown sender" and clearing claims the
+   * wrapper was about to hand off to a long-running agent.
+   *
+   * Stale workers from truly-disconnected agents should be cleaned up by a
+   * presence/heartbeat mechanism (lastActivityAt timeout) rather than by
+   * TCP close events, since TCP close no longer implies agent death.
    */
   private async cleanupMcpWorkers(ws: WebSocket): Promise<void> {
     const workerIds = this.mcpWorkerMap.get(ws);
@@ -713,9 +725,8 @@ export class MoeWebSocketServer {
       return;
     }
 
-    let deletedCount = 0;
     for (const workerId of workerIds) {
-      // Cancel any active wait_for_task waiter before deleting the worker
+      // Cancel any active wait_for_task waiter registered on this WS
       const waiter = activeWaiters.get(workerId);
       if (waiter) {
         clearTimeout(waiter.timer);
@@ -738,21 +749,9 @@ export class MoeWebSocketServer {
       } catch (err) {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
       }
-
-      const worker = this.state.getWorker(workerId);
-      if (worker) {
-        logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
-        await this.state.deleteWorker(workerId);
-        deletedCount++;
-      }
     }
 
     this.mcpWorkerMap.delete(ws);
-
-    if (deletedCount > 0) {
-      const snap = this.state.getSnapshot();
-      this.broadcast({ type: 'STATE_SNAPSHOT', payload: { ...snap, tasks: snap.tasks.filter(t => t.status !== 'ARCHIVED') } });
-    }
   }
 
   /**

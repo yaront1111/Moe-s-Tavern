@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
+import { assertWorkerOwns } from '../util/enforcement.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -12,7 +13,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string' },
         stepId: { type: 'string' },
         modifiedFiles: { type: 'array', items: { type: 'string' } },
-        note: { type: 'string' }
+        note: { type: 'string' },
+        workerId: { type: 'string' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
@@ -23,6 +25,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         stepId: string;
         modifiedFiles?: string[];
         note?: string;
+        workerId?: string;
       };
 
       const task = state.getTask(params.taskId);
@@ -31,6 +34,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       if (task.status !== 'WORKING') {
         throw invalidState('Task', task.status, 'WORKING');
       }
+
+      assertWorkerOwns(task, params.workerId);
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no implementation plan', 'has implementation plan');
@@ -55,7 +60,16 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           : step
       );
 
-      await state.updateTask(task.id, { implementationPlan: steps }, 'STEP_COMPLETED');
+      const prevCompleted = Array.isArray(task.stepsCompleted) ? task.stepsCompleted : [];
+      const stepsCompleted = prevCompleted.includes(params.stepId)
+        ? prevCompleted
+        : [...prevCompleted, params.stepId];
+
+      await state.updateTask(
+        task.id,
+        { implementationPlan: steps, stepsCompleted },
+        'STEP_COMPLETED'
+      );
 
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
@@ -78,6 +92,18 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      const nextAction = nextStep
+        ? {
+            tool: 'moe.start_step',
+            args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
+            reason: `Advance to step ${stepNum + 1}: ${nextStep.description.slice(0, 80)}`
+          }
+        : {
+            tool: 'moe.complete_task',
+            args: { taskId: task.id, workerId: params.workerId },
+            reason: 'All steps complete; hand task off to QA via moe.complete_task.'
+          };
+
       return {
         success: true,
         taskId: task.id,
@@ -88,7 +114,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           percentage: steps.length > 0 ? Math.round((completed / steps.length) * 100) : 0
         },
         nextStep: nextStep ? { stepId: nextStep.stepId, description: nextStep.description } : null,
-        ...(chatHint ? { chatHint } : {})
+        ...(chatHint ? { chatHint } : {}),
+        nextAction
       };
     }
   };

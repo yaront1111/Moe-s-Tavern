@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { cancelSpeedModeTimeout, clearAllSpeedModeTimeouts } from './submitPlan.js';
+import { MoeError, MoeErrorCode } from '../util/errors.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -161,6 +162,42 @@ describe('SPEED mode timeout cancellation', () => {
   it('cancelSpeedModeTimeout is a no-op for unknown taskId', () => {
     // Should not throw
     cancelSpeedModeTimeout('nonexistent-task');
+  });
+
+  it('rejects submit_plan when workerId does not match assignedWorkerId', async () => {
+    setupMoeFolder();
+    createEpic();
+    createTask({ id: 'task-own', status: 'PLANNING', assignedWorkerId: 'architect-a' });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    try {
+      await tool.handler({
+        taskId: 'task-own',
+        workerId: 'architect-b',
+        steps: [{ description: 'Step 1' }],
+      }, state);
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).code).toBe(MoeErrorCode.NOT_ALLOWED);
+    }
+    expect(state.getTask('task-own')?.status).toBe('PLANNING');
+  });
+
+  it('accepts submit_plan when workerId matches assignedWorkerId', async () => {
+    setupMoeFolder();
+    createEpic();
+    createTask({ id: 'task-own2', status: 'PLANNING', assignedWorkerId: 'architect-a' });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    await tool.handler({
+      taskId: 'task-own2',
+      workerId: 'architect-a',
+      steps: [{ description: 'Step 1' }],
+    }, state);
+    expect(state.getTask('task-own2')?.status).toBe('AWAITING_APPROVAL');
   });
 
   it('timeout auto-approves when not cancelled', async () => {

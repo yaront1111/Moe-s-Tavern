@@ -40,6 +40,32 @@ export function isValidJson(str: string): boolean {
   }
 }
 
+/**
+ * Inject MOE_WORKER_ID into tools/call arguments when the caller omits workerId.
+ * Only runs for MCP tools/call requests — never touches initialize/tools/list/ping.
+ * Returns true if the parsed object was mutated. Never throws.
+ */
+export function injectWorkerId(
+  parsed: unknown,
+  envWorkerId: string | undefined
+): boolean {
+  try {
+    if (!envWorkerId) return false;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'workerId')) return false;
+    args.workerId = envWorkerId;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function parseJsonLines(buffer: string): { lines: string[]; remaining: string } {
   const lines: string[] = [];
   let remaining = buffer;

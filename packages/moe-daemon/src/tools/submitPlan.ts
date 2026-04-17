@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { assertWorkerOwns } from '../util/enforcement.js';
 
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
@@ -43,6 +44,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             additionalProperties: false
           }
         },
+        workerId: { type: 'string' },
         planningNotes: {
           type: 'object',
           description: 'Architect reasoning notes for the worker (approaches considered, codebase insights, risks, key files)',
@@ -61,6 +63,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       const params = args as {
         taskId: string;
+        workerId?: string;
         steps: { description: string; affectedFiles?: string[] }[];
         planningNotes?: {
           approachesConsidered?: string;
@@ -76,6 +79,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       if (task.status !== 'PLANNING') {
         throw invalidState('Task', task.status, 'PLANNING');
       }
+
+      assertWorkerOwns(task, params.workerId);
 
       if (!params.steps || params.steps.length === 0) {
         throw invalidInput('steps', 'plan cannot be empty');
@@ -174,12 +179,31 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(task.id, `Implementation plan submitted (${implementationPlan.length} steps)`);
       } catch { /* never block tool */ }
 
+      // If plan is already active (TURBO), tell the architect the next move
+      // is session summary — they're done. Otherwise point them at check_approval.
+      const nextAction = finalStatus === 'WORKING'
+        ? {
+            tool: 'moe.save_session_summary',
+            args: {
+              workerId: params.workerId,
+              taskId: task.id,
+              summary: `Plan submitted for "${task.title}" (${implementationPlan.length} steps); TURBO auto-approved to WORKING.`
+            },
+            reason: 'Plan auto-approved; record architect findings then wait_for_task.'
+          }
+        : {
+            tool: 'moe.check_approval',
+            args: { taskId: task.id },
+            reason: 'Plan submitted; poll approval status until approved or rejected.'
+          };
+
       return {
         success: true,
         taskId: task.id,
         status: finalStatus,
         stepCount: implementationPlan.length,
-        message
+        message,
+        nextAction
       };
     }
   };

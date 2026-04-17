@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import WebSocket from 'ws';
+import { injectWorkerId } from './utils.js';
 
 interface DaemonInfo {
   port: number;
@@ -406,16 +407,18 @@ function connect(projectPath: string): void {
         // Validate JSON before sending to daemon
         try {
           const parsed = JSON.parse(line);
+          const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
+          const payload = mutated ? JSON.stringify(parsed) : line;
           if (isSafeToSend()) {
             // Track request ID for proper pending count and timeout
             if (parsed.id !== undefined && parsed.id !== null) {
               pendingRequestIds.add(parsed.id);
               pendingRequestTimes.set(parsed.id, { sentAt: Date.now(), timeoutMs: getRequestTimeout(parsed) });
             }
-            safeSend(currentWebSocket!, line);
+            safeSend(currentWebSocket!, payload);
           } else {
             // Queue message for when connection is restored
-            pendingMessages.push(line);
+            pendingMessages.push(payload);
             if (pendingMessages.length > 100) {
               // Prevent unbounded queue growth - send error for dropped message
               const droppedMsg = pendingMessages.shift()!;

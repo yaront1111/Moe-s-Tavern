@@ -120,6 +120,20 @@ export interface RejectionDetails {
   issues?: QAIssue[];
 }
 
+/**
+ * Runtime-driven workflow hint attached to tool responses. Tells the agent
+ * which MCP tool to call next and why — so the agent follows a server-authored
+ * state machine instead of a prompt-authored workflow. Purely advisory; the
+ * enforcement layer in util/enforcement.ts is what actually blocks out-of-order
+ * calls. But a well-populated nextAction means the agent rarely hits enforcement
+ * in the first place.
+ */
+export interface NextAction {
+  tool: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -149,6 +163,8 @@ export interface Task {
   reviewCompletedAt?: string;
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
+  contextFetchedBy?: string[];
+  stepsCompleted?: string[];
 }
 
 export interface Worker {

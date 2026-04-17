@@ -39,9 +39,19 @@ export function saveSessionSummaryTool(_state: StateManager): ToolDefinition {
         memoriesCreated: params.memoriesCreated,
       });
 
+      // Suggest the role-appropriate wait statuses so the agent can loop into the next task.
+      const waitStatuses = role === 'architect' ? ['PLANNING']
+        : role === 'qa' ? ['REVIEW']
+        : ['WORKING'];
+
       return {
         sessionId: session.id,
         message: 'Session summary saved — next agent on this task will see your findings',
+        nextAction: {
+          tool: 'moe.wait_for_task',
+          args: { statuses: waitStatuses, workerId: params.workerId },
+          reason: 'Session wrapped up; block until the next task arrives for this role.',
+        },
       };
     },
   };

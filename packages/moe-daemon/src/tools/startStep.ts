@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
+import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -10,19 +11,23 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         taskId: { type: 'string' },
-        stepId: { type: 'string' }
+        stepId: { type: 'string' },
+        workerId: { type: 'string' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as { taskId: string; stepId: string };
+      const params = args as { taskId: string; stepId: string; workerId?: string };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
       if (task.status !== 'WORKING') {
         throw invalidState('Task', task.status, 'WORKING');
       }
+
+      assertWorkerOwns(task, params.workerId);
+      assertContextFetched(task, params.workerId);
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no-plan', 'has-plan');
@@ -59,7 +64,12 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         taskId: task.id,
         stepId: params.stepId,
         stepNumber: stepIndex + 1,
-        totalSteps: steps.length
+        totalSteps: steps.length,
+        nextAction: {
+          tool: 'moe.complete_step',
+          args: { taskId: task.id, stepId: params.stepId, workerId: params.workerId },
+          reason: 'Implement the step, run tests, then mark it complete.'
+        }
       };
     }
   };

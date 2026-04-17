@@ -534,6 +534,21 @@ export class StateManager {
     return comments.slice(-MAX_COMMENTS_PER_TASK);
   }
 
+  private sanitizeStringIdArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string') continue;
+      const trimmed = item.slice(0, 200);
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      out.push(trimmed);
+      if (out.length >= 500) break;
+    }
+    return out;
+  }
+
   private sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
     if (!Array.isArray(plan)) return [];
     const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
@@ -608,6 +623,12 @@ export class StateManager {
         const updates: Partial<Task> = {};
         if (!task.priority) updates.priority = 'MEDIUM' as TaskPriority;
         if (!Array.isArray(task.comments)) updates.comments = [];
+        if (task.contextFetchedBy !== undefined && !Array.isArray(task.contextFetchedBy)) {
+          updates.contextFetchedBy = [];
+        }
+        if (task.stepsCompleted !== undefined && !Array.isArray(task.stepsCompleted)) {
+          updates.stepsCompleted = [];
+        }
         if (Object.keys(updates).length > 0) {
           this.tasks.set(id, { ...task, ...updates });
         }
@@ -1494,6 +1515,12 @@ export class StateManager {
     }
     if (sanitized.implementationPlan !== undefined) {
       sanitized.implementationPlan = this.sanitizeImplementationPlan(sanitized.implementationPlan);
+    }
+    if (sanitized.contextFetchedBy !== undefined) {
+      sanitized.contextFetchedBy = this.sanitizeStringIdArray(sanitized.contextFetchedBy);
+    }
+    if (sanitized.stepsCompleted !== undefined) {
+      sanitized.stepsCompleted = this.sanitizeStringIdArray(sanitized.stepsCompleted);
     }
 
     const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(sanitized, 'comments');

@@ -8,6 +8,7 @@ import {
   formatError,
   isValidJson,
   parseJsonLines,
+  injectWorkerId,
   type DaemonInfo,
 } from './utils.js';
 
@@ -173,6 +174,81 @@ describe('utils', () => {
       const result = parseJsonLines('{"id": 1}');
       expect(result.lines).toEqual([]);
       expect(result.remaining).toBe('{"id": 1}');
+    });
+  });
+
+  describe('injectWorkerId', () => {
+    it('injects workerId for tools/call when missing and env is set', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step', arguments: { taskId: 't1', stepId: 's1' } },
+      };
+      const mutated = injectWorkerId(parsed, 'worker-abc');
+      expect(mutated).toBe(true);
+      expect((parsed.params.arguments as Record<string, unknown>).workerId).toBe('worker-abc');
+    });
+
+    it('does not overwrite explicit workerId', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step', arguments: { taskId: 't1', workerId: 'qa-x' } },
+      };
+      const mutated = injectWorkerId(parsed, 'worker-abc');
+      expect(mutated).toBe(false);
+      expect((parsed.params.arguments as Record<string, unknown>).workerId).toBe('qa-x');
+    });
+
+    it('is a no-op when envWorkerId is undefined', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step', arguments: { taskId: 't1' } },
+      };
+      expect(injectWorkerId(parsed, undefined)).toBe(false);
+      expect((parsed.params.arguments as Record<string, unknown>).workerId).toBeUndefined();
+    });
+
+    it('does nothing for non-tool methods', () => {
+      const cases = [
+        { method: 'initialize', params: {} },
+        { method: 'tools/list', params: {} },
+        { method: 'ping' },
+      ];
+      for (const c of cases) {
+        const parsed = { jsonrpc: '2.0', id: 1, ...c } as Record<string, unknown>;
+        expect(injectWorkerId(parsed, 'worker-abc')).toBe(false);
+      }
+    });
+
+    it('is a no-op when params.arguments is missing', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step' },
+      };
+      expect(injectWorkerId(parsed, 'worker-abc')).toBe(false);
+    });
+
+    it('is a no-op when arguments is an array (malformed)', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'x', arguments: [1, 2] },
+      };
+      expect(injectWorkerId(parsed, 'worker-abc')).toBe(false);
+    });
+
+    it('survives malformed params without throwing', () => {
+      expect(injectWorkerId({ method: 'tools/call', params: 'bad' }, 'worker-abc')).toBe(false);
+      expect(injectWorkerId(null, 'worker-abc')).toBe(false);
+      expect(injectWorkerId(42, 'worker-abc')).toBe(false);
     });
   });
 });
