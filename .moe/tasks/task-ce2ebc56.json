@@ -1,0 +1,193 @@
+{
+  "id": "task-ce2ebc56",
+  "epicId": "epic-c77159a8",
+  "title": "Phase 2: Add nextAction hints to every MCP tool response",
+  "description": "Extend packages/moe-daemon/src/types/schema.ts with optional nextAction:{tool,args,reason}. Add hints on claim_next_task, get_context, start_step, complete_step, complete_task, submit_plan, qa_approve, qa_reject, wait_for_task. Every error response also carries nextAction. Goal: agent always knows what MCP call comes next without consulting the prompt.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "[P0] Add NextAction type to schema.ts. Export `interface NextAction { tool: string; args?: Record<string, unknown>; reason: string; }`. This is a response-envelope field, NOT persisted on Task. Acceptance: type exported, consumed by tools in later steps, backward compatible (optional everywhere). Test: type-check only (npx tsc --noEmit). Error handling: N/A — pure type. Validation: `npx tsc --noEmit`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "[P0] Create packages/moe-daemon/src/util/nextAction.ts with pure builder functions keyed on workflow stage. Each returns a NextAction: `afterClaim(statuses, task)`, `afterClaimEmpty(statuses)`, `afterGetContext(task)`, `afterSubmitPlan(task)`, `afterStartStep(task, stepId)`, `afterCompleteStep(task, remainingSteps)`, `afterCompleteTask()`, `afterQaApprove()`, `afterQaReject()`, `afterWaitForTask(result, statuses)`. Role is inferred from task.status (PLANNING→architect, WORKING→worker, REVIEW→qa) or from claim `statuses` when no task exists yet. Functions <20 lines each, guard clauses only. Acceptance: all builders pure, unit-tested. Test: new nextAction.test.ts covering every branch (architect PLANNING path, worker WORKING path, qa REVIEW path, last-step vs mid-stream complete_step, empty claim, wait-for-task hasNext true/false). Error handling: builders return a sensible default (get_context) when state is ambiguous rather than throwing. Validation: `npx tsc --noEmit && npm run test -- nextAction`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/nextAction.ts",
+        "packages/moe-daemon/src/util/nextAction.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "[P0] Patch claim_next_task to append nextAction. On hasNext=true: nextAction = afterClaim(statuses, task) → points at moe.get_context with the claimed taskId and an actionable reason. On hasNext=false: nextAction = afterClaimEmpty(statuses) → points at moe.wait_for_task. Do not disturb existing chatHint, reopenWarning, or any existing response fields. Acceptance: every claim response contains `nextAction`. Test: extend existing tests (or a new claimNextTask.test.ts) to assert nextAction presence for architect/worker/qa statuses and for the empty case. Error handling: if builder throws, fall through with a generic get_context hint rather than breaking the claim response. Validation: `npx tsc --noEmit && npm run test -- claim`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "[P0] Patch get_context to append nextAction based on task state. PLANNING → moe.submit_plan. WORKING + zero completed steps → moe.start_step with first PENDING stepId. WORKING + some steps done, task not complete → moe.start_step with next PENDING stepId, or moe.complete_task if all done. REVIEW → moe.qa_approve (with reason noting qa_reject is the alternative). No task found → moe.claim_next_task. Acceptance: response always has nextAction that reflects current state. Test: add get_context.test.ts cases for each status and for the no-task path; verify deterministic next step selection. Error handling: if task implementationPlan is null/undefined, default hint is start_step on the empty-plan case (or submit_plan if no plan yet). Validation: `npx tsc --noEmit && npm run test -- getContext`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "[P0] Patch submit_plan to append nextAction. After-auto-approval (TURBO) → moe.wait_for_task with statuses=['PLANNING'] (architect's follow-up — reason mentions calling save_session_summary first). SPEED mode (delayed auto-approve, still AWAITING_APPROVAL at response time) → moe.check_approval. CONTROL (awaiting human) → moe.check_approval. Keep the existing `message` string untouched; nextAction is additive. Acceptance: all three approval-mode branches return the correct hint. Test: extend submitPlan.test.ts with mode-per-branch assertions. Error handling: rail-violation throws still propagate via MoeError (adapter attaches nextAction there). Validation: `npx tsc --noEmit && npm run test -- submitPlan`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "[P0] Patch start_step and complete_step. start_step returns nextAction = moe.complete_step with the same {taskId,stepId}; reason notes 'after implementation + tests pass'. complete_step returns nextAction = moe.start_step for the next PENDING step, OR moe.complete_task when all steps are COMPLETED. Preserve the existing chatHint on the final step (for QA handoff). Acceptance: workers can chain start→complete→start without consulting docs. Test: extend startStep.test.ts and completeStep.test.ts with nextAction assertions for mid-stream and final-step cases. Error handling: already-completed step still throws invalidState; adapter layer attaches recovery nextAction. Validation: `npx tsc --noEmit && npm run test -- 'Step'`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "[P0] Patch complete_task, qa_approve, and qa_reject to append nextAction. complete_task → moe.wait_for_task with statuses=['WORKING'] (worker's follow-up; reason: task in QA review, wait for next WORKING task). qa_approve → moe.wait_for_task with statuses=['REVIEW']. qa_reject → moe.wait_for_task with statuses=['REVIEW']. Existing success shape, stats, system messages, and worker-status side effects preserved. Acceptance: each tool's response carries the correct post-handoff wait hint. Test: add completeTask.test.ts + qaApprove.test.ts + qaReject.test.ts nextAction assertions (or extend existing). Error handling: MoeError paths untouched; adapter attaches recovery hints. Validation: `npx tsc --noEmit && npm run test -- 'complete_task|qa_'`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "[P0] Patch wait_for_task to append nextAction. hasNext=true → moe.claim_next_task with the same statuses (reason: task available, claim it before it's taken). hasNext=false / timeout → moe.wait_for_task with the same statuses (reason: no task yet, keep polling). hasChatMessage=true → moe.chat_read (reason: unread chat, read before continuing). Ordering when multiple signals: chat > task > timeout. Acceptance: every wait_for_task wake-up steers the agent to the right next call. Test: extend waitForTask.test.ts covering all three wake paths. Error handling: if multiple flags are set, select per priority and never return two nextActions. Validation: `npx tsc --noEmit && npm run test -- waitForTask`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "[P0] Error-response nextAction via McpAdapter. In packages/moe-daemon/src/server/McpAdapter.ts, extend the catch branch in handleSingle's tools/call path: when a tool throws MoeError, compute a recovery NextAction from (params.name, error.code, error.context) using a new helper `recoveryNextAction(toolName, code, context)` in util/nextAction.ts. Attach it to the JSON-RPC error response's `data` field as `{ tool, args, reason, nextAction }`. Recovery rules: NOT_FOUND → hint moe.get_context or moe.list_tasks to locate the entity; INVALID_STATE → hint the tool matching the currentState→expectedState transition (e.g. task in PLANNING, expected WORKING → suggest moe.submit_plan); NOT_ALLOWED (ownership) → hint moe.claim_next_task to re-claim; MISSING_REQUIRED / INVALID_INPUT → hint to retry with the missing/invalid field named. Keep existing security guarantees: never include stack traces or unsanitized data in the response payload. Acceptance: every tools/call error carries `error.data.nextAction`. Test: add mcpAdapter.nextAction.test.ts covering each error code branch. Error handling: if recoveryNextAction itself throws, fall through with a generic get_context hint — never suppress the original error. Validation: `npx tsc --noEmit && npm run lint && npm run test -- McpAdapter`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/util/nextAction.ts",
+        "packages/moe-daemon/src/server/mcpAdapter.nextAction.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "[P1] End-to-end integration test for the nextAction chain. New vitest file that walks architect → worker → qa agents through a task lifecycle using only the tools returned by the previous nextAction hint. Assert at every step that the actual next call lines up with the hinted tool+args. Covers: claim(PLANNING) → get_context → submit_plan → wait → claim(WORKING) → get_context → start_step → complete_step (×N) → complete_task → wait → claim(REVIEW) → get_context → qa_approve → wait. This is the regression net ensuring hints stay consistent across phases. Validation: `npm run test -- nextAction.integration`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/nextAction.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-11",
+      "description": "[P1] Docs updates. docs/MCP_SERVER.md: add a top-level `nextAction` section documenting the envelope shape `{ tool, args?, reason }`, the 9 tools that emit hints, the error-response embedding (`error.data.nextAction`), and a worked example for each role (architect/worker/qa). docs/SCHEMA.md: add the NextAction interface near the tool-response types. Note explicitly that nextAction is advisory — agents may choose differently when contextually appropriate — and that it is safe to ignore on older clients. Cross-platform: no platform-specific content; the field is over-the-wire JSON and identical on Windows/Mac/Linux. Validation: manual read — markdown only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-12",
+      "description": "[P0] Final quality gate. From a clean state: `npm --prefix packages/moe-daemon ci` then `npx tsc --noEmit && npm run lint && npm run test && npm run build` in the daemon package. Verify: no regressions in existing tests, every patched tool's response contains nextAction (grep-spot-check the test output), error responses include error.data.nextAction. Confirm phase-2 isolation: git diff confined to packages/moe-daemon/src/{types,util,tools,server}, packages/moe-daemon/src/types/schema.ts, docs/*.md. No changes to moe-proxy, no changes to wrapper scripts, no changes to JetBrains plugin. Rollback: `git revert <phase-2-commit>` restores prior behavior; nextAction is purely additive with zero persistence so rollback is data-safe. Acceptance: four validation commands green and diff scope verified.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Multiple P0 deliverables from the approved plan are missing. Inline nextAction hints were added to most tools (schema.ts NextAction interface + claim/get_context/start_step/complete_step/complete_task/submit_plan/qa_approve/qa_reject/wait_for_task all return nextAction), but the architectural components explicitly called out in the plan are entirely absent. All 12 plan steps still carry status PENDING — the task was force-flipped WORKING->REVIEW at 19:54:09 without a single STEP_STARTED/STEP_COMPLETED/TASK_COMPLETED event in the activity log, so there is no audit trail. Fix the gaps below and run the task through the normal complete_step -> complete_task path so progress is tracked.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-17T19:05:10.897Z",
+  "updatedAt": "2026-04-17T20:05:15.429Z",
+  "planSubmittedAt": "2026-04-17T19:28:22.255Z",
+  "planningNotes": {
+    "approachesConsidered": "A) Centralize nextAction computation in McpAdapter's success path (look at toolName + result) — rejected: too distant from each tool's domain knowledge (submit_plan's auto-approve branch knows which approval mode was in effect; adapter would need to re-derive). B) Make nextAction a required field on every response — rejected: breaks backward compat for in-flight clients and adds boilerplate to tools that are not in the task's listed 9. C) Chosen: shared builder helpers in util/nextAction.ts, called by each of the 9 tools; error-response hints computed centrally in McpAdapter from (toolName, errorCode) since errors never reach the tool success return. D) Adding `role` to Worker entity to drive hints — rejected: role is already implicit in task.status and claim statuses; no persistent state needed.",
+    "codebaseInsights": "Tool handlers return plain objects that McpAdapter wraps in `{ content: [{type:'text', text: JSON.stringify(result)}] }`. Additive fields on the result object flow through cleanly. Errors flow via throw → McpAdapter.errorResponse(id, code, message, data) — the `data` field is the right hook for error-path nextAction. Existing `chatHint` on completeStep and claim_next_task responses is a precedent for advisory response fields; nextAction follows the same pattern. TURBO auto-approval already updates task status synchronously in submitPlan before returning, so hints can inspect the updated status. SPEED mode uses setTimeout and returns AWAITING_APPROVAL immediately — hint must point at check_approval, not wait_for_task.",
+    "risks": "(1) Role inference: claim with statuses=['PLANNING','WORKING'] (multi-status claim) is ambiguous; pick the first matching status in the task's actual state. (2) complete_step on the very last step: the builder must return complete_task, not start_step — easy to get wrong if ordering the checks incorrectly. (3) wait_for_task multi-signal wake (both chat and task): document the priority and test explicitly. (4) Error nextAction: MoeError.context is currently not always populated consistently — the recoveryNextAction helper must tolerate undefined context without throwing. (5) Existing response fields like chatHint must remain; nextAction is additive, never a replacement. (6) Plugin /ws path does not pass through McpAdapter — plugin is unaffected, confirmed by reading WebSocketServer.ts.",
+    "keyFiles": [
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/nextAction.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/startStep.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/util/errors.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-17T19:28:22.258Z",
+  "reviewCompletedAt": "2026-04-17T20:05:15.428Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Step 2 (P0): util/nextAction.ts builder helpers + nextAction.test.ts — file does not exist",
+      "Step 9 (P0): McpAdapter error-response nextAction + mcpAdapter.nextAction.test.ts — McpAdapter.errorResponse at line 252 still emits { tool } only; no recoveryNextAction helper",
+      "Step 10 (P1): tools/nextAction.integration.test.ts — file does not exist",
+      "Process: implementationPlan steps all PENDING; activity log shows direct TASK_UPDATED->REVIEW with no step events"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "util/nextAction.ts does not exist. Step 2 mandates 10 pure builder functions (afterClaim, afterClaimEmpty, afterGetContext, afterSubmitPlan, afterStartStep, afterCompleteStep, afterCompleteTask, afterQaApprove, afterQaReject, afterWaitForTask) + nextAction.test.ts covering every branch. Tools currently build nextAction inline, duplicating logic.",
+        "file": "packages/moe-daemon/src/util/nextAction.ts"
+      },
+      {
+        "type": "missing_feature",
+        "description": "McpAdapter error responses lack nextAction. Step 9 (P0) requires error.data.nextAction via a recoveryNextAction(toolName, code, context) helper covering NOT_FOUND / INVALID_STATE / NOT_ALLOWED / MISSING_REQUIRED / INVALID_INPUT. Current errorResponse still emits { tool } only.",
+        "file": "packages/moe-daemon/src/server/McpAdapter.ts",
+        "line": 252
+      },
+      {
+        "type": "missing_feature",
+        "description": "tools/nextAction.integration.test.ts missing. Step 10 mandates an end-to-end vitest walking architect->worker->qa through the full lifecycle, asserting every actual next call matches the previous hint.",
+        "file": "packages/moe-daemon/src/tools/nextAction.integration.test.ts"
+      },
+      {
+        "type": "other",
+        "description": "All 12 plan steps remain PENDING. Activity log shows only PLAN_SUBMITTED, PLAN_AUTO_APPROVED, then a direct TASK_UPDATED->REVIEW at 19:54:09 with no STEP_* events. Re-execute remaining steps through start_step/complete_step/complete_task so the audit trail is correct."
+      }
+    ]
+  }
+}

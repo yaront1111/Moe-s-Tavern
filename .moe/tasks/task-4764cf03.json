@@ -1,0 +1,139 @@
+{
+  "id": "task-4764cf03",
+  "epicId": "epic-c77159a8",
+  "title": "Phase 5: Shrink role docs to match runtime-driven workflow",
+  "description": "Rewrite docs/roles/architect.md, worker.md, qa.md to remove the step-by-step numbered workflow (now enforced by runtime). Keep only: role identity, DoD philosophy, plan-mode heuristics, guidance to follow nextAction hints. Target <40 lines each.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "[P0] Rewrite docs/roles/architect.md to <=40 lines. Retain only: (a) one-paragraph role identity (\"you turn a task description + rails + DoD into an ordered plan\"); (b) DoD/quality philosophy — production-ready, no TODOs, error handling + test coverage, cross-platform awareness (3-5 bullets max); (c) plan-mode heuristics — a short checklist of when to invoke deep exploration (2+ subsystems, 5+ DoD items, prior rejection, security-sensitive); (d) runtime-enforcement notice — tell the agent to follow `nextAction` hints on every tool response (Phase 2), that ownership + ordering are enforced server-side (Phase 3), so there is no need to memorize a numbered workflow; (e) error-recovery — on MoeError read `error.data.nextAction` and act on it. Delete the 13-step workflow, the extensive chat protocol instructions, the rails sub-system explanations — those now live in MCP_SERVER.md / runtime behavior. Acceptance: `wc -l docs/roles/architect.md` reports ≤40 lines; retains every topic listed above. Error handling: if anything important was only documented here, surface it in MCP_SERVER.md in the same commit. Test: line-count check in Step 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/architect.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "[P0] Rewrite docs/roles/worker.md to <=40 lines. Retain: (a) role identity (\"execute an approved plan step-by-step, producing production-ready code + tests\"); (b) DoD/quality philosophy — hard quality rules (function <=50 lines, file <=300 lines, no any, error handling everywhere, test-per-function) condensed to bullets, no elaboration; (c) when to escalate via report_blocked (one sentence); (d) runtime-enforcement notice pointing at nextAction for next-call guidance; (e) one-liner on how to read memory.relevant + call moe.remember for gotchas. Delete the numbered workflow, the detailed chat etiquette, the start_step/complete_step mechanics (now taught by server-side enforcement + nextAction). Acceptance: line count <=40. Error handling: topics migrating out of this doc should land in MCP_SERVER.md. Test: line-count check in Step 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/worker.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "[P0] Rewrite docs/roles/qa.md to <=40 lines. Retain: (a) role identity (\"verify a completed task against its DoD + rails; approve or reject\"); (b) approval philosophy — verify, don't trust; run tests; check cross-platform paths; confirm docs were updated; reject on any DoD gap; (c) rejection quality — every rejection names failed DoD items + structured issues so workers can act; (d) runtime-enforcement notice + follow nextAction; (e) never move REVIEW->BACKLOG; use qa_reject to send back to WORKING. Delete numbered workflow and detailed chat playbook. Acceptance: line count <=40. Error handling: no topics dropped silently — any workflow mechanic removed must be represented in runtime behavior or MCP_SERVER.md. Test: line-count check in Step 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/qa.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "[P1] Add a docs-lint step to prevent role-doc regrowth. Create scripts/lint-role-docs.sh (bash) and scripts/lint-role-docs.ps1 (PowerShell mirror) that `wc -l` each of docs/roles/{architect,worker,qa}.md and fail with exit code 1 if any exceeds 40. Register the bash version in package.json's root `scripts.lint` chain (or add a `docs:lint` npm script that CI can invoke). Acceptance: running the script against the rewritten docs exits 0; artificially appending lines causes exit 1. Error handling: script fails loud with file + line count on violation; no silent success. Test: run the script twice — once passing, once after padding a file — both behaviors asserted in the script's own self-check block at the bottom (or in a small bats/pester wrapper).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/lint-role-docs.sh",
+        "scripts/lint-role-docs.ps1",
+        "package.json"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "[P1] Cross-reference sweep. Grep for references to sections being deleted (e.g. \"13. Wait for next task\", \"Ultra Plan Mode Workflow\", role-doc workflow steps) across docs/, README.md, CLAUDE.md, moe-jetbrains/README*.md, and packages/moe-daemon/README.md. For any stale reference: either update to point at the new short doc + MCP_SERVER.md, or delete the dangling pointer. Do NOT edit CLAUDE.md's project-level instructions (these are separately maintained). Acceptance: grep -r \"Ultra Plan Mode\\|numbered workflow\" returns no results in docs/ besides the new role doc's plan-mode-heuristics section. Error handling: if a reference lives in code (not docs), flag it as out-of-scope for Phase 5 and create a follow-up task rather than silently editing code. Test: grep-based self-check at end of sweep.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/",
+        "README.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "[P1] Verify wrapper injection still works with the shorter docs. scripts/moe-agent.sh (lines 902-912) and scripts/moe-agent.ps1 (line 303) read docs/roles/$ROLE.md into ROLE_DOC, then splice it into SYSTEM_APPEND. Run a dry-run invocation (e.g. `bash -x scripts/moe-agent.sh --role architect --dry-run` if a dry-run mode exists, otherwise inspect the generated system prompt file in $TEMP) and confirm: (a) the shorter doc is injected verbatim; (b) no placeholder tokens (e.g. \"{{workflow}}\") were expected from the old longer form; (c) total system prompt size drops by ~250-310 lines per role. No code change is expected — this is a behavior verification step. Acceptance: manual confirmation captured in the commit message. Error handling: if the wrapper expected a specific section that was deleted, add it back or migrate to a separate file; do not let the wrapper break silently. Test: run `bash scripts/moe-agent.sh --role architect --no-loop --command 'echo hi'` (if a no-op command path exists) to validate prompt assembly.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "[P0] Final quality gate. (1) Run scripts/lint-role-docs.sh and confirm exit 0 for all three role docs. (2) Grep docs/ for stale references to deleted workflow sections — zero results expected. (3) `bash -n scripts/lint-role-docs.sh` + `pwsh -NoProfile -Command 'Get-Command scripts/lint-role-docs.ps1'` for syntax. (4) git diff scope confined to docs/roles/*.md, scripts/lint-role-docs.*, package.json (npm script addition), plus any cross-reference edits flagged in Step 5. NO changes to packages/moe-daemon/*, moe-proxy/*, moe-jetbrains/*, CLAUDE.md's project instructions, or prior-phase deliverables. Rollback: `git revert <phase-5-commit>` restores the old longer docs and removes the lint script; runtime behavior is unaffected since the role docs are injected advisory content. Acceptance: all checks green and diff verified. Error handling: fix the root cause of any lint failure, do not bypass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/worker.md",
+        "docs/roles/qa.md",
+        "scripts/lint-role-docs.sh",
+        "scripts/lint-role-docs.ps1",
+        "package.json"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Role docs are mostly trimmed but step 1's P0 line-count acceptance fails for architect.md, and the lint scaffolding from step 4 is missing. Same process issue as the other epic tasks: all 7 plan steps PENDING, direct WORKING->REVIEW flip at 19:54:09 with no STEP_* events.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-17T19:05:11.836Z",
+  "updatedAt": "2026-04-17T20:07:41.696Z",
+  "planSubmittedAt": "2026-04-17T19:33:13.581Z",
+  "planningNotes": {
+    "approachesConsidered": "A) Delete docs/roles/*.md entirely and rely on MCP_SERVER.md + runtime nextAction — rejected: the wrapper injects the role doc into system prompts (scripts/moe-agent.sh line 902-912, .ps1 line 303); removing the file would break wrapper injection. B) Keep long docs but move bulk to a new docs/roles-legacy/ — rejected: two sources of truth is worse than one concise doc. C) Chosen: rewrite each role doc to ≤40 lines focused on role identity, DoD philosophy, plan-mode heuristics, and an explicit nextAction reference; anything workflow-mechanical is already enforced by Phase 3 runtime + hinted by Phase 2 nextAction. D) Auto-generate role docs from the runtime state — rejected: overengineering for three static files.",
+    "codebaseInsights": "Role docs are loaded by both wrappers into ROLE_DOC and injected into SYSTEM_APPEND (which becomes --append-system-prompt-file for Claude, .codex/agent-instructions.md for Codex, .gemini/GEMINI.md for Gemini). The wrappers have no hard dependency on specific section headings — they read the file verbatim. init_project.ts creates .moe/roles/ directory (line 52) but copying of docs/roles/* to .moe/roles/ happens elsewhere (not yet located; wrapper falls back to docs/roles/ if .moe/roles/ is missing). The wrappers inject the doc content after a `## Architect Role Guide` heading context, so the leading heading in each doc is redundant — can be trimmed.",
+    "risks": "(1) Shorter docs reduce system-prompt grounding for agents running on weaker models — the runtime nextAction hints (from Phase 2) MUST be deployed before this phase lands in production, or agents will lose guidance with nothing to replace it. (2) CLAUDE.md's project-level instructions reference role behavior — do not edit these; they are separately maintained. (3) JetBrains plugin README may reference role-doc sections; verify in Step 5's cross-reference sweep. (4) Line count is a blunt metric — a 40-line doc could still be bloated with whitespace; the content-discipline bullets in each rewrite step matter more than the raw count. (5) If init_project copies docs to .moe/roles/ at project creation, existing projects will have stale longer copies — document the one-time re-init (or manual copy) in the phase-5 commit message.",
+    "keyFiles": [
+      "docs/roles/architect.md",
+      "docs/roles/worker.md",
+      "docs/roles/qa.md",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "packages/moe-daemon/src/tools/initProject.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-17T19:33:13.583Z",
+  "reviewCompletedAt": "2026-04-17T20:07:41.696Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Step 1 (P0): docs/roles/architect.md is 43 lines; plan acceptance is <=40 lines.",
+      "Step 4 (P1): scripts/lint-role-docs.sh does not exist; lint guard against regrowth is absent.",
+      "Step 4 (P1): scripts/lint-role-docs.ps1 does not exist (PowerShell mirror).",
+      "Step 4 (P1): no docs:lint script in package.json.",
+      "Process: all 7 plan steps PENDING; activity log shows direct TASK_UPDATED->REVIEW at 19:54:09 with no STEP_* events."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "docs/roles/architect.md is 43 lines (wc -l). Plan step 1 P0 acceptance: <=40 lines. Trim 3+ lines (worker.md=36, qa.md=39 already comply).",
+        "file": "docs/roles/architect.md"
+      },
+      {
+        "type": "missing_feature",
+        "description": "scripts/lint-role-docs.sh missing. Plan step 4 mandates this script plus the PowerShell mirror; without them there is no guard against role-doc regrowth and no self-check that can be wired into CI.",
+        "file": "scripts/lint-role-docs.sh"
+      },
+      {
+        "type": "missing_feature",
+        "description": "scripts/lint-role-docs.ps1 missing (PowerShell mirror).",
+        "file": "scripts/lint-role-docs.ps1"
+      },
+      {
+        "type": "other",
+        "description": "package.json has no docs:lint script. Plan step 4 requires registering the bash lint in package.json's scripts chain so CI can invoke it.",
+        "file": "package.json"
+      },
+      {
+        "type": "other",
+        "description": "Process: all 7 plan steps still PENDING; activity log has no STEP_STARTED/STEP_COMPLETED/TASK_COMPLETED events. Re-run through start_step/complete_step/complete_task so progress is tracked."
+      }
+    ]
+  }
+}

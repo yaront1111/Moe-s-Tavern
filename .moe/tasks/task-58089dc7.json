@@ -1,0 +1,172 @@
+{
+  "id": "task-58089dc7",
+  "epicId": "epic-c77159a8",
+  "title": "Phase 4: Wrapper post-flight + --loop mode",
+  "description": "After the agent CLI exits, call save_session_summary and chat_send in scripts/moe-agent.sh / .ps1. Add --loop flag that re-runs pre-flight for the next task without respawning daemon/proxy infra. Tests: session summary file is created; #general receives completion announcement.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "[P0] bash: add explicit `--loop` flag as opt-in alias in scripts/moe-agent.sh. Parse it in the arg loop near existing `--no-loop` handler (line ~176). Behavior: when both are absent, keep current default (loop when AUTO_CLAIM && PollInterval>0, respecting `NO_LOOP`). When `--loop` is set and `--no-loop` is set, the latter wins with a clear warning. Update `--help` output to document both. Acceptance: wrapper runs unchanged without the flag; `--loop` makes looping intent explicit; `--no-loop` still forces single-shot. Error handling: reject conflicting flag combinations with exit code 2 and an actionable message. Test: shell smoke in the Step 5 test suite asserts that `moe-agent.sh --loop --help` prints the new flag, `--loop --no-loop` exits 2, and `--loop` alone sets LOOP_ENABLED=true.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "[P0] PowerShell: add explicit `-Loop` switch in scripts/moe-agent.ps1 as opt-in alias mirroring the bash flag. Parse alongside existing `-NoLoop`. Behavior: loop default unchanged; `-Loop` + `-NoLoop` emits Write-Error and exits 2. Update the param block comment and Write-Host usage section. Acceptance: backward compatible with existing `-NoLoop` scripts; `-Loop` is explicit opt-in. Error handling: conflicting switches fail fast with a clear message. Test: PowerShell smoke in Step 6 asserts `-Loop` sets $loopEnabled=true and that `-Loop -NoLoop` exits 2.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "[P0] bash: define a `post_flight()` shell function in scripts/moe-agent.sh placed after the existing `moe_rpc()` helper (around line ~1028). Contract: takes no args, reads PREFLIGHT_TASK_ID, WORKER_ID, ROLE, GENERAL_CHANNEL_ID, and CLI_EXIT_CODE from loop scope. If PREFLIGHT_OK != true or PREFLIGHT_TASK_ID is empty, return 0 (nothing to report). Otherwise: (a) call `moe_rpc save_session_summary` with {workerId, taskId, summary: \"$ROLE session ended (CLI exit=$CLI_EXIT_CODE). See task activity log for details.\"} — this is a safety-net save that is idempotent with any agent-driven summary; (b) call `moe_rpc chat_send` with {channel: GENERAL_CHANNEL_ID, workerId: WORKER_ID, content: \"$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$CLI_EXIT_CODE)\"}. Every RPC wrapped in `|| true` so a post-flight failure never blocks next iteration. Acceptance: function is pure-side-effect, runs in <1s on success, silent on error. Error handling: stderr notes on RPC failure but exit status always 0. Test: verified by Step 5 smoke test.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "[P0] bash: invoke `post_flight` after the CLI exits in every loop iteration. In the three CLI-spawn branches of scripts/moe-agent.sh (claude / codex / gemini, around lines 1367, 1422, 1448-1452), capture the exit code with `CLI_EXIT_CODE=$?` immediately after the CLI call, then call `post_flight` before the `if [ \"$LOOP_ENABLED\" = false ]; then break; fi` guard. SIGINT/SIGTERM trap already exits via trap — do NOT run post-flight on forced interrupt (trap calls exit 0 before reaching this block). Acceptance: post-flight runs exactly once per normal CLI exit in loop mode; single-shot runs also get post-flight before exit (since the break is after post_flight). Error handling: post_flight internal || true guards prevent loop disruption. Test: covered by Step 5 smoke test.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "[P0] PowerShell: mirror the post-flight in scripts/moe-agent.ps1. Define `function Invoke-PostFlight` near existing `Invoke-MoeRpc` helper with the same contract: reads $preflightTaskId, $preflightOk, $WorkerId, $Role, $generalChannelId, and $LASTEXITCODE. Guard: return early if not $preflightOk or empty task id. Calls: Invoke-MoeRpc save_session_summary and chat_send with the same payloads as bash. Wrap each RPC in try/catch that logs via Write-Warning and swallows the error — post-flight must never throw into the outer do/while. Call `Invoke-PostFlight` after each CLI invocation (after `& $Command ... | Out-Null`) in both the codex, gemini, and claude branches, before the `} while ($loopEnabled)` boundary. Acceptance: feature parity with bash; Ctrl+C still short-circuits cleanly via the finally block. Error handling: try/catch around each RPC. Test: covered by Step 6 smoke test.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "[P1] Add a bash smoke test at scripts/tests/postflight.sh that invokes moe-agent.sh with `--command /bin/true --loop` in a temp project seeded with a daemon-less .moe/ (or using an actual daemon if MOE_DAEMON_PORT is set) and verifies: (a) .moe/memory/sessions/ contains a new SessionSummary JSON with workerId + taskId; (b) the #general messages jsonl has a new entry whose content matches the post-flight template. Uses `set -euo pipefail`, cleans up temp dirs via trap. Skips gracefully with exit 0 + a SKIP message when the daemon is not reachable so CI stays green in environments without the daemon. Make the test executable (chmod +x) and registered in package.json's test script OR in docs/DEVELOPMENT.md as an optional integration step. Error handling: every operation checked; no silent failures. Test strategy: this IS the test for Phase 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "[P1] Add a PowerShell counterpart smoke test at scripts/tests/postflight.ps1 mirroring the bash smoke test logic: invoke moe-agent.ps1 with -Command \"cmd.exe /c exit 0\" -Loop, assert the same two side effects (session summary file + chat message). Skip-with-exit-0 when daemon is unreachable. Error handling: try/catch per assertion; fail the test with Write-Error + exit 1 on first mismatch. Cross-platform note: both smoke tests must be self-contained; no shared state between them. Test strategy: this IS the ps1 test for Phase 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "[P1] Docs updates. In docs/DEVELOPMENT.md add a `Wrapper post-flight` subsection explaining: (a) the two new flags `--loop` / `-Loop` as explicit opt-in (default behavior unchanged for back-compat); (b) what the post-flight block does (save_session_summary + chat_send to #general); (c) how to run the scripts/tests/postflight.sh and .ps1 smoke tests; (d) cross-platform note: Windows uses the .ps1 smoke test, Mac/Linux uses the .sh smoke test — both verify the same contract. In docs/roles/*.md no change needed (role docs are shrunk in Phase 5). Acceptance: new subsection renders cleanly and lists every new flag and file. Validation: manual read.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "[P0] Final quality gate. (1) `bash -n scripts/moe-agent.sh` and `pwsh -NoProfile -Command 'Get-Command scripts/moe-agent.ps1'` confirm syntax. (2) shellcheck on the bash file — zero new warnings. (3) Run scripts/tests/postflight.sh against a running daemon + daemon-less environment; both paths must exit 0 (SKIP or PASS). (4) Run scripts/tests/postflight.ps1 on Windows when available. (5) git diff scope: confined to scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/*.sh, scripts/tests/*.ps1, docs/DEVELOPMENT.md. NO changes to packages/*, NO changes to moe-jetbrains/*, NO changes to prior-phase deliverables. Rollback: `git revert <phase-4-commit>` removes post-flight and the explicit flags; pre-flight continues to work unchanged. Acceptance: all checks green and diff verified. Error handling: if any check fails, fix the underlying issue — do not bypass hooks.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "docs/DEVELOPMENT.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Multiple P0 plan deliverables missing. Inline post-flight logic (save_session_summary + chat_send) IS present at scripts/moe-agent.sh:1497-1519 and mirrored in scripts/moe-agent.ps1 — the behavioral essence works — but the explicit opt-in flags, the extracted function structure, and the entire test suite the plan mandates as the Phase 4 acceptance evidence are absent. Additionally all 9 plan steps are still PENDING: activity log for task-58089dc7 shows PLAN_SUBMITTED -> PLAN_AUTO_APPROVED -> direct TASK_UPDATED{status:REVIEW} at 19:54:09 with zero STEP_* events. Worker bypassed start_step/complete_step/complete_task entirely. Fix the gaps below and re-run the workflow through the normal step events.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-17T19:05:11.533Z",
+  "updatedAt": "2026-04-17T20:06:46.808Z",
+  "planSubmittedAt": "2026-04-17T19:31:09.678Z",
+  "planningNotes": {
+    "approachesConsidered": "A) Rewrite both wrappers in a shared TypeScript CLI (single binary with --loop, --post-flight) — rejected: massive scope creep, breaks epic rail 'Backward compat: interactive mode preserved', and phase must be independently revertable. B) Emit post-flight as a separate hook script invoked by the wrapper (docs/hooks/post-flight) — rejected: adds indirection and a second failure mode; inline is simpler and auditable. C) Have post-flight only run in --loop mode (skip in single-shot) — rejected: single-shot agents also benefit from save_session_summary safety net and the #general completion announcement; keep it universal. D) Chosen: inline post_flight function in each wrapper, mirrored line-for-line, guarded by PREFLIGHT_OK + non-empty task id, every RPC wrapped so a failure never blocks the next iteration.",
+    "codebaseInsights": "Bash wrapper already has a `while [ \"$LOOP_RUNNING\" = true ]; do ... done` loop defaulting to enabled (line ~1028). `--no-loop` flag exists at line 176 and the loop is naturally single-iteration when `LOOP_ENABLED=false`. `moe_rpc()` helper (lines ~978-1025) is the exact RPC surface post-flight needs — already proven for chat_send / chat_channels / claim_next_task. ps1 wrapper has Invoke-MoeRpc and a do/while loop (line 920). Both scripts capture PREFLIGHT_TASK_ID during pre-flight and have GENERAL_CHANNEL_ID resolved early — zero new state plumbing required. Exit codes from `claude` / `codex` / `gemini` already follow `|| true` convention in bash (line 1372, 1448, 1452) so reading $? right after is the canonical approach.",
+    "risks": "(1) $? reset in bash: any command between the CLI and `CLI_EXIT_CODE=$?` resets it — capture MUST be the very next statement. (2) PowerShell $LASTEXITCODE is reset by every external call including RPC invocations — snapshot it into a local before any try/catch. (3) post_flight RPC failure must not throw — every call wrapped in `|| true` (bash) or try/catch (ps1). (4) Session summary may double-save when the agent itself calls moe.save_session_summary (matching workerId+taskId) — the daemon's saveSessionSummary tool should already handle this gracefully (append-only sessions file). (5) SIGINT/SIGTERM path in bash goes through `trap 'exit 0'` which skips post-flight — this is intentional; partial-work summaries would be misleading. Document this in docs. (6) Smoke tests need a running daemon — add explicit SKIP-with-exit-0 path to avoid CI flakiness when daemon is absent.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "packages/moe-daemon/src/tools/saveSessionSummary.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "docs/DEVELOPMENT.md"
+    ]
+  },
+  "planApprovedAt": "2026-04-17T19:31:09.682Z",
+  "reviewCompletedAt": "2026-04-17T20:06:46.808Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Step 1 (P0): --loop flag is not parsed in scripts/moe-agent.sh (grep --loop: 0 matches). Plan requires explicit opt-in alias with --loop + --no-loop conflict detection exiting 2.",
+      "Step 2 (P0): -Loop switch is not defined in scripts/moe-agent.ps1 (grep -Loop: 0 matches). Plan requires mirror of bash opt-in with conflict detection.",
+      "Step 3 (P0): post_flight() shell function is not defined. Plan mandates a named function after moe_rpc(); current code is inlined between the CLI branch and the loop-break guard, so it is not reusable and cannot be unit-tested independently.",
+      "Step 5 (P0): Invoke-PostFlight PowerShell function is not defined (grep Invoke-PostFlight: 0 matches).",
+      "Step 6 (P1): scripts/tests/postflight.sh does not exist. Plan says 'this IS the test for Phase 4' — no executable evidence exists that the post-flight actually writes a session summary file or posts to #general.",
+      "Step 7 (P1): scripts/tests/postflight.ps1 does not exist.",
+      "Step 8 (P1): docs/DEVELOPMENT.md has no Wrapper post-flight subsection (grep post-flight/--loop/postflight: 0 matches).",
+      "Process: all 9 plan steps still PENDING; activity log shows no STEP_* or TASK_COMPLETED events. Task was force-flipped directly to REVIEW."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "--loop flag missing in scripts/moe-agent.sh. Plan step 1 (P0) requires parsing --loop alongside existing --no-loop with conflict detection (exit 2). Update --help to document both.",
+        "file": "scripts/moe-agent.sh"
+      },
+      {
+        "type": "missing_feature",
+        "description": "-Loop switch missing in scripts/moe-agent.ps1 param block. Plan step 2 (P0) requires the PowerShell mirror including -Loop + -NoLoop conflict exit 2.",
+        "file": "scripts/moe-agent.ps1"
+      },
+      {
+        "type": "missing_feature",
+        "description": "post_flight() shell function not defined. Plan step 3 (P0) mandates a named function after moe_rpc() that reads PREFLIGHT_TASK_ID/WORKER_ID/ROLE/GENERAL_CHANNEL_ID/CLI_EXIT_CODE and guards on PREFLIGHT_OK. Current inline block at lines 1480-1519 does the work but is not extracted as a function.",
+        "file": "scripts/moe-agent.sh",
+        "line": 1480
+      },
+      {
+        "type": "missing_feature",
+        "description": "Invoke-PostFlight PowerShell function not defined. Plan step 5 (P0) mandates a function mirroring bash with try/catch around each RPC.",
+        "file": "scripts/moe-agent.ps1"
+      },
+      {
+        "type": "test_failure",
+        "description": "scripts/tests/postflight.sh missing. Plan step 6 explicitly says 'this IS the test for Phase 4'. No verifiable evidence that post-flight produces the session summary file + #general announcement.",
+        "file": "scripts/tests/postflight.sh"
+      },
+      {
+        "type": "test_failure",
+        "description": "scripts/tests/postflight.ps1 missing. Plan step 7 P1 counterpart to the bash test.",
+        "file": "scripts/tests/postflight.ps1"
+      },
+      {
+        "type": "other",
+        "description": "docs/DEVELOPMENT.md lacks the Wrapper post-flight subsection required by step 8 (P1). No documentation of the new flags or post-flight contract.",
+        "file": "docs/DEVELOPMENT.md"
+      },
+      {
+        "type": "other",
+        "description": "Process violation: all 9 plan steps PENDING; activity log has no STEP_STARTED/STEP_COMPLETED/TASK_COMPLETED events. Worker must re-run the implementation through start_step/complete_step/complete_task so the audit trail is correct."
+      }
+    ]
+  }
+}

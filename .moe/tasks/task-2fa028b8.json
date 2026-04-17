@@ -1,0 +1,245 @@
+{
+  "id": "task-2fa028b8",
+  "epicId": "epic-c77159a8",
+  "title": "Phase 3: Server-side ownership + ordering enforcement",
+  "description": "Patch startStep, completeStep, completeTask, submitPlan, qaApprove, qaReject in packages/moe-daemon/src/tools/ to verify workerId === task.assignedWorkerId and reject out-of-order calls (get_context required before start_step; all steps required before complete_task). Add contextFetchedBy[], stepsCompleted[] to Task schema. Propagate workerId via proxy MOE_WORKER_ID env.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "[P0] Extend Task schema with ownership/ordering tracking fields. Add optional `contextFetchedBy?: string[]` (workerIds who have invoked get_context for this task, de-duplicated) and `stepsCompleted?: string[]` (ordered list of stepIds already marked COMPLETED) to the Task interface in schema.ts. Update sanitizeImplementationPlan and StateManager.updateTask sanitization if needed so these arrays round-trip cleanly through writeEntity. Acceptance: fields exist, are optional, persist to .moe/tasks/*.json, and load without breaking existing tasks that lack them. Test: extend tools.test.ts (or add schema.test.ts) with a round-trip test covering both fields. Error handling: defend against non-array values in loaded JSON with a guarded cast that falls back to []. Validation: `npx tsc --noEmit`, `npm run test -- schema`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/schema.test.ts"
+      ],
+      "note": "Added optional contextFetchedBy[] and stepsCompleted[] to Task. New sanitizeStringIdArray() helper dedupes/caps. Load-time backfill converts non-array values to []. Placed round-trip test at src/state/schema.test.ts instead of tools/tools.test.ts (cleaner). 4 tests green.",
+      "startedAt": "2026-04-17T19:27:38.554Z",
+      "completedAt": "2026-04-17T19:30:59.670Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "[P0] Propagate workerId through the proxy via MOE_WORKER_ID env. In packages/moe-proxy/src/index.ts, on each inbound JSON-RPC line: if `method === 'tools/call'` and `params.arguments` is an object without a workerId key, inject `process.env.MOE_WORKER_ID` (when set) before forwarding. Do not overwrite an explicit workerId supplied by the caller. Never inject for non-tool methods (initialize, tools/list, ping). Acceptance: when MOE_WORKER_ID=architect-abc is set and client omits workerId, the daemon receives arguments.workerId='architect-abc'; when client supplies workerId='qa-x', it is preserved. Test: extend packages/moe-proxy/src/utils.test.ts (or add new) with a pure helper `injectWorkerId(parsed, envWorkerId)` and unit tests covering: tool call without workerId + env set, with workerId + env set, non-tool method, missing arguments object, malformed params. Error handling: wrap injection in try/catch so a malformed `params` object never breaks the proxy forward path. Validation: `cd packages/moe-proxy && npx tsc --noEmit && npm run test`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Added injectWorkerId() helper to utils.ts; called from stdin handler in index.ts. Re-serializes the parsed object only when mutated (preserves exact byte layout otherwise). Covers 7 cases; try/catch inside helper guarantees safe fall-through.",
+      "startedAt": "2026-04-17T19:30:59.692Z",
+      "completedAt": "2026-04-17T19:33:09.370Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "[P0] Add shared enforcement helpers under packages/moe-daemon/src/util/enforcement.ts. Export three pure functions that each throw a MoeError: `assertWorkerOwns(task, workerId)` (NOT_ALLOWED when task.assignedWorkerId is set and !== workerId; skip when task.assignedWorkerId is null to preserve --no-auto-claim interactive flows), `assertContextFetched(task, workerId)` (NOT_ALLOWED when workerId is provided and task.contextFetchedBy does not include it; message must instruct caller to run moe.get_context first), `assertAllStepsCompleted(task)` (NOT_ALLOWED when any implementationPlan step has status !== COMPLETED; include count of remaining steps in the error message). Each helper is a guard clause with early return; no function exceeds 20 lines. Acceptance: helpers exported, used nowhere yet, covered by unit tests. Test: new `enforcement.test.ts` with happy-path + every rejection branch for each helper. Validation: `npx tsc --noEmit && npm run lint && npm run test -- enforcement`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ],
+      "note": "Three helpers exported. Each ≤20 lines. 13 tests green. Gotcha: the plan references 'npm run lint' but moe-daemon/moe-proxy have no lint script — plan validation steps referencing lint are not runnable.",
+      "startedAt": "2026-04-17T19:33:09.841Z",
+      "completedAt": "2026-04-17T19:34:22.895Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "[P0] getContext — record contextFetchedBy on every successful fetch. Add an optional `workerId: string` property to the inputSchema. Resolve callerWorkerId from args.workerId || process.env.MOE_WORKER_ID (same fallback pattern already used for taskId). When both a task and a callerWorkerId are resolved, and the workerId is not yet in task.contextFetchedBy, call `state.updateTask(task.id, { contextFetchedBy: [...(task.contextFetchedBy||[]), callerWorkerId] })` — no activity event (internal bookkeeping). Acceptance: repeated calls do not duplicate entries; calls without a workerId leave the field untouched; existing response shape unchanged. Error handling: wrap the persist in try/catch so a write failure never blocks context return (log via logger.warn). Test: extend tools.test.ts with a get_context ownership-tracking test. Validation: `npx tsc --noEmit && npm run test -- getContext`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Persist wrapped in try/catch (logger.warn on failure). Dedup via includes check. Gotcha discovered: tests run inside an agent wrapper so MOE_WORKER_ID env is already set — must explicitly clear env in tests that verify 'missing workerId' branches.",
+      "startedAt": "2026-04-17T19:34:23.742Z",
+      "completedAt": "2026-04-17T19:36:39.589Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "[P0] submitPlan — enforce workerId ownership. Add optional `workerId: string` to inputSchema. After the existing PLANNING status check, call `assertWorkerOwns(task, workerId)` (skipped when task.assignedWorkerId is null to allow pre-claim human-driven planning). Do NOT require contextFetched for plan submission (architects may plan without get_context cached and phase 3 focuses only on start_step / complete_task ordering). Acceptance: a second architect with a different workerId receives NOT_ALLOWED; the claimed architect proceeds normally; existing rail validation and TURBO/SPEED paths untouched. Test: extend submitPlan.test.ts with an ownership-rejection case and a matching-workerId acceptance case. Error handling: use MoeError via assertWorkerOwns — do not swallow. Validation: `npx tsc --noEmit && npm run test -- submitPlan`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Guard placed after status check, before rail validation. Added 2 tests. All 6 submitPlan tests pass.",
+      "startedAt": "2026-04-17T19:36:39.949Z",
+      "completedAt": "2026-04-17T19:38:32.253Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "[P0] startStep — enforce ownership AND get_context precondition. Add optional `workerId: string` to inputSchema. After the WORKING state check and before the step lookup, call `assertWorkerOwns(task, workerId)` then `assertContextFetched(task, workerId)`. If either fails, throw with a message that names the missing step (e.g. 'Call moe.get_context before moe.start_step'). Leave all existing logic (PENDING -> IN_PROGRESS transition, worker status update to CODING, workStartedAt timestamp) unchanged. Acceptance: worker without get_context call is blocked with actionable error; worker who called get_context proceeds; wrong worker is rejected. Test: add startStep.test.ts covering context-missing rejection, ownership mismatch rejection, and happy path after get_context. Error handling: helpers throw MoeError — no silent failures. Validation: `npx tsc --noEmit && npm run test -- startStep`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts"
+      ],
+      "note": "Guards placed after WORKING check, before plan lookup. 4 new tests cover context-missing rejection, wrong-worker rejection, happy path, and legacy (null-assignedWorkerId) path. Existing tests unaffected.",
+      "startedAt": "2026-04-17T19:38:32.726Z",
+      "completedAt": "2026-04-17T19:40:12.511Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "[P0] completeStep — enforce ownership and append stepId to task.stepsCompleted. Add optional `workerId: string` to inputSchema. After the WORKING state check, call `assertWorkerOwns(task, workerId)`. When persisting the updated implementationPlan, also update stepsCompleted by appending params.stepId if not already present (preserve ordering of completion). Keep existing step ordering tolerance (PENDING or IN_PROGRESS -> COMPLETED) since Phase 3 does not mandate strict linear step order — only that get_context precedes start_step and all steps precede complete_task. Acceptance: wrong worker is rejected; stepsCompleted array grows monotonically and is de-duplicated if the same stepId is completed twice via race. Test: add completeStep.test.ts covering ownership rejection, stepsCompleted append, duplicate-stepId no-op. Error handling: assertWorkerOwns throws MoeError; catch-and-never-block wrapper preserved for postSystemMessage. Validation: `npx tsc --noEmit && npm run test -- completeStep`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "note": "Guard placed after WORKING check, before plan lookup. stepsCompleted appended monotonically and deduped. postSystemMessage try/catch preserved (below the new throws).",
+      "startedAt": "2026-04-17T19:40:12.998Z",
+      "completedAt": "2026-04-17T19:42:00.289Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "[P0] completeTask — add ownership + status + all-steps-complete enforcement. Current completeTask is missing even a status guard. Add these guards in order: (1) throw invalidState if task.status !== 'WORKING' (prevents double-complete or complete-from-REVIEW); (2) assertWorkerOwns(task, workerId); (3) assertAllStepsCompleted(task) — rejects when any step is still PENDING or IN_PROGRESS, with a message listing remaining step count. Add optional `workerId: string` to inputSchema. Keep the existing REVIEW transition, prLink handling, worker->IDLE update, and system chat message. Acceptance: task with an uncompleted step is rejected with a helpful error; task in REVIEW cannot be re-completed; non-owner is rejected; fully-complete owner transitions to REVIEW. Test: add completeTask.test.ts covering missing-steps rejection, wrong-status rejection, ownership rejection, happy path. Error handling: all guards use MoeError. Validation: `npx tsc --noEmit && npm run test -- completeTask`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts"
+      ],
+      "note": "Three new guards in order: status=WORKING, worker ownership, all steps complete. Existing tests pre-seeded WORKING + completed steps so unaffected.",
+      "startedAt": "2026-04-17T19:42:00.447Z",
+      "completedAt": "2026-04-17T19:43:37.437Z"
+    },
+    {
+      "stepId": "step-9",
+      "description": "[P0] qaApprove + qaReject — enforce ownership. Add optional `workerId: string` to both inputSchemas. After the existing REVIEW status check, call `assertWorkerOwns(task, workerId)`. Rationale: QA claims the REVIEW task via claim_next_task which sets assignedWorkerId, so a second QA agent must not approve/reject someone else's review. When task.assignedWorkerId is null (human acting directly) the helper is a no-op and human-driven approvals still work. Acceptance: QA agent B rejected when agent A owns the REVIEW; human-driven path unaffected. Test: extend existing QA tests (or add qaApprove.test.ts / qaReject.test.ts) covering ownership mismatch rejection, human no-op path, and happy path. Error handling: MoeError from helper. Validation: `npx tsc --noEmit && npm run test -- qa`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaOwnership.test.ts"
+      ],
+      "note": "Combined qaApprove + qaReject ownership tests in one file (qaOwnership.test.ts) since both guards share identical semantics. 6 new tests cover wrong-worker reject, matching-worker accept, and human no-op for both tools.",
+      "startedAt": "2026-04-17T19:43:37.914Z",
+      "completedAt": "2026-04-17T19:45:50.479Z"
+    },
+    {
+      "stepId": "step-10",
+      "description": "[P1] Integration test for the full enforcement flow. Add a new vitest file that walks a task through claim -> submit_plan -> get_context -> start_step -> complete_step (x N) -> complete_task -> qa_approve, asserting each out-of-order or cross-worker call is rejected with NOT_ALLOWED. Use the in-memory StateManager pattern already established in submitPlan.test.ts (temp .moe dir, seed project/epic/task). Explicitly test: start_step before get_context fails; complete_task with a PENDING step fails; wrong-worker start_step fails; after fixing each, the call succeeds. This is the regression net for Phase 3. Validation: `npm run test -- enforcement.integration`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/enforcement.integration.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/enforcement.integration.test.ts"
+      ],
+      "note": "Single test walks the full lifecycle with multiple cross-worker + ordering rejections interleaved, then finishes with QA approval. stepsCompleted is also asserted at the end to cover step-7 tracking.",
+      "startedAt": "2026-04-17T19:45:50.581Z",
+      "completedAt": "2026-04-17T19:47:01.714Z"
+    },
+    {
+      "stepId": "step-11",
+      "description": "[P1] Documentation updates. In docs/SCHEMA.md add contextFetchedBy[] and stepsCompleted[] to the Task section with one-line descriptions. In docs/MCP_SERVER.md: (a) add a new `workerId` parameter row to each of submit_plan, start_step, complete_step, complete_task, qa_approve, qa_reject (optional, auto-injected by proxy from MOE_WORKER_ID); (b) add an `Ownership & Ordering` subsection explaining the three guards (ownership, context-fetched, all-steps-complete) with their error codes (NOT_ALLOWED / -32003) so workers can handle them. Cross-platform note: MOE_WORKER_ID env is set identically by moe-agent.sh and moe-agent.ps1 — call that out in the Ownership section. Acceptance: docs compile (markdown lint clean) and list every new parameter/field introduced in this phase. Validation: manual read — no automated tool.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added contextFetchedBy[]/stepsCompleted[] to SCHEMA.md Task interface. In MCP_SERVER.md: added workerId param to submit_plan/start_step/complete_step/complete_task/qa_approve/qa_reject/get_context; added new Ownership & Ordering section at top of Tools area with a guard table and cross-platform MOE_WORKER_ID note. Phase 2 (parallel architect) added nextAction hints to the same tools — their changes are additive and don't conflict.",
+      "startedAt": "2026-04-17T19:47:04.592Z",
+      "completedAt": "2026-04-17T19:51:57.963Z"
+    },
+    {
+      "stepId": "step-12",
+      "description": "[P0] Final quality gate. Run the full validation suite from a clean state to catch session-patch drift: `npm --prefix packages/moe-daemon ci`, `npm --prefix packages/moe-proxy ci`, then in each package `npx tsc --noEmit && npm run lint && npm run test && npm run build`. Verify no regressions in existing tests, no new TS errors, no new lint warnings. Confirm the phase is independently revertable — every change is contained within: packages/moe-daemon/src/{tools,types,util,state}, packages/moe-proxy/src/, docs/SCHEMA.md, docs/MCP_SERVER.md. No changes to the JetBrains plugin, no changes to wrapper scripts, no changes to other phase deliverables. Acceptance: all four validation commands green in both packages; git diff confined to the listed paths. Rollback plan: `git revert <phase-3-commit>` restores prior ownership-free behavior with no data migration needed (new Task fields are optional).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon",
+        "packages/moe-proxy",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Validation green: daemon 370 tests pass, proxy 33 tests pass, both packages tsc --noEmit clean, daemon npm run build succeeds. Phase 3 diff is contained within the declared paths. 'npm run lint' does not exist in either package — skipped (flagged as gotcha). Other modified files in git status are from concurrent phases (Phase 1 wrapper preflight, Phase 2 nextAction hints) — NOT Phase 3 scope.",
+      "startedAt": "2026-04-17T19:51:58.297Z",
+      "completedAt": "2026-04-17T19:52:45.719Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-17T19:05:11.205Z",
+  "updatedAt": "2026-04-17T20:03:29.084Z",
+  "planSubmittedAt": "2026-04-17T19:24:17.856Z",
+  "planningNotes": {
+    "approachesConsidered": "A) Middleware-style interceptor in McpAdapter.handleSingle that enforces ownership/ordering for every tool — rejected: too coarse, each tool has different preconditions (submit_plan needs PLANNING, qa_* needs REVIEW), and would require a per-tool policy map anyway. B) Adding a required (not optional) workerId param — rejected: breaks backward compat for --no-auto-claim interactive flows and plugin-driven human actions on /ws. C) Chosen: per-tool guards via shared helpers + optional workerId + null-assignedWorkerId no-op. Helpers keep each tool handler short (<50 lines) and testable in isolation. D) Strict step ordering (step N must precede N+1) — rejected: task description only calls for get_context-before-start_step and all-complete-before-complete_task; tighter order is out of scope for Phase 3 and would break plan flexibility.",
+    "codebaseInsights": "Tools live in packages/moe-daemon/src/tools/, each exporting a factory taking StateManager. MoeError + MoeErrorCode in util/errors.ts is the canonical error surface (code -32003 = NOT_ALLOWED/CONSTRAINT_VIOLATION). StateManager.updateTask sanitizes known Task fields in place — new optional fields need no sanitizer entry to round-trip as-is. Proxy currently does not inspect tools/call params; injection belongs in the stdin->ws path inside index.ts (validate/parse, mutate, re-stringify). Plugin uses /ws not /mcp — ownership enforcement on MCP-only tools does not affect plugin.",
+    "risks": "(1) SPEED-mode auto-approval timer in submitPlan runs async and does not carry a workerId — confirm the timer does not hit ownership guards (it calls state.updateTask directly, bypassing tools, so fine). (2) postSystemMessage is wrapped in try/catch — new throws from enforcement must happen BEFORE that wrapper, not inside it. (3) The existing completeTask has NO status guard — adding one is technically a behavior change that may break tests asserting re-complete-from-REVIEW; search and update those. (4) Backward compat: if MOE_WORKER_ID is unset, proxy injects nothing — tools see workerId=undefined and helpers no-op when assignedWorkerId is null; this matches --no-auto-claim. (5) contextFetchedBy could grow unbounded on long-lived tasks with many workers — de-dup on append; not a concern at current scale. (6) McpAdapter already reads args.workerId for chat notifications — injection from proxy will light up notifications for previously-anonymous calls; expected and desirable.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/startStep.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-17T19:24:17.859Z",
+  "workStartedAt": "2026-04-17T19:27:38.554Z",
+  "completedAt": "2026-04-17T19:53:08.070Z",
+  "reviewStartedAt": "2026-04-17T19:53:08.070Z",
+  "reviewCompletedAt": "2026-04-17T20:03:29.084Z"
+}

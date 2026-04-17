@@ -1,0 +1,150 @@
+{
+  "id": "task-54ef846d",
+  "epicId": "epic-c77159a8",
+  "title": "Phase 6 (optional): Claude-Code PreToolUse hook on moe.init_project",
+  "description": "When moe.init_project runs, emit .claude/settings.json + .claude/hooks/moe-require-claim.sh(.ps1) into the target project. Hook calls moe-call.sh list_tasks to verify the worker has an active claim; exit 2 on miss. Defense-in-depth for Claude Code sessions. Low priority if Phases 1+3 are effective.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "[P0] Add `enableClaudeHook?: boolean` (default false) to moe.init_project inputSchema in packages/moe-daemon/src/tools/initProject.ts. Forward it to writeInitFiles. Rationale: the task marks Phase 6 as optional defense-in-depth; opt-in by default avoids imposing a PreToolUse hook on users who do not want it. Acceptance: inputSchema validates the flag; omitting it preserves current behavior (no .claude/ written); passing true triggers the hook emission in later steps. Test: extend initProject.test.ts with flag-present-and-absent cases asserting .claude/ exists or doesn't. Error handling: if the target project already has a .claude/settings.json, merge our hook block into it instead of overwriting (preserves user-authored hooks). Validation: `npx tsc --noEmit && npm run test -- initProject`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/tools/initProject.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "[P0] Create packages/moe-daemon/src/util/claudeHook.ts with two exports: `writeClaudeHook(projectPath: string): void` and constants `CLAUDE_SETTINGS_CONTENT`, `REQUIRE_CLAIM_SH_CONTENT`, `REQUIRE_CLAIM_PS1_CONTENT`. `writeClaudeHook` creates `<project>/.claude/` and `<project>/.claude/hooks/` if missing, then writes the three files — skipping any that already exist UNLESS settings.json exists and lacks our PreToolUse matcher, in which case merge the matcher block (preserve user's other hooks). Cross-platform path handling via path.join. Files end with a trailing newline. Acceptance: function is idempotent, merges non-destructively, and is covered by unit tests that verify (a) fresh write, (b) skip-on-existing-hook-file, (c) merge-into-existing-settings.json. Error handling: every fs write in a try/catch that logs via logger.warn and continues — missing .claude/ must never crash init_project. Validation: `npx tsc --noEmit && npm run test -- claudeHook`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claudeHook.ts",
+        "packages/moe-daemon/src/util/claudeHook.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "[P0] Author the bash hook script content emitted as .claude/hooks/moe-require-claim.sh. Behavior: (1) read tool name from stdin JSON via `$PYTHON_CMD -c` or a small jq-free inline parser; (2) allowlist — if tool name is not in {mcp__moe__moe_start_step, mcp__moe__moe_complete_step, mcp__moe__moe_complete_task, mcp__moe__moe_submit_plan, mcp__moe__moe_qa_approve, mcp__moe__moe_qa_reject}, exit 0 (let it through); (3) resolve worker id from $MOE_WORKER_ID env, exit 0 (unenforceable) with a stderr warning if unset; (4) invoke scripts/moe-call.sh list_tasks with filter {assignedWorkerId} and check that at least one task has status in {PLANNING, WORKING, REVIEW}; (5) exit 0 on hit, exit 2 with a stderr message \"No active claim for worker $MOE_WORKER_ID — call moe.claim_next_task first\" on miss. Script uses `set -euo pipefail`, resolves moe-call.sh path relative to $CLAUDE_PROJECT_DIR (or $PWD fallback), and has a hard 2-second timeout on the RPC so a stuck daemon does not wedge Claude Code. Acceptance: script passes shellcheck, under 60 lines. Error handling: every external call guarded; fail-open with stderr warning on infrastructure errors rather than wedging the user. Test: unit-test the script with a fake moe-call in the test suite's PATH.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claudeHook.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "[P0] Author the PowerShell hook script emitted as .claude/hooks/moe-require-claim.ps1 mirroring the bash hook. Same allowlist, same env check, same 2-second timeout. Reads stdin via `[Console]::In.ReadToEnd()`, parses JSON with `ConvertFrom-Json`, invokes `Invoke-WebRequest` OR `moe-call.sh` via `bash -c` fallback (pick the moe-call.ps1 equivalent if one exists; otherwise shell out to moe-call.sh from Git-Bash on Windows — document the dependency). Same exit codes (0 allow, 2 block, 0 with Write-Warning on infra error). Acceptance: script passes `Set-StrictMode -Version Latest`, under 80 lines. Error handling: try/catch every external call, never throw into Claude Code's hook runtime. Test: invoke the script with a mocked stdin payload in pester or with raw pwsh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claudeHook.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "[P0] Author .claude/settings.json content emitted by writeClaudeHook. Shape: `{ \"hooks\": { \"PreToolUse\": [{ \"matcher\": \"mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)\", \"hooks\": [{ \"type\": \"command\", \"command\": \"bash .claude/hooks/moe-require-claim.sh\" }] }] } }`. On Windows the command becomes `pwsh -NoProfile -File .claude/hooks/moe-require-claim.ps1`. Emit BOTH hook entries in the settings so the correct one runs based on OS — Claude Code ignores the one that fails to execute. Matcher scopes to ownership-sensitive tools only; read-only tools (get_context, list_tasks, recall) bypass the hook for performance. Acceptance: the settings.json is valid JSON, the matcher regex compiles, and the hook array has both OS entries. Error handling: merge path in writeClaudeHook preserves user-authored hooks — never clobbers. Test: snapshot test of the generated JSON and a smoke parse-validation.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claudeHook.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "[P1] Integration test: end-to-end hook behavior. New vitest file that: (1) runs moe.init_project with enableClaudeHook:true into a temp dir; (2) asserts .claude/settings.json, .claude/hooks/moe-require-claim.sh, .claude/hooks/moe-require-claim.ps1 exist with expected contents; (3) spawns the bash hook as a child process with MOE_WORKER_ID=unknown and a mocked moe-call.sh in PATH returning an empty list — assert exit code 2; (4) repeats with a list containing an active claim — assert exit code 0; (5) tests an allowlisted tool (moe.get_context) — assert exit code 0 regardless of claim state. Skip the ps1 branch gracefully when pwsh is not on PATH so the test stays green on Linux CI. Acceptance: test passes locally on bash and (when available) pwsh. Error handling: every child_process call has a timeout and captures stderr. Validation: `npm run test -- claudeHook.integration`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claudeHook.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "[P1] Docs and final quality gate. (1) Add a `Claude-Code PreToolUse hook (optional)` section to docs/MCP_SERVER.md under init_project: explain the new flag, the allowlist of tools the hook gates, the fail-open-on-infra-error policy, and how to disable (delete .claude/hooks/moe-require-claim.* or remove the matcher). Document that Phases 1 + 3 already provide most of this enforcement — the hook is defense-in-depth only. (2) Final gate: `npx tsc --noEmit && npm run lint && npm run test && npm run build` in packages/moe-daemon — all green. (3) shellcheck the emitted .sh template string (extract via a one-off script into a temp file, shellcheck it). (4) Verify diff scope is confined to: packages/moe-daemon/src/util/claudeHook.ts, packages/moe-daemon/src/util/claudeHook.test.ts, packages/moe-daemon/src/util/claudeHook.integration.test.ts, packages/moe-daemon/src/tools/initProject.ts, packages/moe-daemon/src/tools/initProject.test.ts, docs/MCP_SERVER.md. NO changes to moe-proxy, moe-jetbrains, wrapper scripts, or prior-phase code. Rollback: `git revert <phase-6-commit>` removes the flag and helper; already-emitted .claude/ hook files in user projects remain harmless (matcher hits same MCP server) — document a one-line manual cleanup command for operators.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Implementation diverges materially from the approved plan and task description. A .claude/settings.json + a single cross-platform Node hook (.claude/hooks/moe-require-claim.js) were emitted, but the approved plan explicitly required (a) bash + PowerShell hook scripts calling moe-call.sh list_tasks, (b) an opt-in enableClaudeHook flag, and (c) a scoped MCP-tool matcher. What was shipped is unconditionally enabled, uses a completely different matcher (Edit|Write|Bash vs the planned mcp__moe__moe_* tools), and bypasses moe-call.sh by reading .moe/tasks/*.json directly — the architect's planningNotes explicitly rejected that direct-read approach and mandated moe-call.sh. Plus the same process issue across this epic: all 7 steps PENDING, direct WORKING->REVIEW flip at 19:54:09 with no STEP_* events. Either (1) re-align with the approved plan, or (2) submit a revised plan and get it re-approved before shipping the divergent design.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-17T19:05:12.149Z",
+  "updatedAt": "2026-04-17T20:08:56.286Z",
+  "planSubmittedAt": "2026-04-17T19:35:19.918Z",
+  "planningNotes": {
+    "approachesConsidered": "A) Enable the Claude-Code hook by default on every init_project — rejected: the task marks this phase as optional defense-in-depth; opt-in via a flag respects users who don't use Claude Code or who have their own hooks. B) Hook reads .moe/workers/<workerId>.json directly to check currentTaskId (instant file read, ~1ms) — considered faster but the task description explicitly says 'Hook calls moe-call.sh list_tasks'; follow task spec. Note the perf concern as a risk. C) Hook blocks all MCP tools by default — rejected: read-only tools (get_context, list_tasks, recall) must bypass or the hook would deadlock on its own list_tasks call. D) Chosen: opt-in flag, narrow matcher scoped to the 6 ownership-sensitive tools, fail-open on infra errors, 2-second RPC timeout. E) Writing the hook as TypeScript (compiled to JS) invoked by node — rejected: adds a node process on every tool call, slower and heavier than bash/pwsh scripts.",
+    "codebaseInsights": "init_project already uses a helper pattern (writeInitFiles in util/initFiles.ts) that writes role docs + agent-context + .gitignore conditionally. Mirroring that pattern for writeClaudeHook keeps the tool handler itself thin. scripts/moe-call.sh exists (resolved in moe-agent.sh line 1238) and takes `<tool_name> [json_args]` — exactly what the hook needs. moe-call.ps1 does NOT appear to exist; the PowerShell hook either shells out to moe-call.sh via Git-Bash on Windows OR a new moe-call.ps1 is needed (out of scope for Phase 6; document the Git-Bash dependency). Claude Code hook matcher is a regex on the fully-qualified tool name; `mcp__moe__moe_start_step` is the real name pattern emitted by the MCP server.",
+    "risks": "(1) Hook invokes moe-call.sh which invokes proxy which RPCs to daemon — on every gated tool call. Latency ~20-100ms per call. The 2-second timeout protects against a wedged daemon but the steady-state overhead is real. Document this in the Phase 6 section of MCP_SERVER.md and consider fast-path .moe/workers/<workerId>.json read in a follow-up. (2) Windows PowerShell hook dependency on Git-Bash (for moe-call.sh) is a hidden prerequisite — moe-call.ps1 ought to exist long-term but is out of scope for this phase. (3) .claude/settings.json merging is non-trivial: a user's existing settings.json with other hooks must not be clobbered. Implement as 'append to PreToolUse if our matcher not present, otherwise skip' (no deep-merge). (4) Allowlist drift — if Phase 2 adds new ownership-sensitive tools, the matcher regex must be updated. Document this maintenance touchpoint in the Phase 6 docs. (5) Fail-open policy on infra error means a broken daemon effectively disables the hook rather than blocking the user — this is the correct defense-in-depth posture (Phase 3 still enforces at the daemon), but flag it so QA doesn't treat it as a bug.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/initProject.ts",
+      "packages/moe-daemon/src/util/initFiles.ts",
+      "packages/moe-daemon/src/util/claudeHook.ts",
+      "scripts/moe-call.sh",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-04-17T19:35:19.921Z",
+  "reviewCompletedAt": "2026-04-17T20:08:56.286Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Step 1 (P0): enableClaudeHook?: boolean flag is NOT in initProject.ts inputSchema; writeClaudeHookFiles runs unconditionally at line 137. Plan requires opt-in default false.",
+      "Step 3 (P0): .claude/hooks/moe-require-claim.sh (bash hook) is not emitted; only a .js exists.",
+      "Step 4 (P0): .claude/hooks/moe-require-claim.ps1 (PowerShell hook) is not emitted.",
+      "Step 5 (P0): settings.json matcher is 'Edit|Write|MultiEdit|NotebookEdit|Bash' (general file ops) — plan mandated 'mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)' (ownership-sensitive MCP tools only).",
+      "Step 3/4 semantics: hook reads .moe/tasks/*.json directly instead of invoking moe-call.sh list_tasks. Architect planningNotes explicitly considered and REJECTED this approach in favor of the task spec.",
+      "Step 6 (P1): no claudeHook.integration.test.ts or claudeHook.test.ts exists.",
+      "Step 7 (P1): docs/MCP_SERVER.md has no Claude-Code PreToolUse hook (optional) section.",
+      "Process: all 7 plan steps PENDING; activity log shows direct TASK_UPDATED->REVIEW at 19:54:09 with no STEP_* events."
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "description": "enableClaudeHook flag missing. initProject.ts:137 calls writeClaudeHookFiles(projectPath) unconditionally — every init_project now emits .claude/ artifacts. Plan step 1 P0 requires inputSchema to accept enableClaudeHook?: boolean (default false) and only emit when true.",
+        "file": "packages/moe-daemon/src/tools/initProject.ts",
+        "line": 137
+      },
+      {
+        "type": "missing_feature",
+        "description": "moe-require-claim.sh (bash) and moe-require-claim.ps1 (PowerShell) are not produced. Plan steps 3+4 mandate both scripts with shellcheck compliance, 2s RPC timeout, allowlisted MCP tool names. Only a single cross-platform .js is emitted.",
+        "file": "packages/moe-daemon/src/util/claudeHook.ts"
+      },
+      {
+        "type": "regression",
+        "description": "Matcher semantics changed. SETTINGS_JSON in claudeHook.ts uses 'Edit|Write|MultiEdit|NotebookEdit|Bash' which gates every file op. Plan step 5 mandates 'mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)' — only the ownership-sensitive MCP tools. The shipped matcher will block legitimate read-write work outside of MCP tool calls, which is a meaningful behavior change from what was approved.",
+        "file": "packages/moe-daemon/src/util/claudeHook.ts",
+        "line": 22
+      },
+      {
+        "type": "regression",
+        "description": "Hook resolution strategy deviates. Plan step 3 mandates the hook to call moe-call.sh list_tasks (goes through the daemon). Implementation reads .moe/tasks/*.json directly (claudeHook.ts:68-80). Architect's planningNotes explicitly rejected direct-read in favor of moe-call.sh to avoid bypassing the daemon; the worker did not submit a plan revision before changing this.",
+        "file": "packages/moe-daemon/src/util/claudeHook.ts",
+        "line": 68
+      },
+      {
+        "type": "test_failure",
+        "description": "No unit or integration tests for claudeHook. Plan steps 2 + 6 mandate claudeHook.test.ts (fresh-write / skip-existing / merge-existing branches) and claudeHook.integration.test.ts spawning the hook with various MOE_WORKER_ID/moe-call.sh mocks.",
+        "file": "packages/moe-daemon/src/util/claudeHook.test.ts"
+      },
+      {
+        "type": "other",
+        "description": "docs/MCP_SERVER.md lacks the 'Claude-Code PreToolUse hook (optional)' subsection (step 7 P1). Users have no docs for the new behavior or how to disable it.",
+        "file": "docs/MCP_SERVER.md"
+      },
+      {
+        "type": "other",
+        "description": "Process: all 7 plan steps PENDING; activity log has no STEP_* events. Task was force-flipped to REVIEW at 19:54:09. Re-run via start_step/complete_step/complete_task."
+      }
+    ]
+  }
+}
