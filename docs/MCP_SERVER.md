@@ -92,6 +92,26 @@ The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }
 
 ---
 
+## Ownership & Ordering
+
+Phase 3 introduced server-side guards on six tools: `moe.submit_plan`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.qa_approve`, and `moe.qa_reject`. Each accepts an optional `workerId` parameter. The `moe-proxy` auto-injects it from the `MOE_WORKER_ID` env var — set identically by `scripts/moe-agent.sh` and `scripts/moe-agent.ps1`, so the same rules apply on Linux, macOS, and Windows. Clients that supply an explicit `workerId` (or human-driven actions on tasks with `assignedWorkerId=null`) are never overwritten.
+
+Three guards are checked in order. Each failure throws `MoeError` with JSON-RPC code `-32003` (`NOT_ALLOWED`):
+
+| Guard | Applies to | Fires when | Fix |
+|---|---|---|---|
+| Worker owns task | `submit_plan`, `start_step`, `complete_step`, `complete_task`, `qa_approve`, `qa_reject` | `task.assignedWorkerId` is set and does not match `workerId` | Only the claiming worker may act; a second agent must claim a different task. |
+| Context fetched | `start_step` | Caller has never invoked `moe.get_context` for this task | Call `moe.get_context { taskId, workerId }` first. |
+| All steps complete | `complete_task` | Any `implementationPlan` step is still `PENDING` or `IN_PROGRESS` | Finish remaining steps, then retry. The error message includes the count of incomplete steps. |
+
+Bookkeeping fields on `Task`:
+- `contextFetchedBy?: string[]` — de-duplicated workerIds that invoked `moe.get_context`.
+- `stepsCompleted?: string[]` — ordered stepIds already marked `COMPLETED`, populated by `moe.complete_step`.
+
+All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-auto-claim` interactive flows and the JetBrains plugin `/ws` path (which never carries a `workerId`).
+
+---
+
 ## Tools (Implemented)
 
 ### moe.get_context
@@ -100,13 +120,15 @@ Get current project/epic/task context and rails.
 
 **Parameters:**
 ```typescript
-{ taskId?: string }
+{ taskId?: string, workerId?: string }
 ```
 
 **Resolution order:**
 1. `taskId` param
 2. `MOE_TASK_ID` env
 3. `MOE_WORKER_ID` env (uses worker.currentTaskId)
+
+When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appended to the task's `contextFetchedBy` list so that `moe.start_step` can later verify the caller has seen the plan. See **Ownership & Ordering** below.
 
 **Returns:**
 ```typescript
@@ -133,6 +155,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 ```typescript
 {
   taskId: string,
+  workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
   steps: { description: string; affectedFiles?: string[] }[]
 }
 ```
@@ -177,8 +200,10 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 
 **Parameters:**
 ```typescript
-{ taskId: string, stepId: string }
+{ taskId: string, stepId: string, workerId?: string }
 ```
+
+> `moe.get_context` must be called by `workerId` before `moe.start_step` — see **Ownership & Ordering** below.
 
 **Returns:**
 ```typescript
@@ -189,11 +214,11 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 
 ### moe.complete_step
 
-Mark a step as `COMPLETED`.
+Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplicated).
 
 **Parameters:**
 ```typescript
-{ taskId: string, stepId: string, modifiedFiles?: string[], note?: string }
+{ taskId: string, stepId: string, modifiedFiles?: string[], note?: string, workerId?: string }
 ```
 
 **Returns:**
@@ -211,11 +236,11 @@ Mark a step as `COMPLETED`.
 
 ### moe.complete_task
 
-Mark a task as `REVIEW` (complete) and optionally attach a PR link.
+Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires task to be in `WORKING` status, caller to own the task, and every implementation step to be `COMPLETED`.
 
 **Parameters:**
 ```typescript
-{ taskId: string, prLink?: string, summary?: string }
+{ taskId: string, prLink?: string, summary?: string, workerId?: string }
 ```
 
 **Returns:**
@@ -588,7 +613,7 @@ QA approves a task in REVIEW status, moving it to DONE.
 
 **Parameters:**
 ```typescript
-{ taskId: string, summary?: string }
+{ taskId: string, summary?: string, workerId?: string }
 ```
 
 **Returns:**
@@ -609,7 +634,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes.
 
 **Parameters:**
 ```typescript
-{ taskId: string, reason: string }
+{ taskId: string, reason: string, workerId?: string }
 ```
 
 **Returns:**

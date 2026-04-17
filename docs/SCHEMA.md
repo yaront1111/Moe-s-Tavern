@@ -268,7 +268,11 @@ interface Task {
   
   // Ordering
   order: number;
-  
+
+  // Ownership + ordering bookkeeping (Phase 3; both optional)
+  contextFetchedBy?: string[];   // De-duplicated workerIds that invoked moe.get_context for this task
+  stepsCompleted?: string[];     // Ordered stepIds already marked COMPLETED
+
   // Timestamps
   createdAt: string;
   updatedAt: string;
