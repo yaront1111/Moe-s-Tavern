@@ -562,6 +562,55 @@ if ($Team) {
     }
 }
 
+# Invoke-MoeRpc TOOL ARGS_HASHTABLE_OR_JSON
+# Calls an MCP tool via the proxy and returns the parsed JSON result (the inner text block
+# of the MCP content array). Returns $null on failure.
+function Invoke-MoeRpc {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tool,
+        [object]$Args
+    )
+    $t = if ($Tool.StartsWith("moe.")) { $Tool } else { "moe.$Tool" }
+    if ($null -eq $Args) { $Args = @{} }
+    if ($Args -is [string]) { $argsObj = $Args | ConvertFrom-Json } else { $argsObj = $Args }
+    $rpc = @{
+        jsonrpc = "2.0"
+        id      = 1
+        method  = "tools/call"
+        params  = @{ name = $t; arguments = $argsObj }
+    } | ConvertTo-Json -Depth 20 -Compress
+
+    $prevEnv = $env:MOE_PROJECT_PATH
+    $env:MOE_PROJECT_PATH = $projectPath
+    try {
+        $raw = $rpc | & node $proxyScript 2>$null
+    } catch {
+        $env:MOE_PROJECT_PATH = $prevEnv
+        return $null
+    }
+    $env:MOE_PROJECT_PATH = $prevEnv
+    if (-not $raw) { return $null }
+
+    # Take the last valid JSON line from the response
+    $lines = ($raw -split "`n") | Where-Object { $_.Trim().Length -gt 0 }
+    foreach ($line in ($lines | Sort-Object -Descending { [Array]::IndexOf($lines, $_) })) {
+        try {
+            $d = $line | ConvertFrom-Json -ErrorAction Stop
+            if ($d.error) {
+                Write-Host "  [moe_rpc error: $($d.error.message)]" -ForegroundColor Yellow
+                return $null
+            }
+            if ($d.result -and $d.result.content -and $d.result.content.Count -gt 0) {
+                $text = $d.result.content[0].text
+                try { return ($text | ConvertFrom-Json -ErrorAction Stop) } catch { return $text }
+            }
+        } catch {
+            continue
+        }
+    }
+    return $null
+}
+
 Write-Host "Launching $cliType CLI..."
 if ($cliType -eq "codex") {
     if ($CodexExec) {
@@ -590,44 +639,25 @@ if ($codexInteractive -or $geminiInteractive) {
 }
 $firstRun = $true
 
-# Build system/role context (shared across loop iterations)
-$systemAppend = "Role: $Role. Always use Moe MCP tools. "
+# Build base system/role context (static across iterations; per-iteration pre-flight is appended inside the loop)
+$systemAppendBase = "Role: $Role. Always use Moe MCP tools. "
 if ($AutoClaim) {
-    $systemAppend += "Start by claiming the next task for your role."
+    $systemAppendBase += "Start by claiming the next task for your role."
 }
 if ($agentContext) {
-    $systemAppend += "`n`n$agentContext"
+    $systemAppendBase += "`n`n$agentContext"
 }
 if ($approvalMode) {
-    $systemAppend += "`n`n# Project Settings`nApproval mode: $approvalMode"
+    $systemAppendBase += "`n`n# Project Settings`nApproval mode: $approvalMode"
 }
 if ($roleDoc) {
-    $systemAppend += "`n`n$roleDoc"
+    $systemAppendBase += "`n`n$roleDoc"
 }
 if ($knownIssues) {
-    $systemAppend += "`n`n# Known Issues`n$knownIssues"
+    $systemAppendBase += "`n`n# Known Issues`n$knownIssues"
 }
 if ($teamContext) {
-    $systemAppend += "`n`n# Team`n$teamContext"
-}
-
-# For codex: write system/role context to instructions file (codex reads it as project docs)
-# This avoids passing the long multi-line prompt as a CLI argument, which breaks codex's arg parser
-if ($cliType -eq "codex") {
-    $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
-    $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
-    Write-Host "Agent instructions written to: $agentInstructionsPath"
-}
-
-# For gemini: write system/role context to .gemini/GEMINI.md (Gemini's native context file)
-if ($cliType -eq "gemini") {
-    $geminiInstructionsDir = Join-Path $projectPath ".gemini"
-    if (-not (Test-Path $geminiInstructionsDir)) {
-        New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
-    }
-    $geminiInstructionsPath = Join-Path $geminiInstructionsDir "GEMINI.md"
-    $systemAppend | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
-    Write-Host "Agent instructions written to: $geminiInstructionsPath"
+    $systemAppendBase += "`n`n# Team`n$teamContext"
 }
 
 try {
@@ -640,9 +670,158 @@ do {
     }
     $firstRun = $false
 
-    $claimPrompt = if ($AutoClaim) {
-        "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. If hasNext is false, say: 'No tasks in $Role queue' and wait."
-    } else { $null }
+    # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
+    $preflightTaskId = ""
+    $preflightTaskTitle = ""
+    $preflightTaskChannel = ""
+    $preflightContext = $null
+    $preflightGeneralUnread = $null
+    $preflightTaskUnread = $null
+    $preflightRecall = $null
+    $preflightPending = $null
+    $preflightOk = $false
+    $preflightNoTask = $false
+
+    if ($AutoClaim) {
+        Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan
+
+        # Resolve #general channel id (chat tools take channel id, not name)
+        $generalChannelId = $null
+        $channelsResp = Invoke-MoeRpc -Tool "chat_channels" -Args @{}
+        if ($channelsResp -and $channelsResp.channels) {
+            foreach ($c in $channelsResp.channels) {
+                if ($c.name -eq "general") { $generalChannelId = $c.id; break }
+            }
+        }
+
+        if ($generalChannelId) {
+            # chat_join is safe pre-claim (uses system sender); chat_send requires a registered worker so we defer announce until after claim.
+            Invoke-MoeRpc -Tool "chat_join" -Args @{ channel = $generalChannelId; workerId = $WorkerId } | Out-Null
+            $preflightGeneralUnread = Invoke-MoeRpc -Tool "chat_read" -Args @{ channel = $generalChannelId; workerId = $WorkerId }
+        }
+        $preflightPending = Invoke-MoeRpc -Tool "get_pending_questions" -Args @{}
+
+        $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+        if ($null -ne $claim) {
+            # Worker is auto-registered by claim_next_task; safe to announce now.
+            if ($generalChannelId) {
+                $announceText = if ($claim.hasNext) { "$Role online, starting $($claim.task.id): $($claim.task.title)" } else { "$Role online, waiting for tasks" }
+                Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $announceText } | Out-Null
+            }
+            if ($claim.hasNext) {
+                $preflightTaskId = $claim.task.id
+                $preflightTaskTitle = $claim.task.title
+                if ($claim.task.PSObject.Properties['chatChannel']) { $preflightTaskChannel = $claim.task.chatChannel }
+
+                if ($preflightTaskId) {
+                    $preflightContext = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+                }
+                if ($preflightTaskChannel) {
+                    $preflightTaskUnread = Invoke-MoeRpc -Tool "chat_read" -Args @{ channel = $preflightTaskChannel; workerId = $WorkerId }
+                }
+                if ($preflightTaskTitle) {
+                    $preflightRecall = Invoke-MoeRpc -Tool "recall" -Args @{ query = $preflightTaskTitle; limit = 10 }
+                }
+                $preflightOk = $true
+                Write-Host "[OK] Pre-flight complete. Claimed: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
+            } else {
+                $preflightNoTask = $true
+                Write-Host "[INFO] No claimable task for role $Role. Agent will wait_for_task." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "[WARN] Pre-flight claim RPC failed; falling back to in-agent claim." -ForegroundColor Yellow
+        }
+    }
+    # -------- End pre-flight --------
+
+    # Assemble per-iteration systemAppend (base + pre-flight results)
+    $systemAppend = $systemAppendBase
+    if ($preflightOk) {
+        $ctxJson = if ($preflightContext) { $preflightContext | ConvertTo-Json -Depth 20 -Compress } else { "{}" }
+        $generalJson = if ($preflightGeneralUnread) { $preflightGeneralUnread | ConvertTo-Json -Depth 20 -Compress } else { "{}" }
+        $taskChatJson = if ($preflightTaskUnread) { $preflightTaskUnread | ConvertTo-Json -Depth 20 -Compress } else { "{}" }
+        $recallJson = if ($preflightRecall) { $preflightRecall | ConvertTo-Json -Depth 20 -Compress } else { "{}" }
+        $pendingJson = if ($preflightPending) { $preflightPending | ConvertTo-Json -Depth 20 -Compress } else { "{}" }
+
+        $systemAppend += @"
+
+
+# Pre-flight Complete (runtime-injected — do not repeat)
+You ARE: $Role agent, workerId=$WorkerId.
+The wrapper has ALREADY performed these steps before spawning you:
+- joined #general and announced presence
+- read unread #general messages (see <general_unread> below)
+- claimed task ${preflightTaskId}: $preflightTaskTitle
+- fetched its context (see <claimed_task_context> below)
+- read its task chat backlog (see <task_chat_backlog> below)
+- recalled relevant prior knowledge (see <relevant_memory> below)
+
+DO NOT call at session start: moe.chat_join, moe.chat_send, moe.chat_read, moe.claim_next_task, moe.get_context, moe.recall. They are done.
+
+Claimed task id: $preflightTaskId
+
+<claimed_task_context>
+$ctxJson
+</claimed_task_context>
+
+<general_unread>
+$generalJson
+</general_unread>
+
+<task_chat_backlog>
+$taskChatJson
+</task_chat_backlog>
+
+<relevant_memory>
+$recallJson
+</relevant_memory>
+
+<pending_questions>
+$pendingJson
+</pending_questions>
+"@
+    } elseif ($preflightNoTask) {
+        $systemAppend += @"
+
+
+# Pre-flight Complete: no claimable task
+The daemon reports no claimable task for role $Role right now.
+Your FIRST action MUST be moe.wait_for_task with statuses=$(($statuses | ConvertTo-Json -Compress)), workerId=$WorkerId.
+When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
+"@
+    }
+
+    # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh)
+    if ($cliType -eq "codex") {
+        $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
+        $codexDir = Split-Path $agentInstructionsPath -Parent
+        if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
+        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        Write-Host "Agent instructions written to: $agentInstructionsPath"
+    } elseif ($cliType -eq "gemini") {
+        $geminiInstructionsDir = Join-Path $projectPath ".gemini"
+        if (-not (Test-Path $geminiInstructionsDir)) {
+            New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
+        }
+        $geminiInstructionsPath = Join-Path $geminiInstructionsDir "GEMINI.md"
+        $systemAppend | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
+        Write-Host "Agent instructions written to: $geminiInstructionsPath"
+    }
+
+    # Build the user message prompt — lean when pre-flight succeeded, legacy multi-step otherwise
+    $claimPrompt = $null
+    if ($AutoClaim -and $preflightOk) {
+        $claimPrompt = switch ($Role) {
+            "architect" { "Task $preflightTaskId is claimed and its full context is in your system prompt. Study the implementationPlan, rails, and definitionOfDone, then call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task." }
+            "worker"    { "Task $preflightTaskId is claimed and its full context is in your system prompt. Execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task." }
+            "qa"        { "Task $preflightTaskId is claimed and its full context is in your system prompt. Verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task." }
+        }
+    } elseif ($AutoClaim -and $preflightNoTask) {
+        $claimPrompt = "No claimable task right now. Call moe.wait_for_task with statuses=$($statuses | ConvertTo-Json -Compress), workerId=`"$WorkerId`". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. Handle hasChatMessage / hasPendingQuestion wakeups per your system prompt."
+    } elseif ($AutoClaim) {
+        # Pre-flight skipped or failed — legacy multi-step prompt
+        $claimPrompt = "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+    }
 
     if ($cliType -eq "codex") {
         # Check codex is available
@@ -652,24 +831,22 @@ do {
             exit 1
         }
 
-        # Build role-aware short prompt for Codex CLI argument
-        # Codex instruction delivery chain:
-        # 1. AGENTS.md -> loaded automatically as project docs (generic project context)
-        # 2. .codex/agent-instructions.md -> loaded via model_instructions_file (full role doc + agent context)
-        # 3. developer_instructions in config.toml -> injected into session (role identity reinforcement)
-        # 4. $shortPrompt below -> the user message prompt (role-aware first action)
-        #
-        # Claude equivalent: --append-system-prompt carries all context in a single system message
-        $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
-            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
-            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
-            default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
-        }
-        if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+        if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
+            # Pre-flight baked context into .codex/agent-instructions.md; use the lean $claimPrompt directly
+            $shortPrompt = $claimPrompt
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            # Legacy fallback — pre-flight skipped or failed
+            $roleWorkflow = switch ($Role) {
+                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
+                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
+                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
+                default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
+            }
+            if ($claimPrompt) {
+                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            } else {
+                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            }
         }
 
         if ($CodexExec) {
@@ -689,21 +866,21 @@ do {
             exit 1
         }
 
-        # Build role-aware short prompt for Gemini CLI argument
-        # Gemini instruction delivery chain:
-        # 1. AGENTS.md -> loaded via context settings (generic project context)
-        # 2. .gemini/GEMINI.md -> loaded as project-level context (full role doc + agent context)
-        # 3. $shortPrompt below -> the initial user message (role-aware first action)
-        $roleWorkflow = switch ($Role) {
-            "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
-            "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
-            "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
-            default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
-        }
-        if ($claimPrompt) {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+        if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
+            # Pre-flight baked context into .gemini/GEMINI.md; use the lean $claimPrompt directly
+            $shortPrompt = $claimPrompt
         } else {
-            $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            $roleWorkflow = switch ($Role) {
+                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
+                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
+                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
+                default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
+            }
+            if ($claimPrompt) {
+                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+            } else {
+                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            }
         }
 
         if ($GeminiExec) {
@@ -740,6 +917,42 @@ do {
             & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile"
         }
     }
+
+    # -------- Post-flight: shutdown rituals after CLI exits --------
+    # Save session summary + announce outcome in #general. Best-effort.
+    if ($AutoClaim -and $preflightTaskId) {
+        Write-Host "Post-flight: saving session summary, announcing outcome..." -ForegroundColor Cyan
+
+        # Look up final task status
+        $finalStatus = $null
+        $listResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{}
+        if ($listResp -and $listResp.tasks) {
+            $matched = $listResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
+            if ($matched) { $finalStatus = $matched.status }
+        }
+
+        # Save session summary (best-effort; dedup-safe if agent already saved one)
+        Invoke-MoeRpc -Tool "save_session_summary" -Args @{
+            workerId = $WorkerId
+            taskId   = $preflightTaskId
+            summary  = "wrapper post-flight: session ended with task status=$(if ($finalStatus) { $finalStatus } else { 'unknown' })"
+        } | Out-Null
+
+        # Announce in #general
+        if ($generalChannelId -and $finalStatus) {
+            $announceText = switch -Regex ($finalStatus) {
+                '^(DONE|REVIEW)$'                { "$Role completed $preflightTaskId (now $finalStatus)" }
+                '^(WORKING|AWAITING_APPROVAL)$'  { "$Role paused $preflightTaskId (still $finalStatus)" }
+                default                          { "$Role exited $preflightTaskId (status: $finalStatus)" }
+            }
+            Invoke-MoeRpc -Tool "chat_send" -Args @{
+                channel  = $generalChannelId
+                workerId = $WorkerId
+                content  = $announceText
+            } | Out-Null
+        }
+    }
+    # -------- End post-flight --------
 } while ($loopEnabled)
 } finally {
     # Clean up temp files

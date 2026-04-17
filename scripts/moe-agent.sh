@@ -250,7 +250,9 @@ fi
 
 # Auto-detect python3 from common installation locations
 find_python() {
-    if command -v python3 &> /dev/null; then
+    # Actually run --version to filter out the Windows Store shim that resolves
+    # via `command -v python3` but errors with "Python was not found" when executed.
+    if command -v python3 &> /dev/null && python3 --version &> /dev/null 2>&1; then
         echo "python3"
         return 0
     fi
@@ -268,6 +270,24 @@ find_python() {
             return 0
         fi
     done
+
+    # Windows (Git Bash / MSYS / WSL) — PEP 397 launcher
+    if command -v py &> /dev/null; then
+        if py -3 --version &> /dev/null 2>&1; then
+            echo "py -3"
+            return 0
+        fi
+    fi
+
+    # Last resort: plain `python` if it reports Python 3.x
+    if command -v python &> /dev/null; then
+        local py_version
+        py_version=$(python --version 2>&1)
+        if [[ "$py_version" == *"Python 3."* ]]; then
+            echo "python"
+            return 0
+        fi
+    fi
 
     echo ""
     return 1
@@ -972,6 +992,60 @@ fi
 LOOP_RUNNING=true
 trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
 
+# moe_rpc TOOL ARGS_JSON
+# Calls an MCP tool via the proxy and prints the tool's result text to stdout.
+# Uses TEAM_PROXY / PROXY_CMD resolved earlier. Returns non-zero on failure.
+moe_rpc() {
+    local tool="$1"
+    local args_json="${2:-{}}"
+    local rpc
+    rpc=$($PYTHON_CMD -c "
+import json, sys
+tool = sys.argv[1]
+args = json.loads(sys.argv[2]) if sys.argv[2] else {}
+if not tool.startswith('moe.'):
+    tool = 'moe.' + tool
+print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':tool,'arguments':args}}))
+" "$tool" "$args_json" 2>/dev/null) || return 1
+
+    local raw=""
+    if [ -n "${TEAM_PROXY:-}" ]; then
+        raw=$(echo "$rpc" | MOE_PROJECT_PATH="$PROJECT" "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null) || return 1
+    elif [ -n "${PROXY_CMD:-}" ]; then
+        raw=$(echo "$rpc" | MOE_PROJECT_PATH="$PROJECT" $PROXY_CMD 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+
+    $PYTHON_CMD -c "
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(1)
+for line in reversed(raw.split('\n')):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if 'error' in d:
+        sys.stderr.write(json.dumps(d['error']) + '\n')
+        sys.exit(1)
+    if 'result' in d:
+        r = d['result']
+        if isinstance(r, dict) and 'content' in r:
+            for c in r['content']:
+                if c.get('type') == 'text':
+                    print(c['text'])
+                    sys.exit(0)
+        print(json.dumps(r))
+        sys.exit(0)
+sys.exit(1)
+" <<< "$raw"
+}
+
 FIRST_RUN=true
 
 while [ "$LOOP_RUNNING" = true ]; do
@@ -982,6 +1056,136 @@ while [ "$LOOP_RUNNING" = true ]; do
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
     FIRST_RUN=false
+
+    # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
+    # Claim the next task, fetch context, read chat backlog, recall memory.
+    # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
+    # already initialized instead of being told to do these via prompt.
+    PREFLIGHT_TASK_ID=""
+    PREFLIGHT_TASK_TITLE=""
+    PREFLIGHT_TASK_CHANNEL=""
+    PREFLIGHT_CONTEXT=""
+    PREFLIGHT_GENERAL_UNREAD=""
+    PREFLIGHT_TASK_UNREAD=""
+    PREFLIGHT_RECALL=""
+    PREFLIGHT_PENDING=""
+    PREFLIGHT_NO_TASK=false
+    PREFLIGHT_OK=false
+
+    if [ "$AUTO_CLAIM" = true ]; then
+        echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"
+
+        # 0. Resolve #general channel id (chat tools take id, not name)
+        GENERAL_CHANNEL_ID=""
+        CHANNELS_RESP=$(moe_rpc chat_channels "{}" 2>/dev/null || echo "")
+        if [ -n "$CHANNELS_RESP" ]; then
+            GENERAL_CHANNEL_ID=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    for c in d.get('channels', []):
+        if c.get('name') == 'general':
+            print(c.get('id', ''))
+            break
+except Exception:
+    pass
+" <<< "$CHANNELS_RESP" 2>/dev/null || echo "")
+        fi
+
+        # 1. Join #general and read backlog (join is safe pre-claim; announce deferred to post-claim)
+        if [ -n "$GENERAL_CHANNEL_ID" ]; then
+            moe_rpc chat_join \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
+                > /dev/null 2>&1 || true
+
+            # 2. Read unread #general messages
+            PREFLIGHT_GENERAL_UNREAD=$(moe_rpc chat_read \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
+                2>/dev/null || echo "")
+        fi
+
+        # 3. Check pending questions
+        PREFLIGHT_PENDING=$(moe_rpc get_pending_questions "{}" 2>/dev/null || echo "")
+
+        # 4. Claim next task (auto-registers the worker)
+        CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+        if [ -n "$CLAIM_RESULT" ]; then
+            HAS_NEXT=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print('true' if d.get('hasNext') else 'false')
+except Exception:
+    print('error')
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo "error")
+
+            if [ "$HAS_NEXT" = "true" ]; then
+                PREFLIGHT_TASK_ID=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('task', {}).get('id', ''))
+except Exception:
+    pass
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
+                PREFLIGHT_TASK_TITLE=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('task', {}).get('title', ''))
+except Exception:
+    pass
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
+                PREFLIGHT_TASK_CHANNEL=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('task', {}).get('chatChannel') or '')
+except Exception:
+    pass
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
+
+                # 5. Fetch context for the claimed task
+                if [ -n "$PREFLIGHT_TASK_ID" ]; then
+                    PREFLIGHT_CONTEXT=$(moe_rpc get_context \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
+                        2>/dev/null || echo "")
+                fi
+
+                # 6. Read task channel backlog
+                if [ -n "$PREFLIGHT_TASK_CHANNEL" ]; then
+                    PREFLIGHT_TASK_UNREAD=$(moe_rpc chat_read \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$PREFLIGHT_TASK_CHANNEL" "$WORKER_ID" 2>/dev/null)" \
+                        2>/dev/null || echo "")
+                fi
+
+                # 7. Recall relevant memory by task title
+                if [ -n "$PREFLIGHT_TASK_TITLE" ]; then
+                    PREFLIGHT_RECALL=$(moe_rpc recall \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'query':sys.argv[1],'limit':10}))" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
+                        2>/dev/null || echo "")
+                fi
+
+                PREFLIGHT_OK=true
+                echo -e "${GREEN}[OK]${NC} Pre-flight complete. Claimed: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
+
+                # Post-claim announce in #general (worker now registered, chat_send accepts it)
+                if [ -n "$GENERAL_CHANNEL_ID" ]; then
+                    moe_rpc chat_send \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, starting '+sys.argv[4]+': '+sys.argv[5]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
+                        > /dev/null 2>&1 || true
+                fi
+            elif [ "$HAS_NEXT" = "false" ]; then
+                PREFLIGHT_NO_TASK=true
+                echo -e "${YELLOW}[INFO]${NC} No claimable task for role $ROLE. Agent will wait_for_task."
+            else
+                echo -e "${YELLOW}[WARN]${NC} Pre-flight claim returned unparseable response; falling back to in-agent claim."
+            fi
+        else
+            echo -e "${YELLOW}[WARN]${NC} Pre-flight claim RPC failed (daemon/proxy error); falling back to in-agent claim."
+        fi
+    fi
+    # -------- End pre-flight --------
 
     ROLE_STATUS_DESC=""
     case $ROLE in
@@ -1067,9 +1271,74 @@ Examples:
 Run: bash $moe_call --help for full list."
     fi
 
+    # Append pre-flight results — the agent starts already initialized.
+    if [ "$PREFLIGHT_OK" = true ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Pre-flight Complete (runtime-injected — do not repeat)
+You ARE: $ROLE agent, workerId=$WORKER_ID.
+The wrapper has ALREADY performed these steps before spawning you:
+- joined #general and announced presence
+- read unread #general messages (see <general_unread> below)
+- claimed task $PREFLIGHT_TASK_ID: $PREFLIGHT_TASK_TITLE
+- fetched its context (see <claimed_task_context> below)
+- read its task chat backlog (see <task_chat_backlog> below)
+- recalled relevant prior knowledge (see <relevant_memory> below)
+
+DO NOT call at session start: moe.chat_join, moe.chat_send, moe.chat_read, moe.claim_next_task, moe.get_context, moe.recall. They are done.
+
+Claimed task id: $PREFLIGHT_TASK_ID
+
+<claimed_task_context>
+$PREFLIGHT_CONTEXT
+</claimed_task_context>
+
+<general_unread>
+$PREFLIGHT_GENERAL_UNREAD
+</general_unread>
+
+<task_chat_backlog>
+$PREFLIGHT_TASK_UNREAD
+</task_chat_backlog>
+
+<relevant_memory>
+$PREFLIGHT_RECALL
+</relevant_memory>
+
+<pending_questions>
+$PREFLIGHT_PENDING
+</pending_questions>"
+    elif [ "$PREFLIGHT_NO_TASK" = true ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Pre-flight Complete: no claimable task
+The daemon reports no claimable task for role $ROLE right now.
+Your FIRST action MUST be moe.wait_for_task with statuses=$STATUSES, workerId=$WORKER_ID.
+When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
+If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:true, call moe.get_pending_questions and answer with moe.add_comment."
+    fi
+
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
-        PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
+        if [ "$PREFLIGHT_OK" = true ]; then
+            # Lean per-role prompt — everything else is already in the system prompt.
+            case $ROLE in
+                architect)
+                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. Study the implementationPlan, rails, and definitionOfDone, then call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task."
+                    ;;
+                worker)
+                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. Execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task."
+                    ;;
+                qa)
+                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. Verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task."
+                    ;;
+            esac
+        elif [ "$PREFLIGHT_NO_TASK" = true ]; then
+            PROMPT="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. Handle hasChatMessage / hasPendingQuestion wakeups per your system prompt."
+        else
+            # Pre-flight was skipped or failed — fall back to the legacy multi-step prompt
+            PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
+        fi
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
@@ -1093,22 +1362,27 @@ Run: bash $moe_call --help for full list."
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
         # 1. AGENTS.md → loaded automatically as project docs (generic project context)
-        # 2. .codex/agent-instructions.md → loaded via model_instructions_file (full role doc + agent context)
+        # 2. .codex/agent-instructions.md → loaded via model_instructions_file (full role doc + agent context + pre-flight results)
         # 3. developer_instructions in config.toml → injected into session (role identity reinforcement)
         # 4. SHORT_PROMPT below → the user message prompt (role-aware first action)
-        #
-        # Claude equivalent: --append-system-prompt carries all context in a single system message
-        ROLE_WORKFLOW=""
-        case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
-            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
-            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
-            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
-        esac
-        if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ]; then
+            SHORT_PROMPT="$PROMPT"
+        elif [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ]; then
+            SHORT_PROMPT="$PROMPT"
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            # Legacy fallback — pre-flight skipped or failed
+            ROLE_WORKFLOW=""
+            case $ROLE in
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
+            esac
+            if [ "$AUTO_CLAIM" = true ]; then
+                SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            else
+                SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            fi
         fi
 
         if [ "$CODEX_EXEC" = true ]; then
@@ -1141,19 +1415,25 @@ Run: bash $moe_call --help for full list."
         # Build role-aware short prompt for Gemini CLI argument
         # Gemini instruction delivery chain:
         # 1. AGENTS.md → loaded via context settings (generic project context)
-        # 2. .gemini/GEMINI.md → loaded as project-level context (full role doc + agent context)
+        # 2. .gemini/GEMINI.md → loaded as project-level context (full role doc + agent context + pre-flight results)
         # 3. SHORT_PROMPT below → the initial user message (role-aware first action)
-        ROLE_WORKFLOW=""
-        case $ROLE in
-            architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
-            worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
-            qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
-            *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
-        esac
-        if [ "$AUTO_CLAIM" = true ]; then
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ]; then
+            SHORT_PROMPT="$PROMPT"
+        elif [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ]; then
+            SHORT_PROMPT="$PROMPT"
         else
-            SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            ROLE_WORKFLOW=""
+            case $ROLE in
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
+            esac
+            if [ "$AUTO_CLAIM" = true ]; then
+                SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
+            else
+                SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            fi
         fi
 
         if [ "$GEMINI_EXEC" = true ]; then
@@ -1190,6 +1470,55 @@ Run: bash $moe_call --help for full list."
             (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE") || true
         fi
     fi
+
+    # -------- Post-flight: shutdown rituals after CLI exits --------
+    # Save session summary and announce completion in #general. Best-effort — any
+    # RPC failure does not block loop continuation.
+    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
+        echo -e "${BLUE}Post-flight: saving session summary, announcing outcome...${NC}"
+
+        # Check task's final status (agent may have completed, paused, or bailed)
+        POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' 2>/dev/null || echo "")
+        FINAL_STATUS=""
+        if [ -n "$POSTFLIGHT_STATE" ]; then
+            FINAL_STATUS=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    for t in d.get('tasks', []):
+        if t.get('id') == sys.argv[1]:
+            print(t.get('status', ''))
+            break
+except Exception:
+    pass
+" "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_STATE" 2>/dev/null || echo "")
+        fi
+
+        # Save session summary — captures what this session accomplished, even if aborted.
+        # If the daemon already has a summary from the agent's own moe.save_session_summary,
+        # this is a best-effort no-op thanks to dedup.
+        moe_rpc save_session_summary \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'taskId':sys.argv[2],'summary':sys.argv[3]}))" \
+                "$WORKER_ID" "$PREFLIGHT_TASK_ID" "wrapper post-flight: session ended with task status=${FINAL_STATUS:-unknown}" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+
+        # Announce outcome in #general
+        if [ -n "$GENERAL_CHANNEL_ID" ] && [ -n "$FINAL_STATUS" ]; then
+            case "$FINAL_STATUS" in
+                DONE|REVIEW)
+                    ANNOUNCE_TEXT="$ROLE completed $PREFLIGHT_TASK_ID (now $FINAL_STATUS)" ;;
+                WORKING|AWAITING_APPROVAL)
+                    ANNOUNCE_TEXT="$ROLE paused $PREFLIGHT_TASK_ID (still $FINAL_STATUS)" ;;
+                *)
+                    ANNOUNCE_TEXT="$ROLE exited $PREFLIGHT_TASK_ID (status: $FINAL_STATUS)" ;;
+            esac
+            moe_rpc chat_send \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                    "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ANNOUNCE_TEXT" 2>/dev/null)" \
+                > /dev/null 2>&1 || true
+        fi
+    fi
+    # -------- End post-flight --------
 
     if [ "$LOOP_ENABLED" = false ]; then
         break
