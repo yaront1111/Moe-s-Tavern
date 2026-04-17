@@ -51,7 +51,11 @@ data class ImplementationStep(
     val stepId: String,
     val description: String,
     val status: String,
-    val affectedFiles: List<String>
+    val affectedFiles: List<String>,
+    val modifiedFiles: List<String>? = null,
+    val note: String? = null,
+    val startedAt: String? = null,
+    val completedAt: String? = null
 )
 
 data class Task(
@@ -68,7 +72,14 @@ data class Task(
     val reopenReason: String?,
     val assignedWorkerId: String?,
     val comments: List<TaskComment>? = null,
-    val hasPendingQuestion: Boolean = false
+    val hasPendingQuestion: Boolean = false,
+    // Runtime-driven workflow state (schema additions from Phase 3):
+    // workers who have fetched context (ordering check for start_step)
+    val contextFetchedBy: List<String>? = null,
+    // stepIds already completed (cross-check for complete_task)
+    val stepsCompleted: List<String>? = null,
+    val reopenCount: Int = 0,
+    val taskRails: List<String>? = null
 )
 
 data class DaemonInfo(
