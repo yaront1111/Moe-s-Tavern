@@ -51,6 +51,13 @@ jobs:
         run: ./gradlew buildPlugin
         working-directory: moe-jetbrains
 
+      # Build VS Code / Antigravity extension (.vsix)
+      - name: Package VS Code extension
+        run: |
+          npm ci
+          npm run package
+        working-directory: moe-vscode
+
       # Publish to npm (when NPM_TOKEN is configured)
       - name: Publish daemon to npm
         if: env.NPM_TOKEN != ''
@@ -73,6 +80,7 @@ jobs:
           generate_release_notes: true
           files: |
             moe-jetbrains/build/distributions/*.zip
+            moe-vscode/*.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
