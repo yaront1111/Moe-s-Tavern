@@ -224,7 +224,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
                     tool: 'moe.complete_task',
                     args: { taskId: task.id, workerId: callerWorkerId || undefined },
                     reason: 'All steps complete; hand task off to QA.',
-                    recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
+                    // Reopened tasks land here when QA rejected without resetting steps —
+                    // point the worker at the rejection-reading skill before they re-finish.
+                    recommendedSkill: reopenedSkill ?? recommendSkillFor('worker', 'before_complete_task')
                   };
                 }
                 if (task.status === 'REVIEW') {
