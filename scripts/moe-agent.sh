@@ -971,6 +971,32 @@ if [ -f "$KNOWN_ISSUES_PATH" ]; then
     echo -e "${GREEN}[OK]${NC} Loaded known issues from: $KNOWN_ISSUES_PATH"
 fi
 
+# Load skills manifest (lean: name, role, description per skill).
+# Bodies live in .moe/skills/<name>/SKILL.md and load on demand via the Skill tool.
+SKILLS_LIST=""
+SKILLS_MANIFEST_PATH="$MOE_DIR/skills/manifest.json"
+if [ -f "$SKILLS_MANIFEST_PATH" ] && [ -n "$NODE_CMD" ]; then
+    # Capture stderr separately so we can warn the user if parsing fails.
+    SKILLS_STDERR=$(mktemp 2>/dev/null || echo "/tmp/moe-skills-stderr.$$")
+    SKILLS_LIST=$("$NODE_CMD" -e "
+try {
+  const m = JSON.parse(require('fs').readFileSync(process.argv[1],'utf-8'));
+  if (!Array.isArray(m.skills)) {
+    process.stderr.write('manifest.skills is missing or not an array');
+    process.exit(2);
+  }
+  const lines = m.skills.map(s => '- ' + s.name + ' (' + (s.role||'all') + '): ' + (s.description||''));
+  process.stdout.write(lines.join('\n'));
+} catch (e) { process.stderr.write(String(e && e.message || e)); process.exit(2); }
+" "$SKILLS_MANIFEST_PATH" 2>"$SKILLS_STDERR" || true)
+    if [ -n "$SKILLS_LIST" ]; then
+        echo -e "${GREEN}[OK]${NC} Loaded skill manifest from: $SKILLS_MANIFEST_PATH"
+    elif [ -s "$SKILLS_STDERR" ]; then
+        echo -e "${YELLOW}[WARN]${NC} Skill manifest at $SKILLS_MANIFEST_PATH could not be parsed: $(cat "$SKILLS_STDERR")"
+    fi
+    rm -f "$SKILLS_STDERR"
+fi
+
 LOOP_ENABLED=true
 if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
     LOOP_ENABLED=false
@@ -1225,6 +1251,18 @@ Approval mode: $APPROVAL_MODE"
         SYSTEM_APPEND="$SYSTEM_APPEND
 
 $ROLE_DOC"
+    fi
+
+    # Append available-skills index (manifest only, not bodies — bodies load on
+    # demand via the Skill tool when relevant). The daemon also surfaces a
+    # nextAction.recommendedSkill field per MCP response.
+    if [ -n "$SKILLS_LIST" ]; then
+        SYSTEM_APPEND="$SYSTEM_APPEND
+
+# Available Skills (load via the Skill tool when the situation calls for one)
+Each skill is deeper guidance for a specific phase of work. The daemon recommends one in nextAction.recommendedSkill when relevant — invoke it via the host's Skill tool.
+
+$SKILLS_LIST"
     fi
 
     # Append known issues

@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidState } from '../util/errors.js';
 import { logger } from '../util/logger.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
@@ -197,28 +198,41 @@ export function getContextTool(_state: StateManager): ToolDefinition {
                   return {
                     tool: 'moe.submit_plan',
                     args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Plan this task and submit for approval.'
+                    reason: 'Plan this task and submit for approval.',
+                    recommendedSkill: recommendSkillFor('architect', 'planning_entry')
                   };
                 }
                 if (task.status === 'WORKING') {
                   const nextStep = (task.implementationPlan || []).find(s => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
-                  return nextStep
-                    ? {
-                        tool: 'moe.start_step',
-                        args: { taskId: task.id, stepId: nextStep.stepId, workerId: callerWorkerId || undefined },
-                        reason: `Begin step: ${nextStep.description.slice(0, 80)}`
-                      }
-                    : {
-                        tool: 'moe.complete_task',
-                        args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                        reason: 'All steps complete; hand task off to QA.'
-                      };
+                  // If reopened, point the worker at receiving-code-review first.
+                  const reopenedSkill = (task.reopenCount || 0) > 0
+                    ? recommendSkillFor('worker', 'reopened')
+                    : undefined;
+                  if (nextStep) {
+                    const isFirstStep = (task.implementationPlan || []).every(
+                      s => s.status === 'PENDING' || s.stepId === nextStep.stepId
+                    );
+                    return {
+                      tool: 'moe.start_step',
+                      args: { taskId: task.id, stepId: nextStep.stepId, workerId: callerWorkerId || undefined },
+                      reason: `Begin step: ${nextStep.description.slice(0, 80)}`,
+                      recommendedSkill: reopenedSkill
+                        ?? (isFirstStep ? recommendSkillFor('worker', 'first_start_step') : undefined)
+                    };
+                  }
+                  return {
+                    tool: 'moe.complete_task',
+                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
+                    reason: 'All steps complete; hand task off to QA.',
+                    recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
+                  };
                 }
                 if (task.status === 'REVIEW') {
                   return {
                     tool: 'moe.qa_approve',
                     args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Verify DoD + rails; approve or moe.qa_reject with actionable issues.'
+                    reason: 'Verify DoD + rails; approve or moe.qa_reject with actionable issues.',
+                    recommendedSkill: recommendSkillFor('qa', 'review_entry')
                   };
                 }
                 return undefined;

@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound } from '../util/errors.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
@@ -43,7 +44,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         ? {
             tool: 'moe.wait_for_task',
             args: { workerId: task.assignedWorkerId, statuses: [task.status] },
-            reason: 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.'
+            reason: 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.',
+            recommendedSkill: recommendSkillFor('worker', 'task_blocked')
           }
         : undefined;
 

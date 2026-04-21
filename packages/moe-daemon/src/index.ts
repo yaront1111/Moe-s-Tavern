@@ -16,6 +16,7 @@ import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
+import { writeSkillFiles } from './util/skillFiles.js';
 import { clearAllSpeedModeTimeouts } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
@@ -673,6 +674,10 @@ function initProject(projectPath: string, projectName?: string): InitResult {
         // Ignore invalid project.json
       }
     }
+    // Backfill role docs and skills onto existing .moe/ — safe (skip-if-exists).
+    // Log at warn so a partial-init repair is visible without crashing the daemon.
+    try { writeInitFiles(moePath); } catch (err) { logger.warn({ err }, 'writeInitFiles backfill failed'); }
+    try { writeSkillFiles(moePath); } catch (err) { logger.warn({ err }, 'writeSkillFiles backfill failed'); }
     logger.info({ projectPath, projectId, name }, 'Project already initialized (.moe folder exists)');
     return { alreadyInitialized: true, projectPath, projectId, name };
   }
@@ -723,6 +728,9 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 
   // Write role docs and .gitignore
   writeInitFiles(moePath);
+
+  // Write the curated skill pack (.moe/skills/<name>/SKILL.md + manifest)
+  writeSkillFiles(moePath);
 
   // Write global install config so other projects can find this installation
   writeGlobalConfig();

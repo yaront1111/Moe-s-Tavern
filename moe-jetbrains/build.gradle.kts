@@ -27,6 +27,7 @@ val bundledAgentScript = repoRoot.resolve("scripts/moe-agent.ps1")
 val bundledAgentScriptSh = repoRoot.resolve("scripts/moe-agent.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
+val bundledSkillsDir = repoRoot.resolve("docs/skills")
 
 fun requireBundledAssets() {
     check(bundledDaemonMain.exists()) {
@@ -117,6 +118,9 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundledAgentContext) {
         into("docs")
     }
+    from(bundledSkillsDir) {
+        into("docs/skills")
+    }
 }
 
 tasks.named<BuildPluginTask>("buildPlugin") {
@@ -146,6 +150,9 @@ tasks.named<BuildPluginTask>("buildPlugin") {
     }
     from(bundledAgentContext) {
         into("docs")
+    }
+    from(bundledSkillsDir) {
+        into("docs/skills")
     }
 }
 

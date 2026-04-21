@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -93,15 +94,27 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       }
 
       const nextAction = nextStep
-        ? {
-            tool: 'moe.start_step',
-            args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
-            reason: `Advance to step ${stepNum + 1}: ${nextStep.description.slice(0, 80)}`
-          }
+        ? (() => {
+            const desc = (nextStep.description || '').toLowerCase();
+            const files = (nextStep.affectedFiles || []).join(' ').toLowerCase();
+            const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
+            const isFinal = steps.indexOf(nextStep) === steps.length - 1;
+            return {
+              tool: 'moe.start_step',
+              args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
+              reason: `Advance to step ${stepNum + 1}: ${nextStep.description.slice(0, 80)}`,
+              recommendedSkill: isFinal
+                ? recommendSkillFor('worker', 'final_step')
+                : isTestStep
+                  ? recommendSkillFor('worker', 'test_step')
+                  : undefined
+            };
+          })()
         : {
             tool: 'moe.complete_task',
             args: { taskId: task.id, workerId: params.workerId },
-            reason: 'All steps complete; hand task off to QA via moe.complete_task.'
+            reason: 'All steps complete; hand task off to QA via moe.complete_task.',
+            recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
           };
 
       return {

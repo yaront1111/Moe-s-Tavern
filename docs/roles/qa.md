@@ -37,3 +37,12 @@ If intent is ambiguous, message `@worker-xxx` in the task channel via `moe.chat_
 ## Quality memory
 
 When you find a recurring pattern or a subtle gap the tests didn't catch, call `moe.remember` with `type: "gotcha"`. The runtime auto-extracts memory from every rejection you issue (the rejection issues become gotchas for the next agent), but human-authored entries rank higher.
+
+## Available skills (load via Skill tool when relevant)
+
+The deeper "how" lives in skills under `.moe/skills/<name>/SKILL.md`. The daemon recommends one per phase via `nextAction.recommendedSkill`.
+
+| Phase | Skill | When to load |
+|-------|-------|--------------|
+| Claiming a task in REVIEW | `moe-qa-loop` | Structured `qa_approve` vs `qa_reject` decision flow + actionable `rejectionDetails` |
+| Reading the diff | `adversarial-self-review` | Same checklist the worker should have run — apply it again as the second pair of eyes |

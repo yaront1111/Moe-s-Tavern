@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { writeInitFiles } from '../util/initFiles.js';
+import { writeSkillFiles } from '../util/skillFiles.js';
 import { writeClaudeHookFiles } from '../util/claudeHook.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
@@ -131,6 +132,9 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
 
       // Write role docs and .gitignore
       writeInitFiles(moePath);
+
+      // Write the curated skill pack (.moe/skills/<name>/SKILL.md + manifest)
+      writeSkillFiles(moePath);
 
       // Write Claude Code PreToolUse hook (.claude/settings.json + hooks/moe-require-claim.js).
       // Gates Edit/Write/Bash behind an active claim so agents can't skip claim_next_task.

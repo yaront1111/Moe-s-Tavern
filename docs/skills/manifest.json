@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "moe-planning",
+      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work.",
+      "role": "architect",
+      "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
+    },
+    {
+      "name": "explore-before-assume",
+      "description": "Verify every symbol (function, model, attribute, constant) actually exists before referencing it. Eliminates hallucinated-API bugs.",
+      "role": "architect|worker",
+      "triggeredBy": ["architect during planning", "worker on first start_step in unfamiliar code"]
+    },
+    {
+      "name": "writing-plans",
+      "description": "Vendored from superpowers. Multi-step plan structure with checkpoints; output format aligns with moe.submit_plan step lists.",
+      "role": "architect",
+      "triggeredBy": ["before moe.submit_plan"]
+    },
+    {
+      "name": "brainstorming",
+      "description": "Vendored from superpowers. Socratic questions to refine vague requirements before any plan is written.",
+      "role": "architect",
+      "triggeredBy": ["task with sparse acceptanceCriteria"]
+    },
+    {
+      "name": "test-driven-development",
+      "description": "Vendored from superpowers. RED-GREEN-REFACTOR with mutation-resistant assertions (assertEquals, not assert).",
+      "role": "worker",
+      "triggeredBy": ["start_step on test-touching steps"]
+    },
+    {
+      "name": "verification-before-completion",
+      "description": "Vendored from superpowers. Forces running verification commands and confirming output before any complete claim. Evidence before assertions.",
+      "role": "worker",
+      "triggeredBy": ["before moe.complete_task"]
+    },
+    {
+      "name": "systematic-debugging",
+      "description": "Vendored from superpowers. 4-phase root-cause method (root-cause-tracing, defense-in-depth, condition-based-waiting). Use on bugs and test failures, before proposing fixes.",
+      "role": "worker",
+      "triggeredBy": ["set_task_status BLOCKED", "repeated step failure", "qa_reject for a bug"]
+    },
+    {
+      "name": "adversarial-self-review",
+      "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist before final complete_step or complete_task.",
+      "role": "worker",
+      "triggeredBy": ["final step before complete_step", "before complete_task"]
+    },
+    {
+      "name": "regression-check",
+      "description": "Run the broader test suite (not just new tests) before complete_task. Goal: zero regressions, evidence-based summary.",
+      "role": "worker",
+      "triggeredBy": ["before complete_task"]
+    },
+    {
+      "name": "receiving-code-review",
+      "description": "Vendored from superpowers. Adversarial response to QA feedback — verify, don't capitulate; don't perform agreement.",
+      "role": "worker",
+      "triggeredBy": ["after moe.qa_reject (reopenCount > 0)"]
+    },
+    {
+      "name": "moe-qa-loop",
+      "description": "Structured QA review flow: read plan + diff, verify DoD coverage, decide qa_approve vs qa_reject with actionable rejectionDetails.",
+      "role": "qa",
+      "triggeredBy": ["claim a task in REVIEW status"]
+    },
+    {
+      "name": "using-git-worktrees",
+      "description": "Vendored from superpowers. Isolated workspace per feature so parallel workers don't step on each other's .moe/ state.",
+      "role": "architect|worker",
+      "triggeredBy": ["manual invoke"]
+    },
+    {
+      "name": "dispatching-parallel-agents",
+      "description": "Vendored from superpowers. Fan-out for 2+ independent tasks with no shared state or sequential dependencies.",
+      "role": "architect",
+      "triggeredBy": ["manual invoke"]
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -59,6 +60,18 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         await state.updateWorker(task.assignedWorkerId, { status: 'CODING', currentTaskId: task.id });
       }
 
+      // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
+      // on the final step. Both are advisory.
+      const desc = (step.description || '').toLowerCase();
+      const files = (step.affectedFiles || []).join(' ').toLowerCase();
+      const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
+      const isFinalStep = stepIndex === steps.length - 1;
+      const recommendedSkill = isFinalStep
+        ? recommendSkillFor('worker', 'final_step')
+        : isTestStep
+          ? recommendSkillFor('worker', 'test_step')
+          : undefined;
+
       return {
         success: true,
         taskId: task.id,
@@ -68,7 +81,8 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         nextAction: {
           tool: 'moe.complete_step',
           args: { taskId: task.id, stepId: params.stepId, workerId: params.workerId },
-          reason: 'Implement the step, run tests, then mark it complete.'
+          reason: 'Implement the step, run tests, then mark it complete.',
+          recommendedSkill
         }
       };
     }

@@ -132,6 +132,13 @@ export interface NextAction {
   tool: string;
   args?: Record<string, unknown>;
   reason?: string;
+  /**
+   * Optional skill name (e.g. 'verification-before-completion') the agent
+   * should invoke via the host's Skill tool before performing the next action.
+   * Skills live under .moe/skills/<name>/SKILL.md. Purely advisory — agents
+   * can ignore. See packages/moe-daemon/src/util/recommendSkill.ts.
+   */
+  recommendedSkill?: string;
 }
 
 export interface Task {

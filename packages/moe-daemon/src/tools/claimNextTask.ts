@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState } from '../util/errors.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -224,7 +225,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         nextAction: {
           tool: 'moe.get_context',
           args: { taskId: task.id },
-          reason: 'Always fetch full task context (rails, DoD, memory) before acting.'
+          reason: 'Always fetch full task context (rails, DoD, memory) before acting.',
+          // get_context will recommend the role-appropriate skill once it sees task.status,
+          // so we don't pre-recommend here unless the task is reopened — the reopen
+          // signal is exactly the situation receiving-code-review covers.
+          ...(task.reopenCount > 0
+            ? { recommendedSkill: recommendSkillFor('worker', 'reopened') }
+            : {})
         }
       };
       });

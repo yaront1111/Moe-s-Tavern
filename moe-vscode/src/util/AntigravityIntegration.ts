@@ -19,7 +19,14 @@ export function registerMcpServer(
     outputChannel: vscode.OutputChannel
 ): void {
     try {
-        const proxyPath = path.join(extensionPath, 'bundled', 'proxy', 'dist', 'index.js');
+        // bundle-assets.mjs flattens dist contents into bundled/proxy/, so
+        // bundled/proxy/index.js is the real path. Fall back to the legacy
+        // dist/ layout in case the bundling script changes.
+        const fs = require('fs');
+        let proxyPath = path.join(extensionPath, 'bundled', 'proxy', 'index.js');
+        if (!fs.existsSync(proxyPath)) {
+            proxyPath = path.join(extensionPath, 'bundled', 'proxy', 'dist', 'index.js');
+        }
         // Antigravity exposes an MCP registration API on the vscode namespace.
         // If the API is not available, this is a no-op.
         const antigravityApi = (vscode as any).antigravity;
