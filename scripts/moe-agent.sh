@@ -1691,6 +1691,31 @@ except Exception:
             if [ "$AUTO_COMMIT" = "true" ]; then
                 if git -C "$PROJECT" rev-parse --git-dir > /dev/null 2>&1; then
                     echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true)...${NC}"
+
+                    # Never commit/push directly to main or master. If the worker
+                    # finished on the default branch, peel off onto a shared Moe
+                    # working branch (moe/work-<YYYY-MM-DD>) before committing.
+                    # Uncommitted/staged changes follow the checkout. Existing
+                    # non-default branches are reused as-is -- this is not
+                    # branch-per-task.
+                    CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+                    if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+                        MOE_BRANCH="moe/work-$(date +%Y-%m-%d)"
+                        echo -e "${YELLOW}[branch]${NC} on $CURRENT_BRANCH; switching to $MOE_BRANCH so we don't commit to the default branch."
+                        if git -C "$PROJECT" rev-parse --verify --quiet "refs/heads/$MOE_BRANCH" > /dev/null 2>&1; then
+                            git -C "$PROJECT" checkout "$MOE_BRANCH" 2>&1 | tail -2
+                        elif git -C "$PROJECT" rev-parse --verify --quiet "refs/remotes/origin/$MOE_BRANCH" > /dev/null 2>&1; then
+                            git -C "$PROJECT" checkout -b "$MOE_BRANCH" "origin/$MOE_BRANCH" 2>&1 | tail -2
+                        else
+                            git -C "$PROJECT" checkout -b "$MOE_BRANCH" 2>&1 | tail -2
+                        fi
+                        CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+                        if [ "$CURRENT_BRANCH" != "$MOE_BRANCH" ]; then
+                            echo -e "${YELLOW}[WARN]${NC} failed to switch off default branch; aborting auto-commit to avoid writing to it."
+                            continue
+                        fi
+                    fi
+
                     COMMIT_TYPE="feat"
                     COMMIT_SUFFIX=""
                     if [ "$FINAL_REOPEN_COUNT" -gt 0 ] 2>/dev/null; then
@@ -1707,18 +1732,26 @@ Completed via Moe worker session."
                     git -C "$PROJECT" add -A 2>/dev/null || true
                     if ! git -C "$PROJECT" diff --cached --quiet 2>/dev/null; then
                         if git -C "$PROJECT" commit -m "$COMMIT_MSG" 2>&1 | tail -3; then
-                            echo -e "${GREEN}[OK]${NC} Committed task $PREFLIGHT_TASK_ID."
+                            echo -e "${GREEN}[OK]${NC} Committed task $PREFLIGHT_TASK_ID on $CURRENT_BRANCH."
                         else
                             echo -e "${YELLOW}[WARN]${NC} git commit failed (pre-commit hook? detached HEAD?); skipping push."
                         fi
                     else
                         echo -e "${BLUE}[info]${NC} No staged changes to commit (worker may have already committed mid-session)."
                     fi
-                    # Push whatever commits are ahead of the upstream. Safe even
-                    # when nothing new was committed in this session.
-                    if git -C "$PROJECT" push 2>&1 | tail -5; then
-                        echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID."
+                    # Push whatever commits are ahead of the upstream. If the
+                    # current branch has no upstream yet (fresh moe/work-* branch),
+                    # set it on first push so subsequent `git push` succeeds.
+                    if git -C "$PROJECT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
+                        PUSH_OUT=$(git -C "$PROJECT" push 2>&1)
                     else
+                        PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1)
+                    fi
+                    if [ $? -eq 0 ]; then
+                        echo "$PUSH_OUT" | tail -5
+                        echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
+                    else
+                        echo "$PUSH_OUT" | tail -5
                         echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
                     fi
                 else

@@ -1117,6 +1117,37 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
                 & git -C $projectPath rev-parse --git-dir 2>$null | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "Post-flight: auto-commit+push (settings.autoCommit=true)..." -ForegroundColor Cyan
+
+                    # Never commit/push directly to main or master. If the worker
+                    # finished on the default branch, peel off onto a shared Moe
+                    # working branch (moe/work-<YYYY-MM-DD>) before committing.
+                    # Uncommitted/staged changes follow the checkout. Existing
+                    # non-default branches are reused as-is — this is not
+                    # branch-per-task.
+                    $currentBranch = (& git -C $projectPath rev-parse --abbrev-ref HEAD 2>$null).Trim()
+                    if ($currentBranch -eq "main" -or $currentBranch -eq "master") {
+                        $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
+                        Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+                        # Local exists?
+                        & git -C $projectPath rev-parse --verify --quiet "refs/heads/$moeBranch" 2>$null | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            & git -C $projectPath checkout $moeBranch 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+                        } else {
+                            # Try tracking a remote branch of the same name; else create fresh.
+                            & git -C $projectPath rev-parse --verify --quiet "refs/remotes/origin/$moeBranch" 2>$null | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                & git -C $projectPath checkout -b $moeBranch "origin/$moeBranch" 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+                            } else {
+                                & git -C $projectPath checkout -b $moeBranch 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+                            }
+                        }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
+                            return
+                        }
+                        $currentBranch = $moeBranch
+                    }
+
                     $commitType = if ($finalReopenCount -gt 0) { "fix" } else { "feat" }
                     $commitSuffix = if ($finalReopenCount -gt 0) { " (retry after qa_reject #$finalReopenCount)" } else { "" }
                     $titleText = if ($preflightTaskTitle) { $preflightTaskTitle } else { "completed task" }
@@ -1130,16 +1161,24 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
                     if (-not $nothingStaged) {
                         & git -C $projectPath commit -m $commitMsg 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
                         if ($LASTEXITCODE -eq 0) {
-                            Write-Host "[OK] Committed task $preflightTaskId." -ForegroundColor Green
+                            Write-Host "[OK] Committed task $preflightTaskId on $currentBranch." -ForegroundColor Green
                         } else {
                             Write-Host "[WARN] git commit failed (pre-commit hook? detached HEAD?); skipping push." -ForegroundColor Yellow
                         }
                     } else {
                         Write-Host "[info] No staged changes to commit (worker may have already committed mid-session)." -ForegroundColor Cyan
                     }
-                    & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                    # Check whether the current branch already has an upstream; if not,
+                    # push with -u so subsequent `git push` calls succeed without args.
+                    & git -C $projectPath rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>$null | Out-Null
+                    $hasUpstream = ($LASTEXITCODE -eq 0)
+                    if ($hasUpstream) {
+                        & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                    } else {
+                        & git -C $projectPath push -u origin $currentBranch 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                    }
                     if ($LASTEXITCODE -eq 0) {
-                        Write-Host "[OK] Pushed task $preflightTaskId." -ForegroundColor Green
+                        Write-Host "[OK] Pushed task $preflightTaskId to $currentBranch." -ForegroundColor Green
                     } else {
                         Write-Host "[WARN] git push failed (no upstream? auth? network?) — resolve and push manually." -ForegroundColor Yellow
                     }
