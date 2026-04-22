@@ -993,11 +993,11 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
         $systemPromptFile = Join-Path $env:TEMP "moe-system-prompt-$Role-$myPid.md"
         [System.IO.File]::WriteAllText($systemPromptFile, $systemAppend, [System.Text.UTF8Encoding]::new($false))
         if ($claimPrompt) {
-            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" `"<prompt>`""
-            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" "$claimPrompt"
+            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" --effort max `"<prompt>`""
+            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max "$claimPrompt"
         } else {
-            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`""
-            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile"
+            Write-Host "Command: $Command --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" --effort max"
+            & $Command @CommandArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max
         }
     }
 

@@ -1573,9 +1573,9 @@ If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:tru
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""
-            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "$PROMPT") || true
+            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max "$PROMPT") || true
         else
-            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE") || true
+            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max) || true
         fi
     fi
 
