@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("architect", "worker", "qa")]
     [string]$Role = "worker",
 
@@ -357,6 +357,33 @@ if (Test-Path $knownIssuesPath) {
     Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
+# Load skills manifest (name/role/description/triggeredBy per skill). Bodies
+# live in .moe/skills/<name>/SKILL.md and load on demand via the Skill tool.
+$skillsList = ""
+$skillsManifestPath = Join-Path $moeDir "skills\manifest.json"
+if (Test-Path $skillsManifestPath) {
+    try {
+        $m = Get-Content -Raw -Path $skillsManifestPath | ConvertFrom-Json
+        if ($m.skills) {
+            # NOTE: do NOT use `$role` here — it collides with the script-level
+            # [ValidateSet(...)] $Role parameter and silently mutates it.
+            $lines = foreach ($s in $m.skills) {
+                $skillRole = if ($s.role) { $s.role } else { "all" }
+                $skillDesc = if ($s.description) { $s.description } else { "" }
+                $entry = "- $($s.name) ($skillRole): $skillDesc"
+                if ($s.triggeredBy -and $s.triggeredBy.Count -gt 0) {
+                    $entry += "`n    when: " + ($s.triggeredBy -join "; ")
+                }
+                $entry
+            }
+            $skillsList = ($lines -join "`n")
+            Write-Host "Loaded skill manifest from $skillsManifestPath"
+        }
+    } catch {
+        Write-Host "WARNING: Skill manifest at $skillsManifestPath could not be parsed: $_" -ForegroundColor Yellow
+    }
+}
+
 # Normalize Command + CommandArgs (allow custom command strings with args)
 $resolvedCommand = Resolve-CommandParts -Cmd $Command -CmdArgs $CommandArgs
 $Command = $resolvedCommand.Command
@@ -653,6 +680,16 @@ if ($approvalMode) {
 if ($roleDoc) {
     $systemAppendBase += "`n`n$roleDoc"
 }
+if ($skillsList) {
+    $systemAppendBase += @"
+
+
+# Available Skills (load via the Skill tool when the situation calls for one)
+Each skill is deeper guidance for a specific phase of work. The daemon recommends one per phase via nextAction.recommendedSkill — invoke it via the host's Skill tool. Triggers below describe WHEN each applies.
+
+$skillsList
+"@
+}
 if ($knownIssues) {
     $systemAppendBase += "`n`n# Known Issues`n$knownIssues"
 }
@@ -679,6 +716,9 @@ do {
     $preflightTaskUnread = $null
     $preflightRecall = $null
     $preflightPending = $null
+    $preflightSkillName = $null
+    $preflightSkillReason = $null
+    $preflightSkillNextTool = $null
     $preflightOk = $false
     $preflightNoTask = $false
 
@@ -722,6 +762,30 @@ do {
                 if ($preflightTaskTitle) {
                     $preflightRecall = Invoke-MoeRpc -Tool "recall" -Args @{ query = $preflightTaskTitle; limit = 10 }
                 }
+
+                # Extract phase-recommended skill from context.nextAction. We
+                # do NOT inline the body — the agent loads it via the Skill tool.
+                # We only pull name + reason + the tool it gates, to emit a short
+                # JIT reminder in $systemAppend.
+                if ($preflightContext -and $preflightContext.nextAction) {
+                    $rec = $preflightContext.nextAction.recommendedSkill
+                    if ($rec) {
+                        # Accept either structured {name, reason} or legacy bare string.
+                        if ($rec -is [string]) {
+                            $preflightSkillName = $rec
+                        } elseif ($rec.PSObject.Properties['name']) {
+                            $preflightSkillName = [string]$rec.name
+                            if ($rec.PSObject.Properties['reason']) { $preflightSkillReason = [string]$rec.reason }
+                        }
+                        if ($preflightContext.nextAction.PSObject.Properties['tool']) {
+                            $preflightSkillNextTool = [string]$preflightContext.nextAction.tool
+                        }
+                        if ($preflightSkillName) {
+                            Write-Host "[skill] Recommending '$preflightSkillName' for this phase." -ForegroundColor Cyan
+                        }
+                    }
+                }
+
                 $preflightOk = $true
                 Write-Host "[OK] Pre-flight complete. Claimed: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
             } else {
@@ -780,6 +844,25 @@ $recallJson
 $pendingJson
 </pending_questions>
 "@
+
+        # JIT reminder: point the agent at the phase-recommended skill. We do
+        # NOT inline the body — the agent loads it itself via the Skill tool.
+        if ($preflightSkillName) {
+            $jitNextTool = if ($preflightSkillNextTool) { $preflightSkillNextTool } else { "your next Moe tool" }
+            $jitReason   = if ($preflightSkillReason)  { $preflightSkillReason }  else { "Phase-recommended for this task." }
+            $systemAppend += @"
+
+
+<system-reminder>
+Skill recommendation for this task's current phase: $preflightSkillName
+Why: $jitReason
+Before you call $jitNextTool, invoke the Skill tool:
+  Skill(skill="$preflightSkillName")
+This is not optional. Do not rationalize skipping it ("I'm blocking, not planning", "this is trivial", "I already know what it says"). Skills evolve — load the current version.
+If after loading you decide it truly does not apply here, say so explicitly in chat — but LOAD IT FIRST.
+</system-reminder>
+"@
+        }
     } elseif ($preflightNoTask) {
         $systemAppend += @"
 
@@ -923,12 +1006,19 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
     if ($AutoClaim -and $preflightTaskId) {
         Write-Host "Post-flight: saving session summary, announcing outcome..." -ForegroundColor Cyan
 
-        # Look up final task status
+        # Look up final task status AND reopenCount (the latter drives
+        # commit-message wording in the auto-commit block below).
         $finalStatus = $null
+        $finalReopenCount = 0
         $listResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{}
         if ($listResp -and $listResp.tasks) {
             $matched = $listResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
-            if ($matched) { $finalStatus = $matched.status }
+            if ($matched) {
+                $finalStatus = $matched.status
+                if ($matched.PSObject.Properties['reopenCount'] -and $matched.reopenCount) {
+                    $finalReopenCount = [int]$matched.reopenCount
+                }
+            }
         }
 
         # Save session summary (best-effort; dedup-safe if agent already saved one)
@@ -950,6 +1040,64 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
                 workerId = $WorkerId
                 content  = $announceText
             } | Out-Null
+        }
+
+        # Auto-commit + push on worker completion. Runs when:
+        #   - role is worker
+        #   - task is now REVIEW (worker just called moe.complete_task — first
+        #     pass OR retry after qa_reject)
+        #   - project.json settings.autoCommit is not explicitly false
+        #   - $projectPath is a git repo
+        # Best-effort: failures log a warning but never abort the wrapper loop.
+        # Commits use the user's configured git identity (no Claude attribution).
+        if ($Role -eq "worker" -and $finalStatus -eq "REVIEW") {
+            $autoCommit = $true
+            $projJsonPath = Join-Path $moeDir "project.json"
+            if (Test-Path $projJsonPath) {
+                try {
+                    $cfg = Get-Content -Raw -Path $projJsonPath | ConvertFrom-Json
+                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['autoCommit']) {
+                        # Explicit `false` disables; any other value keeps default (true).
+                        if ($cfg.settings.autoCommit -eq $false) { $autoCommit = $false }
+                    }
+                } catch {
+                    # Malformed project.json — fall through with default true.
+                }
+            }
+            if ($autoCommit) {
+                & git -C $projectPath rev-parse --git-dir 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "Post-flight: auto-commit+push (settings.autoCommit=true)..." -ForegroundColor Cyan
+                    $commitType = if ($finalReopenCount -gt 0) { "fix" } else { "feat" }
+                    $commitSuffix = if ($finalReopenCount -gt 0) { " (retry after qa_reject #$finalReopenCount)" } else { "" }
+                    $titleText = if ($preflightTaskTitle) { $preflightTaskTitle } else { "completed task" }
+                    $commitMsg = "$commitType($preflightTaskId): $titleText$commitSuffix`n`nCompleted via Moe worker session."
+                    # Stage everything. Worker may have already committed mid-session;
+                    # in that case commit is a no-op and we still push any local
+                    # commits ahead of upstream.
+                    & git -C $projectPath add -A 2>$null | Out-Null
+                    & git -C $projectPath diff --cached --quiet 2>$null
+                    $nothingStaged = ($LASTEXITCODE -eq 0)
+                    if (-not $nothingStaged) {
+                        & git -C $projectPath commit -m $commitMsg 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Host "[OK] Committed task $preflightTaskId." -ForegroundColor Green
+                        } else {
+                            Write-Host "[WARN] git commit failed (pre-commit hook? detached HEAD?); skipping push." -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "[info] No staged changes to commit (worker may have already committed mid-session)." -ForegroundColor Cyan
+                    }
+                    & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "[OK] Pushed task $preflightTaskId." -ForegroundColor Green
+                    } else {
+                        Write-Host "[WARN] git push failed (no upstream? auth? network?) — resolve and push manually." -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "[info] $projectPath is not a git repo — skipping auto-commit+push." -ForegroundColor Cyan
+                }
+            }
         }
     }
     # -------- End post-flight --------

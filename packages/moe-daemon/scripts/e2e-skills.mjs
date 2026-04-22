@@ -96,8 +96,12 @@ async function main() {
   });
   const ctxPlanning = await callTool(projectDir, 'moe.get_context', { taskId: planTask.task.id });
   check('PLANNING get_context → moe-planning',
-    ctxPlanning.nextAction?.recommendedSkill === 'moe-planning',
-    `got: ${ctxPlanning.nextAction?.recommendedSkill}`);
+    ctxPlanning.nextAction?.recommendedSkill?.name === 'moe-planning',
+    `got: ${JSON.stringify(ctxPlanning.nextAction?.recommendedSkill)}`);
+  check('PLANNING recommendation carries a reason string',
+    typeof ctxPlanning.nextAction?.recommendedSkill?.reason === 'string'
+      && ctxPlanning.nextAction.recommendedSkill.reason.length > 0,
+    `got: ${ctxPlanning.nextAction?.recommendedSkill?.reason}`);
 
   // ---------- 3. Architect → submit_plan (proper flow, since create_task doesn't take a plan) ----------
   // Architect claims the PLANNING task.
@@ -134,34 +138,34 @@ async function main() {
   // start_step on s1 (test step) → test-driven-development.
   const ss1 = await callTool(projectDir, 'moe.start_step', { taskId: planTask.task.id, stepId: s1, workerId: 'e2e-w' });
   check('start_step on test step → test-driven-development',
-    ss1.nextAction?.recommendedSkill === 'test-driven-development',
-    `got: ${ss1.nextAction?.recommendedSkill}`);
+    ss1.nextAction?.recommendedSkill?.name === 'test-driven-development',
+    `got: ${JSON.stringify(ss1.nextAction?.recommendedSkill)}`);
 
   // complete_step s1 → next is start_step on s2 (final) → adversarial-self-review.
   const cs1 = await callTool(projectDir, 'moe.complete_step', { taskId: planTask.task.id, stepId: s1, workerId: 'e2e-w' });
   check('complete_step → adversarial-self-review (next is final step)',
-    cs1.nextAction?.recommendedSkill === 'adversarial-self-review',
-    `got: ${cs1.nextAction?.recommendedSkill}`);
+    cs1.nextAction?.recommendedSkill?.name === 'adversarial-self-review',
+    `got: ${JSON.stringify(cs1.nextAction?.recommendedSkill)}`);
 
   // start_step on s2 (final) → adversarial-self-review.
   const ss2 = await callTool(projectDir, 'moe.start_step', { taskId: planTask.task.id, stepId: s2, workerId: 'e2e-w' });
   check('start_step on final step → adversarial-self-review',
-    ss2.nextAction?.recommendedSkill === 'adversarial-self-review',
-    `got: ${ss2.nextAction?.recommendedSkill}`);
+    ss2.nextAction?.recommendedSkill?.name === 'adversarial-self-review',
+    `got: ${JSON.stringify(ss2.nextAction?.recommendedSkill)}`);
 
   // complete_step s2 → next is complete_task → verification-before-completion.
   const cs2 = await callTool(projectDir, 'moe.complete_step', { taskId: planTask.task.id, stepId: s2, workerId: 'e2e-w' });
   check('complete_step (final) → verification-before-completion',
-    cs2.nextAction?.recommendedSkill === 'verification-before-completion',
-    `got: ${cs2.nextAction?.recommendedSkill}`);
+    cs2.nextAction?.recommendedSkill?.name === 'verification-before-completion',
+    `got: ${JSON.stringify(cs2.nextAction?.recommendedSkill)}`);
 
   // ---------- 4. complete_task → REVIEW; QA picks up → moe-qa-loop ----------
   const ct = await callTool(projectDir, 'moe.complete_task', { taskId: planTask.task.id, workerId: 'e2e-w' });
   check('complete_task ok', ct.success === true, `status: ${ct.status || ct.task?.status}`);
   const ctxReview = await callTool(projectDir, 'moe.get_context', { taskId: planTask.task.id });
   check('REVIEW get_context → moe-qa-loop',
-    ctxReview.nextAction?.recommendedSkill === 'moe-qa-loop',
-    `got: ${ctxReview.nextAction?.recommendedSkill}`);
+    ctxReview.nextAction?.recommendedSkill?.name === 'moe-qa-loop',
+    `got: ${JSON.stringify(ctxReview.nextAction?.recommendedSkill)}`);
 
   // ---------- 5. qa_reject → reopened task → receiving-code-review ----------
   // QA must claim the task in REVIEW first (asserts ownership before qa_reject).
@@ -169,8 +173,8 @@ async function main() {
   await callTool(projectDir, 'moe.qa_reject', { taskId: planTask.task.id, reason: 'tests are weak', workerId: 'e2e-qa' });
   const ctxReopened = await callTool(projectDir, 'moe.get_context', { taskId: planTask.task.id, workerId: 'e2e-w' });
   check('reopened (reopenCount > 0) get_context → receiving-code-review',
-    ctxReopened.nextAction?.recommendedSkill === 'receiving-code-review',
-    `got: ${ctxReopened.nextAction?.recommendedSkill}`);
+    ctxReopened.nextAction?.recommendedSkill?.name === 'receiving-code-review',
+    `got: ${JSON.stringify(ctxReopened.nextAction?.recommendedSkill)}`);
 
   // ---------- 6. report_blocked → systematic-debugging ----------
   // qa_reject cleared assignedWorkerId (the daemon clears the assignee on any
@@ -180,8 +184,8 @@ async function main() {
   await callTool(projectDir, 'moe.get_context', { taskId: planTask.task.id, workerId: 'e2e-w' });
   const rb = await callTool(projectDir, 'moe.report_blocked', { taskId: planTask.task.id, reason: 'cannot find Y', workerId: 'e2e-w' });
   check('report_blocked → systematic-debugging',
-    rb.nextAction?.recommendedSkill === 'systematic-debugging',
-    `got: ${rb.nextAction?.recommendedSkill}`);
+    rb.nextAction?.recommendedSkill?.name === 'systematic-debugging',
+    `got: ${JSON.stringify(rb.nextAction?.recommendedSkill)}`);
 
   // ---------- 6b. memory subsystem still works (.moe/memory + remember/recall) ----------
   console.log('\nPhase 2b: memory subsystem unaffected');

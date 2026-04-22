@@ -271,7 +271,7 @@ find_python() {
         fi
     done
 
-    # Windows (Git Bash / MSYS / WSL) — PEP 397 launcher
+    # Windows (Git Bash / MSYS / WSL) -- PEP 397 launcher
     if command -v py &> /dev/null; then
         if py -3 --version &> /dev/null 2>&1; then
             echo "py -3"
@@ -985,7 +985,15 @@ try {
     process.stderr.write('manifest.skills is missing or not an array');
     process.exit(2);
   }
-  const lines = m.skills.map(s => '- ' + s.name + ' (' + (s.role||'all') + '): ' + (s.description||''));
+  // Render each skill with its trigger context so the agent recognizes WHEN
+  // to invoke it, not just what it's about. Mirrors how Claude picks MCP
+  // tools -- description alone is topic-oriented; triggers are actionable.
+  const lines = m.skills.map(s => {
+    const triggers = Array.isArray(s.triggeredBy) && s.triggeredBy.length
+      ? '\n    when: ' + s.triggeredBy.join('; ')
+      : '';
+    return '- ' + s.name + ' (' + (s.role||'all') + '): ' + (s.description||'') + triggers;
+  });
   process.stdout.write(lines.join('\n'));
 } catch (e) { process.stderr.write(String(e && e.message || e)); process.exit(2); }
 " "$SKILLS_MANIFEST_PATH" 2>"$SKILLS_STDERR" || true)
@@ -1095,6 +1103,9 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_TASK_UNREAD=""
     PREFLIGHT_RECALL=""
     PREFLIGHT_PENDING=""
+    PREFLIGHT_SKILL_NAME=""
+    PREFLIGHT_SKILL_REASON=""
+    PREFLIGHT_SKILL_NEXT_TOOL=""
     PREFLIGHT_NO_TASK=false
     PREFLIGHT_OK=false
 
@@ -1192,6 +1203,47 @@ except Exception:
                         2>/dev/null || echo "")
                 fi
 
+                # 8. Extract phase-recommended skill from context.nextAction. We
+                #    DO NOT inline the body -- the agent loads it via the Skill tool.
+                #    We only pull name + reason + the tool it gates, to emit a short
+                #    JIT reminder further down in SYSTEM_APPEND.
+                #
+                #    The three fields are emitted NUL-separated so multi-line reasons
+                #    (should one ever be introduced) don't corrupt the split.
+                if [ -n "$PREFLIGHT_CONTEXT" ]; then
+                    PARSED_SKILL=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    na = d.get('nextAction') or {}
+    rec = na.get('recommendedSkill')
+    name = ''
+    reason = ''
+    if isinstance(rec, dict):
+        name = rec.get('name') or ''
+        reason = rec.get('reason') or ''
+    elif isinstance(rec, str):
+        name = rec
+    # NUL-separated so newlines inside reason are preserved verbatim.
+    sys.stdout.write(name + '\0' + reason + '\0' + (na.get('tool') or '') + '\0')
+except Exception:
+    pass
+" <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || echo "")
+                    # Split on NUL. IFS+read -d '' reads one NUL-terminated field at a time.
+                    { IFS= read -r -d '' PREFLIGHT_SKILL_NAME
+                      IFS= read -r -d '' PREFLIGHT_SKILL_REASON
+                      IFS= read -r -d '' PREFLIGHT_SKILL_NEXT_TOOL
+                    } <<< "$PARSED_SKILL" 2>/dev/null || true
+                    # Fallback defaults if parse failed -- keep vars set to avoid
+                    # "unbound variable" under `set -u` (not used today, but cheap).
+                    PREFLIGHT_SKILL_NAME="${PREFLIGHT_SKILL_NAME:-}"
+                    PREFLIGHT_SKILL_REASON="${PREFLIGHT_SKILL_REASON:-}"
+                    PREFLIGHT_SKILL_NEXT_TOOL="${PREFLIGHT_SKILL_NEXT_TOOL:-}"
+                fi
+                if [ -n "$PREFLIGHT_SKILL_NAME" ]; then
+                    echo -e "${BLUE}[skill]${NC} Recommending '$PREFLIGHT_SKILL_NAME' for this phase."
+                fi
+
                 PREFLIGHT_OK=true
                 echo -e "${GREEN}[OK]${NC} Pre-flight complete. Claimed: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
 
@@ -1253,14 +1305,14 @@ Approval mode: $APPROVAL_MODE"
 $ROLE_DOC"
     fi
 
-    # Append available-skills index (manifest only, not bodies — bodies load on
+    # Append available-skills index (manifest only, not bodies -- bodies load on
     # demand via the Skill tool when relevant). The daemon also surfaces a
     # nextAction.recommendedSkill field per MCP response.
     if [ -n "$SKILLS_LIST" ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
 
 # Available Skills (load via the Skill tool when the situation calls for one)
-Each skill is deeper guidance for a specific phase of work. The daemon recommends one in nextAction.recommendedSkill when relevant — invoke it via the host's Skill tool.
+Each skill is deeper guidance for a specific phase of work. The daemon recommends one in nextAction.recommendedSkill when relevant -- invoke it via the host's Skill tool.
 
 $SKILLS_LIST"
     fi
@@ -1309,11 +1361,11 @@ Examples:
 Run: bash $moe_call --help for full list."
     fi
 
-    # Append pre-flight results — the agent starts already initialized.
+    # Append pre-flight results -- the agent starts already initialized.
     if [ "$PREFLIGHT_OK" = true ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
 
-# Pre-flight Complete (runtime-injected — do not repeat)
+# Pre-flight Complete (runtime-injected -- do not repeat)
 You ARE: $ROLE agent, workerId=$WORKER_ID.
 The wrapper has ALREADY performed these steps before spawning you:
 - joined #general and announced presence
@@ -1346,6 +1398,24 @@ $PREFLIGHT_RECALL
 <pending_questions>
 $PREFLIGHT_PENDING
 </pending_questions>"
+
+        # JIT reminder: point the agent at the phase-recommended skill. We do
+        # NOT inline the body -- the agent loads it itself via the Skill tool.
+        # This is the nudge that keeps the agent from rationalizing past it.
+        if [ -n "$PREFLIGHT_SKILL_NAME" ]; then
+            JIT_NEXT_TOOL="${PREFLIGHT_SKILL_NEXT_TOOL:-your next Moe tool}"
+            JIT_REASON="${PREFLIGHT_SKILL_REASON:-Phase-recommended for this task.}"
+            SYSTEM_APPEND="$SYSTEM_APPEND
+
+<system-reminder>
+Skill recommendation for this task's current phase: $PREFLIGHT_SKILL_NAME
+Why: $JIT_REASON
+Before you call $JIT_NEXT_TOOL, invoke the Skill tool:
+  Skill(skill=\"$PREFLIGHT_SKILL_NAME\")
+This is not optional. Do not rationalize skipping it (\"I'm blocking, not planning\", \"this is trivial\", \"I already know what it says\"). Skills evolve -- load the current version.
+If after loading you decide it truly does not apply here, say so explicitly in chat -- but LOAD IT FIRST.
+</system-reminder>"
+        fi
     elif [ "$PREFLIGHT_NO_TASK" = true ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
 
@@ -1359,7 +1429,7 @@ If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:tru
     PROMPT=""
     if [ "$AUTO_CLAIM" = true ]; then
         if [ "$PREFLIGHT_OK" = true ]; then
-            # Lean per-role prompt — everything else is already in the system prompt.
+            # Lean per-role prompt -- everything else is already in the system prompt.
             case $ROLE in
                 architect)
                     PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. Study the implementationPlan, rails, and definitionOfDone, then call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task."
@@ -1374,7 +1444,7 @@ If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:tru
         elif [ "$PREFLIGHT_NO_TASK" = true ]; then
             PROMPT="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. Handle hasChatMessage / hasPendingQuestion wakeups per your system prompt."
         else
-            # Pre-flight was skipped or failed — fall back to the legacy multi-step prompt
+            # Pre-flight was skipped or failed -- fall back to the legacy multi-step prompt
             PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
         fi
     else
@@ -1408,7 +1478,7 @@ If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:tru
         elif [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ]; then
             SHORT_PROMPT="$PROMPT"
         else
-            # Legacy fallback — pre-flight skipped or failed
+            # Legacy fallback -- pre-flight skipped or failed
             ROLE_WORKFLOW=""
             case $ROLE in
                 architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
@@ -1510,29 +1580,37 @@ If it returns hasChatMessage:true, call moe.chat_read. If hasPendingQuestion:tru
     fi
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
-    # Save session summary and announce completion in #general. Best-effort — any
+    # Save session summary and announce completion in #general. Best-effort -- any
     # RPC failure does not block loop continuation.
     if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         echo -e "${BLUE}Post-flight: saving session summary, announcing outcome...${NC}"
 
-        # Check task's final status (agent may have completed, paused, or bailed)
+        # Check task's final status and reopenCount (agent may have completed,
+        # paused, or bailed; reopenCount drives commit-message wording below).
         POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' 2>/dev/null || echo "")
         FINAL_STATUS=""
+        FINAL_REOPEN_COUNT="0"
         if [ -n "$POSTFLIGHT_STATE" ]; then
-            FINAL_STATUS=$($PYTHON_CMD -c "
+            PARSED_POSTFLIGHT=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
     for t in d.get('tasks', []):
         if t.get('id') == sys.argv[1]:
-            print(t.get('status', ''))
+            # NUL-separated so we don't collide with whitespace in fields.
+            sys.stdout.write((t.get('status') or '') + '\0' + str(t.get('reopenCount') or 0) + '\0')
             break
 except Exception:
     pass
 " "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_STATE" 2>/dev/null || echo "")
+            { IFS= read -r -d '' FINAL_STATUS
+              IFS= read -r -d '' FINAL_REOPEN_COUNT
+            } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
+            FINAL_STATUS="${FINAL_STATUS:-}"
+            FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
         fi
 
-        # Save session summary — captures what this session accomplished, even if aborted.
+        # Save session summary -- captures what this session accomplished, even if aborted.
         # If the daemon already has a summary from the agent's own moe.save_session_summary,
         # this is a best-effort no-op thanks to dedup.
         moe_rpc save_session_summary \
@@ -1554,6 +1632,66 @@ except Exception:
                 "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
                     "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ANNOUNCE_TEXT" 2>/dev/null)" \
                 > /dev/null 2>&1 || true
+        fi
+
+        # Auto-commit + push on worker completion. Runs when:
+        #   - role is worker
+        #   - task is now in REVIEW (worker just called moe.complete_task, either
+        #     first time or retry after qa_reject)
+        #   - project.json `settings.autoCommit` is not explicitly false
+        #   - $PROJECT is a git repo with a remote
+        # All operations are best-effort: failures log a warning but never abort
+        # the wrapper loop. Commits use whatever git identity the user has
+        # configured -- no Claude/Codex attribution.
+        if [ "$ROLE" = "worker" ] && [ "$FINAL_STATUS" = "REVIEW" ]; then
+            AUTO_COMMIT=$($PYTHON_CMD -c "
+import json, os
+p = os.path.join('$MOE_DIR', 'project.json')
+try:
+    d = json.load(open(p))
+    v = (d.get('settings') or {}).get('autoCommit')
+    # Default true: autoCommit is opt-out, not opt-in.
+    print('false' if v is False else 'true')
+except Exception:
+    print('true')
+" 2>/dev/null || echo "true")
+            if [ "$AUTO_COMMIT" = "true" ]; then
+                if git -C "$PROJECT" rev-parse --git-dir > /dev/null 2>&1; then
+                    echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true)...${NC}"
+                    COMMIT_TYPE="feat"
+                    COMMIT_SUFFIX=""
+                    if [ "$FINAL_REOPEN_COUNT" -gt 0 ] 2>/dev/null; then
+                        COMMIT_TYPE="fix"
+                        COMMIT_SUFFIX=" (retry after qa_reject #$FINAL_REOPEN_COUNT)"
+                    fi
+                    COMMIT_MSG="$COMMIT_TYPE($PREFLIGHT_TASK_ID): ${PREFLIGHT_TASK_TITLE:-completed task}$COMMIT_SUFFIX
+
+Completed via Moe worker session."
+                    # Stage everything in the worktree. The worker may have
+                    # already committed mid-session; in that case `git diff
+                    # --cached --quiet` returns 0 and we skip the commit, then
+                    # still push to ship those mid-session commits.
+                    git -C "$PROJECT" add -A 2>/dev/null || true
+                    if ! git -C "$PROJECT" diff --cached --quiet 2>/dev/null; then
+                        if git -C "$PROJECT" commit -m "$COMMIT_MSG" 2>&1 | tail -3; then
+                            echo -e "${GREEN}[OK]${NC} Committed task $PREFLIGHT_TASK_ID."
+                        else
+                            echo -e "${YELLOW}[WARN]${NC} git commit failed (pre-commit hook? detached HEAD?); skipping push."
+                        fi
+                    else
+                        echo -e "${BLUE}[info]${NC} No staged changes to commit (worker may have already committed mid-session)."
+                    fi
+                    # Push whatever commits are ahead of the upstream. Safe even
+                    # when nothing new was committed in this session.
+                    if git -C "$PROJECT" push 2>&1 | tail -5; then
+                        echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID."
+                    else
+                        echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                    fi
+                else
+                    echo -e "${YELLOW}[info]${NC} $PROJECT is not a git repo -- skipping auto-commit+push."
+                fi
+            fi
         fi
     fi
     # -------- End post-flight --------

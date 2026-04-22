@@ -104,6 +104,13 @@ interface ProjectSettings {
   // Commit message pattern
   commitPattern: string;         // default: "feat({epicId}): {taskTitle}"
 
+  // Auto-commit + push on worker `complete_task`. When true (default), the
+  // agent wrapper runs `git add -A && git commit && git push` against the
+  // current branch after a worker moves a task to REVIEW (first pass or
+  // retry after qa_reject). Commits use the user's configured git identity;
+  // no Claude/Codex attribution is added. Set false to disable.
+  autoCommit?: boolean;          // default: true
+
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
   // Example: { "REVIEW": 2 } limits review to 2 tasks at a time

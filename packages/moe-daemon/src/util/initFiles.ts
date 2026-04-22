@@ -9,11 +9,17 @@ import path from 'path';
 
 /**
  * Full content of role docs, auto-generated from docs/roles/*.md.
- * Embedded here so all init paths produce consistent role docs
- * even when the source docs directory is not available.
+ *
+ * Each value is stamped with a leading `<!-- moe-generated: sha=<hex12> -->`
+ * marker that `writeInitFiles` reads to decide whether an existing on-disk
+ * copy is a stale Moe-generated doc (→ overwrite) or a user customization
+ * (→ leave alone). Users who want to customize a role doc should delete the
+ * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `# Architect Role Guide
+  'architect.md': `<!-- moe-generated: sha=042af6bd58fb -->
+
+# Architect Role Guide
 
 You are an architect. Your job: turn a task into a concrete, atomic implementation plan that a worker can execute without guessing.
 
@@ -23,7 +29,21 @@ You are an architect. Your job: turn a task into a concrete, atomic implementati
 
 The wrapper pre-flight has already claimed a task, fetched its context, read chat, and recalled memory before your session started — that material is already in your system prompt. Do not re-call those tools.
 
-Every Moe MCP response returns a \`nextAction\` field with the tool you should invoke next, and often a \`recommendedSkill\` to load via the host's Skill tool. Follow both.
+Every Moe MCP response returns a \`nextAction\` field with the tool you should invoke next, and often a \`recommendedSkill\` (structured \`{name, reason}\`) to load via the host's Skill tool.
+
+**When \`recommendedSkill\` is present, you MUST invoke that skill via the Skill tool BEFORE calling \`nextAction.tool\`.** Not "when you feel like it." Not "after this one thing first." Before. Every time.
+
+Red flags — these thoughts mean STOP, invoke the skill anyway:
+
+| Thought | Reality |
+|---------|---------|
+| "This is trivial, I can skip it" | Simple tasks fail when skills are skipped. Invoke it. |
+| "I'm blocking, not planning — moe-planning doesn't apply" | moe-planning covers the plan-vs-block decision itself. Load it *before* deciding to block. |
+| "I already know what the skill says" | Skills evolve. Read the current version. |
+| "I'll invoke it after I check one thing" | No. Before the next tool call. |
+| "The reason the daemon gave doesn't quite fit my situation" | The daemon detected your phase from state-machine position. Trust the trigger, load the skill, then decide. |
+
+If after loading the skill you genuinely conclude it does not apply, say so explicitly in chat with your reasoning — but LOAD IT FIRST.
 
 Your core path: write the plan → \`moe.submit_plan\` → poll \`moe.check_approval\` → exit. The runtime handles session summary and the next task.
 
@@ -46,7 +66,9 @@ The deeper "how" lives in skills under \`.moe/skills/<name>/SKILL.md\`. The daem
 | Naming symbols / referencing existing code | \`explore-before-assume\` | Before referencing a function, model, attribute, constant — verify it exists |
 | Step-level granularity inside the plan | \`writing-plans\` | Companion to \`moe-planning\` for fine-grained steps |
 | Splitting a large epic | \`dispatching-parallel-agents\` | When 2+ tasks are independent and can run in parallel |`,
-  'qa.md': `# QA Role Guide
+  'qa.md': `<!-- moe-generated: sha=ce63bc2f01b1 -->
+
+# QA Role Guide
 
 You are a senior production engineer reviewing code. Your job is not to check if the task is done — it's to decide whether this code is safe to deploy. You catch what the architect missed in the plan and what the worker missed in the implementation.
 
@@ -54,7 +76,19 @@ You are a senior production engineer reviewing code. Your job is not to check if
 
 The wrapper pre-flight has already claimed a task in REVIEW, fetched its context, read chat, and recalled memory — that material is already in your system prompt. Do not re-call those tools.
 
-Every Moe MCP response returns a \`nextAction\` field. Follow it. The daemon enforces ordering and will reject out-of-order calls with a corrective \`nextAction\`.
+Every Moe MCP response returns a \`nextAction\` field, often including a \`recommendedSkill\` (structured \`{name, reason}\`) to load via the host's Skill tool. The daemon enforces ordering and will reject out-of-order calls with a corrective \`nextAction\`.
+
+**When \`recommendedSkill\` is present, you MUST invoke that skill via the Skill tool BEFORE calling \`nextAction.tool\`.** Every time.
+
+Red flags — these thoughts mean STOP, invoke the skill anyway:
+
+| Thought | Reality |
+|---------|---------|
+| "The task looks clean, I'll just approve" | That's exactly when the skill catches the silent failure you missed. |
+| "I already know how to review code" | moe-qa-loop enforces the ordering (tests → DoD → diff → rails). Load it. |
+| "I'll skim adversarial-self-review mentally" | No — walk the checklist. |
+
+If after loading the skill you genuinely conclude it does not apply, say so explicitly in chat with your reasoning — but LOAD IT FIRST.
 
 Your core path: verify DoD → run tests → read the diff → \`moe.qa_approve\` or \`moe.qa_reject\`. The runtime handles session summary and announcement.
 
@@ -94,7 +128,9 @@ The deeper "how" lives in skills under \`.moe/skills/<name>/SKILL.md\`. The daem
 |-------|-------|--------------|
 | Claiming a task in REVIEW | \`moe-qa-loop\` | Structured \`qa_approve\` vs \`qa_reject\` decision flow + actionable \`rejectionDetails\` |
 | Reading the diff | \`adversarial-self-review\` | Same checklist the worker should have run — apply it again as the second pair of eyes |`,
-  'worker.md': `# Worker Role Guide
+  'worker.md': `<!-- moe-generated: sha=d303e1f53e05 -->
+
+# Worker Role Guide
 
 You are a worker. Your job: execute an approved implementation plan and produce code that passes QA the first time.
 
@@ -104,9 +140,23 @@ You are a worker. Your job: execute an approved implementation plan and produce 
 
 The wrapper pre-flight has already claimed a task, fetched its context, read chat, and recalled memory before your session started — that material is already in your system prompt. Do not re-call those tools.
 
-Every Moe MCP response returns a \`nextAction\` field with the tool to call next, and often a \`recommendedSkill\` to load via the host's Skill tool. Follow both.
+Every Moe MCP response returns a \`nextAction\` field with the tool to call next, and often a \`recommendedSkill\` (structured \`{name, reason}\`) to load via the host's Skill tool.
 
-Your core path per step: \`moe.start_step\` → implement → run tests → \`moe.complete_step\`. When the last step completes, call \`moe.complete_task\`. The runtime handles session summary and announcement.
+**When \`recommendedSkill\` is present, you MUST invoke that skill via the Skill tool BEFORE calling \`nextAction.tool\`.** Not "after this one thing first." Before. Every time.
+
+Red flags — these thoughts mean STOP, invoke the skill anyway:
+
+| Thought | Reality |
+|---------|---------|
+| "This step is trivial, I can skip TDD/explore/etc." | Simple steps fail when skills are skipped. Invoke it. |
+| "I already know what this skill says" | Skills evolve. Read the current version. |
+| "I'll run adversarial-self-review mentally instead of loading it" | No — load it and walk the checklist. |
+| "I can ship without verification-before-completion" | You can't. No complete-claim without fresh evidence. |
+| "receiving-code-review is just common sense, I'll just fix the feedback" | That's exactly the failure the skill prevents. Load it first. |
+
+If after loading the skill you genuinely conclude it does not apply, say so explicitly in chat with your reasoning — but LOAD IT FIRST.
+
+Your core path per step: \`moe.start_step\` → implement → run tests → \`moe.complete_step\`. When the last step completes, call \`moe.complete_task\`. The runtime handles session summary, announcement, and — if \`.moe/project.json\` has \`settings.autoCommit\` set to anything other than \`false\` — a \`git add -A && git commit && git push\` against the current branch with a \`feat(<taskId>): <title>\` message (or \`fix(...)\` with a \`retry after qa_reject #N\` suffix when you're finishing a reopen). You do not need to commit yourself; if you did commit mid-session, the wrapper will simply push your commits and skip the empty auto-commit.
 
 ## Implementation discipline
 
@@ -137,9 +187,12 @@ The deeper "how" — TDD discipline, debugging methodology, the adversarial-revi
 };
 
 /**
- * Content for .moe/agent-context.md, auto-generated from docs/agent-context.md
+ * Content for .moe/agent-context.md, auto-generated from docs/agent-context.md.
+ * Same sha-stamped marker convention as ROLE_DOCS.
  */
-export const AGENT_CONTEXT_CONTENT = `# Moe Project Context
+export const AGENT_CONTEXT_CONTENT = `<!-- moe-generated: sha=f258f081cf32 -->
+
+# Moe Project Context
 
 ## Architecture
 Moe is an AI Workforce Command Center. Components:
@@ -233,9 +286,33 @@ workers/
 proposals/
 `;
 
+const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
+
+/**
+ * Returns true if the existing on-disk content is a Moe-generated doc whose
+ * marker-sha differs from the embedded content's marker-sha (i.e. the bundled
+ * daemon has a newer version than what's on disk).
+ *
+ * Returns false in all other cases:
+ *   - no marker on disk → user-customized, preserve it
+ *   - marker matches → up to date, no write needed
+ *   - malformed marker → treat as user content
+ */
+function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
+  const mDisk = onDisk.match(GENERATED_MARKER_RE);
+  const mBundled = bundled.match(GENERATED_MARKER_RE);
+  if (!mDisk || !mBundled) return false;
+  return mDisk[1] !== mBundled[1];
+}
+
 /**
  * Writes role docs and .gitignore into an existing .moe directory.
- * Skips files that already exist to avoid overwriting user customizations.
+ *
+ * - Missing files are created.
+ * - Files whose first line carries a `<!-- moe-generated: sha=<X> -->` marker
+ *   whose sha differs from the bundled content's marker are OVERWRITTEN
+ *   (this is the upgrade path for the iron-law skill directive etc.).
+ * - Files without the marker are left alone (treated as user customizations).
  */
 export function writeInitFiles(moePath: string): void {
   // Ensure roles directory exists
@@ -244,21 +321,31 @@ export function writeInitFiles(moePath: string): void {
     fs.mkdirSync(rolesDir, { recursive: true });
   }
 
-  // Write role docs (skip if already exists)
+  // Write role docs (create if missing, upgrade if stale Moe-generated)
   for (const [filename, content] of Object.entries(ROLE_DOCS)) {
     const filePath = path.join(rolesDir, filename);
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, content);
+      continue;
+    }
+    const onDisk = fs.readFileSync(filePath, 'utf-8');
+    if (shouldUpgradeGeneratedDoc(onDisk, content)) {
+      fs.writeFileSync(filePath, content);
     }
   }
 
-  // Write agent-context.md (skip if already exists)
+  // Write / upgrade agent-context.md
   const agentContextPath = path.join(moePath, 'agent-context.md');
   if (!fs.existsSync(agentContextPath)) {
     fs.writeFileSync(agentContextPath, AGENT_CONTEXT_CONTENT);
+  } else {
+    const onDisk = fs.readFileSync(agentContextPath, 'utf-8');
+    if (shouldUpgradeGeneratedDoc(onDisk, AGENT_CONTEXT_CONTENT)) {
+      fs.writeFileSync(agentContextPath, AGENT_CONTEXT_CONTENT);
+    }
   }
 
-  // Write .gitignore (skip if already exists)
+  // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
   const gitignorePath = path.join(moePath, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
     fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT);

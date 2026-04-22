@@ -47,6 +47,14 @@ export interface ProjectSettings {
   columnLimits?: Record<string, number>;
   chatEnabled?: boolean;              // default: true
   chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
+  /**
+   * Auto-commit + push on worker `complete_task`. When true (default), the
+   * agent wrapper runs `git add -A && git commit && git push` on the current
+   * branch after a worker moves a task to REVIEW (first pass OR retry after
+   * qa_reject). Commits use the user's configured git identity — no
+   * Claude/Codex attribution. Set false to disable.
+   */
+  autoCommit?: boolean;               // default: true
 }
 
 export interface Project {
@@ -128,17 +136,30 @@ export interface RejectionDetails {
  * calls. But a well-populated nextAction means the agent rarely hits enforcement
  * in the first place.
  */
+/**
+ * Skill the daemon recommends the agent load before invoking `NextAction.tool`.
+ *
+ * `name` matches a directory under `.moe/skills/<name>/SKILL.md`. `reason` is
+ * a short "why now" the agent can latch onto to resist rationalizing past the
+ * recommendation ("I'm blocking, not planning"). See
+ * `packages/moe-daemon/src/util/recommendSkill.ts` for the phase→skill table.
+ */
+export interface SkillRecommendation {
+  name: string;
+  reason: string;
+}
+
 export interface NextAction {
   tool: string;
   args?: Record<string, unknown>;
   reason?: string;
   /**
-   * Optional skill name (e.g. 'verification-before-completion') the agent
-   * should invoke via the host's Skill tool before performing the next action.
-   * Skills live under .moe/skills/<name>/SKILL.md. Purely advisory — agents
-   * can ignore. See packages/moe-daemon/src/util/recommendSkill.ts.
+   * Optional skill (e.g. 'verification-before-completion') the agent should
+   * invoke via the host's Skill tool before performing the next action.
+   * Advisory — agents can ignore — but the agent-wrapper emits a JIT
+   * system-reminder naming this skill when it is set.
    */
-  recommendedSkill?: string;
+  recommendedSkill?: SkillRecommendation;
 }
 
 export interface Task {
