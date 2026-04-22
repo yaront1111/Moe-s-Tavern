@@ -357,6 +357,55 @@ if (Test-Path $knownIssuesPath) {
     Write-Host "Loaded known issues from $knownIssuesPath"
 }
 
+# Expose Moe-vendored skills to the Claude Code Skill tool by mirroring
+# <project>/.moe/skills/<name>/ into <project>/.claude/skills/<name>/. Claude
+# Code only discovers project skills under .claude/skills/; it does not scan
+# .moe/skills/. Prefer a directory junction (Windows) or symlink (Unix under
+# pwsh) so updates in .moe/skills/ take effect immediately; fall back to copy
+# when symlink creation fails (no dev mode / no permissions).
+$moeSkillsDir = Join-Path $moeDir "skills"
+if (Test-Path $moeSkillsDir) {
+    $claudeSkillsDir = Join-Path $projectPath ".claude\skills"
+    $claudeDir = Split-Path $claudeSkillsDir -Parent
+    if (-not (Test-Path $claudeDir)) {
+        New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+    }
+    if (-not (Test-Path $claudeSkillsDir)) {
+        New-Item -ItemType Directory -Force -Path $claudeSkillsDir | Out-Null
+    }
+
+    $mirrored = 0
+    $skipped  = 0
+    Get-ChildItem -Path $moeSkillsDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $src  = $_.FullName
+        $dest = Join-Path $claudeSkillsDir $_.Name
+        if (Test-Path $dest) { $skipped++; return }
+
+        # Skill loader requires SKILL.md at dest root; skip skill dirs that lack one
+        if (-not (Test-Path (Join-Path $src "SKILL.md"))) { return }
+
+        $linked = $false
+        try {
+            # mklink /J creates a directory junction (no admin required on Windows)
+            $null = & cmd.exe /c mklink /J "`"$dest`"" "`"$src`"" 2>&1
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) { $linked = $true }
+        } catch { }
+        if (-not $linked) {
+            try {
+                New-Item -ItemType SymbolicLink -Path $dest -Target $src -ErrorAction Stop | Out-Null
+                $linked = $true
+            } catch { }
+        }
+        if (-not $linked) {
+            Copy-Item -Recurse -Force -Path $src -Destination $dest
+        }
+        $mirrored++
+    }
+    if ($mirrored -gt 0 -or $skipped -gt 0) {
+        Write-Host "Mirrored $mirrored skill(s) from .moe/skills/ to .claude/skills/ ($skipped already present)"
+    }
+}
+
 # Load skills manifest (name/role/description/triggeredBy per skill). Bodies
 # live in .moe/skills/<name>/SKILL.md and load on demand via the Skill tool.
 $skillsList = ""

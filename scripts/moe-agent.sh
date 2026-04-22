@@ -971,6 +971,39 @@ if [ -f "$KNOWN_ISSUES_PATH" ]; then
     echo -e "${GREEN}[OK]${NC} Loaded known issues from: $KNOWN_ISSUES_PATH"
 fi
 
+# Expose Moe-vendored skills to the Claude Code Skill tool by mirroring
+# <project>/.moe/skills/<name>/ into <project>/.claude/skills/<name>/. Claude
+# Code only discovers project skills under .claude/skills/; it does not scan
+# .moe/skills/. Prefer symlink so .moe/skills/ edits propagate immediately;
+# fall back to copy if symlink creation fails.
+MOE_SKILLS_DIR="$MOE_DIR/skills"
+if [ -d "$MOE_SKILLS_DIR" ]; then
+    CLAUDE_SKILLS_DIR="$PROJECT/.claude/skills"
+    mkdir -p "$CLAUDE_SKILLS_DIR"
+    mirrored=0
+    skipped=0
+    for src in "$MOE_SKILLS_DIR"/*/; do
+        [ -d "$src" ] || continue
+        name=$(basename "$src")
+        dest="$CLAUDE_SKILLS_DIR/$name"
+        if [ -e "$dest" ] || [ -L "$dest" ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+        # Skill loader requires SKILL.md at dest root
+        [ -f "${src}SKILL.md" ] || continue
+        if ln -s "$src" "$dest" 2>/dev/null; then
+            :
+        else
+            cp -R "$src" "$dest"
+        fi
+        mirrored=$((mirrored + 1))
+    done
+    if [ $mirrored -gt 0 ] || [ $skipped -gt 0 ]; then
+        echo -e "${GREEN}[OK]${NC} Mirrored $mirrored skill(s) from .moe/skills/ to .claude/skills/ ($skipped already present)"
+    fi
+fi
+
 # Load skills manifest (lean: name, role, description per skill).
 # Bodies live in .moe/skills/<name>/SKILL.md and load on demand via the Skill tool.
 SKILLS_LIST=""
