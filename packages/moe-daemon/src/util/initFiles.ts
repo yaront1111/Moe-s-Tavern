@@ -17,7 +17,7 @@ import path from 'path';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=042af6bd58fb -->
+  'architect.md': `<!-- moe-generated: sha=38d016858dca -->
 
 # Architect Role Guide
 
@@ -65,8 +65,24 @@ The deeper "how" lives in skills under \`.moe/skills/<name>/SKILL.md\`. The daem
 | Drafting the plan | \`moe-planning\` | After \`moe.get_context\`, every PLANNING task |
 | Naming symbols / referencing existing code | \`explore-before-assume\` | Before referencing a function, model, attribute, constant — verify it exists |
 | Step-level granularity inside the plan | \`writing-plans\` | Companion to \`moe-planning\` for fine-grained steps |
-| Splitting a large epic | \`dispatching-parallel-agents\` | When 2+ tasks are independent and can run in parallel |`,
-  'qa.md': `<!-- moe-generated: sha=ce63bc2f01b1 -->
+| Splitting a large epic | \`dispatching-parallel-agents\` | When 2+ tasks are independent and can run in parallel |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, \`@architects\`, or \`@all\`) you MUST reply via \`moe.chat_send\` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if \`<routed_mentions>\` appears in your system prompt, those are unread messages named you. Read them, then \`moe.chat_send\` a reply to each, THEN \`moe.submit_plan\` or whatever your planned next call was.
+- **Runtime**: if \`moe.wait_for_task\` returns \`{ hasChatMessage: true, chatMessage: { channel, sender, preview } }\`, call \`moe.chat_read\` on that channel, then \`moe.chat_send\` with your reply, then \`moe.wait_for_task\` again.
+
+Architect reply examples:
+- "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
+- "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
+- "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."
+
+Do NOT submit a plan or claim a new PLANNING task while routed mentions are unanswered.`,
+  'qa.md': `<!-- moe-generated: sha=36b05245a387 -->
 
 # QA Role Guide
 
@@ -127,8 +143,24 @@ The deeper "how" lives in skills under \`.moe/skills/<name>/SKILL.md\`. The daem
 | Phase | Skill | When to load |
 |-------|-------|--------------|
 | Claiming a task in REVIEW | \`moe-qa-loop\` | Structured \`qa_approve\` vs \`qa_reject\` decision flow + actionable \`rejectionDetails\` |
-| Reading the diff | \`adversarial-self-review\` | Same checklist the worker should have run — apply it again as the second pair of eyes |`,
-  'worker.md': `<!-- moe-generated: sha=d303e1f53e05 -->
+| Reading the diff | \`adversarial-self-review\` | Same checklist the worker should have run — apply it again as the second pair of eyes |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, \`@qa\`, or \`@all\`) you MUST reply via \`moe.chat_send\` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if \`<routed_mentions>\` appears in your system prompt, those are unread messages named you. Read them, then \`moe.chat_send\` a reply to each, THEN \`moe.qa_approve\` / \`moe.qa_reject\` or whatever your planned next call was.
+- **Runtime**: if \`moe.wait_for_task\` returns \`{ hasChatMessage: true, chatMessage: { channel, sender, preview } }\`, call \`moe.chat_read\` on that channel, then \`moe.chat_send\` with your reply, then \`moe.wait_for_task\` again.
+
+QA reply examples:
+- "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
+- "Approved: all DoD items verified, tests green on commit \`abcd123\`."
+- "Before I approve, can you confirm the migration is idempotent? My read says it isn't."
+
+Do NOT call \`qa_approve\`/\`qa_reject\` on a new REVIEW task while routed mentions are unanswered.`,
+  'worker.md': `<!-- moe-generated: sha=8775c3536190 -->
 
 # Worker Role Guide
 
@@ -183,14 +215,30 @@ The deeper "how" — TDD discipline, debugging methodology, the adversarial-revi
 | Before \`complete_task\` | \`regression-check\` | Run the broader suite; capture counts in your summary |
 | Before \`complete_task\` | \`verification-before-completion\` | No completion claim without fresh verification evidence |
 | Reopened (\`reopenCount > 0\`) | \`receiving-code-review\` | Verify each \`rejectionDetails\` item against the diff before fixing |
-| Parallel work isolation | \`using-git-worktrees\` | When concurrent workers would step on each other |`
+| Parallel work isolation | \`using-git-worktrees\` | When concurrent workers would step on each other |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, \`@workers\`, or \`@all\`) you MUST reply via \`moe.chat_send\` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if \`<routed_mentions>\` appears in your system prompt, those are unread messages named you. Read them, then \`moe.chat_send\` a reply to each, THEN \`moe.start_step\` or whatever your planned next call was.
+- **Runtime**: if \`moe.wait_for_task\` returns \`{ hasChatMessage: true, chatMessage: { channel, sender, preview } }\`, call \`moe.chat_read\` on that channel, then \`moe.chat_send\` with your reply, then \`moe.wait_for_task\` again.
+
+Worker reply examples:
+- "Step 2 is blocked on the \`retry-budget\` constant — do you want \`5\` or the env-var fallback?"
+- "Confirmed I own task-X; starting step 0 now."
+- "Tests are red after step 3; investigating before I \`complete_step\`."
+
+Do NOT claim a new task while routed mentions are unanswered. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle — you don't need to add your own.`
 };
 
 /**
  * Content for .moe/agent-context.md, auto-generated from docs/agent-context.md.
  * Same sha-stamped marker convention as ROLE_DOCS.
  */
-export const AGENT_CONTEXT_CONTENT = `<!-- moe-generated: sha=f258f081cf32 -->
+export const AGENT_CONTEXT_CONTENT = `<!-- moe-generated: sha=1a3f5e8d403a -->
 
 # Moe Project Context
 
@@ -254,9 +302,18 @@ moe.chat_read { channel: "<channelId from claim>", workerId: "<your-id>" }
 ### Loop Guard
 Max 4 agent-to-agent messages per channel before a human must intervene. Do not try to work around this.
 
+### Mention Response Protocol (required)
+
+**When another agent or human tags you** — your workerId appears in the message, or a group you belong to (\`@workers\`, \`@architects\`, \`@qa\`, \`@all\`) is tagged — you MUST reply via \`moe.chat_send\` in the same channel before you call any other planned tool.
+
+- Replies are substantive: answer the question, confirm the handoff, or say why you can't. Empty ACKs ("OK", "Got it") are still forbidden.
+- The Loop Guard (max 4 agent-to-agent hops per channel) prevents runaway chains — you do not need to add your own throttling.
+- If you are mid-step on a task when a reply is required (e.g., \`moe.wait_for_task\` wakes with \`hasChatMessage:true\` or preflight shows a \`<routed_mentions>\` block), finish the current tool call in flight, then reply, then resume.
+- Do NOT claim a new task while routed mentions are unanswered.
+
 ### Rules
-**DO:** Read task channel after claiming. Send messages for handoff notes, questions, or clarifications.
-**DO NOT:** Send progress updates (system posts those). Have multi-turn agent-to-agent conversations. Send empty acknowledgments ("OK", "Got it").
+**DO:** Reply when tagged. Read task channel after claiming. Send messages for handoff notes, questions, or clarifications. Ask a question via chat when you need info another agent has.
+**DO NOT:** Send progress updates (system posts those). Start casual/unsolicited agent-to-agent threads (the "no multi-turn chatter" rule — this is NOT an excuse to skip a reply when tagged). Send empty acknowledgments ("OK", "Got it").
 
 ## Project Memory (Required)
 
