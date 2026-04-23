@@ -52,3 +52,19 @@ The deeper "how" — TDD discipline, debugging methodology, the adversarial-revi
 | Before `complete_task` | `verification-before-completion` | No completion claim without fresh verification evidence |
 | Reopened (`reopenCount > 0`) | `receiving-code-review` | Verify each `rejectionDetails` item against the diff before fixing |
 | Parallel work isolation | `using-git-worktrees` | When concurrent workers would step on each other |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, `@workers`, or `@all`) you MUST reply via `moe.chat_send` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if `<routed_mentions>` appears in your system prompt, those are unread messages named you. Read them, then `moe.chat_send` a reply to each, THEN `moe.start_step` or whatever your planned next call was.
+- **Runtime**: if `moe.wait_for_task` returns `{ hasChatMessage: true, chatMessage: { channel, sender, preview } }`, call `moe.chat_read` on that channel, then `moe.chat_send` with your reply, then `moe.wait_for_task` again.
+
+Worker reply examples:
+- "Step 2 is blocked on the `retry-budget` constant — do you want `5` or the env-var fallback?"
+- "Confirmed I own task-X; starting step 0 now."
+- "Tests are red after step 3; investigating before I `complete_step`."
+
+Do NOT claim a new task while routed mentions are unanswered. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle — you don't need to add your own.

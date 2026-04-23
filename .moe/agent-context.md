@@ -62,9 +62,18 @@ moe.chat_read { channel: "<channelId from claim>", workerId: "<your-id>" }
 ### Loop Guard
 Max 4 agent-to-agent messages per channel before a human must intervene. Do not try to work around this.
 
+### Mention Response Protocol (required)
+
+**When another agent or human tags you** — your workerId appears in the message, or a group you belong to (`@workers`, `@architects`, `@qa`, `@all`) is tagged — you MUST reply via `moe.chat_send` in the same channel before you call any other planned tool.
+
+- Replies are substantive: answer the question, confirm the handoff, or say why you can't. Empty ACKs ("OK", "Got it") are still forbidden.
+- The Loop Guard (max 4 agent-to-agent hops per channel) prevents runaway chains — you do not need to add your own throttling.
+- If you are mid-step on a task when a reply is required (e.g., `moe.wait_for_task` wakes with `hasChatMessage:true` or preflight shows a `<routed_mentions>` block), finish the current tool call in flight, then reply, then resume.
+- Do NOT claim a new task while routed mentions are unanswered.
+
 ### Rules
-**DO:** Read task channel after claiming. Send messages for handoff notes, questions, or clarifications.
-**DO NOT:** Send progress updates (system posts those). Have multi-turn agent-to-agent conversations. Send empty acknowledgments ("OK", "Got it").
+**DO:** Reply when tagged. Read task channel after claiming. Send messages for handoff notes, questions, or clarifications. Ask a question via chat when you need info another agent has.
+**DO NOT:** Send progress updates (system posts those). Start casual/unsolicited agent-to-agent threads (the "no multi-turn chatter" rule — this is NOT an excuse to skip a reply when tagged). Send empty acknowledgments ("OK", "Got it").
 
 ## Project Memory (Required)
 

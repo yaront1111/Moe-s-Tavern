@@ -770,6 +770,7 @@ do {
     $preflightSkillNextTool = $null
     $preflightOk = $false
     $preflightNoTask = $false
+    $preflightRoutedMentions = @()
 
     if ($AutoClaim) {
         Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan
@@ -843,6 +844,38 @@ do {
             }
         } else {
             Write-Host "[WARN] Pre-flight claim RPC failed; falling back to in-agent claim." -ForegroundColor Yellow
+        }
+
+        # Filter unread messages for ones routed at THIS worker. Claude otherwise
+        # sees a wall of <general_unread> and tends to skip replying. The
+        # <routed_mentions> banner injected below gives the model a focused list.
+        # Match directly on workerId, on @all, or on the role-group tag this
+        # worker belongs to (architects/workers/qa).
+        $roleGroupTag = switch ($Role) { "architect" { "architects" } "worker" { "workers" } "qa" { "qa" } default { "" } }
+        $buckets = @()
+        if ($preflightGeneralUnread -and $preflightGeneralUnread.messages) { $buckets += ,$preflightGeneralUnread.messages }
+        if ($preflightTaskUnread    -and $preflightTaskUnread.messages)    { $buckets += ,$preflightTaskUnread.messages }
+        foreach ($bucket in $buckets) {
+            foreach ($msg in $bucket) {
+                if (-not $msg -or -not $msg.mentions) { continue }
+                $hit = $false
+                foreach ($m in $msg.mentions) {
+                    if ($m -eq $WorkerId) { $hit = $true; break }
+                    if ($m -eq "all") { $hit = $true; break }
+                    if ($roleGroupTag -and $m -eq $roleGroupTag) { $hit = $true; break }
+                }
+                if ($hit) {
+                    $preflightRoutedMentions += [ordered]@{
+                        id      = $msg.id
+                        channel = $msg.channel
+                        sender  = $msg.sender
+                        content = $msg.content
+                    }
+                }
+            }
+        }
+        if ($preflightRoutedMentions.Count -gt 0) {
+            Write-Host "[mention] $($preflightRoutedMentions.Count) unread message(s) tagging $WorkerId -- will surface in system prompt." -ForegroundColor Magenta
         }
     }
     # -------- End pre-flight --------
@@ -920,6 +953,30 @@ If after loading you decide it truly does not apply here, say so explicitly in c
 The daemon reports no claimable task for role $Role right now.
 Your FIRST action MUST be moe.wait_for_task with statuses=$(($statuses | ConvertTo-Json -Compress)), workerId=$WorkerId.
 When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
+If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. Do not claim a new task while a routed mention is unanswered.
+"@
+    }
+
+    # Priority banner for unread messages routed at THIS worker. Injected LAST
+    # (so it's the most recent text before the user prompt) to maximize the
+    # chance the model acts on it before anything else. Role docs
+    # (.moe/roles/<role>.md) back this up with the "Mention Response Protocol"
+    # section — the two work together.
+    if ($preflightRoutedMentions -and $preflightRoutedMentions.Count -gt 0) {
+        $mentionsJson = $preflightRoutedMentions | ConvertTo-Json -Depth 8 -Compress
+        $mentionCount = $preflightRoutedMentions.Count
+        $systemAppend += @"
+
+
+<system-reminder>
+# Incoming @mentions targeting you ($WorkerId)
+
+You have $mentionCount unread message(s) that named you directly, via @all, or via your role group. Before ANY other planned tool call (moe.start_step, moe.submit_plan, moe.qa_approve, moe.claim_next_task, etc.), you MUST reply to each via moe.chat_send in the same channel. Replies are substantive — answer the question, confirm the handoff, or say why you can't. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle; you don't need your own.
+
+<routed_mentions>
+$mentionsJson
+</routed_mentions>
+</system-reminder>
 "@
     }
 
@@ -944,12 +1001,12 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
     $claimPrompt = $null
     if ($AutoClaim -and $preflightOk) {
         $claimPrompt = switch ($Role) {
-            "architect" { "Task $preflightTaskId is claimed and its full context is in your system prompt. Study the implementationPlan, rails, and definitionOfDone, then call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task." }
-            "worker"    { "Task $preflightTaskId is claimed and its full context is in your system prompt. Execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task." }
-            "qa"        { "Task $preflightTaskId is claimed and its full context is in your system prompt. Verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task." }
+            "architect" { "Task $preflightTaskId is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task." }
+            "worker"    { "Task $preflightTaskId is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task." }
+            "qa"        { "Task $preflightTaskId is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task." }
         }
     } elseif ($AutoClaim -and $preflightNoTask) {
-        $claimPrompt = "No claimable task right now. Call moe.wait_for_task with statuses=$($statuses | ConvertTo-Json -Compress), workerId=`"$WorkerId`". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. Handle hasChatMessage / hasPendingQuestion wakeups per your system prompt."
+        $claimPrompt = "No claimable task right now. Call moe.wait_for_task with statuses=$($statuses | ConvertTo-Json -Compress), workerId=`"$WorkerId`". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
     } elseif ($AutoClaim) {
         # Pre-flight skipped or failed — legacy multi-step prompt
         $claimPrompt = "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. If hasNext is false, say: 'No tasks in $Role queue' and wait."

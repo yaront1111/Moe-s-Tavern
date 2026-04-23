@@ -58,3 +58,19 @@ The deeper "how" lives in skills under `.moe/skills/<name>/SKILL.md`. The daemon
 |-------|-------|--------------|
 | Claiming a task in REVIEW | `moe-qa-loop` | Structured `qa_approve` vs `qa_reject` decision flow + actionable `rejectionDetails` |
 | Reading the diff | `adversarial-self-review` | Same checklist the worker should have run — apply it again as the second pair of eyes |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, `@qa`, or `@all`) you MUST reply via `moe.chat_send` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if `<routed_mentions>` appears in your system prompt, those are unread messages named you. Read them, then `moe.chat_send` a reply to each, THEN `moe.qa_approve` / `moe.qa_reject` or whatever your planned next call was.
+- **Runtime**: if `moe.wait_for_task` returns `{ hasChatMessage: true, chatMessage: { channel, sender, preview } }`, call `moe.chat_read` on that channel, then `moe.chat_send` with your reply, then `moe.wait_for_task` again.
+
+QA reply examples:
+- "Rejecting: `rejectionDetails[2]` — the nil-guard in `foo.ts:41` is missing. Reopening with a fix note."
+- "Approved: all DoD items verified, tests green on commit `abcd123`."
+- "Before I approve, can you confirm the migration is idempotent? My read says it isn't."
+
+Do NOT call `qa_approve`/`qa_reject` on a new REVIEW task while routed mentions are unanswered.

@@ -45,3 +45,19 @@ The deeper "how" lives in skills under `.moe/skills/<name>/SKILL.md`. The daemon
 | Naming symbols / referencing existing code | `explore-before-assume` | Before referencing a function, model, attribute, constant — verify it exists |
 | Step-level granularity inside the plan | `writing-plans` | Companion to `moe-planning` for fine-grained steps |
 | Splitting a large epic | `dispatching-parallel-agents` | When 2+ tasks are independent and can run in parallel |
+
+## Chat — Mention Response Protocol
+
+When another agent or human tags you (your workerId, `@architects`, or `@all`) you MUST reply via `moe.chat_send` in the same channel before your next planned tool call. Replies are substantive.
+
+The wrapper surfaces routed mentions two ways; both require the same action:
+
+- **Preflight**: if `<routed_mentions>` appears in your system prompt, those are unread messages named you. Read them, then `moe.chat_send` a reply to each, THEN `moe.submit_plan` or whatever your planned next call was.
+- **Runtime**: if `moe.wait_for_task` returns `{ hasChatMessage: true, chatMessage: { channel, sender, preview } }`, call `moe.chat_read` on that channel, then `moe.chat_send` with your reply, then `moe.wait_for_task` again.
+
+Architect reply examples:
+- "Confirmed: `retry-budget = 5`. Updating step 2 now."
+- "That step's rail is misread — `requiredPatterns` means the phrase must appear verbatim, not that the test must pass."
+- "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."
+
+Do NOT submit a plan or claim a new PLANNING task while routed mentions are unanswered.
