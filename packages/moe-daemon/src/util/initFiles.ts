@@ -17,7 +17,7 @@ import path from 'path';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=38d016858dca -->
+  'architect.md': `<!-- moe-generated: sha=02fbfb6da557 -->
 
 # Architect Role Guide
 
@@ -81,7 +81,31 @@ Architect reply examples:
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."
 
-Do NOT submit a plan or claim a new PLANNING task while routed mentions are unanswered.`,
+Do NOT submit a plan or claim a new PLANNING task while routed mentions are unanswered.
+
+## Rail Proposals (escape hatch, use sparingly)
+
+When \`moe.submit_plan\` fails with \`CONSTRAINT_VIOLATION\` (a rail violation), the default is to **revise the plan and resubmit**. Only reach for \`moe.propose_rail\` when the rail itself is wrong for this task — not when you can rewrite the plan to satisfy it.
+
+Call \`moe.propose_rail\` when:
+- A \`forbiddenPatterns\` entry is catching a false positive in this task's actual scope (e.g., the codebase legitimately needs the flagged API)
+- A global \`requiredPatterns\` phrase doesn't map onto this task at all (e.g., the task has no test surface so the "add tests" required phrase is unreachable)
+- An epic rail or task rail was written for a different shape of task and is blocking progress
+
+Shape:
+\`\`\`
+moe.propose_rail {
+  proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL",
+  targetScope:  "GLOBAL" | "EPIC" | "TASK",
+  taskId:        "<the blocked task>",
+  currentValue:  "<exact current rail text, required for MODIFY/REMOVE>",
+  proposedValue: "<new text or empty for REMOVE>",
+  reason:        "<one short paragraph: why the current rail is wrong for this task, what changes>",
+  workerId:      "<your workerId>"
+}
+\`\`\`
+
+The proposal lands in \`.moe/proposals/\` and the plugin shows it for human Approve/Reject. Once approved, the rail change applies to the target scope and your next \`submit_plan\` will pass. Do NOT loop between resubmits if the rail is the real blocker — that's the exact failure mode this tool prevents.`,
   'qa.md': `<!-- moe-generated: sha=36b05245a387 -->
 
 # QA Role Guide
@@ -160,7 +184,7 @@ QA reply examples:
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."
 
 Do NOT call \`qa_approve\`/\`qa_reject\` on a new REVIEW task while routed mentions are unanswered.`,
-  'worker.md': `<!-- moe-generated: sha=8775c3536190 -->
+  'worker.md': `<!-- moe-generated: sha=9e4aab4ea7e2 -->
 
 # Worker Role Guide
 
@@ -231,7 +255,25 @@ Worker reply examples:
 - "Confirmed I own task-X; starting step 0 now."
 - "Tests are red after step 3; investigating before I \`complete_step\`."
 
-Do NOT claim a new task while routed mentions are unanswered. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle — you don't need to add your own.`
+Do NOT claim a new task while routed mentions are unanswered. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle — you don't need to add your own.
+
+## Rail Proposals (escape hatch, use sparingly)
+
+If a rail blocks a step and you can't satisfy it without actively breaking the task's definitionOfDone, the default is to \`moe.report_blocked\` with a clear reason so the architect can re-plan. In the rarer case where the rail itself is wrong — e.g., a \`forbiddenPatterns\` entry catching a false positive that would force unsafe workarounds — use \`moe.propose_rail\` to request a human-approved rail change:
+
+\`\`\`
+moe.propose_rail {
+  proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL",
+  targetScope:  "GLOBAL" | "EPIC" | "TASK",
+  taskId:        "<your claimed task>",
+  currentValue:  "<exact current rail text, required for MODIFY/REMOVE>",
+  proposedValue: "<new text or empty for REMOVE>",
+  reason:        "<why the rail is wrong for this task, one short paragraph>",
+  workerId:      "<your workerId>"
+}
+\`\`\`
+
+Do NOT use this to get around rails that are correct but inconvenient — adversarial-self-review and receiving-code-review catch that, and QA will reject. Use it when the rail would force you to ship bad code. The proposal lands in \`.moe/proposals/\` and shows up in the plugin for human Approve/Reject; once approved, retry the step.`
 };
 
 /**

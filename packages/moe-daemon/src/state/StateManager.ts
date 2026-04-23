@@ -1965,6 +1965,13 @@ export class StateManager {
 
     await this.writeEntity('proposals', proposalId, updated);
     this.proposals.set(proposalId, updated);
+    this.appendActivity(
+      'PROPOSAL_APPROVED',
+      { proposalType: updated.proposalType, targetScope: updated.targetScope, reason: updated.reason },
+      this.tasks.get(updated.taskId),
+      undefined,
+      updated
+    );
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
 
     try {
@@ -2056,6 +2063,13 @@ export class StateManager {
 
     await this.writeEntity('proposals', proposalId, updated);
     this.proposals.set(proposalId, updated);
+    this.appendActivity(
+      'PROPOSAL_REJECTED',
+      { proposalType: updated.proposalType, targetScope: updated.targetScope, reason: updated.reason },
+      this.tasks.get(updated.taskId),
+      undefined,
+      updated
+    );
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
     return updated;
   }

@@ -115,7 +115,28 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
       const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
       if (!railsCheck.ok) {
-        throw new MoeError(MoeErrorCode.CONSTRAINT_VIOLATION, 'Rail violation', { violation: railsCheck.violation });
+        // Steer the agent toward the escape hatch when the rail is wrong for
+        // this task (rare but legitimate). The default path is still to fix
+        // the plan — propose_rail is only for when the rail itself is the
+        // bug, not when the plan skipped a required pattern.
+        const v = railsCheck.violation || {};
+        const message =
+          `Rail violation: ${JSON.stringify(v)}. ` +
+          `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
+          `Escape hatch: if this rail is genuinely wrong for task ${task.id} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
+          `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${task.id}", currentValue, proposedValue, reason, workerId } ` +
+          `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
+        throw new MoeError(
+          MoeErrorCode.CONSTRAINT_VIOLATION,
+          message,
+          {
+            violation: v,
+            suggestedAction: {
+              tool: 'moe.propose_rail',
+              reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
+            }
+          }
+        );
       }
 
       const implementationPlan = params.steps.map((step, idx) => ({

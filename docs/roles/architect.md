@@ -61,3 +61,27 @@ Architect reply examples:
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."
 
 Do NOT submit a plan or claim a new PLANNING task while routed mentions are unanswered.
+
+## Rail Proposals (escape hatch, use sparingly)
+
+When `moe.submit_plan` fails with `CONSTRAINT_VIOLATION` (a rail violation), the default is to **revise the plan and resubmit**. Only reach for `moe.propose_rail` when the rail itself is wrong for this task — not when you can rewrite the plan to satisfy it.
+
+Call `moe.propose_rail` when:
+- A `forbiddenPatterns` entry is catching a false positive in this task's actual scope (e.g., the codebase legitimately needs the flagged API)
+- A global `requiredPatterns` phrase doesn't map onto this task at all (e.g., the task has no test surface so the "add tests" required phrase is unreachable)
+- An epic rail or task rail was written for a different shape of task and is blocking progress
+
+Shape:
+```
+moe.propose_rail {
+  proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL",
+  targetScope:  "GLOBAL" | "EPIC" | "TASK",
+  taskId:        "<the blocked task>",
+  currentValue:  "<exact current rail text, required for MODIFY/REMOVE>",
+  proposedValue: "<new text or empty for REMOVE>",
+  reason:        "<one short paragraph: why the current rail is wrong for this task, what changes>",
+  workerId:      "<your workerId>"
+}
+```
+
+The proposal lands in `.moe/proposals/` and the plugin shows it for human Approve/Reject. Once approved, the rail change applies to the target scope and your next `submit_plan` will pass. Do NOT loop between resubmits if the rail is the real blocker — that's the exact failure mode this tool prevents.

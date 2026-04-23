@@ -68,3 +68,21 @@ Worker reply examples:
 - "Tests are red after step 3; investigating before I `complete_step`."
 
 Do NOT claim a new task while routed mentions are unanswered. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle — you don't need to add your own.
+
+## Rail Proposals (escape hatch, use sparingly)
+
+If a rail blocks a step and you can't satisfy it without actively breaking the task's definitionOfDone, the default is to `moe.report_blocked` with a clear reason so the architect can re-plan. In the rarer case where the rail itself is wrong — e.g., a `forbiddenPatterns` entry catching a false positive that would force unsafe workarounds — use `moe.propose_rail` to request a human-approved rail change:
+
+```
+moe.propose_rail {
+  proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL",
+  targetScope:  "GLOBAL" | "EPIC" | "TASK",
+  taskId:        "<your claimed task>",
+  currentValue:  "<exact current rail text, required for MODIFY/REMOVE>",
+  proposedValue: "<new text or empty for REMOVE>",
+  reason:        "<why the rail is wrong for this task, one short paragraph>",
+  workerId:      "<your workerId>"
+}
+```
+
+Do NOT use this to get around rails that are correct but inconvenient — adversarial-self-review and receiving-code-review catch that, and QA will reject. Use it when the rail would force you to ship bad code. The proposal lands in `.moe/proposals/` and shows up in the plugin for human Approve/Reject; once approved, retry the step.
