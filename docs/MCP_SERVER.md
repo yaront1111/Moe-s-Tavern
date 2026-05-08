@@ -114,13 +114,62 @@ All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-a
 
 ## Tools (Implemented)
 
+### moe.init_project
+
+Initialize a Moe project and create the `.moe/` directory structure.
+
+**Parameters:**
+```typescript
+{
+  projectPath?: string,
+  name?: string,
+  force?: boolean,
+  enableClaudeHook?: boolean // default false
+}
+```
+
+#### Claude-Code PreToolUse hook (optional)
+
+`enableClaudeHook: true` emits defense-in-depth Claude Code hook files:
+
+- `.claude/settings.json`
+- `.claude/hooks/moe-require-claim.sh`
+- `.claude/hooks/moe-require-claim.ps1`
+
+The hook gates only ownership-sensitive Moe MCP tools:
+`mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)`.
+Read-only tools such as `get_context`, `list_tasks`, and `recall` bypass the hook.
+
+On each gated tool call, the hook invokes `scripts/moe-call.sh list_tasks` and verifies that
+`MOE_WORKER_ID` owns a task in `PLANNING`, `WORKING`, or `REVIEW`. Missing worker ID,
+missing `moe-call.sh`, daemon/proxy failure, malformed output, or timeout fail open with a
+short warning; this hook supplements, but does not replace, server-side ownership/order guards.
+On Windows, the PowerShell hook prefers `MOE_BASH_PATH` or Git Bash before PATH-discovered
+`bash.exe` launchers so a broken WSL shim does not silently disable claim enforcement.
+
+Disable by deleting `.claude/hooks/moe-require-claim.*` or removing the matching
+`PreToolUse` entry from `.claude/settings.json`.
+
+Manual cleanup:
+```bash
+rm -f .claude/hooks/moe-require-claim.sh .claude/hooks/moe-require-claim.ps1
+```
+
 ### moe.get_context
 
 Get current project/epic/task context and rails.
 
 **Parameters:**
 ```typescript
-{ taskId?: string, workerId?: string }
+{
+  taskId?: string,
+  workerId?: string,
+  memoryMode?: 'off' | 'summary' | 'full', // default: project.settings.memory.autoInject
+  memoryLimit?: number,                    // default: project setting, max 10
+  memoryMaxChars?: number,                 // default: project setting
+  commentsLimit?: number,                  // default: 10 recent comments, max 50; 0 omits comments
+  commentsMaxChars?: number                // default: 1000 per comment; 0 returns full comment text
+}
 ```
 
 **Resolution order:**
@@ -135,15 +184,41 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 {
   project: { id, name, globalRails, settings },
   epic: { id, title, description, architectureNotes, epicRails } | null,
-  task: { id, title, description, definitionOfDone, taskRails, status, implementationPlan } | null,
-  worker: null,
+  task: {
+    id, title, description, definitionOfDone, taskRails, status, implementationPlan,
+    comments: Array<{
+      id: string,
+      author: string,
+      content: string,
+      timestamp: string,
+      contentTruncated?: boolean,
+      contentOriginalLength?: number
+    }>,
+    commentSummary: { total, returned, omitted, truncated, hint?: string }
+  } | null,
+  worker: {
+    id, type, status, currentTaskId, lastActivityAt, lastError, errorCount, teamId
+  } | null, // lean: excludes chatCursors, modifiedFiles, and branch
   allRails: {
     global: string[], // currently project.globalRails.requiredPatterns
     epic: string[],
     task: string[]
+  },
+  memory: {
+    mode: 'off' | 'summary' | 'full',
+    relevant: Array<{
+      id: string,
+      type: string,
+      confidence: number,
+      preview?: string, // summary mode
+      content?: string  // full mode, budget-capped
+    }>,
+    lastSession: object | null
   }
 }
 ```
+
+By default, `get_context` returns compact memory previews, compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. `memoryMode: 'off'` suppresses auto memories and the last-session payload; `memoryMode: 'full'` returns full memory/session content capped by `memoryMaxChars`. Call `moe.recall` for full memory content when a preview is useful; call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
 
 ---
 
@@ -298,7 +373,12 @@ List tasks for an epic (optionally filtered by status).
 
 **Parameters:**
 ```typescript
-{ epicId?: string, status?: string[] }
+{
+  epicId?: string,
+  status?: string[],
+  limit?: number,  // default: 100, max: 500
+  offset?: number  // default: 0
+}
 ```
 
 **Returns:**
@@ -306,8 +386,13 @@ List tasks for an epic (optionally filtered by status).
 {
   epicId: string | null,
   epicTitle: string | null,
-  tasks: { id, title, status, order, hasWorker }[],
-  counts: { backlog, inProgress, review, done }
+  tasks: Array<{
+    id, epicId, title, status, priority, order,
+    assignedWorkerId, hasWorker, reopenCount, hasPendingQuestion,
+    definitionOfDoneCount, planStepCount, completedStepCount
+  }>,
+  counts: { backlog, inProgress, review, done },
+  pagination: { limit, offset, returned, total, hasMore }
 }
 ```
 
@@ -328,17 +413,20 @@ Search tasks by query and filters with relevance ranking.
     epicId?: string,        // Filter by epic ID
     assignedWorkerId?: string  // Filter by assigned worker ID
   },
-  limit?: number            // Maximum results (default: 20)
+  limit?: number,           // Maximum results (default: 20, max: 200)
+  detail?: 'summary' | 'full', // default: 'summary'
+  maxDescriptionChars?: number // summary preview budget (default: 240, max: 2000)
 }
 ```
 
 **Returns:**
 ```typescript
 {
-  tasks: Task[],            // Matching tasks (full task objects)
-  totalMatches: number,     // Number of results returned
+  tasks: TaskSummary[] | Task[], // summaries by default; full tasks only with detail: 'full'
+  totalMatches: number,     // Matching tasks before limit
   query: string | null,     // The search query used
-  filters: object           // Filters that were applied
+  filters: object,          // Filters that were applied
+  detail: 'summary' | 'full'
 }
 ```
 
@@ -346,6 +434,7 @@ Search tasks by query and filters with relevance ranking.
 - Title matches are weighted 2x higher than description matches
 - Results are sorted by relevance score (highest first)
 - Filters are applied before search query
+- Default `summary` responses omit full descriptions, DoD, comments, and plans. Use `detail: 'full'` only when necessary.
 - If no query is provided, returns filtered tasks up to limit
 
 ---
@@ -356,12 +445,20 @@ Return the next BACKLOG task by order.
 
 **Parameters:**
 ```typescript
-{ epicId?: string }
+{
+  epicId?: string,
+  detail?: 'summary' | 'full', // default: 'summary'
+  maxDescriptionChars?: number // summary preview budget (default: 240, max: 2000)
+}
 ```
 
 **Returns:**
 ```typescript
-{ hasNext: boolean, task?: { id, title, description, definitionOfDone } }
+{
+  hasNext: boolean,
+  detail?: 'summary' | 'full',
+  task?: TaskSummary | { id, title, description, definitionOfDone }
+}
 ```
 
 ---
@@ -384,12 +481,31 @@ Claim the next task by status (optionally filtered by epic). Assigns `assignedWo
 ```typescript
 {
   hasNext: boolean,
-  project?: { id, name, globalRails, settings },
-  epic?: { id, title, description, architectureNotes, epicRails } | null,
-  task?: { id, epicId, title, description, definitionOfDone, taskRails, status, assignedWorkerId, implementationPlan },
-  allRails?: { global: string[], epic: string[], task: string[] }
+  task?: {
+    id,
+    epicId,
+    title,
+    status,
+    priority,
+    assignedWorkerId,
+    reopenCount,
+    reopenReason,
+    rejectionDetails,
+    roleChannelId,
+    generalChannelId
+  },
+  reopenWarning?: string,
+  chatHint?: string,
+  nextAction: {
+    tool: 'moe.get_context' | 'moe.wait_for_task',
+    args: object,
+    reason: string,
+    recommendedSkill?: { name: string, reason: string }
+  }
 }
 ```
+
+`claim_next_task` is intentionally lean: it does **not** return project rails, epic details, task descriptions, definition of done, task rails, implementation plans, chat history, or memory payloads. Call `moe.get_context` after a successful claim to fetch the full, token-budgeted context.
 
 **Worker Constraint:**
 Only one worker can work on tasks of the same status type per epic at a time:
@@ -558,7 +674,9 @@ Query the activity log for task history, decisions, and events.
   epicId?: string,        // Filter by epic ID
   workerId?: string,      // Filter by worker ID
   eventTypes?: string[],  // Filter by event types (e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)
-  limit?: number          // Max events to return (default 50)
+  limit?: number,         // Max events to return (default 10, max 100)
+  offset?: number,        // Skip first N matching events (default 0, max 10000)
+  maxPayloadChars?: number // Max chars per payload value (default 500, max 2000, 0 = no truncation)
 }
 ```
 
@@ -567,7 +685,10 @@ Query the activity log for task history, decisions, and events.
 {
   events: ActivityLogEntry[],
   count: number,
-  filters: { taskId, epicId, workerId, eventTypes, limit }
+  hasMore: boolean,
+  filters: { taskId, epicId, workerId, eventTypes, limit, offset, maxPayloadChars },
+  pagination: { limit, offset, returned, hasMore },
+  search: { scannedEvents, scannedLines, scanLimit, matchingEventsWithinScan, complete }
 }
 ```
 
@@ -604,6 +725,106 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
 - `resolution is required`
 - `Worker not found: <workerId>`
 - `Worker must be in BLOCKED status` - if worker is not BLOCKED
+
+---
+
+### moe.release_task
+
+Release a task from its assigned worker (clears `assignedWorkerId`, status unchanged). Anyone can call — no ownership check. Use when an agent shuts down without releasing, or when you want to hand a task to a different agent.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,   // Required
+  reason?: string   // Optional human-readable reason
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  taskId: string,
+  previousWorkerId: string | null,  // null if task was already unassigned
+  status: TaskStatus,               // unchanged
+  message: string
+}
+```
+
+**Side effects:**
+- Sets `task.assignedWorkerId = null`.
+- If the released worker exists and `worker.currentTaskId === taskId`, sets the worker to `IDLE` with `currentTaskId = null`.
+- Posts a system message to `#general`.
+- Activity event: `WORKER_RELEASED`.
+
+---
+
+### moe.list_workers
+
+List all registered workers with liveness derived from `lastActivityAt`. Use to see which agents are alive and which shut down (potentially still holding task assignments).
+
+**Parameters:**
+```typescript
+{
+  livenessTimeoutMs?: number,  // Workers idle longer than this are reported isAlive=false (default 120000)
+  onlyStale?: boolean          // If true, return only stale workers
+}
+```
+
+**Returns:**
+```typescript
+{
+  workers: Array<{
+    workerId: string,
+    type: string,
+    status: WorkerStatus,
+    currentTaskId: string | null,
+    currentTaskTitle: string | null,
+    lastActivityAt: string,
+    secondsSinceLastActivity: number,  // -1 if never recorded
+    isAlive: boolean,
+    epicId: string | null,
+    teamId: string | null
+  }>,
+  summary: { total, alive, stale, staleWithAssignedTask, livenessTimeoutMs },
+  // Present only when stale workers still hold assignments:
+  hint?: string,
+  staleAssignments?: Array<{ workerId, taskId, taskTitle, secondsSinceLastActivity }>
+}
+```
+
+---
+
+### moe.enter_governance
+
+Architect transitions from planning to governance after the PLANNING queue empties. Sets the worker status to `GOVERNING`, broadcasts presence to `#general` and `#architects`, and returns a `chat_wait` `nextAction` so the architect oversees in-flight work via chat.
+
+`moe.claim_next_task` automatically suggests this tool as `nextAction` when an architect-style claim (`statuses: ["PLANNING"]`) finds no claimable work and the worker is already registered.
+
+**Parameters:**
+```typescript
+{ workerId: string }
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  workerId: string,
+  status: "GOVERNING",
+  channels: Array<{ id: string, name: string }>,  // general/architects/workers/qa, those that exist
+  governanceDuties: string[],
+  nextAction: { tool: "moe.chat_wait", args: { workerId, channels, timeoutMs }, reason: string }
+}
+```
+
+**Side effects:**
+- `worker.status = "GOVERNING"`, `worker.currentTaskId = null`.
+- System message in `#general`: `🧭 {workerId} is now governing — @mention them on plan questions, drift, or rejections.`
+- Same message in `#architects`.
+- Activity event: `WORKER_GOVERNING`.
+
+**Resuming planning.** When any task transitions into PLANNING (via `moe.create_task` or `moe.set_task_status`), the daemon posts `📋 New plan needed: …` to `#architects`. The governing architect's `chat_wait` fires; they call `moe.claim_next_task` to resume planning.
 
 ---
 
@@ -746,6 +967,47 @@ List all teams, optionally filtered by role.
 
 ---
 
+### moe.get_pending_questions
+
+Return tasks with unanswered human task comments, using bounded defaults so a large backlog cannot flood the agent context.
+
+**Parameters:**
+```typescript
+{
+  epicId?: string,             // Optional epic filter
+  limit?: number,              // Task entries to return (default: 10, max: 50)
+  maxQuestionsPerTask?: number,// Human comments per task (default: 3, max: 20)
+  maxContentChars?: number     // Max chars/question (default: 1000, max: 10000; 0 = full)
+}
+```
+
+**Returns:**
+```typescript
+{
+  count: number,        // returned task entries
+  totalMatches: number, // matching task entries before limit
+  tasks: Array<{
+    taskId, title, status, epicId, assignedWorkerId,
+    questions: Array<{
+      commentId, content, timestamp,
+      contentTruncated?: boolean,
+      contentOriginalLength?: number
+    }>,
+    totalQuestions: number,
+    omittedQuestions: number
+  }>,
+  pagination: { limit, returned, total, hasMore },
+  truncatedQuestions: number,
+  hint?: string
+}
+```
+
+**Notes:**
+- Only human comments after the last non-human response are treated as pending.
+- Long question content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed.
+
+---
+
 ## Chat Tools
 
 Real-time multi-agent chat communication. Ported from [agentchattr](https://github.com/bcurts/agentchattr).
@@ -785,19 +1047,26 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
   channel?: string,     // Channel ID (omit to read from all channels)
   workerId?: string,    // Worker ID for auto-cursor tracking
   sinceId?: string,     // Return messages after this message ID
-  limit?: number        // Max messages (default 20, max 200)
+  limit?: number,       // Max messages (default 10, max 200)
+  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
 }
 ```
 
 **Returns:**
 ```typescript
-{ messages: ChatMessage[], cursor: string | null }
+{
+  messages: Array<ChatMessage & { contentTruncated?: boolean, contentOriginalLength?: number }>,
+  cursor: string | null,
+  truncated: number
+}
 ```
 
 **Notes:**
 - If `workerId` provided without `sinceId`, uses the worker's saved cursor for incremental reads
-- After reading, the worker's cursor is automatically updated
-- When no `channel` specified, reads from all channels merged by timestamp
+- After reading, the worker's cursor is automatically updated only for messages returned in the response
+- When no `channel` specified, reads up to `limit` messages per channel, merges them by timestamp, and returns the newest global `limit` messages
+- In all-channel mode, per-channel cursors and unread counts advance/clear only when doing so cannot skip fetched-but-omitted messages; any channel with omitted fetched messages stays unchanged so those messages remain readable on a later call
+- Long message content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed
 
 ---
 
@@ -878,13 +1147,14 @@ Long-poll for chat messages mentioning this worker or from humans.
 {
   workerId: string,     // Required: your worker ID
   channels?: string[],  // Optional: channel filter
-  timeoutMs?: number    // Max wait (default 300000, max 600000)
+  timeoutMs?: number,   // Max wait (default 300000, max 600000)
+  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
 }
 ```
 
 **Returns:**
 ```typescript
-{ hasMessage: true, messages: [ChatMessage] }  // on match
+{ hasMessage: true, messages: [ChatMessage], truncated: number }  // on match
 { hasMessage: false, timedOut: true }           // on timeout
 { hasMessage: false, cancelled: true }          // if cancelled
 ```
@@ -927,25 +1197,26 @@ Propose a decision for human approval. Optionally posts a system message to a ch
 
 ### moe.chat_resync
 
-Clear chat cursors and return full message history for resync. Useful when a worker loses context or wants to re-read all messages.
+Clear chat cursors and return a bounded, token-budgeted message window for resync. Useful when a worker loses context or wants to re-read recent messages.
 
 **Parameters:**
 ```typescript
 {
   workerId: string,   // Required: worker whose cursors to reset
   channel?: string,   // Optional: specific channel to resync (omit for all)
-  limit?: number      // Max messages per channel (default 50, max 200)
+  limit?: number,     // Max messages per channel (default 20, max 200)
+  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
 }
 ```
 
 **Returns:**
 ```typescript
-{ success: true, messagesCount: number, messages: ChatMessage[], cursorsReset: true }
+{ success: true, messagesCount: number, messages: ChatMessage[], cursorsReset: true, truncated: number }
 ```
 
 **Notes:**
 - Clears the worker's chatCursors for the specified channel (or all channels)
-- Returns messages from the beginning of history
+- Returns a bounded window of messages; long content is truncated by default
 - Updates cursors to the latest message after resync
 
 ## Memory Tools
@@ -993,7 +1264,7 @@ Search the project knowledge base for relevant memories.
 **Notes:**
 - Uses BM25 ranking algorithm with composite scoring (text relevance + tags + file overlap + recency + quality)
 - Automatically updates access counts on returned memories
-- Memories also auto-surface in `moe.get_context` responses (top 5 relevant)
+- Memory previews can auto-surface in `moe.get_context`; full content remains available through explicit `moe.recall`
 
 ### moe.reflect
 

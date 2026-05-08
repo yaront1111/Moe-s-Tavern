@@ -26,6 +26,9 @@ import { qaRejectTool } from './qaReject.js';
 import { initProjectTool } from './initProject.js';
 import { getActivityLogTool } from './getActivityLog.js';
 import { unblockWorkerTool } from './unblockWorker.js';
+import { releaseTaskTool } from './releaseTask.js';
+import { enterGovernanceTool } from './enterGovernance.js';
+import { listWorkersTool } from './listWorkers.js';
 import { createTeamTool } from './createTeam.js';
 import { joinTeamTool } from './joinTeam.js';
 import { leaveTeamTool } from './leaveTeam.js';
@@ -83,6 +86,9 @@ export function getTools(state: StateManager): ToolDefinition[] {
     initProjectTool(state),
     getActivityLogTool(state),
     unblockWorkerTool(state),
+    releaseTaskTool(state),
+    enterGovernanceTool(state),
+    listWorkersTool(state),
     createTeamTool(state),
     joinTeamTool(state),
     leaveTeamTool(state),

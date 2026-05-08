@@ -120,6 +120,19 @@ interface ProjectSettings {
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
   chatAutoCreateChannels?: boolean;   // default: true — auto-create channels for epics/tasks
+
+  // Memory/token-budget settings (all optional, defaults applied at runtime)
+  memory?: {
+    autoInject?: 'off' | 'summary' | 'full'; // default: summary
+    maxAutoResults?: number;                 // default: 1
+    maxAutoChars?: number;                   // default: 500 total chars
+    autoSave?: {
+      completedTask?: boolean;     // default: false
+      firstPassApproval?: boolean; // default: false
+      qaRejection?: boolean;       // default: true
+      reopenedApproval?: boolean;  // default: true
+    };
+  };
 }
 ```
 
@@ -431,7 +444,8 @@ type WorkerStatus =
   | 'PLANNING'          // Creating implementation plan
   | 'AWAITING_APPROVAL' // Plan submitted, waiting
   | 'CODING'            // Executing steps
-  | 'BLOCKED';          // Stuck, needs human help
+  | 'BLOCKED'           // Stuck, needs human help
+  | 'GOVERNING';        // Architect overseeing in-flight work via chat (set by moe.enter_governance)
 ```
 
 **Example:**
@@ -784,6 +798,8 @@ type ActivityEventType =
   | 'WORKER_DISCONNECTED'
   | 'WORKER_ERROR'
   | 'WORKER_BLOCKED'
+  | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
+  | 'WORKER_GOVERNING'   // Architect entered governance mode via moe.enter_governance
   
   // Proposal
   | 'PROPOSAL_CREATED'

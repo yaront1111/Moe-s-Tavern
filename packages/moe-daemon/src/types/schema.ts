@@ -23,7 +23,8 @@ export type WorkerStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'CODING'
-  | 'BLOCKED';
+  | 'BLOCKED'
+  | 'GOVERNING';
 
 export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED';
 
@@ -55,6 +56,32 @@ export interface ProjectSettings {
    * Claude/Codex attribution. Set false to disable.
    */
   autoCommit?: boolean;               // default: true
+  /**
+   * Token-budget controls for the project knowledge base. `summary` is the
+   * default: get_context returns memory IDs + short previews, while full memory
+   * content stays available through explicit moe.recall.
+   */
+  memory?: MemorySettings;
+}
+
+export type MemoryAutoInjectMode = 'off' | 'summary' | 'full';
+
+export interface MemoryAutoSaveSettings {
+  /** Generic task-completion summaries. Default false because they are noisy. */
+  completedTask?: boolean;
+  /** First-pass QA approvals. Default false because they rarely add reusable knowledge. */
+  firstPassApproval?: boolean;
+  /** QA rejections. Default true because they encode concrete failure patterns. */
+  qaRejection?: boolean;
+  /** QA approvals after reopens. Default true because they capture proven fixes. */
+  reopenedApproval?: boolean;
+}
+
+export interface MemorySettings {
+  autoInject?: MemoryAutoInjectMode;   // default: summary
+  maxAutoResults?: number;             // default: 1
+  maxAutoChars?: number;               // default: 500 total chars
+  autoSave?: MemoryAutoSaveSettings;
 }
 
 export interface Project {
@@ -260,7 +287,9 @@ export const ACTIVITY_EVENT_TYPES = [
   'WORKER_ERROR',
   'WORKER_BLOCKED',
   'WORKER_REPLACED',
+  'WORKER_RELEASED',
   'WORKER_UNBLOCKED',
+  'WORKER_GOVERNING',
   'WORKER_TIMEOUT',
   'TASK_BLOCKED',
   'PROPOSAL_CREATED',
