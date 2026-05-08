@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { TaskPriority, WorkerType } from '../types/schema.js';
-import { missingRequired, notAllowed, invalidState } from '../util/errors.js';
+import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
+import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -14,14 +14,15 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
-    description: 'Claim the next task by status (assigns workerId if provided)',
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided.',
     inputSchema: {
       type: 'object',
       properties: {
         statuses: { type: 'array', items: { type: 'string' } },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
-        replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' }
+        replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
+        taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' }
       },
       required: ['statuses'],
       additionalProperties: false
@@ -29,7 +30,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       // Use StateManager's mutex to prevent race conditions with plugin assignments
       return state.runExclusive(async () => {
-        const params = (args || {}) as { statuses?: string[]; epicId?: string; workerId?: string; replaceExisting?: boolean };
+        const params = (args || {}) as { statuses?: string[]; epicId?: string; workerId?: string; replaceExisting?: boolean; taskId?: string };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
           throw missingRequired('statuses');
@@ -39,16 +40,40 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           throw invalidState('StateManager', 'unloaded', 'loaded');
         }
 
-        const tasks = Array.from(state.tasks.values())
-        .filter((t) => statuses.includes(t.status))
-        .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
-        .filter((t) => state.isTaskClaimable(t))
-        .sort((a, b) => {
-          const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
-          const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
-          if (pa !== pb) return pa - pb;
-          return a.order - b.order;
-        });
+        let tasks: Task[];
+        if (params.taskId) {
+          const requested = state.getTask(params.taskId);
+          if (!requested) {
+            throw notFound('Task', params.taskId);
+          }
+          if (!statuses.includes(requested.status)) {
+            throw invalidState('Task', requested.status, statuses.join('|'));
+          }
+          if (params.epicId && requested.epicId !== params.epicId) {
+            throw notAllowed(
+              'claim',
+              `Task ${requested.id} belongs to epic ${requested.epicId}, not ${params.epicId}`
+            );
+          }
+          if (!state.isTaskClaimable(requested) && !params.replaceExisting) {
+            throw notAllowed(
+              'claim',
+              `Task ${requested.id} is already assigned to ${requested.assignedWorkerId}. Pass replaceExisting:true to take over.`
+            );
+          }
+          tasks = [requested];
+        } else {
+          tasks = Array.from(state.tasks.values())
+            .filter((t) => statuses.includes(t.status))
+            .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
+            .filter((t) => state.isTaskClaimable(t))
+            .sort((a, b) => {
+              const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+              const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+              if (pa !== pb) return pa - pb;
+              return a.order - b.order;
+            });
+        }
 
       if (tasks.length === 0) {
         // Architect entering an empty PLANNING queue → suggest governance instead of just waiting.

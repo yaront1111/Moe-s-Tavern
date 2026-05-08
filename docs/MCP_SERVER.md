@@ -465,7 +465,7 @@ Return the next BACKLOG task by order.
 
 ### moe.claim_next_task
 
-Claim the next task by status (optionally filtered by epic). Assigns `assignedWorkerId` if provided.
+Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`. Assigns `assignedWorkerId` if provided.
 
 **Parameters:**
 ```typescript
@@ -473,9 +473,12 @@ Claim the next task by status (optionally filtered by epic). Assigns `assignedWo
   statuses: string[],
   epicId?: string,
   workerId?: string,
-  replaceExisting?: boolean  // Take over from existing worker
+  replaceExisting?: boolean,  // Take over from existing worker
+  taskId?: string             // Claim this specific task (must be in one of `statuses`)
 }
 ```
+
+When `taskId` is provided the priority/order ranking is bypassed — you get the named task or an error. The task must be in one of the requested `statuses`; if it's already assigned to someone else, pass `replaceExisting: true` to take over.
 
 **Returns:**
 ```typescript
