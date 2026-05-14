@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { EpicStatus } from '../types/schema.js';
-import { missingRequired } from '../util/errors.js';
+import { invalidInput, missingRequired } from '../util/errors.js';
 
 export function updateEpicTool(_state: StateManager): ToolDefinition {
   return {
@@ -22,7 +22,18 @@ export function updateEpicTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as {
+      const raw = (args || {}) as Record<string, unknown>;
+      // Proxy auto-injects workerId from MOE_WORKER_ID env into every tools/call;
+      // update_epic doesn't use it, so drop it before strict-field validation.
+      delete raw.workerId;
+      const allowedFields = new Set(['epicId', 'title', 'description', 'architectureNotes', 'epicRails', 'status', 'order']);
+      for (const field of Object.keys(raw)) {
+        if (!allowedFields.has(field)) {
+          throw invalidInput(field, 'is not a supported epic update field');
+        }
+      }
+
+      const params = raw as {
         epicId?: string;
         title?: string;
         description?: string;

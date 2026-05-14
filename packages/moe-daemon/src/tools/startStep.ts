@@ -27,8 +27,8 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
 
-      assertWorkerOwns(task, params.workerId);
-      assertContextFetched(task, params.workerId);
+      assertWorkerOwns(task, params.workerId, 'moe.start_step');
+      assertContextFetched(task, params.workerId, 'moe.start_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no-plan', 'has-plan');
@@ -55,10 +55,8 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       }
       await state.updateTask(task.id, updates, 'STEP_STARTED');
 
-      // Update worker status to CODING
-      if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {
-        await state.updateWorker(task.assignedWorkerId, { status: 'CODING', currentTaskId: task.id });
-      }
+      // Update worker liveness/status to CODING without requiring a worker record to exist.
+      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
 
       // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
       // on the final step. Both are advisory.

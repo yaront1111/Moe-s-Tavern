@@ -2,6 +2,14 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
+import {
+  DEFAULT_TASK_PREVIEW_CHARS,
+  MAX_TASK_PREVIEW_CHARS,
+  normalizeIntegerOption,
+  normalizeTaskDetailMode,
+  taskSummary,
+  type TaskDetailMode,
+} from '../util/taskPayload.js';
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const MIN_SEARCH_LIMIT = 1;
@@ -42,6 +50,17 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           type: 'number',
           description: 'Maximum number of results (default: 20)',
           default: 20
+        },
+        detail: {
+          type: 'string',
+          enum: ['summary', 'full'],
+          description: 'Response detail level. summary returns compact task summaries; full returns full task objects.',
+          default: 'summary'
+        },
+        maxDescriptionChars: {
+          type: 'number',
+          description: 'Maximum description preview length in summary mode (default: 240, max: 2000)',
+          default: DEFAULT_TASK_PREVIEW_CHARS
         }
       },
       additionalProperties: false
@@ -55,6 +74,8 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           assignedWorkerId?: string;
         };
         limit?: number;
+        detail?: TaskDetailMode;
+        maxDescriptionChars?: number;
       };
 
       if (params.query !== undefined && typeof params.query !== 'string') {
@@ -72,6 +93,14 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
         ? DEFAULT_SEARCH_LIMIT
         : Math.trunc(params.limit);
       const limit = Math.max(MIN_SEARCH_LIMIT, Math.min(MAX_SEARCH_LIMIT, limitInput));
+      const detail = normalizeTaskDetailMode(params.detail);
+      const maxDescriptionChars = normalizeIntegerOption(
+        params.maxDescriptionChars,
+        'maxDescriptionChars',
+        DEFAULT_TASK_PREVIEW_CHARS,
+        0,
+        MAX_TASK_PREVIEW_CHARS
+      );
 
       const queryValue = params.query === undefined
         ? null
@@ -115,10 +144,16 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
       results = results.slice(0, limit);
 
       return {
-        tasks: results,
+        tasks: detail === 'full'
+          ? results
+          : results.map(task => taskSummary(task, {
+              includeDescriptionPreview: true,
+              maxDescriptionChars,
+            })),
         totalMatches,
         query: queryValue,
-        filters
+        filters,
+        detail
       };
     }
   };

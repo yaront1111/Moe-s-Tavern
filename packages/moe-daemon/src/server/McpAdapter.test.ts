@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpAdapter, RateLimiter, type JsonRpcRequest, type JsonRpcResponse } from './McpAdapter.js';
 import type { StateManager } from '../state/StateManager.js';
+import { invalidInput, invalidState, notAllowed, notFound } from '../util/errors.js';
 
 // Mock the tools module
 vi.mock('../tools/index.js', () => ({
@@ -71,6 +72,20 @@ describe('McpAdapter', () => {
     mockState = {} as StateManager;
     adapter = new McpAdapter(mockState);
   });
+
+  function installThrowingTool(name: string, error: Error): void {
+    const tools = (adapter as unknown as {
+      tools: Map<string, { name: string; description: string; inputSchema: object; handler: () => Promise<unknown> }>;
+    }).tools;
+    tools.set(name, {
+      name,
+      description: 'throws a configured error',
+      inputSchema: { type: 'object' },
+      handler: vi.fn(async () => {
+        throw error;
+      }),
+    });
+  }
 
   describe('tools/list', () => {
     it('returns list of available tools', async () => {
@@ -174,6 +189,55 @@ describe('McpAdapter', () => {
       expect(response.error?.message).toBe('Tool intentionally failed');
       expect((response.error?.data as { tool: string })?.tool).toBe('moe.failing_tool');
     });
+
+    it('preserves MoeError invalid-input JSON-RPC code without stack data', async () => {
+      installThrowingTool('moe.invalid_tool', invalidInput('taskId', 'must be safe'));
+      const request: JsonRpcRequest = {
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
+        params: { name: 'moe.invalid_tool', arguments: {} },
+      };
+
+      const response = (await adapter.handle(request)) as JsonRpcResponse;
+
+      expect(response.error?.code).toBe(-32602);
+      expect(response.error?.message).toContain('[INVALID_INPUT]');
+      expect(response.error?.data).toEqual({ tool: 'moe.invalid_tool', codeName: 'INVALID_INPUT' });
+      expect(JSON.stringify(response.error?.data)).not.toContain('stack');
+    });
+
+    it('preserves MoeError not-allowed, not-found, and invalid-state JSON-RPC codes', async () => {
+      installThrowingTool('moe.not_allowed_tool', notAllowed('complete_task', 'owned by another worker'));
+      installThrowingTool('moe.not_found_tool', notFound('Task', 'task-missing'));
+      installThrowingTool('moe.invalid_state_tool', invalidState('Task', 'BACKLOG', 'WORKING'));
+
+      const notAllowedResponse = (await adapter.handle({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: { name: 'moe.not_allowed_tool', arguments: {} },
+      })) as JsonRpcResponse;
+      const notFoundResponse = (await adapter.handle({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'tools/call',
+        params: { name: 'moe.not_found_tool', arguments: {} },
+      })) as JsonRpcResponse;
+      const invalidStateResponse = (await adapter.handle({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'tools/call',
+        params: { name: 'moe.invalid_state_tool', arguments: {} },
+      })) as JsonRpcResponse;
+
+      expect(notAllowedResponse.error?.code).toBe(-32003);
+      expect(notAllowedResponse.error?.message).toContain('[NOT_ALLOWED]');
+      expect(notFoundResponse.error?.code).toBe(-32001);
+      expect(notFoundResponse.error?.message).toContain('[TASK_NOT_FOUND]');
+      expect(invalidStateResponse.error?.code).toBe(-32002);
+      expect(invalidStateResponse.error?.message).toContain('[INVALID_STATE]');
+    });
   });
 
   describe('unknown methods', () => {
@@ -193,6 +257,35 @@ describe('McpAdapter', () => {
   });
 
   describe('batch requests', () => {
+    it('rejects oversized batches without executing tool handlers or echoing payloads', async () => {
+      const handler = vi.fn(async () => ({ ok: true }));
+      const tools = (adapter as unknown as {
+        tools: Map<string, { name: string; description: string; inputSchema: object; handler: typeof handler }>;
+      }).tools;
+      tools.set('moe.counted_tool', {
+        name: 'moe.counted_tool',
+        description: 'counts invocations',
+        inputSchema: { type: 'object' },
+        handler,
+      });
+
+      const requests: JsonRpcRequest[] = Array.from({ length: 101 }, (_, idx) => ({
+        jsonrpc: '2.0',
+        id: idx + 1,
+        method: 'tools/call',
+        params: { name: 'moe.counted_tool', arguments: { payload: `item-${idx}` } },
+      }));
+
+      const response = await adapter.handle(requests);
+
+      expect(Array.isArray(response)).toBe(false);
+      const errorResponse = response as JsonRpcResponse;
+      expect(errorResponse.error?.code).toBe(-32000);
+      expect(errorResponse.error?.message).toContain('Batch size limit exceeded');
+      expect(JSON.stringify(errorResponse)).not.toContain('item-100');
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it('handles array of requests', async () => {
       const requests: JsonRpcRequest[] = [
         { jsonrpc: '2.0', id: 1, method: 'tools/list' },
@@ -234,6 +327,86 @@ describe('McpAdapter', () => {
 
       expect(responses[0].error).toBeUndefined();
       expect(responses[1].error).toBeDefined();
+    });
+
+    it('returns compact errors for malformed batch members without dropping later responses', async () => {
+      const requests = [
+        { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+        null,
+        { jsonrpc: '2.0', id: 3, method: 'tools/list' },
+      ] as unknown as JsonRpcRequest[];
+
+      const responses = (await adapter.handle(requests)) as JsonRpcResponse[];
+
+      expect(responses).toHaveLength(3);
+      expect(responses[0].error).toBeUndefined();
+      expect(responses[1].id).toBeNull();
+      expect(responses[1].error?.code).toBe(-32600);
+      expect(responses[1].error?.message).toBe('Invalid Request');
+      expect(JSON.stringify(responses[1])).not.toContain('Cannot read');
+      expect(responses[2].error).toBeUndefined();
+    });
+
+    it('charges rate limiting per request in a batch', async () => {
+      (adapter as unknown as { rateLimiter: RateLimiter | null }).rateLimiter = new RateLimiter(2, 60_000);
+      const requests: JsonRpcRequest[] = [1, 2, 3, 4].map((id) => ({
+        jsonrpc: '2.0',
+        id,
+        method: 'tools/list',
+      }));
+
+      const responses = (await adapter.handle(requests)) as JsonRpcResponse[];
+
+      expect(responses).toHaveLength(4);
+      expect(responses[0].error).toBeUndefined();
+      expect(responses[1].error).toBeUndefined();
+      expect(responses[2].error?.code).toBe(-32000);
+      expect(responses[2].error?.message).toContain('Rate limit exceeded');
+      expect(responses[3].error?.code).toBe(-32000);
+    });
+
+    it('serializes tools/call items in a batch to avoid concurrent state mutation', async () => {
+      let inFlight = 0;
+      let sawConcurrentExecution = false;
+      const completionOrder: string[] = [];
+      const handler = vi.fn(async (args: { label: string }) => {
+        inFlight += 1;
+        if (inFlight > 1) sawConcurrentExecution = true;
+        await Promise.resolve();
+        completionOrder.push(args.label);
+        inFlight -= 1;
+        return { label: args.label };
+      });
+      const tools = (adapter as unknown as {
+        tools: Map<string, { name: string; description: string; inputSchema: object; handler: typeof handler }>;
+      }).tools;
+      tools.set('moe.serial_tool', {
+        name: 'moe.serial_tool',
+        description: 'detects concurrent execution',
+        inputSchema: { type: 'object' },
+        handler,
+      });
+
+      const responses = (await adapter.handle([
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'moe.serial_tool', arguments: { label: 'first' } },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'moe.serial_tool', arguments: { label: 'second' } },
+        },
+      ])) as JsonRpcResponse[];
+
+      expect(responses).toHaveLength(2);
+      expect(responses[0].error).toBeUndefined();
+      expect(responses[1].error).toBeUndefined();
+      expect(sawConcurrentExecution).toBe(false);
+      expect(completionOrder).toEqual(['first', 'second']);
     });
   });
 

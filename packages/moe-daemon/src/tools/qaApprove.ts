@@ -2,6 +2,8 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { resolveMemorySettings } from '../util/memorySettings.js';
+import { logger } from '../util/logger.js';
 
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
@@ -34,6 +36,7 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       }
 
       assertWorkerOwns(task, params.workerId);
+      const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       const updated = await state.updateTask(
         params.taskId,
@@ -41,15 +44,23 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         'QA_APPROVED'
       );
 
+      // Use the captured assignee because updateTask clears assignedWorkerId on
+      // REVIEW -> DONE handoff. touchWorker skips missing worker records.
+      await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
+
       // Post system message to task channel
       try {
         await state.postSystemMessage(params.taskId, 'QA approved — task complete');
       } catch { /* never block tool */ }
 
-      // Auto-extract memory: approvals encode "what worked." Especially valuable
-      // when reopenCount > 0 — the approved fix is now proven, so capture it as
-      // a pattern for future workers facing similar rejections.
-      if (params.workerId) {
+      // Auto-extract memory only for high-signal approvals by default. A
+      // first-pass approval rarely adds reusable knowledge; an approval after a
+      // reopen captures a proven fix and is worth preserving.
+      const memorySettings = resolveMemorySettings(state.project?.settings);
+      const shouldAutoSaveApproval = updated.reopenCount > 0
+        ? memorySettings.autoSave.reopenedApproval
+        : memorySettings.autoSave.firstPassApproval;
+      if (params.workerId && shouldAutoSaveApproval) {
         try {
           const mm = state.getMemoryManager();
           const modified = (updated.implementationPlan || [])
@@ -70,7 +81,10 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
             epicId: updated.epicId,
           });
         } catch (err) {
-          console.warn(`[qaApprove] memory auto-extract failed for ${updated.id}:`, err);
+          logger.warn({
+            taskId: updated.id,
+            error: err instanceof Error ? err.message : String(err),
+          }, 'qaApprove memory auto-extract failed');
         }
       }
 

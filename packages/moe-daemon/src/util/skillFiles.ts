@@ -74,325 +74,6 @@ Tests verify behavior you thought to write. Adversarial review catches behavior 
 ## When to skip
 
 Doc-only changes, single-line config tweaks, trivial typo fixes. For anything touching logic, IO, or state — run the full checklist. It takes three minutes and prevents the kind of bug that costs three days.`,
-  'brainstorming/SKILL.md': `---
-name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
----
-
-# Brainstorming Ideas Into Designs
-
-Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
-
-Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design and get user approval.
-
-<HARD-GATE>
-Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
-</HARD-GATE>
-
-## Anti-Pattern: "This Is Too Simple To Need A Design"
-
-Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.
-
-## Checklist
-
-You MUST work through these items in order:
-
-1. **Explore project context** — check files, docs, recent commits
-2. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
-3. **Propose 2-3 approaches** — with trade-offs and your recommendation
-4. **Present design** — in sections scaled to their complexity, get user approval after each section
-5. **Write design doc** — save it (see Moe integration below for path)
-6. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
-7. **User reviews written spec** — ask user to review the spec file before proceeding
-8. **Transition to implementation** — invoke writing-plans skill to create implementation plan
-
-## Process Flow
-
-\`\`\`dot
-digraph brainstorming {
-    "Explore project context" [shape=box];
-    "Ask clarifying questions" [shape=box];
-    "Propose 2-3 approaches" [shape=box];
-    "Present design sections" [shape=box];
-    "User approves design?" [shape=diamond];
-    "Write design doc" [shape=box];
-    "Spec self-review\\n(fix inline)" [shape=box];
-    "User reviews spec?" [shape=diamond];
-    "Invoke writing-plans skill" [shape=doublecircle];
-
-    "Explore project context" -> "Ask clarifying questions";
-    "Ask clarifying questions" -> "Propose 2-3 approaches";
-    "Propose 2-3 approaches" -> "Present design sections";
-    "Present design sections" -> "User approves design?";
-    "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc" [label="yes"];
-    "Write design doc" -> "Spec self-review\\n(fix inline)";
-    "Spec self-review\\n(fix inline)" -> "User reviews spec?";
-    "User reviews spec?" -> "Write design doc" [label="changes requested"];
-    "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
-}
-\`\`\`
-
-**The terminal state is invoking writing-plans.** Do NOT invoke any other implementation skill from here.
-
-## The Process
-
-**Understanding the idea:**
-
-- Check out the current project state first (files, docs, recent commits)
-- Before asking detailed questions, assess scope: if the request describes multiple independent subsystems (e.g., "build a platform with chat, file storage, billing, and analytics"), flag this immediately. Don't spend questions refining details of a project that needs to be decomposed first.
-- If the project is too large for a single spec, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own spec → plan → implementation cycle.
-- For appropriately-scoped projects, ask questions one at a time to refine the idea
-- Prefer multiple choice questions when possible, but open-ended is fine too
-- Only one question per message - if a topic needs more exploration, break it into multiple questions
-- Focus on understanding: purpose, constraints, success criteria
-
-**Exploring approaches:**
-
-- Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning
-- Lead with your recommended option and explain why
-
-**Presenting the design:**
-
-- Once you believe you understand what you're building, present the design
-- Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
-- Ask after each section whether it looks right so far
-- Cover: architecture, components, data flow, error handling, testing
-- Be ready to go back and clarify if something doesn't make sense
-
-**Design for isolation and clarity:**
-
-- Break the system into smaller units that each have one clear purpose, communicate through well-defined interfaces, and can be understood and tested independently
-- For each unit, you should be able to answer: what does it do, how do you use it, and what does it depend on?
-- Can someone understand what a unit does without reading its internals? Can you change the internals without breaking consumers? If not, the boundaries need work.
-
-**Working in existing codebases:**
-
-- Explore the current structure before proposing changes. Follow existing patterns.
-- Where existing code has problems that affect the work, include targeted improvements as part of the design - the way a good developer improves code they're working in.
-- Don't propose unrelated refactoring. Stay focused on what serves the current goal.
-
-## After the Design
-
-**Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
-
-1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
-2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
-3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
-4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
-
-Fix any issues inline. No need to re-review — just fix and move on.
-
-**User Review Gate:**
-After the spec review loop passes, ask the user to review the written spec before proceeding. Wait for their response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
-
-## Key Principles
-
-- **One question at a time** - Don't overwhelm with multiple questions
-- **Multiple choice preferred** - Easier to answer than open-ended when possible
-- **YAGNI ruthlessly** - Remove unnecessary features from all designs
-- **Explore alternatives** - Always propose 2-3 approaches before settling
-- **Incremental validation** - Present design, get approval before moving on
-- **Be flexible** - Go back and clarify when something doesn't make sense
-
----
-
-## Moe integration
-
-When an architect claims a Moe task with sparse \`acceptanceCriteria\` or vague \`description\`:
-
-- **Don't go straight to \`moe.submit_plan\`.** Run this brainstorming process with the human in chat first (use \`moe.chat_send\` on the task channel).
-- **Save the design doc** to \`docs/specs/<task-id>-<slug>.md\` (this repo's spec convention) and commit. Reference its path in the first step description of \`implementationPlan\` so the worker has the design context.
-- **Then invoke \`moe-planning\` (not the upstream \`writing-plans\` skill)** — \`moe-planning\` is the Moe-flavored equivalent that maps the 8 phases to \`submit_plan\` step lists.
-
-When the task already has clear acceptance criteria and the design space is small, skip brainstorming and go straight to \`moe-planning\`.`,
-  'brainstorming/SOURCE.md': `# Source
-
-Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
-
-- Upstream path: \`skills/brainstorming/SKILL.md\`
-- Upstream commit: \`b55764852ac78870e65c6565fb585b6cd8b3c5c9\`
-- License: MIT (see \`../LICENSE-VENDORED.md\`)
-
-## Local modifications
-
-- Removed the Visual Companion section (browser-based mockup tool not part of Moe today; can be re-introduced once the JetBrains/VS Code panes support a similar surface).
-- Removed the explicit \`frontend-design\`, \`mcp-builder\` skill references (those skills are not part of the Moe skill pack).
-- Renamed \`docs/superpowers/specs/...\` save path to \`docs/specs/<task-id>-<slug>.md\` in the Moe integration footer (matches this repo's docs convention).
-- Re-pointed the next-step skill from \`writing-plans\` to \`moe-planning\` (Moe-flavored equivalent).
-- Appended \`## Moe integration\` footer wiring the skill to \`moe.chat_send\` on the task channel and the \`moe.submit_plan\` flow.`,
-  'dispatching-parallel-agents/SKILL.md': `---
-name: dispatching-parallel-agents
-description: Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies
----
-
-# Dispatching Parallel Agents
-
-## Overview
-
-You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
-
-When you have multiple unrelated failures (different test files, different subsystems, different bugs), investigating them sequentially wastes time. Each investigation is independent and can happen in parallel.
-
-**Core principle:** Dispatch one agent per independent problem domain. Let them work concurrently.
-
-## When to Use
-
-\`\`\`dot
-digraph when_to_use {
-    "Multiple failures?" [shape=diamond];
-    "Are they independent?" [shape=diamond];
-    "Single agent investigates all" [shape=box];
-    "One agent per problem domain" [shape=box];
-    "Can they work in parallel?" [shape=diamond];
-    "Sequential agents" [shape=box];
-    "Parallel dispatch" [shape=box];
-
-    "Multiple failures?" -> "Are they independent?" [label="yes"];
-    "Are they independent?" -> "Single agent investigates all" [label="no - related"];
-    "Are they independent?" -> "Can they work in parallel?" [label="yes"];
-    "Can they work in parallel?" -> "Parallel dispatch" [label="yes"];
-    "Can they work in parallel?" -> "Sequential agents" [label="no - shared state"];
-}
-\`\`\`
-
-**Use when:**
-- 3+ test files failing with different root causes
-- Multiple subsystems broken independently
-- Each problem can be understood without context from others
-- No shared state between investigations
-
-**Don't use when:**
-- Failures are related (fix one might fix others)
-- Need to understand full system state
-- Agents would interfere with each other
-
-## The Pattern
-
-### 1. Identify Independent Domains
-
-Group failures by what's broken:
-- File A tests: Tool approval flow
-- File B tests: Batch completion behavior
-- File C tests: Abort functionality
-
-Each domain is independent - fixing tool approval doesn't affect abort tests.
-
-### 2. Create Focused Agent Tasks
-
-Each agent gets:
-- **Specific scope:** One test file or subsystem
-- **Clear goal:** Make these tests pass
-- **Constraints:** Don't change other code
-- **Expected output:** Summary of what you found and fixed
-
-### 3. Dispatch in Parallel
-
-\`\`\`typescript
-// In Claude Code / AI environment
-Task("Fix agent-tool-abort.test.ts failures")
-Task("Fix batch-completion-behavior.test.ts failures")
-Task("Fix tool-approval-race-conditions.test.ts failures")
-// All three run concurrently
-\`\`\`
-
-### 4. Review and Integrate
-
-When agents return:
-- Read each summary
-- Verify fixes don't conflict
-- Run full test suite
-- Integrate all changes
-
-## Agent Prompt Structure
-
-Good agent prompts are:
-1. **Focused** - One clear problem domain
-2. **Self-contained** - All context needed to understand the problem
-3. **Specific about output** - What should the agent return?
-
-\`\`\`markdown
-Fix the 3 failing tests in src/agents/agent-tool-abort.test.ts:
-
-1. "should abort tool with partial output capture" - expects 'interrupted at' in message
-2. "should handle mixed completed and aborted tools" - fast tool aborted instead of completed
-3. "should properly track pendingToolCount" - expects 3 results but gets 0
-
-These are timing/race condition issues. Your task:
-
-1. Read the test file and understand what each test verifies
-2. Identify root cause - timing issues or actual bugs?
-3. Fix by:
-   - Replacing arbitrary timeouts with event-based waiting
-   - Fixing bugs in abort implementation if found
-   - Adjusting test expectations if testing changed behavior
-
-Do NOT just increase timeouts - find the real issue.
-
-Return: Summary of what you found and what you fixed.
-\`\`\`
-
-## Common Mistakes
-
-**❌ Too broad:** "Fix all the tests" - agent gets lost
-**✅ Specific:** "Fix agent-tool-abort.test.ts" - focused scope
-
-**❌ No context:** "Fix the race condition" - agent doesn't know where
-**✅ Context:** Paste the error messages and test names
-
-**❌ No constraints:** Agent might refactor everything
-**✅ Constraints:** "Do NOT change production code" or "Fix tests only"
-
-**❌ Vague output:** "Fix it" - you don't know what changed
-**✅ Specific:** "Return summary of root cause and changes"
-
-## When NOT to Use
-
-**Related failures:** Fixing one might fix others - investigate together first
-**Need full context:** Understanding requires seeing entire system
-**Exploratory debugging:** You don't know what's broken yet
-**Shared state:** Agents would interfere (editing same files, using same resources)
-
-## Key Benefits
-
-1. **Parallelization** - Multiple investigations happen simultaneously
-2. **Focus** - Each agent has narrow scope, less context to track
-3. **Independence** - Agents don't interfere with each other
-4. **Speed** - 3 problems solved in time of 1
-
-## Verification
-
-After agents return:
-1. **Review each summary** - Understand what changed
-2. **Check for conflicts** - Did agents edit same code?
-3. **Run full suite** - Verify all fixes work together
-4. **Spot check** - Agents can make systematic errors
-
----
-
-## Moe integration
-
-Two flavours of "parallel" in Moe:
-
-1. **Within a single agent session** — use the host's subagent tool (e.g., Claude Code's \`Agent\` / \`Task\` tool) to fan out exploration or independent fixes. Same as the upstream pattern above.
-
-2. **Across Moe workers** — use \`moe.create_task\` to fan a large epic out into smaller independent tasks, each claimable by a separate worker. The architect's plan should explicitly call out which tasks can run in parallel (no shared \`affectedFiles\`, no sequential \`blockedBy\` dependencies).
-
-Pair with \`using-git-worktrees\` so concurrent workers don't trample each other's working tree. The daemon serializes all \`.moe/\` writes — but file edits in \`src/\` are the worker's responsibility, and worktrees give you isolation for free.`,
-  'dispatching-parallel-agents/SOURCE.md': `# Source
-
-Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
-
-- Upstream path: \`skills/dispatching-parallel-agents/SKILL.md\`
-- Upstream commit: \`b55764852ac78870e65c6565fb585b6cd8b3c5c9\`
-- License: MIT (see \`../LICENSE-VENDORED.md\`)
-
-## Local modifications
-
-- Removed the "Real Example from Session" + "Real-World Impact" anecdotes (specific to upstream debugging history).
-- Appended \`## Moe integration\` footer distinguishing within-session subagent fan-out vs cross-worker fan-out via \`moe.create_task\`, and pointing at \`using-git-worktrees\`.`,
   'explore-before-assume/SKILL.md': `---
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
@@ -588,218 +269,86 @@ name: receiving-code-review
 description: Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation
 ---
 
-# Code Review Reception
+# Receiving Code Review
 
-## Overview
+Code review requires technical evaluation, not emotional performance. **Verify before implementing. Ask before assuming. Technical correctness over social comfort.**
 
-Code review requires technical evaluation, not emotional performance.
+## Response pattern
 
-**Core principle:** Verify before implementing. Ask before assuming. Technical correctness over social comfort.
+1. **Read** the complete feedback without reacting.
+2. **Understand** by restating the requirement in your own words (or asking).
+3. **Verify** against codebase reality — open the file, grep for usage.
+4. **Evaluate** — technically sound for THIS codebase?
+5. **Respond** with technical acknowledgment or reasoned pushback.
+6. **Implement** one item at a time, test each.
 
-## The Response Pattern
+## Forbidden phrases
 
-\`\`\`
-WHEN receiving code review feedback:
+NEVER write:
+- "You're absolutely right!" / "Great point!" / "Excellent feedback!" / "Thanks for catching that!"
+- "Let me implement that now" before verification
+- Any gratitude expression
 
-1. READ: Complete feedback without reacting
-2. UNDERSTAND: Restate requirement in own words (or ask)
-3. VERIFY: Check against codebase reality
-4. EVALUATE: Technically sound for THIS codebase?
-5. RESPOND: Technical acknowledgment or reasoned pushback
-6. IMPLEMENT: One item at a time, test each
-\`\`\`
+INSTEAD: restate the requirement, ask clarifying questions, push back with technical reasoning, or just start working. Actions > words. If you catch yourself typing "Thanks", delete it.
 
-## Forbidden Responses
+## Unclear items — STOP
 
-**NEVER:**
-- "You're absolutely right!" (performative)
-- "Great point!" / "Excellent feedback!" (performative)
-- "Let me implement that now" (before verification)
+If any item is unclear, do NOT implement anything yet. Ask for clarification on the unclear items first. Items may be related; partial understanding produces wrong implementations.
 
-**INSTEAD:**
-- Restate the technical requirement
-- Ask clarifying questions
-- Push back with technical reasoning if wrong
-- Just start working (actions > words)
+Wrong: "I'll implement 1,2,3,6 now and ask about 4,5 later."
+Right: "I understand 1,2,3,6. Need clarification on 4 and 5 before proceeding."
 
-## Handling Unclear Feedback
-
-\`\`\`
-IF any item is unclear:
-  STOP - do not implement anything yet
-  ASK for clarification on unclear items
-
-WHY: Items may be related. Partial understanding = wrong implementation.
-\`\`\`
-
-**Example:**
-\`\`\`
-Reviewer: "Fix 1-6"
-You understand 1,2,3,6. Unclear on 4,5.
-
-❌ WRONG: Implement 1,2,3,6 now, ask about 4,5 later
-✅ RIGHT: "I understand items 1,2,3,6. Need clarification on 4 and 5 before proceeding."
-\`\`\`
-
-## Source-Specific Handling
-
-### From a trusted human reviewer
-- Implement after understanding
-- Still ask if scope unclear
-- No performative agreement
-- Skip to action or technical acknowledgment
-
-### From External Reviewers / Bots
-\`\`\`
-BEFORE implementing:
-  1. Check: Technically correct for THIS codebase?
-  2. Check: Breaks existing functionality?
-  3. Check: Reason for current implementation?
-  4. Check: Works on all platforms/versions?
-  5. Check: Does reviewer understand full context?
-
-IF suggestion seems wrong:
-  Push back with technical reasoning
-
-IF can't easily verify:
-  Say so: "I can't verify this without [X]. Should I [investigate/ask/proceed]?"
-
-IF conflicts with prior decisions:
-  Stop and discuss before changing direction.
-\`\`\`
-
-## YAGNI Check for "Professional" Features
-
-\`\`\`
-IF reviewer suggests "implementing properly":
-  grep codebase for actual usage
-
-  IF unused: "This endpoint isn't called. Remove it (YAGNI)?"
-  IF used: Then implement properly
-\`\`\`
-
-## Implementation Order
-
-\`\`\`
-FOR multi-item feedback:
-  1. Clarify anything unclear FIRST
-  2. Then implement in this order:
-     - Blocking issues (breaks, security)
-     - Simple fixes (typos, imports)
-     - Complex fixes (refactoring, logic)
-  3. Test each fix individually
-  4. Verify no regressions
-\`\`\`
-
-## When To Push Back
+## When to push back
 
 Push back when:
-- Suggestion breaks existing functionality
-- Reviewer lacks full context
-- Violates YAGNI (unused feature)
-- Technically incorrect for this stack
-- Legacy/compatibility reasons exist
-- Conflicts with architectural decisions
+- Suggestion breaks existing functionality.
+- Reviewer lacks full context.
+- Violates YAGNI (suggestion targets unused feature).
+- Technically incorrect for this stack.
+- Legacy/compatibility reasons exist.
+- Conflicts with prior architectural decisions.
 
-**How to push back:**
-- Use technical reasoning, not defensiveness
-- Ask specific questions
-- Reference working tests/code
+How: technical reasoning, not defensiveness. Ask specific questions. Reference working tests/code.
 
-## Acknowledging Correct Feedback
+## YAGNI check
 
-When feedback IS correct:
-\`\`\`
-✅ "Fixed. [Brief description of what changed]"
-✅ "Good catch - [specific issue]. Fixed in [location]."
-✅ [Just fix it and show in the code]
+If a reviewer says "implement properly", grep the codebase for actual usage. If unused, push: "This isn't called. Remove it (YAGNI)?" If used, then implement properly.
 
-❌ "You're absolutely right!"
-❌ "Great point!"
-❌ "Thanks for catching that!"
-❌ ANY gratitude expression
-\`\`\`
+## Implementation order
 
-**Why no thanks:** Actions speak. Just fix it. The code itself shows you heard the feedback.
+For multi-item feedback:
+1. Clarify everything unclear FIRST.
+2. Then implement: blocking issues (breaks, security) → simple fixes (typos, imports) → complex fixes (refactoring, logic).
+3. Test each fix individually. Verify no regressions.
 
-**If you catch yourself about to write "Thanks":** DELETE IT. State the fix instead.
+## Acknowledging correct feedback
 
-## Gracefully Correcting Your Pushback
+State the fix factually:
+- "Fixed. [Brief description]."
+- "Good catch — [specific issue]. Fixed in [location]."
+- Or just fix it and let the code show you heard.
 
-If you pushed back and were wrong:
-\`\`\`
-✅ "You were right - I checked [X] and it does [Y]. Implementing now."
-✅ "Verified this and you're correct. My initial understanding was wrong because [reason]. Fixing."
+No gratitude. No performative agreement.
 
-❌ Long apology
-❌ Defending why you pushed back
-❌ Over-explaining
-\`\`\`
+## Correcting your own pushback
 
-State the correction factually and move on.
-
-## Common Mistakes
-
-| Mistake | Fix |
-|---------|-----|
-| Performative agreement | State requirement or just act |
-| Blind implementation | Verify against codebase first |
-| Batch without testing | One at a time, test each |
-| Assuming reviewer is right | Check if breaks things |
-| Avoiding pushback | Technical correctness > comfort |
-| Partial implementation | Clarify all items first |
-| Can't verify, proceed anyway | State limitation, ask for direction |
-
-## Real Examples
-
-**Performative Agreement (Bad):**
-\`\`\`
-Reviewer: "Remove legacy code"
-❌ "You're absolutely right! Let me remove that..."
-\`\`\`
-
-**Technical Verification (Good):**
-\`\`\`
-Reviewer: "Remove legacy code"
-✅ "Checking... build target is 10.15+, this API needs 13+. Need legacy for backward compat. Current impl has wrong bundle ID - fix it or drop pre-13 support?"
-\`\`\`
-
-**YAGNI (Good):**
-\`\`\`
-Reviewer: "Implement proper metrics tracking with database, date filters, CSV export"
-✅ "Grepped codebase - nothing calls this endpoint. Remove it (YAGNI)? Or is there usage I'm missing?"
-\`\`\`
-
-**Unclear Item (Good):**
-\`\`\`
-Reviewer: "Fix items 1-6"
-You understand 1,2,3,6. Unclear on 4,5.
-✅ "Understand 1,2,3,6. Need clarification on 4 and 5 before implementing."
-\`\`\`
-
-## The Bottom Line
-
-**External feedback = suggestions to evaluate, not orders to follow.**
-
-Verify. Question. Then implement.
-
-No performative agreement. Technical rigor always.
+If you pushed back and were wrong: "You were right — I checked X and it does Y. Implementing now." No long apology, no defending, no over-explaining.
 
 ---
 
 ## Moe integration
 
-This skill loads automatically when Moe's \`nextAction\` returns \`recommendedSkill: receiving-code-review\` — typically after \`moe.qa_reject\` (the task is back in \`WORKING\` with \`reopenCount > 0\` and \`rejectionDetails\` populated).
+This skill loads when \`nextAction.recommendedSkill = receiving-code-review\` — typically after \`moe.qa_reject\` (task is back in WORKING with \`reopenCount > 0\` and \`rejectionDetails\` populated).
 
 When you receive a QA rejection:
 
 1. **Read all of \`rejectionDetails\` first.** Don't start fixing until you understand every item.
 2. **Verify each item against the diff.** If QA points at a file/line, open it and read for yourself.
-3. **If an item seems wrong**, push back via \`moe.add_comment\` on the task channel with technical reasoning. Don't silently ignore it; don't silently implement it.
-4. **Implement in priority order** (security/correctness > simple fixes > refactoring) and use \`moe.start_step\` per item — don't batch unrelated fixes into one commit.
-5. **After fixes, run the regression suite** (\`regression-check\` skill) and put the actual results in your \`moe.complete_task\` summary.
+3. **If an item seems wrong**, push back via \`moe.add_comment\` on the task channel with technical reasoning. Don't silently ignore; don't silently implement.
+4. **Implement in priority order** (security/correctness > simple fixes > refactoring). Use one \`moe.start_step\` per item — don't batch unrelated fixes.
+5. **After fixes, run regression-check** and put actual results in your \`moe.complete_task\` summary.
 
-Never include performative gratitude in \`moe.add_comment\` ("thanks for the catch!"). State what you changed.`,
+Never include performative gratitude in \`moe.add_comment\`. State what you changed.`,
   'receiving-code-review/SOURCE.md': `# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
@@ -872,263 +421,75 @@ description: Use when encountering any bug, test failure, or unexpected behavior
 
 # Systematic Debugging
 
-## Overview
-
-Random fixes waste time and create new bugs. Quick patches mask underlying issues.
-
-**Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.
-
-**Violating the letter of this process is violating the spirit of debugging.**
-
 ## The Iron Law
 
 \`\`\`
 NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
 \`\`\`
 
-If you haven't completed Phase 1, you cannot propose fixes.
+Symptom fixes mask underlying issues and create new bugs. If you haven't completed Phase 1, you cannot propose a fix.
 
-## When to Use
+## When To Use
 
-Use for ANY technical issue:
-- Test failures
-- Bugs in production
-- Unexpected behavior
-- Performance problems
-- Build failures
-- Integration issues
-
-**Use this ESPECIALLY when:**
-- Under time pressure (emergencies make guessing tempting)
-- "Just one quick fix" seems obvious
-- You've already tried multiple fixes
-- Previous fix didn't work
-- You don't fully understand the issue
-
-**Don't skip when:**
-- Issue seems simple (simple bugs have root causes too)
-- You're in a hurry (rushing guarantees rework)
-- Manager wants it fixed NOW (systematic is faster than thrashing)
+Any bug, test failure, build break, integration issue, or unexpected behaviour. Especially under time pressure — systematic is faster than guess-and-check thrashing.
 
 ## The Four Phases
 
-You MUST complete each phase before proceeding to the next.
+Complete each phase before the next. No skipping.
 
-### Phase 1: Root Cause Investigation
+### Phase 1 — Root Cause Investigation
 
-**BEFORE attempting ANY fix:**
+- Read every error message and stack trace fully. Note line numbers, file paths, error codes.
+- Reproduce consistently. Document exact steps. If you can't reproduce, gather more data — don't guess.
+- Check recent changes: \`git diff\`, recent commits, new dependencies, config changes, environmental differences.
+- Multi-component systems: instrument every component boundary (log inputs, log outputs, verify env/config propagation, check state per layer). Run once, identify which component breaks, then investigate that one.
+- Trace data flow upward: where does the bad value originate? Fix at the source, not the symptom.
 
-1. **Read Error Messages Carefully**
-   - Don't skip past errors or warnings
-   - They often contain the exact solution
-   - Read stack traces completely
-   - Note line numbers, file paths, error codes
+### Phase 2 — Pattern Analysis
 
-2. **Reproduce Consistently**
-   - Can you trigger it reliably?
-   - What are the exact steps?
-   - Does it happen every time?
-   - If not reproducible → gather more data, don't guess
+- Find a working example of the same pattern in this codebase.
+- Read reference implementations completely (no skimming).
+- List every difference between working and broken — however small. Don't dismiss "that can't matter".
+- Map the dependencies, settings, and assumptions the working example needs.
 
-3. **Check Recent Changes**
-   - What changed that could cause this?
-   - Git diff, recent commits
-   - New dependencies, config changes
-   - Environmental differences
+### Phase 3 — Hypothesis & Testing
 
-4. **Gather Evidence in Multi-Component Systems**
+- State one specific hypothesis: "I think X is the root cause because Y." Write it down.
+- Test minimally — the smallest possible change to confirm or refute.
+- One variable at a time. Don't bundle fixes.
+- Worked? → Phase 4. Didn't work? → Form a NEW hypothesis. Don't pile fixes on top.
+- Don't know? Say so. Don't pretend.
 
-   **WHEN system has multiple components (CI → build → signing, API → service → database):**
+### Phase 4 — Implementation
 
-   **BEFORE proposing fixes, add diagnostic instrumentation:**
-   \`\`\`
-   For EACH component boundary:
-     - Log what data enters component
-     - Log what data exits component
-     - Verify environment/config propagation
-     - Check state at each layer
+- Write a failing test that reproduces the bug (use \`test-driven-development\`).
+- Apply ONE fix that addresses the root cause. No "while I'm here" improvements.
+- Verify: test passes, no other tests broken, issue actually resolved (use \`verification-before-completion\`).
+- If the fix fails: STOP. Count attempts. <3: return to Phase 1 with the new information. ≥3: question the architecture before any further attempt — repeated failures often signal a wrong design, not a missing fix. Discuss with the human.
 
-   Run once to gather evidence showing WHERE it breaks
-   THEN analyze evidence to identify failing component
-   THEN investigate that specific component
-   \`\`\`
+## Red Flags — STOP and return to Phase 1
 
-5. **Trace Data Flow**
-
-   **WHEN error is deep in call stack:**
-
-   - Where does bad value originate?
-   - What called this with bad value?
-   - Keep tracing up until you find the source
-   - Fix at source, not at symptom
-
-### Phase 2: Pattern Analysis
-
-**Find the pattern before fixing:**
-
-1. **Find Working Examples**
-   - Locate similar working code in same codebase
-   - What works that's similar to what's broken?
-
-2. **Compare Against References**
-   - If implementing pattern, read reference implementation COMPLETELY
-   - Don't skim - read every line
-   - Understand the pattern fully before applying
-
-3. **Identify Differences**
-   - What's different between working and broken?
-   - List every difference, however small
-   - Don't assume "that can't matter"
-
-4. **Understand Dependencies**
-   - What other components does this need?
-   - What settings, config, environment?
-   - What assumptions does it make?
-
-### Phase 3: Hypothesis and Testing
-
-**Scientific method:**
-
-1. **Form Single Hypothesis**
-   - State clearly: "I think X is the root cause because Y"
-   - Write it down
-   - Be specific, not vague
-
-2. **Test Minimally**
-   - Make the SMALLEST possible change to test hypothesis
-   - One variable at a time
-   - Don't fix multiple things at once
-
-3. **Verify Before Continuing**
-   - Did it work? Yes → Phase 4
-   - Didn't work? Form NEW hypothesis
-   - DON'T add more fixes on top
-
-4. **When You Don't Know**
-   - Say "I don't understand X"
-   - Don't pretend to know
-   - Ask for help
-   - Research more
-
-### Phase 4: Implementation
-
-**Fix the root cause, not the symptom:**
-
-1. **Create Failing Test Case**
-   - Simplest possible reproduction
-   - Automated test if possible
-   - One-off test script if no framework
-   - MUST have before fixing
-   - Use the \`test-driven-development\` skill for writing proper failing tests
-
-2. **Implement Single Fix**
-   - Address the root cause identified
-   - ONE change at a time
-   - No "while I'm here" improvements
-   - No bundled refactoring
-
-3. **Verify Fix**
-   - Test passes now?
-   - No other tests broken?
-   - Issue actually resolved?
-
-4. **If Fix Doesn't Work**
-   - STOP
-   - Count: How many fixes have you tried?
-   - If < 3: Return to Phase 1, re-analyze with new information
-   - **If ≥ 3: STOP and question the architecture (step 5 below)**
-   - DON'T attempt Fix #4 without architectural discussion
-
-5. **If 3+ Fixes Failed: Question Architecture**
-
-   **Pattern indicating architectural problem:**
-   - Each fix reveals new shared state/coupling/problem in different place
-   - Fixes require "massive refactoring" to implement
-   - Each fix creates new symptoms elsewhere
-
-   **STOP and question fundamentals:**
-   - Is this pattern fundamentally sound?
-   - Are we "sticking with it through sheer inertia"?
-   - Should we refactor architecture vs. continue fixing symptoms?
-
-   **Discuss with your human partner before attempting more fixes**
-
-   This is NOT a failed hypothesis - this is a wrong architecture.
-
-## Red Flags - STOP and Follow Process
-
-If you catch yourself thinking:
-- "Quick fix for now, investigate later"
-- "Just try changing X and see if it works"
-- "Add multiple changes, run tests"
-- "Skip the test, I'll manually verify"
-- "It's probably X, let me fix that"
-- "I don't fully understand but this might work"
-- "Pattern says X but I'll adapt it differently"
-- "Here are the main problems: [lists fixes without investigation]"
-- Proposing solutions before tracing data flow
-- **"One more fix attempt" (when already tried 2+)**
-- **Each fix reveals new problem in different place**
-
-**ALL of these mean: STOP. Return to Phase 1.**
-
-**If 3+ fixes failed:** Question the architecture (see Phase 4.5)
-
-## Common Rationalizations
-
-| Excuse | Reality |
-|--------|---------|
-| "Issue is simple, don't need process" | Simple issues have root causes too. Process is fast for simple bugs. |
-| "Emergency, no time for process" | Systematic debugging is FASTER than guess-and-check thrashing. |
-| "Just try this first, then investigate" | First fix sets the pattern. Do it right from the start. |
-| "I'll write test after confirming fix works" | Untested fixes don't stick. Test first proves it. |
-| "Multiple fixes at once saves time" | Can't isolate what worked. Causes new bugs. |
-| "Reference too long, I'll adapt the pattern" | Partial understanding guarantees bugs. Read it completely. |
-| "I see the problem, let me fix it" | Seeing symptoms ≠ understanding root cause. |
-| "One more fix attempt" (after 2+ failures) | 3+ failures = architectural problem. Question pattern, don't fix again. |
-
-## Quick Reference
-
-| Phase | Key Activities | Success Criteria |
-|-------|---------------|------------------|
-| **1. Root Cause** | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY |
-| **2. Pattern** | Find working examples, compare | Identify differences |
-| **3. Hypothesis** | Form theory, test minimally | Confirmed or new hypothesis |
-| **4. Implementation** | Create test, fix, verify | Bug resolved, tests pass |
-
-## When Process Reveals "No Root Cause"
-
-If systematic investigation reveals issue is truly environmental, timing-dependent, or external:
-
-1. You've completed the process
-2. Document what you investigated
-3. Implement appropriate handling (retry, timeout, error message)
-4. Add monitoring/logging for future investigation
-
-**But:** 95% of "no root cause" cases are incomplete investigation.
-
-## Real-World Impact
-
-From debugging sessions:
-- Systematic approach: 15-30 minutes to fix
-- Random fixes approach: 2-3 hours of thrashing
-- First-time fix rate: 95% vs 40%
-- New bugs introduced: Near zero vs common
+- "Quick fix now, investigate later."
+- "Just try changing X and see."
+- Multiple changes at once.
+- "Skip the test, I'll manually verify."
+- "It's probably X."
+- Proposing solutions before tracing data flow.
+- "One more attempt" after 2+ failures.
+- Each new fix surfacing a new problem in a different place — architectural smell.
 
 ---
 
 ## Moe integration
 
-Use this skill when:
+Trigger this skill when:
 
 - A worker repeatedly fails the same step.
-- A task lands in \`BLOCKED\` (set via \`moe.set_task_status\`) for a non-trivial reason.
-- A \`qa_reject\` returns with a bug-shaped \`rejectionDetails\` (not a "missing test" or "missing doc").
+- A task lands in \`BLOCKED\` for a non-trivial reason.
+- A \`qa_reject\` returns bug-shaped \`rejectionDetails\` (not "missing test" or "missing doc").
 - A worker is reopened (\`reopenCount > 0\`).
 
-Do not propose a fix in \`moe.complete_step\` until you've completed Phase 1 of this skill. If you cannot find the root cause, call \`moe.report_blocked\` with what you investigated — that's better than a guessed fix that wastes another QA round-trip.
-
-Pair with \`test-driven-development\` for the Phase 4.1 failing-test step, and \`verification-before-completion\` for the Phase 4.3 verify step.`,
+Do not propose a fix in \`moe.complete_step\` until Phase 1 is complete. If you cannot find the root cause, call \`moe.report_blocked\` with what you investigated — better than a guessed fix that wastes another QA round-trip.`,
   'systematic-debugging/SOURCE.md': `# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
@@ -1151,384 +512,71 @@ description: Use when implementing any feature or bugfix, before writing impleme
 
 # Test-Driven Development (TDD)
 
-## Overview
-
-Write the test first. Watch it fail. Write minimal code to pass.
-
-**Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
-
-**Violating the letter of the rules is violating the spirit of the rules.**
-
-## When to Use
-
-**Always:**
-- New features
-- Bug fixes
-- Refactoring
-- Behavior changes
-
-**Exceptions (ask your human partner):**
-- Throwaway prototypes
-- Generated code
-- Configuration files
-
-Thinking "skip TDD just this once"? Stop. That's rationalization.
-
 ## The Iron Law
 
 \`\`\`
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
 \`\`\`
 
-Write code before the test? Delete it. Start over.
-
-**No exceptions:**
-- Don't keep it as "reference"
-- Don't "adapt" it while writing tests
-- Don't look at it
-- Delete means delete
-
-Implement fresh from tests. Period.
+If you wrote code first, delete it and start over. Don't keep it as "reference" — you'll adapt it, which is testing-after, which is not TDD.
 
 ## Red-Green-Refactor
 
-\`\`\`dot
-digraph tdd_cycle {
-    rankdir=LR;
-    red [label="RED\\nWrite failing test", shape=box, style=filled, fillcolor="#ffcccc"];
-    verify_red [label="Verify fails\\ncorrectly", shape=diamond];
-    green [label="GREEN\\nMinimal code", shape=box, style=filled, fillcolor="#ccffcc"];
-    verify_green [label="Verify passes\\nAll green", shape=diamond];
-    refactor [label="REFACTOR\\nClean up", shape=box, style=filled, fillcolor="#ccccff"];
-    next [label="Next", shape=ellipse];
+### RED — Write a failing test
+- One behaviour, clear name (no "and"), real code (mocks only when unavoidable).
+- Assert specific values, not truthiness. Mutation-resistant: if a one-character change to production code wouldn't fail a test, the test isn't testing.
+  - Bad: \`assert(result)\`, \`expect(items).toBeTruthy()\`, \`expect(fn).not.toThrow()\`
+  - Good: \`expect(result.status).toBe('completed')\`, \`expect(items).toEqual(['a','b','c'])\`
 
-    red -> verify_red;
-    verify_red -> green [label="yes"];
-    verify_red -> red [label="wrong\\nfailure"];
-    green -> verify_green;
-    verify_green -> refactor [label="yes"];
-    verify_green -> green [label="no"];
-    refactor -> verify_green [label="stay\\ngreen"];
-    verify_green -> next;
-    next -> red;
-}
-\`\`\`
+### Verify RED — watch it fail (mandatory)
+Run the test. Confirm: it fails (not errors), the failure message matches what you expect, it fails because the feature is missing (not a typo).
 
-### RED - Write Failing Test
+If it passes, you're testing existing behaviour — fix the test. If it errors, fix the error and re-run until it fails for the right reason.
 
-Write one minimal test showing what should happen.
+### GREEN — minimal code
+Simplest code that passes. No options bag, no extra branches, no "while I'm here" cleanup.
 
-<Good>
-\`\`\`typescript
-test('retries failed operations 3 times', async () => {
-  let attempts = 0;
-  const operation = () => {
-    attempts++;
-    if (attempts < 3) throw new Error('fail');
-    return 'success';
-  };
+### Verify GREEN — watch it pass (mandatory)
+Test passes, other tests still pass, output pristine. If a test fails: fix the code, not the test.
 
-  const result = await retryOperation(operation);
+### REFACTOR — clean up while green
+Remove duplication, improve names, extract helpers. No new behaviour. Tests stay green.
 
-  expect(result).toBe('success');
-  expect(attempts).toBe(3);
-});
-\`\`\`
-Clear name, tests real behavior, one thing
-</Good>
+## When To Use
 
-<Bad>
-\`\`\`typescript
-test('retry works', async () => {
-  const mock = jest.fn()
-    .mockRejectedValueOnce(new Error())
-    .mockRejectedValueOnce(new Error())
-    .mockResolvedValueOnce('success');
-  await retryOperation(mock);
-  expect(mock).toHaveBeenCalledTimes(3);
-});
-\`\`\`
-Vague name, tests mock not code
-</Bad>
+Always: new features, bug fixes, refactors, behaviour changes. Exceptions (ask first): throwaway prototypes, generated code, config files. "Just this once" is rationalization.
 
-**Requirements:**
-- One behavior
-- Clear name
-- Real code (no mocks unless unavoidable)
+## Bug-fix Pattern
 
-### Verify RED - Watch It Fail
-
-**MANDATORY. Never skip.**
-
-\`\`\`bash
-npm test path/to/test.test.ts
-\`\`\`
-
-Confirm:
-- Test fails (not errors)
-- Failure message is expected
-- Fails because feature missing (not typos)
-
-**Test passes?** You're testing existing behavior. Fix test.
-
-**Test errors?** Fix error, re-run until it fails correctly.
-
-### GREEN - Minimal Code
-
-Write simplest code to pass the test.
-
-<Good>
-\`\`\`typescript
-async function retryOperation<T>(fn: () => Promise<T>): Promise<T> {
-  for (let i = 0; i < 3; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      if (i === 2) throw e;
-    }
-  }
-  throw new Error('unreachable');
-}
-\`\`\`
-Just enough to pass
-</Good>
-
-<Bad>
-\`\`\`typescript
-async function retryOperation<T>(
-  fn: () => Promise<T>,
-  options?: {
-    maxRetries?: number;
-    backoff?: 'linear' | 'exponential';
-    onRetry?: (attempt: number) => void;
-  }
-): Promise<T> {
-  // YAGNI
-}
-\`\`\`
-Over-engineered
-</Bad>
-
-Don't add features, refactor other code, or "improve" beyond the test.
-
-### Verify GREEN - Watch It Pass
-
-**MANDATORY.**
-
-\`\`\`bash
-npm test path/to/test.test.ts
-\`\`\`
-
-Confirm:
-- Test passes
-- Other tests still pass
-- Output pristine (no errors, warnings)
-
-**Test fails?** Fix code, not test.
-
-**Other tests fail?** Fix now.
-
-### REFACTOR - Clean Up
-
-After green only:
-- Remove duplication
-- Improve names
-- Extract helpers
-
-Keep tests green. Don't add behavior.
-
-### Repeat
-
-Next failing test for next feature.
-
-## Good Tests
-
-| Quality | Good | Bad |
-|---------|------|-----|
-| **Minimal** | One thing. "and" in name? Split it. | \`test('validates email and domain and whitespace')\` |
-| **Clear** | Name describes behavior | \`test('test1')\` |
-| **Shows intent** | Demonstrates desired API | Obscures what code should do |
-
-## Mutation-Resistant Assertions
-
-Assert specific values, not truthiness. Tests that pass when code does nothing are worse than no tests.
-
-| Bad | Good |
-|-----|------|
-| \`assert(result)\` | \`assertEquals('completed', result.status)\` |
-| \`expect(items).toBeTruthy()\` | \`expect(items).toEqual(['a','b','c'])\` |
-| \`expect(fn).not.toThrow()\` | \`expect(fn()).toBe(expectedValue)\` |
-
-If a one-character change to your production code wouldn't make any test fail, your tests aren't doing their job.
-
-## Why Order Matters
-
-**"I'll write tests after to verify it works"**
-
-Tests written after code pass immediately. Passing immediately proves nothing:
-- Might test wrong thing
-- Might test implementation, not behavior
-- Might miss edge cases you forgot
-- You never saw it catch the bug
-
-Test-first forces you to see the test fail, proving it actually tests something.
-
-**"I already manually tested all the edge cases"**
-
-Manual testing is ad-hoc. You think you tested everything but:
-- No record of what you tested
-- Can't re-run when code changes
-- Easy to forget cases under pressure
-- "It worked when I tried it" ≠ comprehensive
-
-Automated tests are systematic. They run the same way every time.
-
-**"Deleting X hours of work is wasteful"**
-
-Sunk cost fallacy. The time is already gone. Your choice now:
-- Delete and rewrite with TDD (X more hours, high confidence)
-- Keep it and add tests after (30 min, low confidence, likely bugs)
-
-The "waste" is keeping code you can't trust. Working code without real tests is technical debt.
-
-**"TDD is dogmatic, being pragmatic means adapting"**
-
-TDD IS pragmatic:
-- Finds bugs before commit (faster than debugging after)
-- Prevents regressions (tests catch breaks immediately)
-- Documents behavior (tests show how to use code)
-- Enables refactoring (change freely, tests catch breaks)
-
-"Pragmatic" shortcuts = debugging in production = slower.
-
-**"Tests after achieve the same goals - it's spirit not ritual"**
-
-No. Tests-after answer "What does this do?" Tests-first answer "What should this do?"
-
-Tests-after are biased by your implementation. You test what you built, not what's required. You verify remembered edge cases, not discovered ones.
-
-Tests-first force edge case discovery before implementing. Tests-after verify you remembered everything (you didn't).
-
-30 minutes of tests after ≠ TDD. You get coverage, lose proof tests work.
-
-## Common Rationalizations
-
-| Excuse | Reality |
-|--------|---------|
-| "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Tests after achieve same goals" | Tests-after = "what does this do?" Tests-first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic. No record, can't re-run. |
-| "Deleting X hours is wasteful" | Sunk cost fallacy. Keeping unverified code is technical debt. |
-| "Keep as reference, write tests first" | You'll adapt it. That's testing after. Delete means delete. |
-| "Need to explore first" | Fine. Throw away exploration, start with TDD. |
-| "Test hard = design unclear" | Listen to test. Hard to test = hard to use. |
-| "TDD will slow me down" | TDD faster than debugging. Pragmatic = test-first. |
-| "Manual test faster" | Manual doesn't prove edge cases. You'll re-test every change. |
-| "Existing code has no tests" | You're improving it. Add tests for existing code. |
-
-## Red Flags - STOP and Start Over
-
-- Code before test
-- Test after implementation
-- Test passes immediately
-- Can't explain why test failed
-- Tests added "later"
-- Rationalizing "just this once"
-- "I already manually tested it"
-- "Tests after achieve the same purpose"
-- "It's about spirit not ritual"
-- "Keep as reference" or "adapt existing code"
-- "Already spent X hours, deleting is wasteful"
-- "TDD is dogmatic, I'm being pragmatic"
-- "This is different because..."
-
-**All of these mean: Delete code. Start over with TDD.**
-
-## Example: Bug Fix
-
-**Bug:** Empty email accepted
-
-**RED**
-\`\`\`typescript
-test('rejects empty email', async () => {
-  const result = await submitForm({ email: '' });
-  expect(result.error).toBe('Email required');
-});
-\`\`\`
-
-**Verify RED**
-\`\`\`bash
-$ npm test
-FAIL: expected 'Email required', got undefined
-\`\`\`
-
-**GREEN**
-\`\`\`typescript
-function submitForm(data: FormData) {
-  if (!data.email?.trim()) {
-    return { error: 'Email required' };
-  }
-  // ...
-}
-\`\`\`
-
-**Verify GREEN**
-\`\`\`bash
-$ npm test
-PASS
-\`\`\`
-
-**REFACTOR**
-Extract validation for multiple fields if needed.
+Bug found → write a failing test that reproduces it → run → see it fail → fix → run → see it pass. Never fix a bug without a test.
 
 ## Verification Checklist
 
-Before marking work complete:
+- [ ] Every new function/method has a test.
+- [ ] Watched each test fail before implementing.
+- [ ] Each test failed for the expected reason.
+- [ ] Wrote minimal code to pass.
+- [ ] All tests pass and output is pristine.
+- [ ] Edge cases and errors covered.
 
-- [ ] Every new function/method has a test
-- [ ] Watched each test fail before implementing
-- [ ] Each test failed for expected reason (feature missing, not typo)
-- [ ] Wrote minimal code to pass each test
-- [ ] All tests pass
-- [ ] Output pristine (no errors, warnings)
-- [ ] Tests use real code (mocks only if unavoidable)
-- [ ] Edge cases and errors covered
-
-Can't check all boxes? You skipped TDD. Start over.
+If you can't tick all boxes, you skipped TDD — start over.
 
 ## When Stuck
 
-| Problem | Solution |
-|---------|----------|
-| Don't know how to test | Write wished-for API. Write assertion first. Ask your human partner. |
-| Test too complicated | Design too complicated. Simplify interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
-| Test setup huge | Extract helpers. Still complex? Simplify design. |
-
-## Debugging Integration
-
-Bug found? Write failing test reproducing it. Follow TDD cycle. Test proves fix and prevents regression.
-
-Never fix bugs without a test.
-
-## Final Rule
-
-\`\`\`
-Production code → test exists and failed first
-Otherwise → not TDD
-\`\`\`
-
-No exceptions without your human partner's permission.
+| Problem | Move |
+|---|---|
+| Don't know how to test | Write the wished-for API as the test, then build to it. |
+| Test too complicated | Design too complicated — simplify the interface. |
+| Need to mock everything | Code too coupled — use dependency injection. |
+| Test setup huge | Extract helpers; if still huge, simplify the design. |
 
 ---
 
 ## Moe integration
 
-In a Moe session:
 - Apply this discipline within each \`moe.start_step\` → implement → \`moe.complete_step\` cycle on test-touching steps.
-- The architect should plan the failing test as a separate step before the implementation step (see the \`moe-planning\` skill, Phase 3).
-- Before \`moe.complete_task\`, pair with the \`verification-before-completion\` skill — capture the actual test run output (count + pass/fail) in your \`complete_step\` summary so QA has evidence rather than a claim.`,
+- The architect should plan the failing test as a separate step before the implementation step (see \`moe-planning\` Phase 3).
+- Before \`moe.complete_task\`, pair with \`verification-before-completion\` — capture the actual test-run output (count + pass/fail) in your \`complete_step\` summary so QA has evidence rather than a claim.`,
   'test-driven-development/SOURCE.md': `# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
@@ -1929,139 +977,87 @@ description: Use when you have a spec or requirements for a multi-step task, bef
 
 # Writing Plans
 
-## Overview
+Write plans assuming the engineer has zero context for our codebase. Document everything they need: which files to touch, code blocks per step, exact commands with expected output, what to test.
 
-Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
+DRY. YAGNI. TDD. Frequent commits.
 
-Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
+## Scope check
 
-**Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+If the spec covers multiple independent subsystems, suggest breaking it into one plan per subsystem. Each plan should produce working, testable software on its own.
 
-## Scope Check
+## File structure
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+Before defining tasks, map files: which created, which modified, what each is responsible for. Smaller focused files over large ones. Files that change together live together. Follow existing codebase patterns — don't unilaterally restructure.
 
-## File Structure
+## Bite-sized tasks
 
-Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in.
+Each step is one action (2-5 minutes):
+- Write the failing test
+- Run it to confirm it fails
+- Write minimal code to pass
+- Run again to confirm it passes
+- Commit
 
-- Design units with clear boundaries and well-defined interfaces. Each file should have one clear responsibility.
-- You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
-- Files that change together should live together. Split by responsibility, not by technical layer.
-- In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure - but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
-
-This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently.
-
-## Bite-Sized Task Granularity
-
-**Each step is one action (2-5 minutes):**
-- "Write the failing test" - step
-- "Run it to make sure it fails" - step
-- "Implement the minimal code to make the test pass" - step
-- "Run the tests and make sure they pass" - step
-- "Commit" - step
-
-## Plan Document Header
-
-**Every plan MUST start with this header:**
+## Plan header (every plan)
 
 \`\`\`markdown
 # [Feature Name] Implementation Plan
-
-**Goal:** [One sentence describing what this builds]
-
-**Architecture:** [2-3 sentences about approach]
-
-**Tech Stack:** [Key technologies/libraries]
-
+**Goal:** [one sentence]
+**Architecture:** [2-3 sentences]
+**Tech Stack:** [key technologies]
 ---
 \`\`\`
 
-## Task Structure
+## Task structure
 
-\`\`\`\`markdown
+\`\`\`markdown
 ### Task N: [Component Name]
-
 **Files:**
 - Create: \`exact/path/to/file.py\`
-- Modify: \`exact/path/to/existing.py:123-145\`
-- Test: \`tests/exact/path/to/test.py\`
+- Modify: \`exact/path/existing.py:123-145\`
+- Test: \`tests/exact/path/test.py\`
 
-- [ ] **Step 1: Write the failing test**
-
-\`\`\`python
-def test_specific_behavior():
-    result = function(input)
-    assert result == expected
+- [ ] Step 1: Write the failing test
+  \`\`\`python
+  def test_specific_behavior(): ...
+  \`\`\`
+- [ ] Step 2: Run test, expect FAIL with "<reason>"
+- [ ] Step 3: Write minimal implementation (code block)
+- [ ] Step 4: Run test, expect PASS
+- [ ] Step 5: Commit (exact \`git add\` + commit message)
 \`\`\`
 
-- [ ] **Step 2: Run test to verify it fails**
+## No placeholders
 
-Run: \`pytest tests/path/test.py::test_name -v\`
-Expected: FAIL with "function not defined"
-
-- [ ] **Step 3: Write minimal implementation**
-
-\`\`\`python
-def function(input):
-    return expected
-\`\`\`
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: \`pytest tests/path/test.py::test_name -v\`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-\`\`\`bash
-git add tests/path/test.py src/path/file.py
-git commit -m "feat: add specific feature"
-\`\`\`
-\`\`\`\`
-
-## No Placeholders
-
-Every step must contain the actual content an engineer needs. These are **plan failures** — never write them:
+These are plan failures — never write them:
 - "TBD", "TODO", "implement later", "fill in details"
-- "Add appropriate error handling" / "add validation" / "handle edge cases"
-- "Write tests for the above" (without actual test code)
-- "Similar to Task N" (repeat the code — the engineer may be reading tasks out of order)
-- Steps that describe what to do without showing how (code blocks required for code steps)
-- References to types, functions, or methods not defined in any task
+- "Add appropriate error handling" / "handle edge cases"
+- "Write tests for the above" with no actual test code
+- "Similar to Task N" — repeat the code; the engineer may read tasks out of order
+- Steps that say what without showing how (code blocks required for code steps)
 
-## Remember
-- Exact file paths always
-- Complete code in every step — if a step changes code, show the code
-- Exact commands with expected output
-- DRY, YAGNI, TDD, frequent commits
+Every step contains the actual content the engineer needs.
 
-## Self-Review
+## Self-review
 
-After writing the complete plan, look at the spec with fresh eyes and check the plan against it. This is a checklist you run yourself — not a subagent dispatch.
+After writing, re-read the spec with fresh eyes:
+1. **Coverage:** every requirement maps to a task? List gaps.
+2. **Placeholder scan:** any of the failure patterns above? Fix them.
+3. **Type consistency:** types and method names match across tasks? \`clearLayers()\` in Task 3 vs \`clearFullLayers()\` in Task 7 is a bug.
 
-**1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
-
-**2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
-
-**3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called \`clearLayers()\` in Task 3 but \`clearFullLayers()\` in Task 7 is a bug.
-
-If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
+Fix issues inline. No re-review pass.
 
 ---
 
 ## Moe integration
 
-In Moe, the architect's plan is submitted via \`moe.submit_plan\` as \`implementationPlan.steps\`. Each step in this skill maps to one Moe step:
-
+In Moe, the architect's plan becomes \`implementationPlan.steps\` via \`moe.submit_plan\`. Each step in this skill maps to one Moe step:
 - **Title** → step \`title\`
-- **Files** + **code blocks** → step \`description\` (paste the code in the description so the worker doesn't re-derive it)
+- **Files** + **code blocks** → step \`description\` (paste code so the worker doesn't re-derive it)
 - **Test files** → step \`affectedFiles\`
-- **Run commands** → step \`description\` ("Run X, expect Y")
+- **Run commands** → in \`description\` ("Run X, expect Y")
 
-Use the **Moe-native \`moe-planning\` skill** for the higher-level 8-phase template (plan → explore → tests → … → adversarial review → QA loop). Use this \`writing-plans\` skill for the inside-the-step granularity (RED-GREEN-REFACTOR + commit per logical concern).
-
-The \`moe-planning\` skill is the architect's entry point; \`writing-plans\` is its detail-level companion.`,
+Use \`moe-planning\` for the higher-level 8-phase template; use this skill for inside-the-step granularity.`,
   'writing-plans/SOURCE.md': `# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
@@ -2102,12 +1098,6 @@ export const SKILL_MANIFEST = `{
       "description": "Vendored from superpowers. Multi-step plan structure with checkpoints; output format aligns with moe.submit_plan step lists.",
       "role": "architect",
       "triggeredBy": ["before moe.submit_plan"]
-    },
-    {
-      "name": "brainstorming",
-      "description": "Vendored from superpowers. Socratic questions to refine vague requirements before any plan is written.",
-      "role": "architect",
-      "triggeredBy": ["task with sparse acceptanceCriteria"]
     },
     {
       "name": "test-driven-development",
@@ -2156,12 +1146,6 @@ export const SKILL_MANIFEST = `{
       "description": "Vendored from superpowers. Isolated workspace per feature so parallel workers don't step on each other's .moe/ state.",
       "role": "architect|worker",
       "triggeredBy": ["manual invoke"]
-    },
-    {
-      "name": "dispatching-parallel-agents",
-      "description": "Vendored from superpowers. Fan-out for 2+ independent tasks with no shared state or sequential dependencies.",
-      "role": "architect",
-      "triggeredBy": ["manual invoke"]
     }
   ]
 }`;
@@ -2180,8 +1164,6 @@ This directory contains skills adapted from upstream open-source projects. Each 
 
 The following skills are vendored from [obra/superpowers](https://github.com/obra/superpowers) at commit [\`b55764852ac78870e65c6565fb585b6cd8b3c5c9\`](https://github.com/obra/superpowers/commit/b55764852ac78870e65c6565fb585b6cd8b3c5c9):
 
-- \`brainstorming/\`
-- \`dispatching-parallel-agents/\`
 - \`receiving-code-review/\`
 - \`systematic-debugging/\`
 - \`test-driven-development/\`

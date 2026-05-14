@@ -7,6 +7,8 @@ import os from 'os';
 import { MoeWebSocketServer } from './WebSocketServer.js';
 import { StateManager } from '../state/StateManager.js';
 import { McpAdapter } from './McpAdapter.js';
+import { activeWaiters } from '../tools/waitForTask.js';
+import { activeChatWaiters } from '../tools/chatWait.js';
 
 describe('MoeWebSocketServer Integration', () => {
   let testDir: string;
@@ -126,6 +128,10 @@ describe('MoeWebSocketServer Integration', () => {
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());
     });
+    for (const waiter of activeWaiters.values()) clearTimeout(waiter.timer);
+    activeWaiters.clear();
+    for (const waiter of activeChatWaiters.values()) clearTimeout(waiter.timer);
+    activeChatWaiters.clear();
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -211,6 +217,70 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('caps and truncates GET_ACTIVITY_LOG responses', async () => {
+      const logPath = path.join(moePath, 'activity.log');
+      for (let i = 0; i < 120; i++) {
+        fs.appendFileSync(logPath, JSON.stringify({
+          id: `evt-ws-${i}`,
+          timestamp: new Date(Date.now() + i).toISOString(),
+          projectId: 'proj-test',
+          event: 'TASK_UPDATED',
+          payload: { bigField: 'x'.repeat(5000), index: i },
+        }) + '\n');
+      }
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({ type: 'GET_ACTIVITY_LOG', payload: { limit: 999999, maxPayloadChars: 999999 } }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ACTIVITY_LOG');
+      expect(parsed.payload.length).toBeLessThanOrEqual(100);
+      expect(parsed.payload[0].payload.bigField.length).toBeLessThanOrEqual(2020);
+      expect(parsed.payload[0].payload.bigField).toContain('[truncated]');
+
+      ws.send(JSON.stringify({ type: 'GET_ACTIVITY_LOG', payload: { limit: 1, maxPayloadChars: 0 } }));
+      const zeroCapResponse = await nextMessage();
+      const zeroCapParsed = JSON.parse(zeroCapResponse);
+      expect(zeroCapParsed.type).toBe('ACTIVITY_LOG');
+      expect(zeroCapParsed.payload).toHaveLength(1);
+      expect(zeroCapParsed.payload[0].payload.bigField.length).toBeLessThanOrEqual(520);
+      expect(zeroCapParsed.payload[0].payload.bigField).toContain('[truncated]');
+
+      ws.close();
+    });
+
+    it('returns epic lifecycle activity from GET_ACTIVITY_LOG newest-first', async () => {
+      const epic = await state.createEpic({ title: 'WS Epic', status: 'ACTIVE', order: 2 });
+      await state.updateEpic(epic.id, { title: 'WS Epic Updated', order: 3 });
+      await state.flushActivityLog();
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'GET_ACTIVITY_LOG',
+        payload: {
+          epicId: epic.id,
+          eventTypes: ['EPIC_CREATED', 'EPIC_UPDATED'],
+          limit: 10,
+          maxPayloadChars: 0,
+        },
+      }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ACTIVITY_LOG');
+      expect(parsed.payload.map((event: { event: string }) => event.event)).toEqual(['EPIC_UPDATED', 'EPIC_CREATED']);
+      expect(parsed.payload.every((event: { epicId?: string }) => event.epicId === epic.id)).toBe(true);
+
+      ws.close();
+    });
+
     it('rejects ADD_TASK_COMMENT payloads over 10K characters', async () => {
       const { ws, ready, nextMessage } = connectAndCollect();
       await ready;
@@ -231,6 +301,81 @@ describe('MoeWebSocketServer Integration', () => {
       const parsed = JSON.parse(response);
       expect(parsed.type).toBe('ERROR');
       expect(parsed.message).toContain('10000');
+
+      ws.close();
+    });
+
+    it('returns an ERROR for invalid settings updates without persisting them', async () => {
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_SETTINGS',
+        payload: {
+          approvalMode: 'CHAOS',
+          agentCommand: 'codex',
+        },
+      }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ERROR');
+      expect(parsed.message).toContain('approvalMode');
+      expect(state.project?.settings.approvalMode).toBe('CONTROL');
+      expect(state.project?.settings.agentCommand).toBe('claude');
+
+      ws.close();
+    });
+
+    it('returns an ERROR for invalid team updates without persisting them', async () => {
+      const team = await state.createTeam({ name: 'Workers', role: 'worker', maxSize: 2 });
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TEAM',
+        payload: {
+          teamId: team.id,
+          updates: {
+            memberIds: ['worker-1', 'worker-1'],
+            name: 'Should Not Persist',
+          },
+        },
+      }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ERROR');
+      expect(parsed.message).toContain('memberIds');
+      expect(state.getTeam(team.id)?.name).toBe('Workers');
+
+      ws.close();
+    });
+
+    it('returns an ERROR for immutable CREATE_TEAM fields without creating a team', async () => {
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'CREATE_TEAM',
+        payload: {
+          id: 'team-evil',
+          name: 'Injected Team',
+          role: 'worker',
+        },
+      }));
+
+      const response = await nextMessage();
+      const parsed = JSON.parse(response);
+      expect(parsed.type).toBe('ERROR');
+      expect(parsed.message).toContain('id');
+      expect(state.getTeamByName('Injected Team')).toBeNull();
 
       ws.close();
     });
@@ -258,6 +403,19 @@ describe('MoeWebSocketServer Integration', () => {
   });
 
   describe('MCP endpoint (/mcp)', () => {
+    async function waitUntil(
+      predicate: () => boolean,
+      description: string,
+      timeoutMs = 1000
+    ): Promise<void> {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+
     it('handles tools/list request', async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/mcp`);
 
@@ -320,6 +478,106 @@ describe('MoeWebSocketServer Integration', () => {
       expect(content.tasks[0].id).toBe('task-1');
 
       ws.close();
+    });
+
+    it('does not start later batched waiters after the MCP socket closes mid-batch', async () => {
+      const workerId = 'worker-batch-close';
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/mcp`);
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on('open', () => resolve());
+        ws.on('error', reject);
+      });
+
+      ws.send(JSON.stringify([
+        {
+          jsonrpc: '2.0',
+          id: 'wait',
+          method: 'tools/call',
+          params: {
+            name: 'moe.wait_for_task',
+            arguments: { statuses: ['WORKING'], workerId, timeoutMs: 60_000 },
+          },
+        },
+        {
+          jsonrpc: '2.0',
+          id: 'chat',
+          method: 'tools/call',
+          params: {
+            name: 'moe.chat_wait',
+            arguments: { workerId, timeoutMs: 60_000 },
+          },
+        },
+      ]));
+
+      await waitUntil(() => activeWaiters.has(workerId), 'wait_for_task waiter registration');
+
+      const closed = new Promise<void>((resolve) => {
+        ws.on('close', () => resolve());
+      });
+      ws.close();
+      await closed;
+
+      await waitUntil(() => !activeWaiters.has(workerId), 'wait_for_task disconnect cleanup');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(activeWaiters.has(workerId)).toBe(false);
+      expect(activeChatWaiters.has(workerId)).toBe(false);
+    });
+
+    it('tracks worker IDs from batched tools/call requests for disconnect cleanup', async () => {
+      const waitResolve = vi.fn();
+      const waitUnsubscribe = vi.fn();
+      const waitTimer = setTimeout(() => {}, 60_000);
+      activeWaiters.set('worker-batch-wait', {
+        resolve: waitResolve,
+        unsubscribe: waitUnsubscribe,
+        timer: waitTimer,
+      });
+
+      const chatResolve = vi.fn();
+      const chatUnsubscribe = vi.fn();
+      const chatTimer = setTimeout(() => {}, 60_000);
+      activeChatWaiters.set('worker-batch-chat', {
+        resolve: chatResolve,
+        unsubscribe: chatUnsubscribe,
+        timer: chatTimer,
+        channels: null,
+      });
+
+      const fakeWs = {} as WebSocket;
+      const internals = wsServer as unknown as {
+        trackMcpWorker(ws: WebSocket, request: unknown): void;
+        cleanupMcpWorkers(ws: WebSocket): Promise<void>;
+        mcpWorkerMap: Map<WebSocket, Set<string>>;
+      };
+
+      internals.trackMcpWorker(fakeWs, [
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'moe.wait_for_task', arguments: { workerId: 'worker-batch-wait' } },
+        },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+        {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: 'moe.chat_wait', arguments: { workerId: 'worker-batch-chat' } },
+        },
+      ]);
+
+      expect(internals.mcpWorkerMap.get(fakeWs)).toEqual(new Set(['worker-batch-wait', 'worker-batch-chat']));
+
+      await internals.cleanupMcpWorkers(fakeWs);
+
+      expect(activeWaiters.has('worker-batch-wait')).toBe(false);
+      expect(waitUnsubscribe).toHaveBeenCalledTimes(1);
+      expect(waitResolve).toHaveBeenCalledWith({ hasNext: false, cancelled: true });
+      expect(activeChatWaiters.has('worker-batch-chat')).toBe(false);
+      expect(chatUnsubscribe).toHaveBeenCalledTimes(1);
+      expect(chatResolve).toHaveBeenCalledWith({ hasMessage: false, cancelled: true });
     });
   });
 

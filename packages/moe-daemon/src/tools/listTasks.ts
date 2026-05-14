@@ -1,5 +1,12 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import {
+  DEFAULT_TASK_LIST_LIMIT,
+  DEFAULT_TASK_LIST_OFFSET,
+  MAX_TASK_LIST_LIMIT,
+  normalizeIntegerOption,
+  taskSummary,
+} from '../util/taskPayload.js';
 
 export function listTasksTool(_state: StateManager): ToolDefinition {
   return {
@@ -9,12 +16,37 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         epicId: { type: 'string' },
-        status: { type: 'array', items: { type: 'string' } }
+        status: { type: 'array', items: { type: 'string' } },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of task summaries to return (default: 100, max: 500)',
+          default: DEFAULT_TASK_LIST_LIMIT
+        },
+        offset: {
+          type: 'number',
+          description: 'Number of matching tasks to skip for pagination (default: 0)',
+          default: DEFAULT_TASK_LIST_OFFSET
+        }
       },
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { epicId?: string; status?: string[] };
+      const params = (args || {}) as { epicId?: string; status?: string[]; limit?: number; offset?: number };
+      const limit = normalizeIntegerOption(
+        params.limit,
+        'limit',
+        DEFAULT_TASK_LIST_LIMIT,
+        1,
+        MAX_TASK_LIST_LIMIT
+      );
+      const offset = normalizeIntegerOption(
+        params.offset,
+        'offset',
+        DEFAULT_TASK_LIST_OFFSET,
+        0,
+        Number.MAX_SAFE_INTEGER
+      );
+
       const tasks = Array.from(state.tasks.values()).filter((task) => {
         if (params.epicId && task.epicId !== params.epicId) return false;
         if (params.status && params.status.length > 0) {
@@ -27,6 +59,7 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
 
       // Sort tasks by order for consistent output
       const sortedTasks = [...tasks].sort((a, b) => a.order - b.order);
+      const pagedTasks = sortedTasks.slice(offset, offset + limit);
 
       const counts = {
         total: tasks.length,
@@ -44,30 +77,28 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
         epicId: string | null;
         epicTitle: string | null;
         epicStatus: string | null;
-        tasks: Array<{
-          id: string;
-          title: string;
-          status: string;
-          priority: string;
-          order: number;
-          hasWorker: boolean;
-          reopenCount: number;
-        }>;
+        tasks: Array<ReturnType<typeof taskSummary>>;
         counts: typeof counts;
+        pagination: {
+          limit: number;
+          offset: number;
+          returned: number;
+          total: number;
+          hasMore: boolean;
+        };
       } = {
         epicId: epic?.id ?? params.epicId ?? null,
         epicTitle: epic?.title ?? null,
         epicStatus: epic?.status ?? null,
-        tasks: sortedTasks.map((t) => ({
-          id: t.id,
-          title: t.title,
-          status: t.status,
-          priority: t.priority,
-          order: t.order,
-          hasWorker: Boolean(t.assignedWorkerId),
-          reopenCount: t.reopenCount
-        })),
-        counts
+        tasks: pagedTasks.map((t) => taskSummary(t)),
+        counts,
+        pagination: {
+          limit,
+          offset,
+          returned: pagedTasks.length,
+          total: sortedTasks.length,
+          hasMore: offset + pagedTasks.length < sortedTasks.length,
+        }
       };
 
       return response;

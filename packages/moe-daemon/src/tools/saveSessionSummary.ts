@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { missingRequired } from '../util/errors.js';
+import { missingRequired, notFound } from '../util/errors.js';
+import { validateEntityId } from '../util/sanitize.js';
 
 export function saveSessionSummaryTool(_state: StateManager): ToolDefinition {
   return {
@@ -25,15 +26,20 @@ export function saveSessionSummaryTool(_state: StateManager): ToolDefinition {
       if (!params.workerId) throw missingRequired('workerId');
       if (!params.taskId) throw missingRequired('taskId');
       if (!params.summary?.trim()) throw missingRequired('summary');
+      const workerId = validateEntityId(params.workerId, 'workerId');
+      const taskId = validateEntityId(params.taskId, 'taskId');
 
       // Determine role from worker
-      const worker = state.getWorker(params.workerId);
-      const role = worker ? guessRole(worker.status) : 'unknown';
+      const worker = state.getWorker(workerId) ?? state.tryLoadWorkerFromDisk(workerId);
+      if (!worker) throw notFound('Worker', workerId);
+      const task = state.getTask(taskId);
+      if (!task) throw notFound('Task', taskId);
+      const role = guessRole(worker.status);
 
       const mm = state.getMemoryManager();
       const session = await mm.saveSessionSummary({
-        workerId: params.workerId,
-        taskId: params.taskId,
+        workerId,
+        taskId,
         role,
         summary: params.summary,
         memoriesCreated: params.memoriesCreated,
@@ -49,7 +55,7 @@ export function saveSessionSummaryTool(_state: StateManager): ToolDefinition {
         message: 'Session summary saved — next agent on this task will see your findings',
         nextAction: {
           tool: 'moe.wait_for_task',
-          args: { statuses: waitStatuses, workerId: params.workerId },
+          args: { statuses: waitStatuses, workerId },
           reason: 'Session wrapped up; block until the next task arrives for this role.',
         },
       };

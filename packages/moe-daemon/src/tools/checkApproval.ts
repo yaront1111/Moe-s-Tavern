@@ -19,6 +19,7 @@ export function checkApprovalTool(_state: StateManager): ToolDefinition {
       const params = args as { taskId: string; workerId?: string };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
+      await state.touchWorker(params.workerId);
 
       const approved = task.status === 'WORKING';
       const rejected = task.status === 'PLANNING' && task.reopenReason !== null;

@@ -81,6 +81,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       }
 
       assertWorkerOwns(task, params.workerId);
+      const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       if (!params.steps || params.steps.length === 0) {
         throw invalidInput('steps', 'plan cannot be empty');
@@ -135,7 +136,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
               tool: 'moe.propose_rail',
               reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
             }
-          }
+          },
+          'CONSTRAINT_VIOLATION'
         );
       }
 
@@ -159,7 +161,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
         };
       }
+
       await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED');
+      // Use the captured assignee because updateTask clears assignedWorkerId on
+      // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
+      // records and never blocks a successfully submitted plan.
+      await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
 
       const approvalMode = project.settings.approvalMode;
       let finalStatus = 'AWAITING_APPROVAL';

@@ -63,47 +63,19 @@ export type SkillTrigger =
 
 const TABLE: Record<Role, Partial<Record<SkillTrigger, SkillRecommendation>>> = {
   architect: {
-    planning_entry: {
-      name: 'moe-planning',
-      reason:
-        'Fresh PLANNING task — load the 8-phase template before drafting steps. This skill also governs the decide-to-block-vs-plan call, so do not skip on the grounds that you are about to block.',
-    },
-    before_submit_plan: {
-      name: 'writing-plans',
-      reason: 'You are about to call moe.submit_plan — load the plan-writing discipline before the plan is frozen.',
-    },
+    planning_entry:     { name: 'moe-planning',                  reason: 'Fresh PLANNING task.' },
+    before_submit_plan: { name: 'writing-plans',                 reason: 'Before submit_plan.' },
   },
   worker: {
-    first_start_step: {
-      name: 'explore-before-assume',
-      reason: 'First step of the task in code you have not edited — verify every symbol you plan to reference actually exists before writing.',
-    },
-    test_step: {
-      name: 'test-driven-development',
-      reason: 'This step touches tests — run the red/green/refactor discipline before writing implementation code.',
-    },
-    final_step: {
-      name: 'adversarial-self-review',
-      reason: 'Final step before complete_step — read your own diff adversarially (concurrency, null, security, embarrassment) before marking it done.',
-    },
-    before_complete_task: {
-      name: 'verification-before-completion',
-      reason: 'About to call moe.complete_task — run the verification commands and confirm output before making any success claim.',
-    },
-    task_blocked: {
-      name: 'systematic-debugging',
-      reason: 'You are about to block — systematic-debugging teaches root-cause investigation first. Load it before deciding the task is truly blocked; the skill also covers when blocking is the right call.',
-    },
-    reopened: {
-      name: 'receiving-code-review',
-      reason: 'Task was reopened by QA with rejection details — load receiving-code-review to respond with technical rigor, not performative agreement.',
-    },
+    first_start_step:     { name: 'explore-before-assume',         reason: 'First step in unfamiliar code.' },
+    test_step:            { name: 'test-driven-development',       reason: 'Step touches tests.' },
+    final_step:           { name: 'adversarial-self-review',       reason: 'Final step before complete_step.' },
+    before_complete_task: { name: 'verification-before-completion', reason: 'Before complete_task.' },
+    task_blocked:         { name: 'systematic-debugging',          reason: 'Before blocking.' },
+    reopened:             { name: 'receiving-code-review',         reason: 'Reopened by QA.' },
   },
   qa: {
-    review_entry: {
-      name: 'moe-qa-loop',
-      reason: 'You claimed a REVIEW task — load the QA loop (read diff, run tests, verify DoD and rails) before approving or rejecting.',
-    },
+    review_entry: { name: 'moe-qa-loop', reason: 'Claimed REVIEW.' },
   },
 };
 
