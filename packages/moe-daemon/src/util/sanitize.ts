@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { logger } from './logger.js';
+import { invalidInput } from './errors.js';
 
 /**
  * Validates and truncates a string field to max length.
@@ -69,17 +70,17 @@ export function sanitizePattern(
  * IDs should only contain alphanumeric characters, hyphens, and underscores.
  * Throws an error if the ID is invalid.
  */
-export function validateEntityId(id: unknown): string {
+export function validateEntityId(id: unknown, fieldName: string = 'entityId'): string {
   if (!id || typeof id !== 'string') {
-    throw new Error('Entity ID is required');
+    throw invalidInput(fieldName, 'is required');
   }
   // Only allow safe characters: alphanumeric, hyphen, underscore
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid entity ID: ${id}. IDs must contain only alphanumeric characters, hyphens, and underscores.`);
+    throw invalidInput(fieldName, 'must contain only alphanumeric characters, hyphens, and underscores');
   }
   // Prevent overly long IDs
   if (id.length > 128) {
-    throw new Error(`Entity ID too long: ${id.length} chars (max 128)`);
+    throw invalidInput(fieldName, 'must be 128 characters or fewer');
   }
   return id;
 }

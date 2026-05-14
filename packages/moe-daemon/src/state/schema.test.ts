@@ -10,7 +10,7 @@ describe('Task schema: contextFetchedBy / stepsCompleted round-trip', () => {
   let moePath: string;
   let state: StateManager;
 
-  function setupMoeFolder() {
+  function setupMoeFolder(projectOverrides: Partial<Project> = {}) {
     fs.mkdirSync(moePath, { recursive: true });
     for (const sub of ['epics', 'tasks', 'workers', 'proposals', 'channels', 'decisions', 'teams']) {
       fs.mkdirSync(path.join(moePath, sub));
@@ -39,6 +39,7 @@ describe('Task schema: contextFetchedBy / stepsCompleted round-trip', () => {
       },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...projectOverrides,
     };
     fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
   }
@@ -181,5 +182,70 @@ describe('Task schema: contextFetchedBy / stepsCompleted round-trip', () => {
     const task = state.getTask('task-rt');
     expect(task?.contextFetchedBy).toEqual([]);
     expect(task?.stepsCompleted).toEqual([]);
+  });
+
+  it('loads old projects without memory settings using token-budget defaults', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'TURBO',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: false,
+        branchPattern: '',
+        commitPattern: '',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+      },
+    } as Partial<Project>);
+    await state.load();
+
+    expect(state.project?.settings.memory).toEqual({
+      autoInject: 'off',
+      maxAutoResults: 1,
+      maxAutoChars: 500,
+      autoSave: {
+        completedTask: false,
+        firstPassApproval: false,
+        qaRejection: true,
+        reopenedApproval: true,
+      },
+    });
+  });
+
+  it('preserves custom memory settings while clamping invalid numeric values', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'TURBO',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: false,
+        branchPattern: '',
+        commitPattern: '',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+        memory: {
+          autoInject: 'full',
+          maxAutoResults: 999,
+          maxAutoChars: -5,
+          autoSave: {
+            completedTask: true,
+            firstPassApproval: true,
+            qaRejection: false,
+            reopenedApproval: false,
+          },
+        },
+      },
+    } as Partial<Project>);
+    await state.load();
+
+    expect(state.project?.settings.memory).toEqual({
+      autoInject: 'full',
+      maxAutoResults: 10,
+      maxAutoChars: 0,
+      autoSave: {
+        completedTask: true,
+        firstPassApproval: true,
+        qaRejection: false,
+        reopenedApproval: false,
+      },
+    });
   });
 });

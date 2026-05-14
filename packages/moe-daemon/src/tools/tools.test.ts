@@ -294,7 +294,7 @@ describe('MCP Tools', () => {
       expect(step1?.modifiedFiles).toEqual(['a.ts', 'b.ts']);
     });
 
-    it('auto-surfaces memory as compact previews by default', async () => {
+    it('auto-surfaces memory as compact previews when memoryMode=summary', async () => {
       setupMoeFolder();
       createEpic();
       createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
@@ -307,7 +307,7 @@ describe('MCP Tools', () => {
       });
 
       const tool = getContextTool(state);
-      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+      const result = await tool.handler({ taskId: 'task-1', memoryMode: 'summary' }, state) as {
         memory: {
           mode: string;
           relevant: Array<{ preview?: string; content?: string; truncated?: boolean }>;
@@ -547,7 +547,7 @@ describe('MCP Tools', () => {
       expect(recall.memories[0].content).toBe(fullContent);
     });
 
-    it('keeps auto-injected recent chat compact', async () => {
+    it('does not auto-inject recent chat by default', async () => {
       setupMoeFolder();
       createEpic();
       createTask();
@@ -562,21 +562,10 @@ describe('MCP Tools', () => {
 
       const tool = getContextTool(state);
       const result = await tool.handler({ taskId: 'task-1' }, state) as {
-        chat?: {
-          recentMessages: Array<{
-            id: string;
-            content: string;
-            contentTruncated?: boolean;
-            contentOriginalLength?: number;
-          }>;
-        };
+        chat?: { recentMessages: unknown[] };
       };
 
-      expect(result.chat?.recentMessages).toHaveLength(1);
-      expect(result.chat!.recentMessages[0].id).toBeTruthy();
-      expect(result.chat!.recentMessages[0].content.length).toBeLessThanOrEqual(300);
-      expect(result.chat!.recentMessages[0].contentTruncated).toBe(true);
-      expect(result.chat!.recentMessages[0].contentOriginalLength).toBeGreaterThan(300);
+      expect(result.chat?.recentMessages ?? []).toEqual([]);
     });
 
     it('keeps task comments compact in get_context and exposes summary metadata', async () => {
@@ -638,7 +627,7 @@ describe('MCP Tools', () => {
 
         const project = JSON.parse(fs.readFileSync(path.join(projectPath, '.moe', 'project.json'), 'utf-8')) as Project;
         expect(project.settings.memory).toEqual({
-          autoInject: 'summary',
+          autoInject: 'off',
           maxAutoResults: 1,
           maxAutoChars: 500,
           autoSave: {

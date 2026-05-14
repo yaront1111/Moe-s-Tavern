@@ -12,11 +12,16 @@ import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import {
+  ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
+  normalizeActivityLogParams,
+  queryActivityLog,
+} from '../tools/getActivityLog.js';
 
 export type PluginMessage =
   | { type: 'PING' }
   | { type: 'GET_STATE' }
-  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number } }
+  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
   | { type: 'UPDATE_TASK'; payload: { taskId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_TASK'; payload: { taskId: string } }
@@ -175,8 +180,13 @@ export class MoeWebSocketServer {
           this.sendStateSnapshot(ws);
           return;
         case 'GET_ACTIVITY_LOG': {
-          const limit = (message.payload as { limit?: number })?.limit ?? 100;
-          const events = this.state.getActivityLog(limit);
+          const params = normalizeActivityLogParams(message.payload || {});
+          // Plugin clients must always get a bounded payload; keep maxPayloadChars=0 as
+          // an MCP-only full-content opt-in for backwards compatibility.
+          if (params.maxPayloadChars === 0) {
+            params.maxPayloadChars = ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS;
+          }
+          const { events } = queryActivityLog(this.state, params);
           this.safeSend(ws, JSON.stringify({ type: 'ACTIVITY_LOG', payload: events }));
           return;
         }
@@ -369,12 +379,12 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const { name, role, maxSize } = message.payload as { name: string; role: string; maxSize?: number };
-          if (!name || !role) {
+          const payload = message.payload as Record<string, unknown>;
+          if (typeof payload.name !== 'string' || payload.name.trim().length === 0 || typeof payload.role !== 'string' || payload.role.trim().length === 0) {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
             return;
           }
-          const team = await this.withMutex(() => this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize }));
+          const team = await this.withMutex(() => this.state.createTeam(payload as { name: string; role: 'architect' | 'worker' | 'qa'; maxSize?: number }));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
           return;
         }
@@ -668,7 +678,9 @@ export class MoeWebSocketServer {
     try {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
-      const response = await this.mcpAdapter.handle(request);
+      const response = await this.mcpAdapter.handle(request, {
+        shouldContinue: () => this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
+      });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));
       }
@@ -689,10 +701,22 @@ export class MoeWebSocketServer {
    * Track which MCP WebSocket connection owns which worker IDs.
    * Extracts workerId from tools/call request arguments.
    */
-  private trackMcpWorker(ws: WebSocket, request: Record<string, unknown>): void {
-    if (request.method !== 'tools/call') return;
-    const params = request.params as { arguments?: Record<string, unknown> } | undefined;
-    const workerId = params?.arguments?.workerId;
+  private trackMcpWorker(ws: WebSocket, request: unknown): void {
+    const requests = Array.isArray(request) ? request : [request];
+    for (const item of requests) {
+      this.trackSingleMcpWorker(ws, item);
+    }
+  }
+
+  private trackSingleMcpWorker(ws: WebSocket, request: unknown): void {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) return;
+    const record = request as Record<string, unknown>;
+    if (record.method !== 'tools/call') return;
+    const params = record.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const args = (params as { arguments?: unknown }).arguments;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return;
+    const workerId = (args as Record<string, unknown>).workerId;
     if (typeof workerId !== 'string') return;
 
     let workerIds = this.mcpWorkerMap.get(ws);

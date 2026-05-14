@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState } from '../util/errors.js';
-import { assertWorkerOwns } from '../util/enforcement.js';
+import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
+import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
@@ -36,7 +36,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
 
-      assertWorkerOwns(task, params.workerId);
+      assertWorkerOwns(task, params.workerId, 'moe.complete_step');
+      assertContextFetched(task, params.workerId, 'moe.complete_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no implementation plan', 'has implementation plan');
@@ -45,8 +46,25 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       const existingStep = task.implementationPlan.find((s) => s.stepId === params.stepId);
       if (!existingStep) throw notFound('Step', params.stepId);
 
-      if (existingStep.status === 'COMPLETED') {
-        throw invalidState('Step', 'COMPLETED', 'PENDING or IN_PROGRESS');
+      if (existingStep.status === 'PENDING') {
+        throw new MoeError(
+          MoeErrorCode.INVALID_STATE,
+          'Step is in PENDING state, expected IN_PROGRESS; call moe.start_step before moe.complete_step',
+          {
+            entity: 'Step',
+            currentState: 'PENDING',
+            expectedState: 'IN_PROGRESS',
+            nextAction: {
+              tool: 'moe.start_step',
+              args: { taskId: task.id, stepId: params.stepId, workerId: params.workerId },
+            },
+          },
+          'INVALID_STATE'
+        );
+      }
+
+      if (existingStep.status !== 'IN_PROGRESS') {
+        throw invalidState('Step', existingStep.status, 'IN_PROGRESS');
       }
 
       const steps = task.implementationPlan.map((step) =>
@@ -71,6 +89,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         { implementationPlan: steps, stepsCompleted },
         'STEP_COMPLETED'
       );
+      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
 
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;

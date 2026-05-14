@@ -145,8 +145,11 @@ describe('moe.start_step ownership + ordering enforcement', () => {
     const tool = startStepTool(state);
     const result = await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state) as { success: boolean };
     expect(result.success).toBe(true);
-    const step = state.getTask('task-1')?.implementationPlan[0];
+    const task = state.getTask('task-1');
+    const step = task?.implementationPlan[0];
     expect(step?.status).toBe('IN_PROGRESS');
+    expect(step?.startedAt).toBeDefined();
+    expect(task?.workStartedAt).toBeDefined();
   });
 
   it('preserves legacy path when workerId is not supplied (null assignedWorkerId)', async () => {

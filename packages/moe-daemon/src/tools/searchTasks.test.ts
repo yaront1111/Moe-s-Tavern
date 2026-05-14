@@ -122,6 +122,56 @@ describe('searchTasksTool validation', () => {
     expect(result.tasks[0]?.id).toBe('task-1');
   });
 
+  it('defaults to summary payloads and supports full task opt-in', async () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-search-test-'));
+    tempDirs.push(testDir);
+    const moePath = setupMoeFolder(testDir);
+
+    createTask(moePath, {
+      id: 'task-1',
+      title: 'Payload budget',
+      description: 'Payload detail should be compact by default. '.repeat(20),
+      definitionOfDone: ['Tests pass'],
+      implementationPlan: [
+        { stepId: 'step-1', description: 'Implement', status: 'PENDING', affectedFiles: ['src/a.ts'] },
+      ],
+    });
+
+    const state = new StateManager({ projectPath: testDir });
+    await state.load();
+
+    const tool = searchTasksTool(state);
+    const compact = await tool.handler({
+      query: 'payload',
+      maxDescriptionChars: 80,
+    }, state) as {
+      detail: string;
+      tasks: Array<{
+        id: string;
+        description?: string;
+        descriptionPreview?: string;
+        descriptionTruncated?: boolean;
+        implementationPlan?: unknown;
+        planStepCount: number;
+      }>;
+    };
+
+    expect(compact.detail).toBe('summary');
+    expect(compact.tasks[0].description).toBeUndefined();
+    expect(compact.tasks[0].implementationPlan).toBeUndefined();
+    expect(compact.tasks[0].descriptionPreview!.length).toBeLessThanOrEqual(80);
+    expect(compact.tasks[0].descriptionTruncated).toBe(true);
+    expect(compact.tasks[0].planStepCount).toBe(1);
+
+    const full = await tool.handler({ query: 'payload', detail: 'full' }, state) as {
+      detail: string;
+      tasks: Task[];
+    };
+    expect(full.detail).toBe('full');
+    expect(full.tasks[0].description).toContain('Payload detail');
+    expect(full.tasks[0].implementationPlan).toHaveLength(1);
+  });
+
   it('clamps result limit to 200 max and 1 min', async () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-search-test-'));
     tempDirs.push(testDir);

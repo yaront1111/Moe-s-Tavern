@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { completeStepTool } from './completeStep.js';
+import { startStepTool } from './startStep.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import type { Task, Epic, Project } from '../types/schema.js';
 
@@ -58,6 +59,7 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
         { stepId: 'step-2', description: 'second', status: 'PENDING', affectedFiles: [] },
       ],
       status: 'WORKING', assignedWorkerId: 'worker-a', branch: null, prLink: null,
+      contextFetchedBy: ['worker-a'],
       reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
       priority: 'MEDIUM', order: 1, comments: [],
       createdAt: now, updatedAt: now,
@@ -100,6 +102,81 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
     const tool = completeStepTool(state);
     await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state);
     expect(state.getTask('task-1')?.stepsCompleted).toEqual(['step-1']);
+  });
+
+  it('rejects direct completion of a PENDING step', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask({
+      implementationPlan: [
+        { stepId: 'step-1', description: 'first', status: 'PENDING', affectedFiles: [] },
+      ],
+      contextFetchedBy: ['worker-a'],
+    });
+    await state.load();
+    const tool = completeStepTool(state);
+
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state)
+    ).rejects.toMatchObject({
+      code: MoeErrorCode.INVALID_STATE,
+      context: { entity: 'Step', currentState: 'PENDING', expectedState: 'IN_PROGRESS' },
+    });
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state)
+    ).rejects.toThrow('moe.start_step');
+  });
+
+  it('requires claimed workers to fetch context before completing a started step', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask({ contextFetchedBy: [] });
+    await state.load();
+    const tool = completeStepTool(state);
+
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state)
+    ).rejects.toMatchObject({
+      code: MoeErrorCode.NOT_ALLOWED,
+    });
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state)
+    ).rejects.toThrow('before moe.complete_step');
+  });
+
+  it('completes after start_step and preserves lifecycle metadata', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask({
+      implementationPlan: [
+        { stepId: 'step-1', description: 'first', status: 'PENDING', affectedFiles: [] },
+      ],
+      contextFetchedBy: ['worker-a'],
+    });
+    await state.load();
+
+    await startStepTool(state).handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state);
+    const startedTask = state.getTask('task-1')!;
+    const startedAt = startedTask.implementationPlan[0].startedAt;
+    expect(startedTask.workStartedAt).toBeDefined();
+    expect(startedAt).toBeDefined();
+
+    await completeStepTool(state).handler({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      workerId: 'worker-a',
+      modifiedFiles: ['src/foo.ts'],
+      note: 'completed after start',
+    }, state);
+
+    const completedTask = state.getTask('task-1')!;
+    const completedStep = completedTask.implementationPlan[0];
+    expect(completedStep.status).toBe('COMPLETED');
+    expect(completedStep.startedAt).toBe(startedAt);
+    expect(completedStep.completedAt).toBeDefined();
+    expect(completedStep.modifiedFiles).toEqual(['src/foo.ts']);
+    expect(completedStep.note).toBe('completed after start');
+    expect(completedTask.stepsCompleted).toEqual(['step-1']);
   });
 
   it('preserves completion order across multiple steps', async () => {

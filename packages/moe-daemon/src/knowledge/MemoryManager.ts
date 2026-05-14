@@ -6,6 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
+import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
+import { validateEntityId } from '../util/sanitize.js';
 import { generateAutoTags } from './tokenizer.js';
 import {
   createEmptyIndex, indexEntry, removeFromIndex,
@@ -211,10 +213,11 @@ export class MemoryManager {
     memoriesCreated?: string[];
     completedSteps?: string[];
   }): Promise<SessionSummary> {
+    const sessionFile = this.resolveSessionFilePath(input.workerId, input.taskId);
     const summary: SessionSummary = {
       id: generateId('sess'),
-      workerId: input.workerId,
-      taskId: input.taskId,
+      workerId: sessionFile.workerId,
+      taskId: sessionFile.taskId,
       role: input.role,
       summary: input.summary.slice(0, MAX_SUMMARY_LENGTH),
       memoriesCreated: input.memoriesCreated ?? [],
@@ -222,11 +225,12 @@ export class MemoryManager {
       createdAt: new Date().toISOString(),
     };
 
-    const filePath = path.join(this.sessionsDir, `${input.workerId}_${input.taskId}.json`);
     try {
-      fs.writeFileSync(filePath, JSON.stringify(summary, null, 2));
+      if (!fs.existsSync(this.sessionsDir)) fs.mkdirSync(this.sessionsDir, { recursive: true });
+      fs.writeFileSync(sessionFile.filePath, JSON.stringify(summary, null, 2));
     } catch (error) {
       logger.error({ error }, 'Failed to save session summary');
+      throw new MoeError(MoeErrorCode.INTERNAL_ERROR, 'Failed to save session summary', undefined, 'INTERNAL_ERROR');
     }
 
     return summary;
@@ -236,17 +240,22 @@ export class MemoryManager {
     if (!fs.existsSync(this.sessionsDir)) return null;
 
     try {
+      const safeTaskId = validateEntityId(taskId, 'taskId');
       const files = fs.readdirSync(this.sessionsDir)
-        .filter(f => f.endsWith('.json') && f.includes(taskId));
+        .filter(f => f.endsWith('.json'));
 
       let latest: SessionSummary | null = null;
       let latestTime = 0;
 
       for (const file of files) {
         try {
-          const raw = fs.readFileSync(path.join(this.sessionsDir, file), 'utf-8');
+          const filePath = this.assertInsideSessionsDir(path.join(this.sessionsDir, file));
+          if (!fs.lstatSync(filePath).isFile()) continue;
+          const raw = fs.readFileSync(filePath, 'utf-8');
           const session = JSON.parse(raw) as SessionSummary;
+          if (session.taskId !== safeTaskId) continue;
           const time = new Date(session.createdAt).getTime();
+          if (!Number.isFinite(time)) continue;
           if (time > latestTime) {
             latestTime = time;
             latest = session;
@@ -258,6 +267,31 @@ export class MemoryManager {
     } catch {
       return null;
     }
+  }
+
+  private resolveSessionFilePath(workerId: unknown, taskId: unknown): {
+    workerId: string;
+    taskId: string;
+    filePath: string;
+  } {
+    const safeWorkerId = validateEntityId(workerId, 'workerId');
+    const safeTaskId = validateEntityId(taskId, 'taskId');
+    const filePath = path.join(this.sessionsDir, `${safeWorkerId}_${safeTaskId}.json`);
+    return {
+      workerId: safeWorkerId,
+      taskId: safeTaskId,
+      filePath: this.assertInsideSessionsDir(filePath),
+    };
+  }
+
+  private assertInsideSessionsDir(filePath: string): string {
+    const resolvedSessionsDir = path.resolve(this.sessionsDir);
+    const resolvedFilePath = path.resolve(filePath);
+    const relative = path.relative(resolvedSessionsDir, resolvedFilePath);
+    if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw invalidInput('sessionPath', 'must stay within the session summary directory');
+    }
+    return resolvedFilePath;
   }
 
   getEntryCount(): number {

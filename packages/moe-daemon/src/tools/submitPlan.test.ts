@@ -6,7 +6,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { submitPlanTool } from './submitPlan.js';
-import type { Task, Epic, Project } from '../types/schema.js';
+import type { Task, Epic, Project, WorkerStatus } from '../types/schema.js';
 
 describe('SPEED mode timeout cancellation', () => {
   let testDir: string;
@@ -91,6 +91,17 @@ describe('SPEED mode timeout cancellation', () => {
     };
     fs.writeFileSync(path.join(moePath, 'tasks', `${task.id}.json`), JSON.stringify(task, null, 2));
     return task;
+  }
+
+  async function createWorker(id: string, status: WorkerStatus = 'PLANNING', currentTaskId: string | null = 'task-1') {
+    return state.createWorker({
+      id,
+      type: 'CLAUDE',
+      projectId: 'proj-test',
+      epicId: 'epic-1',
+      currentTaskId,
+      status,
+    });
   }
 
   beforeEach(() => {
@@ -198,6 +209,94 @@ describe('SPEED mode timeout cancellation', () => {
       steps: [{ description: 'Step 1' }],
     }, state);
     expect(state.getTask('task-own2')?.status).toBe('AWAITING_APPROVAL');
+  });
+
+  it('releases the assigned architect worker after TURBO auto-approval', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'TURBO',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: true,
+        branchPattern: 'moe/{epicId}/{taskId}',
+        commitPattern: 'feat({epicId}): {taskTitle}',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+      },
+    });
+    createEpic();
+    createTask({ id: 'task-turbo', status: 'PLANNING', assignedWorkerId: 'architect-a' });
+    await state.load();
+    await createWorker('architect-a', 'PLANNING', 'task-turbo');
+
+    const tool = submitPlanTool(state);
+    const result = await tool.handler({
+      taskId: 'task-turbo',
+      workerId: 'architect-a',
+      steps: [{ description: 'Step 1' }],
+    }, state) as { status: string };
+
+    expect(result.status).toBe('WORKING');
+    expect(state.getTask('task-turbo')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('architect-a')?.status).toBe('IDLE');
+    expect(state.getWorker('architect-a')?.currentTaskId).toBeNull();
+  });
+
+  it('releases the assigned architect worker after non-TURBO plan submission', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'CONTROL',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: true,
+        branchPattern: 'moe/{epicId}/{taskId}',
+        commitPattern: 'feat({epicId}): {taskTitle}',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+      },
+    });
+    createEpic();
+    createTask({ id: 'task-control', status: 'PLANNING', assignedWorkerId: 'architect-a' });
+    await state.load();
+    await createWorker('architect-a', 'PLANNING', 'task-control');
+
+    const tool = submitPlanTool(state);
+    const result = await tool.handler({
+      taskId: 'task-control',
+      workerId: 'architect-a',
+      steps: [{ description: 'Step 1' }],
+    }, state) as { status: string };
+
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(state.getTask('task-control')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('architect-a')?.status).toBe('IDLE');
+    expect(state.getWorker('architect-a')?.currentTaskId).toBeNull();
+  });
+
+  it('does not block plan handoff when the assigned architect worker record is missing', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'CONTROL',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: true,
+        branchPattern: 'moe/{epicId}/{taskId}',
+        commitPattern: 'feat({epicId}): {taskTitle}',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+      },
+    });
+    createEpic();
+    createTask({ id: 'task-missing-worker', status: 'PLANNING', assignedWorkerId: 'architect-missing' });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    const result = await tool.handler({
+      taskId: 'task-missing-worker',
+      workerId: 'architect-missing',
+      steps: [{ description: 'Step 1' }],
+    }, state) as { status: string };
+
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(state.getTask('task-missing-worker')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('architect-missing')).toBeNull();
   });
 
   it('timeout auto-approves when not cancelled', async () => {
