@@ -4,17 +4,8 @@
 // Moe Proxy - MCP stdio shim forwarding to daemon
 // =============================================================================
 
-import fs from 'fs';
-import path from 'path';
 import WebSocket from 'ws';
-import { injectWorkerId } from './utils.js';
-
-interface DaemonInfo {
-  port: number;
-  pid: number;
-  startedAt: string;
-  projectPath: string;
-}
+import { getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
 
 // Reconnect configuration
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -46,26 +37,6 @@ function isSafeToSend(): boolean {
   return isConnected &&
          currentWebSocket !== null &&
          currentWebSocket.readyState === WebSocket.OPEN;
-}
-
-function readDaemonInfo(projectPath: string): DaemonInfo | null {
-  const filePath = path.join(projectPath, '.moe', 'daemon.json');
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const info = JSON.parse(raw) as DaemonInfo;
-    // Basic validation
-    if (typeof info.port !== 'number' || typeof info.pid !== 'number') {
-      return null;
-    }
-    return info;
-  } catch {
-    return null;
-  }
-}
-
-function getProjectPath(): string {
-  return process.env.MOE_PROJECT_PATH || process.cwd();
 }
 
 function writeError(message: string, code = -32000) {
@@ -245,9 +216,15 @@ function gracefulShutdown(): void {
 }
 
 function connect(projectPath: string): void {
-  const info = readDaemonInfo(projectPath);
+  const daemonInfo = readDaemonInfoResult(projectPath);
+  const info = daemonInfo.info;
 
   if (!info) {
+    if (daemonInfo.error && !daemonInfo.retryable) {
+      writeError(daemonInfo.error);
+      process.exit(1);
+      return;
+    }
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       const delay = calculateReconnectDelay();
       reconnectAttempts++;

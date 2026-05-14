@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import {
   readDaemonInfo,
+  readDaemonInfoResult,
   getProjectPath,
   formatError,
   isValidJson,
@@ -49,6 +50,42 @@ describe('utils', () => {
 
       const result = readDaemonInfo(testDir);
       expect(result).toEqual(daemonInfo);
+    });
+
+    it('returns null for projectPath mismatch', () => {
+      const moePath = path.join(testDir, '.moe');
+      fs.mkdirSync(moePath);
+      fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+        port: 3000,
+        pid: 12345,
+        startedAt: '2024-01-01T00:00:00Z',
+        projectPath: path.join(os.tmpdir(), 'other-project'),
+      }));
+
+      expect(readDaemonInfo(testDir)).toBeNull();
+      expect(readDaemonInfoResult(testDir)).toMatchObject({
+        info: null,
+        retryable: false,
+        error: 'daemon.json belongs to a different project',
+      });
+    });
+
+    it('returns null for malformed port and pid', () => {
+      const moePath = path.join(testDir, '.moe');
+      fs.mkdirSync(moePath);
+      fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+        port: 0,
+        pid: -1,
+        startedAt: '2024-01-01T00:00:00Z',
+        projectPath: testDir,
+      }));
+
+      expect(readDaemonInfo(testDir)).toBeNull();
+      expect(readDaemonInfoResult(testDir)).toMatchObject({
+        info: null,
+        retryable: false,
+        error: 'daemon.json contains invalid daemon connection details',
+      });
     });
 
     it('returns null for invalid JSON', () => {
