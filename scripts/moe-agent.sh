@@ -949,8 +949,11 @@ if [ -n "$TEAM" ]; then
         fi
     fi
 
-    # Use python to safely construct JSON (prevents injection from special chars in team name)
-    TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1]}))" "$TEAM" 2>/dev/null)
+    # Use python to safely construct JSON (prevents injection from special chars in team name).
+    # Include role so the daemon binds team.role for role-gated tools
+    # (enter_governance requires team.role === 'governor', mention routing groups
+    # by team.role, etc.). create_team is idempotent on name+role.
+    TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1],'role':sys.argv[2]}))" "$TEAM" "$ROLE" 2>/dev/null)
     TEAM_CREATE_RPC=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'moe.create_team','arguments':json.loads(sys.argv[1])}}))" "$TEAM_CREATE_JSON" 2>/dev/null)
 
     TEAM_RESULT=""

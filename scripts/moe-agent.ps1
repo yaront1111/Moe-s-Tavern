@@ -646,7 +646,17 @@ if (-not $Team) {
 # stringifying, dropping proxy diagnostic lines, and scanning for JSON.
 function Invoke-MoeRpcRaw {
     param([string]$RpcJson)
-    $output = $RpcJson | & node $proxyScript 2>&1
+    # moe-proxy writes diagnostic lines (e.g. "[moe-proxy] Connected to daemon") to
+    # stderr. The script-wide $ErrorActionPreference='Stop' otherwise turns those
+    # into NativeCommandError that bubbles up as a misleading "Failed to set up team"
+    # warning even when the RPC succeeded.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = $RpcJson | & node $proxyScript 2>&1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
     $stringLines = @()
     foreach ($entry in @($output)) {
         $stringLines += (("$entry") -split "`r?`n")
@@ -667,7 +677,11 @@ function Invoke-MoeRpcRaw {
 
 if ($Team) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
-    $createTeamJson = ConvertTo-Json @{ name = $Team } -Compress
+    # Include role so the daemon binds team.role for role-gated tools
+    # (enter_governance requires team.role === 'governor', mention routing groups
+    # by team.role, etc.). create_team is idempotent on name+role, so multiple
+    # roles can share a project-shaped team name like "Cordum".
+    $createTeamJson = ConvertTo-Json @{ name = $Team; role = $Role } -Compress
     $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
     try {
         $createResult = Invoke-MoeRpcRaw -RpcJson $createRpc
@@ -714,12 +728,20 @@ function Invoke-MoeRpc {
     # ErrorRecord objects that break ConvertFrom-Json on a per-pipeline-record
     # basis even when 2>$null is in place; merging + stringifying yields a clean
     # stream of lines we can scan for the JSON-RPC response.
+    # Locally drop EAP from 'Stop' to 'Continue' for the node invocation: the proxy
+    # writes diagnostic lines (e.g. "[moe-proxy] Connected to daemon") to stderr on
+    # every spawn, which under Stop becomes a NativeCommandError that silently
+    # returns $null here and surfaces as "[WARN] Pre-flight claim RPC failed".
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         $raw = ($rpc | & node $proxyScript 2>&1) | ForEach-Object { "$_" }
     } catch {
         $env:MOE_PROJECT_PATH = $prevEnv
+        $ErrorActionPreference = $prevEAP
         return $null
     }
+    $ErrorActionPreference = $prevEAP
     $env:MOE_PROJECT_PATH = $prevEnv
     if (-not $raw) { return $null }
 
@@ -1166,12 +1188,24 @@ $mentionsJson
 "@
     }
 
-    # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh)
+    # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh).
+    # For codex and gemini we ALSO fold $dynamicContext (claimed_task_context, routed_mentions, skill JIT)
+    # into the file. Reason: PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
+    # forwarding native-command args on Windows. Task JSON serialized into $dynamicContext routinely
+    # contains "..." substrings (e.g. `\"audit.read\"`), which causes codex/gemini to word-split the
+    # prompt argv (e.g. "unexpected argument 'VERIFICATION' found"). Claude reads its system prompt
+    # from --append-system-prompt-file, so its bug surface is the (mostly quote-free) role directive.
+    $codexUsesFileContext = $false
     if ($cliType -eq "codex") {
         $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
-        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        $fileBody = $systemAppend
+        if ($dynamicContext) {
+            $fileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
+            $codexUsesFileContext = $true
+        }
+        $fileBody | Set-Content -Path $agentInstructionsPath -Encoding UTF8
         Write-Host "Agent instructions written to: $agentInstructionsPath"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $projectPath ".gemini"
@@ -1179,7 +1213,14 @@ $mentionsJson
             New-Item -ItemType Directory -Force -Path $geminiInstructionsDir | Out-Null
         }
         $geminiInstructionsPath = Join-Path $geminiInstructionsDir "GEMINI.md"
-        $systemAppend | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
+        $geminiFileBody = $systemAppend
+        if ($dynamicContext) {
+            $geminiFileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
+            $geminiUsesFileContext = $true
+        } else {
+            $geminiUsesFileContext = $false
+        }
+        $geminiFileBody | Set-Content -Path $geminiInstructionsPath -Encoding UTF8
         Write-Host "Agent instructions written to: $geminiInstructionsPath"
     }
 
@@ -1239,8 +1280,16 @@ $mentionsJson
         }
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
-            # Pre-flight baked context into .codex/agent-instructions.md; use the lean $claimPrompt directly
-            $shortPrompt = $claimPrompt
+            # Pre-flight baked context into .codex/agent-instructions.md. When that file already
+            # includes $dynamicContext (see $codexUsesFileContext branch above), we pass only the
+            # short role directive on argv to avoid PS 5.1's broken native-command quote escaping
+            # tripping over double quotes inside task JSON (e.g. \"audit.read\"). Falls back to the
+            # combined $claimPrompt when there's no dynamic context to fold.
+            if ($codexUsesFileContext -and $claimPromptBody) {
+                $shortPrompt = $claimPromptBody
+            } else {
+                $shortPrompt = $claimPrompt
+            }
         } else {
             # Legacy fallback — pre-flight skipped or failed
             $roleWorkflow = switch ($Role) {
@@ -1276,8 +1325,15 @@ $mentionsJson
         }
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
-            # Pre-flight baked context into .gemini/GEMINI.md; use the lean $claimPrompt directly
-            $shortPrompt = $claimPrompt
+            # Pre-flight baked context into .gemini/GEMINI.md. When that file already includes
+            # $dynamicContext (see $geminiUsesFileContext branch above), pass only the short role
+            # directive on argv to avoid PS 5.1's broken native-command quote escaping tripping over
+            # double quotes inside task JSON. Falls back to combined $claimPrompt otherwise.
+            if ($geminiUsesFileContext -and $claimPromptBody) {
+                $shortPrompt = $claimPromptBody
+            } else {
+                $shortPrompt = $claimPrompt
+            }
         } else {
             $roleWorkflow = switch ($Role) {
                 "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
