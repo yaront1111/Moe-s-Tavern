@@ -666,37 +666,6 @@ Delete an epic and optionally its tasks.
 
 ---
 
-### moe.get_activity_log
-
-Query the activity log for task history, decisions, and events.
-
-**Parameters:**
-```typescript
-{
-  taskId?: string,        // Filter by task ID
-  epicId?: string,        // Filter by epic ID
-  workerId?: string,      // Filter by worker ID
-  eventTypes?: string[],  // Filter by event types (e.g. STEP_COMPLETED, TASK_STATUS_CHANGED)
-  limit?: number,         // Max events to return (default 10, max 100)
-  offset?: number,        // Skip first N matching events (default 0, max 10000)
-  maxPayloadChars?: number // Max chars per payload value (default 500, max 2000, 0 = no truncation)
-}
-```
-
-**Returns:**
-```typescript
-{
-  events: ActivityLogEntry[],
-  count: number,
-  hasMore: boolean,
-  filters: { taskId, epicId, workerId, eventTypes, limit, offset, maxPayloadChars },
-  pagination: { limit, offset, returned, hasMore },
-  search: { scannedEvents, scannedLines, scanLimit, matchingEventsWithinScan, complete }
-}
-```
-
----
-
 ### moe.unblock_worker
 
 Clear BLOCKED status on a worker, setting it back to IDLE.
@@ -1112,35 +1081,6 @@ Join a chat channel. Posts a system message and returns online workers.
 
 ---
 
-### moe.chat_who
-
-List online workers. Optionally filter by channel participation.
-
-**Parameters:**
-```typescript
-{
-  channel?: string      // Optional: filter by channel participation
-}
-```
-
-**Returns:**
-```typescript
-{
-  online: Array<{
-    workerId: string,
-    status: string,
-    lastActivity: string,
-    currentTaskId: string | null
-  }>
-}
-```
-
-**Notes:**
-- Uses 120-second presence timeout (matching agentchattr)
-- Channel filter checks worker's chatCursors for participation
-
----
-
 ### moe.chat_wait
 
 Long-poll for chat messages mentioning this worker or from humans.
@@ -1166,61 +1106,6 @@ Long-poll for chat messages mentioning this worker or from humans.
 - Follows the same long-poll pattern as `moe.wait_for_task`
 - Only wakes for messages where `workerId` is in `mentions` or `sender` is "human"
 - Cancels any previous wait for the same worker
-
-### moe.chat_decision
-
-Propose a decision for human approval. Optionally posts a system message to a chat channel linking to the decision.
-
-**Parameters:**
-```typescript
-{
-  content: string,      // Required: decision text (max 10KB)
-  channel?: string,     // Optional: channel ID to post decision message
-  workerId?: string     // Optional: proposing worker ID (defaults to "human")
-}
-```
-
-**Returns:**
-```typescript
-{
-  success: true,
-  decision: Decision,   // The created decision entity
-  messageId?: string    // System message ID (if channel was specified)
-}
-```
-
-**Notes:**
-- Creates a Decision entity in `.moe/decisions/{id}.json`
-- If `channel` is provided, posts a system message with `decisionId` set on the ChatMessage
-- Decision starts in `proposed` status
-- Humans approve/reject from IDE UI (GET_DECISIONS → APPROVE_DECISION / REJECT_DECISION WebSocket messages)
-- Emits `DECISION_PROPOSED` state change event
-
----
-
-### moe.chat_resync
-
-Clear chat cursors and return a bounded, token-budgeted message window for resync. Useful when a worker loses context or wants to re-read recent messages.
-
-**Parameters:**
-```typescript
-{
-  workerId: string,   // Required: worker whose cursors to reset
-  channel?: string,   // Optional: specific channel to resync (omit for all)
-  limit?: number,     // Max messages per channel (default 20, max 200)
-  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
-}
-```
-
-**Returns:**
-```typescript
-{ success: true, messagesCount: number, messages: ChatMessage[], cursorsReset: true, truncated: number }
-```
-
-**Notes:**
-- Clears the worker's chatCursors for the specified channel (or all channels)
-- Returns a bounded window of messages; long content is truncated by default
-- Updates cursors to the latest message after resync
 
 ## Memory Tools
 

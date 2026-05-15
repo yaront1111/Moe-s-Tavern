@@ -8,8 +8,6 @@ This directory contains skills adapted from upstream open-source projects. Each 
 
 The following skills are vendored from [obra/superpowers](https://github.com/obra/superpowers) at commit [`b55764852ac78870e65c6565fb585b6cd8b3c5c9`](https://github.com/obra/superpowers/commit/b55764852ac78870e65c6565fb585b6cd8b3c5c9):
 
-- `brainstorming/`
-- `dispatching-parallel-agents/`
 - `receiving-code-review/`
 - `systematic-debugging/`
 - `test-driven-development/`

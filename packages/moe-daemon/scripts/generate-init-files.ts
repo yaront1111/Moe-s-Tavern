@@ -1,14 +1,18 @@
 /**
- * Reads docs/roles/*.md and docs/agent-context.md from the repo root
- * and generates src/util/initFiles.ts with their contents embedded
- * as template-literal strings so the daemon can write them at init
- * without needing the source docs directory at runtime.
+ * Reads docs/roles/*.md and docs/agents/moe-*.md from the repo root and
+ * generates src/util/initFiles.ts with their contents embedded as template-
+ * literal strings so the daemon can write them at init without needing the
+ * source docs directory at runtime.
  *
  * Each generated file is stamped with a leading HTML comment
  *   <!-- moe-generated: sha=<hex12> -->
  * so `writeInitFiles` can detect a stale Moe-generated doc at upgrade time
  * and replace it, while still preserving user-authored customizations
  * (which won't carry the marker).
+ *
+ * NOTE: agent-context.md is no longer auto-injected into agent system
+ * prompts (role doc + CLAUDE.md cover the same ground). The file remains
+ * on disk in existing projects but is not regenerated for new ones.
  */
 import crypto from 'crypto';
 import fs from 'fs';
@@ -18,7 +22,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const rolesDir = path.join(repoRoot, 'docs', 'roles');
-const agentContextPath = path.join(repoRoot, 'docs', 'agent-context.md');
+const subagentsDir = path.join(repoRoot, 'docs', 'agents');
 const outPath = path.join(__dirname, '..', 'src', 'util', 'initFiles.ts');
 
 // Skip regeneration when docs dir is not available (e.g. Docker builds
@@ -50,12 +54,22 @@ const roleEntries = roleFiles.map(f => {
   return `  '${f}': \`${escapeTemplateLiteral(stamped)}\``;
 });
 
-const agentContext = fs.readFileSync(agentContextPath, 'utf-8');
-const agentContextStamped = stampMarker(agentContext);
+// Subagent definitions live under docs/agents/moe-<name>.md. Only files matching
+// that prefix are bundled — the directory also contains uppercase role docs
+// (ARCHITECT.md, WORKER.md, REVIEWER.md, README.md) that are documentation, not
+// Claude Code subagent definitions.
+const subagentFiles = fs.existsSync(subagentsDir)
+  ? fs.readdirSync(subagentsDir).filter(f => f.endsWith('.md') && f.startsWith('moe-')).sort()
+  : [];
+const subagentEntries = subagentFiles.map(f => {
+  const content = fs.readFileSync(path.join(subagentsDir, f), 'utf-8');
+  const stamped = stampMarker(content);
+  return `  '${f}': \`${escapeTemplateLiteral(stamped)}\``;
+});
 
 const output = `// =============================================================================
 // AUTO-GENERATED — DO NOT EDIT MANUALLY
-// Source of truth: docs/roles/*.md and docs/agent-context.md
+// Source of truth: docs/roles/*.md
 // Regenerate: npm run generate-init-files (runs automatically on build)
 // =============================================================================
 
@@ -76,10 +90,14 @@ ${roleEntries.join(',\n')}
 };
 
 /**
- * Content for .moe/agent-context.md, auto-generated from docs/agent-context.md.
- * Same sha-stamped marker convention as ROLE_DOCS.
+ * Claude Code subagent definitions, auto-generated from docs/agents/moe-*.md.
+ * \`writeInitFiles\` writes these to \`.moe/agents/\` so the agent launcher can
+ * mirror them into \`.claude/agents/\` for Claude Code's subagent loader.
+ * Same sha-marker convention as ROLE_DOCS.
  */
-export const AGENT_CONTEXT_CONTENT = \`${escapeTemplateLiteral(agentContextStamped)}\`;
+export const SUBAGENT_DOCS: Record<string, string> = {
+${subagentEntries.join(',\n')}
+};
 
 /**
  * Content for .moe/.gitignore
@@ -139,16 +157,28 @@ export function writeInitFiles(moePath: string): void {
     }
   }
 
-  // Write / upgrade agent-context.md
-  const agentContextPath = path.join(moePath, 'agent-context.md');
-  if (!fs.existsSync(agentContextPath)) {
-    fs.writeFileSync(agentContextPath, AGENT_CONTEXT_CONTENT);
-  } else {
-    const onDisk = fs.readFileSync(agentContextPath, 'utf-8');
-    if (shouldUpgradeGeneratedDoc(onDisk, AGENT_CONTEXT_CONTENT)) {
-      fs.writeFileSync(agentContextPath, AGENT_CONTEXT_CONTENT);
+  // Write Claude Code subagent defs to .moe/agents/. The agent launcher mirrors
+  // these into .claude/agents/ so Claude Code's subagent loader picks them up.
+  if (Object.keys(SUBAGENT_DOCS).length > 0) {
+    const agentsDir = path.join(moePath, 'agents');
+    if (!fs.existsSync(agentsDir)) {
+      fs.mkdirSync(agentsDir, { recursive: true });
+    }
+    for (const [filename, content] of Object.entries(SUBAGENT_DOCS)) {
+      const filePath = path.join(agentsDir, filename);
+      if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, content);
+        continue;
+      }
+      const onDisk = fs.readFileSync(filePath, 'utf-8');
+      if (shouldUpgradeGeneratedDoc(onDisk, content)) {
+        fs.writeFileSync(filePath, content);
+      }
     }
   }
+
+  // agent-context.md is no longer auto-written to new projects (role doc +
+  // CLAUDE.md cover the same ground). Existing projects keep their copy.
 
   // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
   const gitignorePath = path.join(moePath, '.gitignore');
@@ -159,4 +189,4 @@ export function writeInitFiles(moePath: string): void {
 `;
 
 fs.writeFileSync(outPath, output);
-console.log('Generated ' + outPath + ' (' + roleFiles.length + ' role docs + agent-context, sha-stamped)');
+console.log('Generated ' + outPath + ' (' + roleFiles.length + ' role docs + ' + subagentFiles.length + ' subagents, sha-stamped)');

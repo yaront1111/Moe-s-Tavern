@@ -1,0 +1,125 @@
+{
+  "id": "task-405c6f84",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Fix JetBrains connection lifecycle status and daemon refcount leaks",
+  "description": "Deep sweep finding: MoeProjectService registers the daemon PID on every WebSocket onOpen, but only unregisters once on dispose. Reconnects to the same daemon can increment MoeProjectRegistry's refcount repeatedly and prevent the spawned daemon from being killed on final dispose. Manual disconnect sets wsClient=null before close; the stale onClose callback is ignored and disconnect() itself does not publish a disconnected status, so UI/status bar listeners may remain stale. Fix JetBrains connection lifecycle bookkeeping and status notifications.",
+  "definitionOfDone": [
+    "MoeProjectRegistry register/unregister calls are balanced across reconnects, manual disconnect, daemon shutdown, and dispose for a single project.",
+    "Reconnects to the same daemon PID do not inflate refcount; switching daemon PIDs unregisters the previous PID safely.",
+    "Manual disconnect publishes a disconnected status and stops refresh/retry/reconnect timers without relying on ignored stale onClose callbacks.",
+    "Daemon shutdown and project dispose still avoid killing a daemon used by other open projects.",
+    "Regression tests or service-level tests cover reconnect refcount, manual disconnect status notification, and dispose behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Make daemon PID registration idempotent per MoeProjectService instance. On successful onOpen, if connectedDaemonPid is already the same PID, do not register again; if it differs, unregister the previous PID before registering the new one with error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectRegistryTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+      ],
+      "note": "Added MoeDaemonRegistrationTracker and wired MoeProjectService onOpen through it so repeated opens for the same PID do not re-register; switching PIDs unregisters the previous PID before registering the new one. Added tests first: they failed before implementation with missing tracker/test seam, then passed after implementation. Focused Gradle check passed: gradlew.bat test --no-daemon --tests com.moe.util.MoeProjectRegistryTest --tests com.moe.services.MoeProjectServiceTest.",
+      "startedAt": "2026-04-30T15:47:05.212Z",
+      "completedAt": "2026-04-30T15:52:41.147Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update disconnect/onClose/onError/dispose lifecycle so manual disconnect publishes `onStatus(false, \"Disconnected\")`, cancels timers, and either unregisters the active PID at the correct ownership boundary or leaves a clearly documented dispose-only registration that cannot leak on reconnect.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+      ],
+      "note": "Updated disconnect lifecycle: manual disconnect now cancels reconnect/retry timers via cancelConnectionTimers(), stops auto-refresh, clears wsClient under wsLock, marks connected/connecting false, and publishes onStatus(false, \"Disconnected\") directly instead of relying on a stale onClose callback. dispose uses the same cleanup with notifyStatus=false and unregisters through the registration tracker exactly once, preserving dispose-only daemon ownership. Focused check passed: gradlew.bat test --no-daemon --tests com.moe.services.MoeProjectServiceTest.",
+      "startedAt": "2026-04-30T15:52:45.148Z",
+      "completedAt": "2026-04-30T15:53:07.853Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests or a small test seam for MoeProjectRegistry/MoeProjectService lifecycle: repeated onOpen same PID increments once, switching PID balances old/new, manual disconnect notifies listeners, dispose unregisters once. If UI-service tests are hard, extract refcount helper for testability.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectRegistryTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectRegistryTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt"
+      ],
+      "note": "Added lifecycle regression coverage via a small test seam. MoeProjectRegistryTest covers repeated same-PID registration (register once), PID switching (old unregistered/new registered), and unregisterCurrent idempotence. MoeProjectServiceTest covers manual disconnect status notification and dispose unregistering a connected daemon PID only once using internal registry test introspection. Red checks failed before implementation/test seam (missing tracker/test APIs); focused green check passed: gradlew.bat test --no-daemon --tests com.moe.util.MoeProjectRegistryTest --tests com.moe.services.MoeProjectServiceTest.",
+      "startedAt": "2026-04-30T15:53:19.893Z",
+      "completedAt": "2026-04-30T15:54:37.679Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run JetBrains tests/build once the Gradle wrapper blocker is fixed; until then run the available Gradle command and record the wrapper failure as blocked verification. Ensure test/error handling notes are included in the worker handoff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/gradle/wrapper/gradle-wrapper.jar"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectRegistryTest.kt"
+      ],
+      "note": "Validation complete: baseline JetBrains tests passed before edits; focused red/green lifecycle tests passed after implementation. Final full validation in moe-jetbrains: .\\gradlew.bat test buildPlugin --no-daemon => BUILD SUCCESSFUL. git diff --check on the four modified JetBrains files exited 0 (only existing CRLF normalization warnings). Wrapper works. Build warnings are pre-existing configuration warnings (since-build lower than target, Kotlin stdlib auto-add, Gradle IntelliJ Plugin 1.x support notice).",
+      "startedAt": "2026-04-30T15:54:50.363Z",
+      "completedAt": "2026-04-30T15:56:59.252Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:03:34.729Z",
+  "updatedAt": "2026-04-30T18:24:15.030Z",
+  "planSubmittedAt": "2026-04-28T08:03:49.938Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected leaving refcount cleanup only to dispose because reconnects are normal and can happen many times in one project session. Prefer idempotent register-per-project-PID behavior or balanced unregister on connection close/manual disconnect.",
+    "codebaseInsights": "MoeProjectService.connectedDaemonPid is set on open and unregisters only in dispose. Manual disconnect nulls wsClient before close, causing onClose to treat the callback as stale and skip publishStatus. The registry is process-local refcounting across open projects.",
+    "risks": "Do not kill a daemon on transient reconnect if the same project is about to reconnect. Separate connection refcount from spawned process ownership if needed. Include error handling and tests; Gradle wrapper build is separately tracked.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectRegistry.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/statusbar/MoeStatusBarWidget.kt"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:03:49.940Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T15:47:05.212Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T15:57:59.348Z",
+  "reviewStartedAt": "2026-04-30T15:57:59.348Z",
+  "reviewCompletedAt": "2026-04-30T18:24:15.030Z"
+}

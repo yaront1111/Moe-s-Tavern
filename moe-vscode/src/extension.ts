@@ -217,13 +217,13 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
-            items.push({ label: 'Restart Daemon', description: 'Disconnect and reconnect' });
+            items.push({ label: 'Reconnect to Daemon', description: 'Disconnect and connect again' });
 
             const selected = await vscode.window.showQuickPick(items, {
                 placeHolder: 'Daemon Status'
             });
 
-            if (selected?.label === 'Restart Daemon') {
+            if (selected?.label === 'Reconnect to Daemon') {
                 vscode.commands.executeCommand('moe.restartDaemon');
             }
         })

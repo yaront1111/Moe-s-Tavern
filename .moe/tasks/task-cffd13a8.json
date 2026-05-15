@@ -1,0 +1,105 @@
+{
+  "id": "task-cffd13a8",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Clear stale rejectionDetails on reason-only QA rejection",
+  "description": "Deep sweep finding: packages/moe-daemon/src/tools/qaReject.ts only writes `rejectionDetails` when structured feedback is provided. If a task previously had structured details and a later QA rejection is reason-only, the tool response says `rejectionDetails: null` but the task retains stale old details in state, misleading future workers and get_context/claim_next_task.",
+  "definitionOfDone": [
+    "Reason-only qa_reject explicitly clears any previous rejectionDetails from the persisted task.",
+    "Structured qa_reject still stores current failedDodItems/issues and replaces old details atomically.",
+    "Regression test covers structured rejection followed by reason-only rejection and verifies get_context/claim response no longer expose old details.",
+    "packages/moe-daemon npm test and build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update qaReject so reason-only rejection explicitly clears previous rejectionDetails while structured rejection replaces them atomically; preserve existing validation error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "qa_reject now always persists rejectionDetails in the task update payload: structured feedback stores/replaces current details, while reason-only rejections write null to clear stale details. Targeted qaReject tests passed: npm test -- --run src/tools/tools.test.ts -t \"moe.qa_reject\" (15 passed, 156 skipped).",
+      "startedAt": "2026-04-30T14:49:06.318Z",
+      "completedAt": "2026-04-30T14:50:56.007Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add regression test: reject with structured details, resubmit/re-review, reject reason-only, then verify stored task/get_context/claim_next_task no longer expose old details.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Added regression covering structured rejection replacement, then reason-only rejection clearing persisted details, and verification through get_context plus claim_next_task. TDD red verified by temporarily restoring old conditional persistence: new test failed with stale details; restored fix and qaReject targeted suite passed (16 passed, 156 skipped).",
+      "startedAt": "2026-04-30T14:51:22.279Z",
+      "completedAt": "2026-04-30T14:52:52.735Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run targeted qaReject/getContext/claim tests plus daemon test/build validation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Final verification complete. Adversarial review of relevant diff found intended null-clearing semantics only: reason-only writes null, structured writes object, existing validation/races unchanged. Tests/build: targeted qaReject/get_context/claim_next_task suite passed (45 passed, 127 skipped); full packages/moe-daemon npm test passed (25 files, 454 tests); npm run build passed; git diff --check on affected files passed with existing line-ending warnings only.",
+      "startedAt": "2026-04-30T14:53:00.990Z",
+      "completedAt": "2026-04-30T14:53:57.359Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [
+    {
+      "id": "comment-4d7ca53d",
+      "author": "architect-2992",
+      "content": "Token-budget check: clearing stale rejectionDetails should prevent old issue blobs from resurfacing in get_context. Tests should verify reason-only rejection does not retain bulky stale details.",
+      "timestamp": "2026-04-28T08:03:57.785Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.284Z",
+  "updatedAt": "2026-04-30T18:07:10.883Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.437Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: always include `rejectionDetails: rejectionDetails ?? null` in updatePayload. Rejected: leave stale details and rely on reopenReason because workers consume both fields.",
+    "codebaseInsights": "qaReject returns `rejectionDetails: null` when no structured feedback is provided, but updatePayload omits the field, so StateManager preserves old task.rejectionDetails.",
+    "risks": "Need distinguish omitted structured feedback from explicit empty arrays. Fix should not erase details when current rejection includes issues/failedDodItems. Include error handling for invalid issue payloads.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.438Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T14:49:06.318Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T14:54:24.957Z",
+  "reviewStartedAt": "2026-04-30T14:54:24.957Z",
+  "reviewCompletedAt": "2026-04-30T18:07:10.883Z"
+}

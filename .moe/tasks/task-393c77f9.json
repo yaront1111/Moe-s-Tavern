@@ -1,0 +1,152 @@
+{
+  "id": "task-393c77f9",
+  "epicId": "epic-0110ece1",
+  "title": "[HIGH] Prevent stale-worker cleanup from stealing active task assignments",
+  "description": "Deep sweep finding: StateManager.checkBlockedTimeouts deletes any worker whose lastActivityAt is older than staleWorkerTimeoutMs (default 30 minutes), regardless of whether the worker is actively assigned to a WORKING/PLANNING/REVIEW task. Long coding/review sessions can exceed 30 minutes without MCP calls, causing deleteWorker to clear assignedWorkerId and allowing another agent to claim the same task. Startup purge also only clears assignments for worker IDs that have worker files; orphan assignedWorkerId values without worker files remain permanently unclaimable. Fix worker presence cleanup so active assignments are preserved or explicitly heartbeated, and orphan assignments are handled safely.",
+  "definitionOfDone": [
+    "Stale-worker cleanup does not clear assignedWorkerId for active in-progress tasks solely because lastActivityAt is old; active workers are marked stale/unknown or require an explicit heartbeat policy instead of silently freeing the task.",
+    "Worker lastActivityAt is refreshed by relevant worker-owned tools (get_context, start_step, complete_step, complete_task, wait_for_task/check_approval as appropriate) without corrupting task state.",
+    "Startup/load cleanup detects tasks assigned to missing worker records and either clears them with an activity event or exposes them as claimable according to a documented safe rule.",
+    "claim_next_task and wait_for_task treat orphaned assignments consistently and never leave tasks permanently unclaimable.",
+    "Regression tests simulate a long-running active worker, an idle stale worker, and a task assigned to a missing worker file."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Define worker presence semantics in StateManager: active assignment statuses that must not be freed by generic stale cleanup, idle/reading/waiting statuses that may be cleaned, and orphan assignment handling. Implement a helper to detect task assignments for a worker and to detect assignedWorkerId values with no worker record.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Added explicit worker-presence helpers: active task-assignment statuses, cleanup-eligible idle worker statuses, orphan-assignment detection, claimable-task predicate, and safe worker heartbeat helper. Verified with npm test -- --run src/state/StateManager.test.ts (92 passed).",
+      "startedAt": "2026-04-30T13:58:14.763Z",
+      "completedAt": "2026-04-30T14:02:59.441Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update checkBlockedTimeouts/purgeAllWorkers/load cleanup so stale active workers are not deleted in a way that clears their task assignment. For orphan task assignments, choose one documented safe behavior (clear with activity event or make claim_next_task/wait_for_task treat as claimable) and implement it consistently with robust error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "Updated stale cleanup and claimability: checkBlockedTimeouts now preserves workers that own active task assignments instead of deleting them; load logs orphan task assignments as claimable; purgeAllWorkers clears orphan assignments after startup purge with WORKER_DISCONNECTED activity; claim_next_task and wait_for_task use StateManager.isTaskClaimable and repair orphan assignments before claiming. Verified with npm test -- --run src/state/StateManager.test.ts src/tools/tools.test.ts src/tools/waitForTask.test.ts (261 passed).",
+      "startedAt": "2026-04-30T14:03:04.523Z",
+      "completedAt": "2026-04-30T14:04:35.644Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Refresh worker lastActivityAt/status on worker-owned operations that indicate liveness: get_context, start_step, complete_step, complete_task, check_approval, wait_for_task entry/timeout, and chat reads/sends where applicable. Avoid unnecessary task updates just for heartbeat; use updateWorker when the worker exists.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/checkApproval.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/checkApproval.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Added safe worker heartbeat refreshes via StateManager.touchWorker in get_context, start_step, complete_step, complete_task, check_approval, wait_for_task entry/timeout, chat_read, and chat_send. Worker status updates are limited to already status-mutating worker operations (CODING/IDLE) and no-op when the worker record is absent. Verified with npm test -- --run src/tools/tools.test.ts src/tools/completeStep.test.ts src/tools/completeTask.test.ts src/tools/startStep.test.ts src/tools/waitForTask.test.ts (181 passed).",
+      "startedAt": "2026-04-30T14:04:40.677Z",
+      "completedAt": "2026-04-30T14:06:55.223Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add regression tests for: stale CODING worker with currentTaskId remains assigned; stale IDLE worker is cleaned; orphan assignedWorkerId is recoverable; wait_for_task wakes for recoverable orphan tasks; lastActivityAt changes on complete_step/check_approval. Run packages/moe-daemon npm test and build.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/checkApproval.ts",
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Regression and final validation complete for stale-worker assignment hardening. Added tests for stale active workers preserving assignments, idle stale worker cleanup, startup purge/orphan clearing, orphan claim repair, wait_for_task orphan availability, and worker heartbeat updates. Ran targeted suites: StateManager/tools/waitForTask (268 passed), tools/start/complete/check suites (181 passed), full daemon npm test (25 files/453 tests passed), npm run build (tsc passed), and git diff --check on affected files (exit 0; line-ending warnings only). Adversarial review finding: heartbeat writes must be best-effort because some tools mutate task state before touching worker liveness; touchWorker now catches/logs heartbeat failures instead of causing already-applied task operations to return failure.",
+      "startedAt": "2026-04-30T14:07:11.322Z",
+      "completedAt": "2026-04-30T14:12:08.600Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 11,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:00:12.920Z",
+  "updatedAt": "2026-04-30T17:55:49.534Z",
+  "planSubmittedAt": "2026-04-28T08:00:34.682Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected simply raising staleWorkerTimeoutMs because long tasks and paused IDE sessions can still exceed it. Rejected deleting active workers while leaving task assignment intact because that creates owners that cannot be updated. Prefer explicit active/orphan assignment semantics with tests.",
+    "codebaseInsights": "Worker lastActivityAt is only updated by updateWorker, but many worker-owned task operations update only the task. deleteWorker intentionally clears task assignments, so stale deletion is dangerous for active task ownership.",
+    "risks": "Do not make abandoned tasks impossible to recover. The safe rule should distinguish active assigned task statuses from idle/disconnected workers and should log/activity-record any cleanup. Include error handling and test coverage for missing files and malformed worker records.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/startStep.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/checkApproval.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:00:34.685Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T13:58:14.763Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T14:12:58.673Z",
+  "reviewStartedAt": "2026-04-30T14:12:58.673Z",
+  "reviewCompletedAt": "2026-04-30T17:55:49.534Z"
+}
