@@ -677,11 +677,18 @@ function Invoke-MoeRpcRaw {
 
 if ($Team) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
-    # Include role so the daemon binds team.role for role-gated tools
-    # (enter_governance requires team.role === 'governor', mention routing groups
-    # by team.role, etc.). create_team is idempotent on name+role, so multiple
-    # roles can share a project-shaped team name like "Cordum".
-    $createTeamJson = ConvertTo-Json @{ name = $Team; role = $Role } -Compress
+    # Team creation is idempotent on (name, role). enter_governance strictly requires
+    # team.role === 'governor', so the governor role gets a role-bound team. For
+    # architect/worker/qa we omit role: a user-supplied $Team like "Cordum" should
+    # mean ONE shared team across those roles. The mention router falls back to a
+    # workerId-substring match for @architects/@workers/@qa when team.role isn't
+    # set, so role-based addressing still works.
+    if ($Role -eq 'governor') {
+        $createTeamHash = @{ name = $Team; role = 'governor' }
+    } else {
+        $createTeamHash = @{ name = $Team }
+    }
+    $createTeamJson = ConvertTo-Json $createTeamHash -Compress
     $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
     try {
         $createResult = Invoke-MoeRpcRaw -RpcJson $createRpc

@@ -950,10 +950,16 @@ if [ -n "$TEAM" ]; then
     fi
 
     # Use python to safely construct JSON (prevents injection from special chars in team name).
-    # Include role so the daemon binds team.role for role-gated tools
-    # (enter_governance requires team.role === 'governor', mention routing groups
-    # by team.role, etc.). create_team is idempotent on name+role.
-    TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1],'role':sys.argv[2]}))" "$TEAM" "$ROLE" 2>/dev/null)
+    # Team creation is idempotent on (name, role). enter_governance strictly requires
+    # team.role === 'governor', so the governor role gets a role-bound team. For
+    # architect/worker/qa we omit role: a user-supplied $TEAM like "Cordum" should
+    # mean ONE shared team across those roles. The mention router falls back to a
+    # workerId-substring match for @architects/@workers/@qa when team.role isn't set.
+    if [ "$ROLE" = "governor" ]; then
+        TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1],'role':'governor'}))" "$TEAM" 2>/dev/null)
+    else
+        TEAM_CREATE_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1]}))" "$TEAM" 2>/dev/null)
+    fi
     TEAM_CREATE_RPC=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'moe.create_team','arguments':json.loads(sys.argv[1])}}))" "$TEAM_CREATE_JSON" 2>/dev/null)
 
     TEAM_RESULT=""
