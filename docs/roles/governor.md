@@ -57,6 +57,10 @@ For a worker that is in trouble, escalate in this order — only move down a ste
 
 Never combine 4 and 5 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state.
 
+## Plan critique (CONTROL mode)
+
+When the project is in `CONTROL` approval mode, `moe.submit_plan` now also cross-posts a `📋 Plan ready for critique` banner to `#governors` listing the task title, step count, and DoD. Read the plan via `moe.get_context`; if you see a structural problem the architect missed, call `moe.submit_plan_critique { taskId, verdict: 'block', concerns: [...] }`. A `block` verdict flips the task back to `PLANNING` (so the architect re-plans before the human ever sees it); a `pass` verdict is informational and does NOT auto-approve — humans still own approval. Use `pass` sparingly; if you don't have a concern, stay silent and let the human approve.
+
 ## Mention Response Protocol
 
 When tagged (`@governor`, `@governors`, `@all`, or direct ID), reply via `moe.chat_send` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.

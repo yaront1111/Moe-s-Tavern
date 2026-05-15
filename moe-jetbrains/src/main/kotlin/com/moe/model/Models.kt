@@ -58,6 +58,45 @@ data class ImplementationStep(
     val completedAt: String? = null
 )
 
+data class TaskMetrics(
+    val plannedStepCount: Int? = null,
+    val executedStepCount: Int? = null,
+    val reopenCount: Int? = null,
+    val rejectCount: Int? = null,
+    val wallClockMs: Long? = null,
+    val firstClaimAt: String? = null,
+    val doneAt: String? = null
+)
+
+data class TaskBudget(
+    val wallClockMs: Long? = null,
+    val warnedAt: String? = null,
+    val escalatedAt: String? = null
+)
+
+data class HandoffNote(
+    val from: String? = null,
+    val to: String? = null,
+    val createdAt: String? = null,
+    val whatIsDone: String? = null,
+    val whatRemains: String? = null,
+    val pitfalls: String? = null,
+    val openQuestions: String? = null
+)
+
+data class FailedDodItem(
+    val item: String,
+    val rejectedAt: String? = null,
+    val rejectedBy: String? = null
+)
+
+data class PlanCritiqueResult(
+    val verdict: String,
+    val concerns: List<String>? = null,
+    val reviewedBy: String? = null,
+    val reviewedAt: String? = null
+)
+
 data class Task(
     val id: String,
     val epicId: String,
@@ -79,7 +118,30 @@ data class Task(
     // stepIds already completed (cross-check for complete_task)
     val stepsCompleted: List<String>? = null,
     val reopenCount: Int = 0,
-    val taskRails: List<String>? = null
+    val taskRails: List<String>? = null,
+    // Schema additions for budget + metrics surface (rendered when present)
+    val metrics: TaskMetrics? = null,
+    val budget: TaskBudget? = null,
+    val priorHandoffs: List<HandoffNote>? = null,
+    val failedDodItems: List<FailedDodItem>? = null,
+    val planCritiqueResult: PlanCritiqueResult? = null
+)
+
+// Aggregates returned by the daemon's moe.list_metrics tool.
+data class MetricsAggregate(
+    val firstPassApprovalPct: Double? = null,
+    val avgWallClockMs: Long? = null,
+    val avgReopenCount: Double? = null,
+    val totalCompleted: Int? = null,
+    val perEpic: List<EpicMetricsAggregate> = emptyList()
+)
+
+data class EpicMetricsAggregate(
+    val epicId: String,
+    val epicTitle: String? = null,
+    val completed: Int = 0,
+    val avgReopenCount: Double? = null,
+    val avgWallClockMs: Long? = null
 )
 
 data class DaemonInfo(

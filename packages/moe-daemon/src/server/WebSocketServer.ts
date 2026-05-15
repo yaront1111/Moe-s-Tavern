@@ -17,6 +17,10 @@ import {
   normalizeActivityLogParams,
   queryActivityLog,
 } from '../tools/getActivityLog.js';
+import {
+  computeDashboardAggregate,
+  filterTasksForMetrics,
+} from '../util/metrics.js';
 
 export type PluginMessage =
   | { type: 'PING' }
@@ -43,6 +47,17 @@ export type PluginMessage =
   | { type: 'ARCHIVE_DONE_TASKS'; payload?: { epicId?: string } }
   | { type: 'ADD_TASK_COMMENT'; payload: { taskId: string; content: string; author?: string } }
   | { type: 'GET_CHANNELS' }
+  | { type: 'GET_METRICS'; payload?: { epicId?: string; sinceIso?: string } }
+  | {
+      type: 'AGENT_TOOL_EVENT';
+      payload: {
+        workerId?: string;
+        tool?: string;
+        args?: unknown;
+        result?: unknown;
+        durationMs?: number;
+      };
+    }
   | { type: 'GET_MESSAGES'; payload: { channel: string; limit?: number; sinceId?: string } }
   | { type: 'SEND_MESSAGE'; payload: { channel: string; content: string } }
   | { type: 'GET_PINS'; payload: { channel: string } }
@@ -66,7 +81,9 @@ export class MoeWebSocketServer {
     private readonly state: StateManager,
     private readonly mcpAdapter: McpAdapter
   ) {
-    this.wss = new WSS({ server: httpServer });
+    // Cap incoming frame size to prevent memory exhaustion from malicious clients.
+    // 2MB is generous for state snapshots and MCP tool args; activity log queries are paginated.
+    this.wss = new WSS({ server: httpServer, maxPayload: 2 * 1024 * 1024 });
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req));
     this.wss.on('error', (error) => {
       logger.error({ error }, 'WebSocket server error');
@@ -219,7 +236,7 @@ export class MoeWebSocketServer {
                   PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
                   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
                   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                  REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING'],
                   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                   ARCHIVED: ['BACKLOG', 'WORKING']
                 };
@@ -232,7 +249,8 @@ export class MoeWebSocketServer {
                   const columnLimits = this.state.project?.settings?.columnLimits;
                   if (columnLimits && typeof columnLimits[newStatus] === 'number') {
                     const limit = columnLimits[newStatus];
-                    const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
+                    // Exclude ARCHIVED tasks from WIP counts — they're not in flight.
+                    const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus && t.status !== 'ARCHIVED').length;
                     if (currentCount >= limit) {
                       throw new Error(`Column ${newStatus} is at its WIP limit of ${limit}`);
                     }
@@ -520,6 +538,59 @@ export class MoeWebSocketServer {
         case 'GET_CHANNELS': {
           const channels = this.state.getChannels();
           this.safeSend(ws, JSON.stringify({ type: 'CHANNELS', payload: { channels } }));
+          return;
+        }
+        case 'GET_METRICS': {
+          const payload = (message.payload || {}) as { epicId?: string; sinceIso?: string };
+          const epicId = typeof payload.epicId === 'string' && payload.epicId.length > 0 ? payload.epicId : undefined;
+          const sinceIso = typeof payload.sinceIso === 'string' && payload.sinceIso.length > 0 ? payload.sinceIso : undefined;
+          if (sinceIso && !Number.isFinite(Date.parse(sinceIso))) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'GET_METRICS sinceIso must be ISO 8601' }));
+            return;
+          }
+          const filtered = filterTasksForMetrics(this.state.tasks.values(), { epicId, sinceIso });
+          const aggregate = computeDashboardAggregate(filtered, (id) => this.state.getEpic(id)?.title);
+          this.safeSend(ws, JSON.stringify({ type: 'METRICS', payload: aggregate }));
+          return;
+        }
+        case 'AGENT_TOOL_EVENT': {
+          const payload = (message.payload || {}) as {
+            workerId?: string;
+            tool?: string;
+            args?: unknown;
+            result?: unknown;
+            durationMs?: number;
+          };
+          // Fire-and-forget telemetry from @moe/claude-plugin's PostToolUse hook.
+          // Persisted to the activity log so the metrics tab can correlate later.
+          const workerId = typeof payload.workerId === 'string' ? payload.workerId : 'unknown';
+          const tool = typeof payload.tool === 'string' ? payload.tool : 'unknown';
+          this.state.appendActivity('AGENT_TOOL_EVENT', {
+            workerId,
+            tool,
+            durationMs: typeof payload.durationMs === 'number' ? payload.durationMs : undefined,
+          });
+          // Also fold into the worker's current task metrics so the Metrics
+          // tab can render per-task tool counts. Worker may not have a
+          // currentTaskId (idle / between claims) — silently drop in that case.
+          const worker = workerId !== 'unknown' ? this.state.getWorker(workerId) : null;
+          const taskId = worker?.currentTaskId;
+          if (taskId) {
+            const task = this.state.getTask(taskId);
+            if (task) {
+              const priorMetrics = task.metrics ?? {};
+              const breakdown: Record<string, number> = { ...(priorMetrics.agentToolBreakdown ?? {}) };
+              breakdown[tool] = (breakdown[tool] ?? 0) + 1;
+              const nextMetrics = {
+                ...priorMetrics,
+                agentToolCallCount: (priorMetrics.agentToolCallCount ?? 0) + 1,
+                agentToolBreakdown: breakdown,
+              };
+              this.state.updateTask(taskId, { metrics: nextMetrics }).catch((err) => {
+                logger.debug({ err, taskId }, 'Failed to fold AGENT_TOOL_EVENT into task metrics');
+              });
+            }
+          }
           return;
         }
         case 'GET_MESSAGES': {

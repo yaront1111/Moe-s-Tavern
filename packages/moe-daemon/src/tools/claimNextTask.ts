@@ -3,6 +3,8 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { computeFileCollisions } from '../util/affectedFiles.js';
+import { maybeApplyBudgetWarnings } from '../util/budget.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -22,7 +24,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         epicId: { type: 'string' },
         workerId: { type: 'string' },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
-        taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' }
+        taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
+        preferAdjacentInEpic: {
+          type: 'boolean',
+          description: 'When true (default), prefer claimable tasks in the worker\'s current/last epic before falling through to global ranking. Lets a worker waiting on wait_for_task pick up the next claimable task in the same epic.'
+        }
       },
       required: ['statuses'],
       additionalProperties: false
@@ -30,7 +36,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       // Use StateManager's mutex to prevent race conditions with plugin assignments
       return state.runExclusive(async () => {
-        const params = (args || {}) as { statuses?: string[]; epicId?: string; workerId?: string; replaceExisting?: boolean; taskId?: string };
+        const params = (args || {}) as {
+          statuses?: string[];
+          epicId?: string;
+          workerId?: string;
+          replaceExisting?: boolean;
+          taskId?: string;
+          preferAdjacentInEpic?: boolean;
+        };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
           throw missingRequired('statuses');
@@ -81,11 +94,31 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
           tasks = [requested];
         } else {
+          // Compute the worker's preferred epic for adjacency: explicit
+          // params.epicId wins, then their currently-recorded epic on the
+          // worker entity (set when they last claimed a task in the same
+          // wait loop). Default preferAdjacentInEpic to true.
+          const preferAdjacent = params.preferAdjacentInEpic !== false;
+          let adjacentEpicId: string | undefined = params.epicId;
+          if (!adjacentEpicId && preferAdjacent && params.workerId) {
+            const w = state.getWorker(params.workerId);
+            adjacentEpicId = w?.epicId || undefined;
+          }
           tasks = Array.from(state.tasks.values())
             .filter((t) => statuses.includes(t.status))
             .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
             .filter((t) => state.isTaskClaimable(t))
             .sort((a, b) => {
+              // When preferAdjacentInEpic is on and a hint epic is set,
+              // rank in-epic candidates ahead of out-of-epic. This lets a
+              // worker idling on wait_for_task pick up an adjacent task
+              // whose dependencies just cleared, rather than dropping back
+              // to the global pool.
+              if (preferAdjacent && adjacentEpicId) {
+                const aIn = a.epicId === adjacentEpicId ? 0 : 1;
+                const bIn = b.epicId === adjacentEpicId ? 0 : 1;
+                if (aIn !== bIn) return aIn - bIn;
+              }
               const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
               const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
               if (pa !== pb) return pa - pb;
@@ -169,8 +202,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             });
 
             try {
-              const roleLabel = statuses.includes('PLANNING') ? 'architect'
-                : statuses.includes('REVIEW') ? 'qa' : 'worker';
+              // Prefer the worker's registered team role over inferring from
+              // the requested statuses (a worker may legitimately claim
+              // across multiple status sets).
+              const team = state.getTeamForWorker(params.workerId);
+              const roleLabel = team?.role
+                ?? (statuses.includes('PLANNING')
+                  ? 'architect'
+                  : statuses.includes('REVIEW') ? 'qa' : 'worker');
               await state.postToGeneral(`${params.workerId} is online (${roleLabel})`);
             } catch { /* never block claim */ }
           } else {
@@ -196,6 +235,37 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             reason: 'All candidate tasks were taken by concurrent workers; wait and retry.'
           }
         };
+      }
+
+      // Record firstClaimAt the first time a worker picks this task up, so
+      // budget/aggregate metrics can compute wall-clock duration. Idempotent:
+      // we never overwrite an existing timestamp.
+      if (!task.metrics?.firstClaimAt) {
+        const nextMetrics = { ...(task.metrics ?? {}), firstClaimAt: new Date().toISOString() };
+        try {
+          task = await state.updateTask(task.id, { metrics: nextMetrics });
+        } catch { /* never block claim */ }
+      }
+
+      // Budget warn/escalate checks run on every WORKING-path tool call so
+      // crossings get caught the next time the worker touches Moe — no separate
+      // scheduler needed.
+      task = await maybeApplyBudgetWarnings(state, task);
+
+      // Compute file-collision warnings against every OTHER WORKING task.
+      // Advisory only — never blocks the claim. We post a heads-up to
+      // #workers if there's any overlap so peers can sync diffs.
+      const fileCollision = computeFileCollisions(task, state.tasks.values());
+      if (fileCollision.length > 0) {
+        try {
+          const summary = fileCollision
+            .map((c) => `${c.task}: ${c.files.slice(0, 3).join(', ')}${c.files.length > 3 ? '…' : ''}`)
+            .join(' | ');
+          await state.postToRoleChannel(
+            'workers',
+            `⚠️ file collision on ${task.id}: ${summary}`
+          );
+        } catch { /* never block tool */ }
       }
 
       // Post system message to #general so the team sees who claimed it
@@ -230,6 +300,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // Surface a priorHandoffs hint — workers picking up a released task
+      // should pull the handoff history before assuming nothing's been done.
+      const hasHandoffs = Array.isArray(task.priorHandoffs) && task.priorHandoffs.length > 0;
+      const handoffHint = hasHandoffs
+        ? `Previous worker(s) left ${task.priorHandoffs!.length} handoff note(s). Call moe.get_handoff_history { taskId: "${task.id}" } before starting.`
+        : undefined;
+
       return {
         hasNext: true,
         task: {
@@ -243,7 +320,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           reopenReason: task.reopenReason,
           rejectionDetails: task.rejectionDetails || null,
           roleChannelId,
-          generalChannelId
+          generalChannelId,
+          priorHandoffCount: hasHandoffs ? task.priorHandoffs!.length : 0,
         },
         ...(task.reopenCount > 0
           ? {
@@ -251,17 +329,25 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             }
           : {}),
         ...(chatHint ? { chatHint } : {}),
-        nextAction: {
-          tool: 'moe.get_context',
-          args: { taskId: task.id },
-          reason: 'Always fetch full task context (rails, DoD, memory) before acting.',
-          // get_context will recommend the role-appropriate skill once it sees task.status,
-          // so we don't pre-recommend here unless the task is reopened — the reopen
-          // signal is exactly the situation receiving-code-review covers.
-          ...(task.reopenCount > 0
-            ? { recommendedSkill: recommendSkillFor('worker', 'reopened') }
-            : {})
-        }
+        ...(handoffHint ? { handoffHint } : {}),
+        ...(fileCollision.length > 0 ? { fileCollision } : {}),
+        nextAction: hasHandoffs
+          ? {
+              tool: 'moe.get_handoff_history',
+              args: { taskId: task.id },
+              reason: 'This task was released with handoff notes; read them before claiming work.',
+            }
+          : {
+              tool: 'moe.get_context',
+              args: { taskId: task.id },
+              reason: 'Always fetch full task context (rails, DoD, memory) before acting.',
+              // get_context will recommend the role-appropriate skill once it sees task.status,
+              // so we don't pre-recommend here unless the task is reopened — the reopen
+              // signal is exactly the situation receiving-code-review covers.
+              ...(task.reopenCount > 0
+                ? { recommendedSkill: recommendSkillFor('worker', 'reopened') }
+                : {})
+            }
       };
       });
     }

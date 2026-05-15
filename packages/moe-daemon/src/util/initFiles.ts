@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { atomicWriteText } from './atomicWrite.js';
 
 /**
  * Full content of role docs, auto-generated from docs/roles/*.md.
@@ -105,7 +106,7 @@ When you discover a non-obvious constraint, gotcha, or pattern during exploratio
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=1dfcffc79f0c -->
+  'governor.md': `<!-- moe-generated: sha=3aa528c96f55 -->
 
 # Governor
 
@@ -165,6 +166,10 @@ For a worker that is in trouble, escalate in this order — only move down a ste
 5. **\`moe.set_task_status\` back to PLANNING** if QA has rejected twice on the same fundamental issue. This is the explicit "needs re-plan" handoff; the architect picks it up.
 
 Never combine 4 and 5 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state.
+
+## Plan critique (CONTROL mode)
+
+When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also cross-posts a \`📋 Plan ready for critique\` banner to \`#governors\` listing the task title, step count, and DoD. Read the plan via \`moe.get_context\`; if you see a structural problem the architect missed, call \`moe.submit_plan_critique { taskId, verdict: 'block', concerns: [...] }\`. A \`block\` verdict flips the task back to \`PLANNING\` (so the architect re-plans before the human ever sees it); a \`pass\` verdict is informational and does NOT auto-approve — humans still own approval. Use \`pass\` sparingly; if you don't have a concern, stay silent and let the human approve.
 
 ## Mention Response Protocol
 
@@ -530,12 +535,12 @@ export function writeInitFiles(moePath: string): void {
   for (const [filename, content] of Object.entries(ROLE_DOCS)) {
     const filePath = path.join(rolesDir, filename);
     if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, content);
+      atomicWriteText(filePath, content);
       continue;
     }
     const onDisk = fs.readFileSync(filePath, 'utf-8');
     if (shouldUpgradeGeneratedDoc(onDisk, content)) {
-      fs.writeFileSync(filePath, content);
+      atomicWriteText(filePath, content);
     }
   }
 
@@ -549,12 +554,12 @@ export function writeInitFiles(moePath: string): void {
     for (const [filename, content] of Object.entries(SUBAGENT_DOCS)) {
       const filePath = path.join(agentsDir, filename);
       if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, content);
+        atomicWriteText(filePath, content);
         continue;
       }
       const onDisk = fs.readFileSync(filePath, 'utf-8');
       if (shouldUpgradeGeneratedDoc(onDisk, content)) {
-        fs.writeFileSync(filePath, content);
+        atomicWriteText(filePath, content);
       }
     }
   }
@@ -565,6 +570,6 @@ export function writeInitFiles(moePath: string): void {
   // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
   const gitignorePath = path.join(moePath, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT);
+    atomicWriteText(gitignorePath, GITIGNORE_CONTENT);
   }
 }

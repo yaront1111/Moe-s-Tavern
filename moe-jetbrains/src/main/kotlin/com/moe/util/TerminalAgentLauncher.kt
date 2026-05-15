@@ -261,7 +261,7 @@ object TerminalAgentLauncher {
         } else {
             ""
         }
-        val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
+        val workerId = "$role-${UUID.randomUUID().toString().replace("-", "").substring(0, 8)}"
         val workerIdArg = psQuote(workerId)
         val teamArg = if (teamName != null) " -Team ${psQuote(teamName)}" else ""
         val execArg = if (codexExec) {
@@ -336,7 +336,7 @@ object TerminalAgentLauncher {
         } else {
             ""
         }
-        val workerId = "$role-${UUID.randomUUID().toString().substring(0, 4)}"
+        val workerId = "$role-${UUID.randomUUID().toString().replace("-", "").substring(0, 8)}"
         val workerIdArg = shQuote(workerId)
         val teamArg = if (teamName != null) " --team ${shQuote(teamName)}" else ""
         val execArg = if (codexExec) {
@@ -378,19 +378,29 @@ object TerminalAgentLauncher {
                     2 -> method.invoke(manager, basePath, tabName)
                     3 -> method.invoke(manager, basePath, tabName, false)
                     4 -> method.invoke(manager, basePath, tabName, false, false)
-                    else -> null
+                    else -> continue
                 }
-            } catch (_: Exception) {
-                // Try next overload
+            } catch (ex: InvocationTargetException) {
+                // Method matched and was invoked, but the call itself failed.
+                // Don't keep trying other overloads — that masks the real failure.
+                LOG.warn(
+                    "createLocalShellWidget(${params.joinToString { it.simpleName }}) on ${clazz.name} threw",
+                    ex.targetException ?: ex
+                )
+                return null
+            } catch (_: IllegalArgumentException) {
+                // Argument type mismatch for this overload — try next.
+            } catch (ex: IllegalAccessException) {
+                LOG.debug("createLocalShellWidget overload not accessible on ${clazz.name}: ${ex.message}", ex)
             }
         }
         LOG.warn("Failed to create terminal widget: no matching createLocalShellWidget overload found for ${clazz.name}")
         return null
     }
 
-    private fun sendCommand(widget: Any, command: String) {
+    private fun sendCommand(widget: Any, command: String): Boolean {
         // Try direct PTY write first - works regardless of shell integration or tab focus
-        if (writeToTtyConnector(widget, command)) return
+        if (writeToTtyConnector(widget, command)) return true
 
         val widgetClass = widget.javaClass
 
@@ -401,8 +411,16 @@ object TerminalAgentLauncher {
             }
         }
         if (exec != null) {
-            exec.invoke(widget, command)
-            return
+            try {
+                exec.invoke(widget, command)
+                return true
+            } catch (ex: InvocationTargetException) {
+                LOG.warn("executeCommand on ${widgetClass.name} threw", ex.targetException ?: ex)
+                return false
+            } catch (ex: IllegalAccessException) {
+                LOG.warn("executeCommand on ${widgetClass.name} not accessible", ex)
+                return false
+            }
         }
 
         // Last resort: sendCommandToExecute (requires shell integration, may not work in unfocused tabs)
@@ -412,10 +430,19 @@ object TerminalAgentLauncher {
             }
         }
         if (send != null) {
-            send.invoke(widget, command)
-        } else {
-            LOG.warn("Failed to send command to terminal: no matching method found on ${widgetClass.name}")
+            try {
+                send.invoke(widget, command)
+                return true
+            } catch (ex: InvocationTargetException) {
+                LOG.warn("sendCommandToExecute on ${widgetClass.name} threw", ex.targetException ?: ex)
+                return false
+            } catch (ex: IllegalAccessException) {
+                LOG.warn("sendCommandToExecute on ${widgetClass.name} not accessible", ex)
+                return false
+            }
         }
+        LOG.warn("Failed to send command to terminal: no matching method found on ${widgetClass.name}")
+        return false
     }
 
     private fun writeToTtyConnector(widget: Any, command: String): Boolean {

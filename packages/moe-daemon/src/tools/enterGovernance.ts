@@ -46,23 +46,36 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
         );
       }
 
-      await state.updateWorker(
-        params.workerId,
-        { status: 'GOVERNING', currentTaskId: null },
-        'WORKER_GOVERNING'
-      );
-
+      // Hold the state mutex so concurrent enter_governance calls don't
+      // double-broadcast or race on the worker update. We also re-check the
+      // worker status inside the locked section so a second concurrent call
+      // becomes a no-op.
+      let alreadyGoverning = false;
       const wantedNames = new Set(['general', 'architects', 'workers', 'qa', 'governors']);
       const channels: { id: string; name: string }[] = [];
-      for (const ch of state.channels.values() as Iterable<ChatChannel>) {
-        if (ch.name && wantedNames.has(ch.name)) {
-          channels.push({ id: ch.id, name: ch.name });
+      await state.runExclusive(async () => {
+        const fresh = state.getWorker(params.workerId!);
+        if (fresh?.status === 'GOVERNING') {
+          alreadyGoverning = true;
+        } else {
+          await state.updateWorker(
+            params.workerId!,
+            { status: 'GOVERNING', currentTaskId: null },
+            'WORKER_GOVERNING'
+          );
         }
-      }
+        for (const ch of state.channels.values() as Iterable<ChatChannel>) {
+          if (ch.name && wantedNames.has(ch.name)) {
+            channels.push({ id: ch.id, name: ch.name });
+          }
+        }
+      });
 
-      const broadcast = `🧭 ${params.workerId} is now governing — @mention them on stuck workers, rejections, or escalations.`;
-      try { await state.postToGeneral(broadcast); } catch { /* never block tool */ }
-      try { await state.postToRoleChannel('governors', broadcast); } catch { /* never block tool */ }
+      if (!alreadyGoverning) {
+        const broadcast = `🧭 ${params.workerId} is now governing — @mention them on stuck workers, rejections, or escalations.`;
+        try { await state.postToGeneral(broadcast); } catch { /* never block tool */ }
+        try { await state.postToRoleChannel('governors', broadcast); } catch { /* never block tool */ }
+      }
 
       const channelIds = channels.map((c) => c.id);
 

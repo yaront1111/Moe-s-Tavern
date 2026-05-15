@@ -10,6 +10,7 @@ import com.moe.model.ChatMessage
 import com.moe.model.Decision
 import com.moe.model.DaemonInfo
 import com.moe.model.Epic
+import com.moe.model.MetricsAggregate
 import com.moe.model.PinEntry
 import com.moe.model.MoeState
 import com.moe.model.Project
@@ -227,7 +228,8 @@ class MoeProjectService @JvmOverloads constructor(
 
                 override fun onMessage(message: String?) {
                     if (message == null) return
-                    if (wsClient !== this) {
+                    val isStale = wsLock.withLock { wsClient !== this }
+                    if (isStale) {
                         log.debug("Ignoring onMessage from stale WebSocket client")
                         return
                     }
@@ -715,6 +717,15 @@ class MoeProjectService @JvmOverloads constructor(
                     log.warn("Failed to parse DECISION_RESOLVED payload", e)
                 }
             }
+            "METRICS" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                try {
+                    val aggregate = MoeJson.parseMetricsAggregate(payload)
+                    publishMetrics(aggregate)
+                } catch (e: Exception) {
+                    log.warn("Failed to parse METRICS payload", e)
+                }
+            }
             "DAEMON_SHUTTING_DOWN" -> {
                 if (disposed.get()) return
                 isManualDisconnect = true
@@ -1074,10 +1085,35 @@ class MoeProjectService @JvmOverloads constructor(
         }
     }
 
+    private fun publishMetrics(aggregate: MetricsAggregate) {
+        invokeLater {
+            listeners.forEach { it.onMetrics(aggregate) }
+        }
+    }
+
     fun requestActivityLog(limit: Int = 100) {
         if (!ensureConnected()) return
         val payload = JsonObject().apply { addProperty("limit", limit) }
         sendMessage("GET_ACTIVITY_LOG", payload)
+    }
+
+    /**
+     * Request aggregated metrics from the daemon. The daemon agent is wiring
+     * the underlying `moe.list_metrics` tool; this client sends `GET_METRICS`
+     * with the same payload shape and listens for `METRICS` responses.
+     *
+     * Safe to call before the daemon supports it — request is dropped silently
+     * if not connected, and a missing response simply leaves the metrics tab
+     * empty.
+     */
+    fun requestMetrics(epicId: String? = null, sinceIso: String? = null, limit: Int? = null) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            if (epicId != null) addProperty("epicId", epicId)
+            if (sinceIso != null) addProperty("sinceIso", sinceIso)
+            if (limit != null) addProperty("limit", limit)
+        }
+        sendMessage("GET_METRICS", payload)
     }
 
     fun approveProposal(proposalId: String) {
@@ -1623,4 +1659,5 @@ interface MoeStateListener {
     fun onDecisions(decisions: List<Decision>) {}
     fun onDecisionProposed(decision: Decision) {}
     fun onDecisionResolved(decision: Decision) {}
+    fun onMetrics(aggregate: MetricsAggregate) {}
 }

@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import type { MoeStateSnapshot, Task, TaskComment, TaskPriority } from '../types/moe';
+import type {
+    HandoffNote,
+    MoeStateSnapshot,
+    Task,
+    TaskComment,
+    TaskPriority,
+} from '../types/moe';
 
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
@@ -511,6 +517,81 @@ export class TaskDetailPanel implements vscode.Disposable {
             font-size: 11px;
             font-style: italic;
         }
+        /* Metrics */
+        .kpi-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin: 8px 0 12px;
+        }
+        .kpi {
+            display: flex;
+            flex-direction: column;
+            min-width: 100px;
+        }
+        .kpi-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .kpi-value {
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .critique-panel {
+            padding: 8px 10px;
+            margin: 6px 0 10px;
+            border-radius: 4px;
+            border-left: 3px solid;
+        }
+        .critique-block {
+            background: rgba(244, 67, 54, 0.08);
+            border-left-color: #f44336;
+        }
+        .critique-pass {
+            background: rgba(76, 175, 80, 0.08);
+            border-left-color: #4caf50;
+        }
+        .critique-header {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        .critique-concerns {
+            margin: 4px 0 0 16px;
+            padding: 0;
+            font-size: 12px;
+        }
+        .handoff-card {
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 4px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+        }
+        .handoff-card-title {
+            font-weight: bold;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .handoff-section {
+            margin-top: 4px;
+            font-size: 12px;
+        }
+        .handoff-section-label {
+            font-weight: bold;
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .handoff-section-body {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .failed-dod-list {
+            margin-left: 16px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -555,7 +636,7 @@ export class TaskDetailPanel implements vscode.Disposable {
             <textarea id="reopenReasonInput" rows="2" ${task.status !== 'REVIEW' && task.status !== 'DONE' ? 'readonly style="opacity:0.7;"' : ''}>${escapeHtml(task.reopenReason)}</textarea>
         </div>` : ''}
 
-        ${task.prLink ? `<div class="pr-link">
+        ${task.prLink && safeHttpUrl(task.prLink) ? `<div class="pr-link">
             <div class="field-label">Pull Request</div>
             <a href="${escapeHtml(task.prLink)}" title="Open PR">${escapeHtml(task.prLink)}</a>
         </div>` : ''}
@@ -563,6 +644,8 @@ export class TaskDetailPanel implements vscode.Disposable {
         <!-- Implementation Plan -->
         <div class="section-title" id="planTitle">Implementation Plan</div>
         <div id="planContent">${this.renderSteps(task.implementationPlan || [])}</div>
+
+        ${this.renderMetrics(task)}
 
         <!-- Comments -->
         <div class="comments-section">
@@ -619,6 +702,95 @@ export class TaskDetailPanel implements vscode.Disposable {
         }).join('');
     }
 
+    private renderMetrics(task: Task): string {
+        const metrics = task.metrics;
+        const budget = task.budget;
+        const handoffs = task.priorHandoffs || [];
+        const failedDod = task.failedDodItems || [];
+        const critique = task.planCritiqueResult;
+
+        if (!metrics && !budget && handoffs.length === 0 && failedDod.length === 0 && !critique) {
+            return '';
+        }
+
+        const parts: string[] = [];
+        parts.push('<div class="section-title">Metrics</div>');
+
+        // KPI row
+        const kpis: string[] = [];
+        if (metrics?.plannedStepCount != null || metrics?.executedStepCount != null) {
+            const exec = metrics?.executedStepCount ?? '-';
+            const planned = metrics?.plannedStepCount ?? '-';
+            kpis.push(kpi('Steps', `${exec} / ${planned}`));
+        }
+        let usedMs = metrics?.wallClockMs;
+        if (usedMs == null && metrics?.firstClaimAt) {
+            const from = Date.parse(metrics.firstClaimAt);
+            const toIso = metrics?.doneAt;
+            const to = toIso ? Date.parse(toIso) : Date.now();
+            if (!Number.isNaN(from) && !Number.isNaN(to)) {
+                usedMs = Math.max(0, to - from);
+            }
+        }
+        if (usedMs != null) {
+            kpis.push(kpi('Wall-clock', humaniseDuration(usedMs)));
+        }
+        const reopens = metrics?.reopenCount ?? task.reopenCount;
+        if (reopens > 0 || metrics?.reopenCount != null) {
+            kpis.push(kpi('Reopens', String(reopens)));
+        }
+        if (metrics?.rejectCount != null) {
+            kpis.push(kpi('Rejects', String(metrics.rejectCount)));
+        }
+        if (budget?.wallClockMs != null) {
+            const remaining = Math.max(0, budget.wallClockMs - (usedMs ?? 0));
+            kpis.push(kpi('Budget remaining', `${humaniseDuration(remaining)} / ${humaniseDuration(budget.wallClockMs)}`));
+        }
+        if (kpis.length > 0) {
+            parts.push(`<div class="kpi-row">${kpis.join('')}</div>`);
+        }
+
+        // Critique
+        if (critique) {
+            const block = critique.verdict === 'block';
+            const cls = block ? 'critique-block' : 'critique-pass';
+            const reviewedLine = (critique.reviewedBy || critique.reviewedAt)
+                ? `<div class="muted-text">${escapeHtml(critique.reviewedBy || 'unknown')} ${escapeHtml(critique.reviewedAt || '')}</div>`
+                : '';
+            const concernsHtml = (critique.concerns && critique.concerns.length > 0)
+                ? `<ul class="critique-concerns">${critique.concerns.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`
+                : '';
+            parts.push(`<div class="critique-panel ${cls}">
+                <div class="critique-header">Plan critique: ${escapeHtml(critique.verdict.toUpperCase())}</div>
+                ${concernsHtml}
+                ${reviewedLine}
+            </div>`);
+        }
+
+        // Failed DoD
+        if (failedDod.length > 0) {
+            const counts = new Map<string, number>();
+            for (const f of failedDod) {
+                counts.set(f.item, (counts.get(f.item) || 0) + 1);
+            }
+            const items = Array.from(counts.entries())
+                .map(([item, n]) => `<li>${escapeHtml(item)}${n > 1 ? ` (${n} failures)` : ''}</li>`)
+                .join('');
+            parts.push(`<div class="field-label" style="margin-top:8px;">Failed DoD items</div>
+                <ul class="failed-dod-list">${items}</ul>`);
+        }
+
+        // Prior handoffs
+        if (handoffs.length > 0) {
+            parts.push(`<div class="field-label" style="margin-top:8px;">Prior hand-offs (${handoffs.length})</div>`);
+            for (let i = 0; i < handoffs.length; i++) {
+                parts.push(renderHandoff(i + 1, handoffs[i]));
+            }
+        }
+
+        return parts.join('\n');
+    }
+
     private renderComments(comments: TaskComment[]): string {
         if (!comments || comments.length === 0) {
             return '<p class="no-comments">No comments yet</p>';
@@ -653,6 +825,12 @@ export class TaskDetailPanel implements vscode.Disposable {
 // Utility functions (module-scoped)
 // ============================================================================
 
+function safeHttpUrl(url: string): boolean {
+    if (!url) { return false; }
+    const trimmed = String(url).trim().toLowerCase();
+    return trimmed.startsWith('http://') || trimmed.startsWith('https://');
+}
+
 function escapeHtml(text: string): string {
     if (!text) { return ''; }
     return String(text)
@@ -667,6 +845,47 @@ function humanizeStatus(status: string): string {
     return status.toLowerCase().replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 }
 
+function humaniseDuration(ms: number | undefined): string {
+    if (ms == null) { return '-'; }
+    if (ms <= 0) { return '0s'; }
+    const totalSec = Math.floor(ms / 1000);
+    const days = Math.floor(totalSec / 86400);
+    const hours = Math.floor((totalSec % 86400) / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    if (days > 0) { return hours > 0 ? `${days}d ${hours}h` : `${days}d`; }
+    if (hours > 0) { return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`; }
+    if (minutes > 0) {
+        return (seconds > 0 && minutes < 5) ? `${minutes}m ${seconds}s` : `${minutes}m`;
+    }
+    return `${seconds}s`;
+}
+
+function kpi(label: string, value: string): string {
+    return `<div class="kpi"><div class="kpi-label">${escapeHtml(label)}</div><div class="kpi-value">${escapeHtml(value)}</div></div>`;
+}
+
+function renderHandoff(index: number, h: HandoffNote): string {
+    const title = `#${index}` +
+        (h.from ? ` from ${escapeHtml(h.from)}` : '') +
+        (h.to ? ` → ${escapeHtml(h.to)}` : '') +
+        (h.createdAt ? `  (${escapeHtml(h.createdAt)})` : '');
+    function block(label: string, value: string | undefined): string {
+        const body = value && value.trim() ? escapeHtml(value) : '—';
+        return `<div class="handoff-section">
+            <div class="handoff-section-label">${escapeHtml(label)}</div>
+            <div class="handoff-section-body">${body}</div>
+        </div>`;
+    }
+    return `<div class="handoff-card">
+        <div class="handoff-card-title">${title}</div>
+        ${block('What is done', h.whatIsDone)}
+        ${block('What remains', h.whatRemains)}
+        ${block('Pitfalls', h.pitfalls)}
+        ${block('Open questions', h.openQuestions)}
+    </div>`;
+}
+
 function isAgentAuthor(author: string | undefined): boolean {
     if (!author) { return false; }
     const lower = author.toLowerCase();
@@ -676,11 +895,3 @@ function isAgentAuthor(author: string | undefined): boolean {
         || lower.includes('gemini');
 }
 
-function getNonce(): string {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
-}

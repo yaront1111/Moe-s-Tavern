@@ -13,7 +13,12 @@ const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10000;
 
 // Per-message timeout configuration
-const MESSAGE_TIMEOUT_MS = parseInt(process.env.MOE_MESSAGE_TIMEOUT_MS || '30000', 10);
+function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+const MESSAGE_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_MESSAGE_TIMEOUT_MS, 30000);
 const WAIT_FOR_TASK_TIMEOUT_MS = 11 * 60 * 1000; // 11 minutes (longer than max wait_for_task timeout)
 const TIMEOUT_CHECK_INTERVAL_MS = 5000;
 
@@ -208,6 +213,29 @@ function gracefulShutdown(): void {
       const remaining = pendingRequestIds.size + pendingMessages.length;
       if (remaining > 0) {
         writeLog(`Timeout waiting for ${remaining} pending request(s)`);
+        // Emit error responses so clients don't hang forever waiting for replies
+        for (const reqId of pendingRequestIds) {
+          safeStdoutWrite(JSON.stringify({
+            jsonrpc: '2.0',
+            id: reqId,
+            error: { code: -32000, message: 'Proxy shutting down before response received' }
+          }) + '\n');
+        }
+        pendingRequestIds.clear();
+        pendingRequestTimes.clear();
+        for (const msg of pendingMessages) {
+          try {
+            const parsed = JSON.parse(msg);
+            if (parsed.id !== undefined && parsed.id !== null) {
+              safeStdoutWrite(JSON.stringify({
+                jsonrpc: '2.0',
+                id: parsed.id,
+                error: { code: -32000, message: 'Proxy shutting down with message still queued' }
+              }) + '\n');
+            }
+          } catch { /* drop unparseable */ }
+        }
+        pendingMessages = [];
       }
       closeWebSocket();
       process.exit(0);
@@ -302,7 +330,26 @@ function connect(projectPath: string): void {
       reconnectTimer = null;
     }
 
+    // If we're shutting down, gracefulShutdown owns the pending-request lifecycle
+    // and will emit its own errors; skip emission here to avoid duplicates.
     if (shuttingDown) return;
+
+    // Emit clean JSON-RPC errors for every in-flight request so clients see a
+    // disconnect rather than waiting for a per-message timeout. Reconnect logic
+    // still proceeds; queued (not-yet-sent) messages remain queued to be flushed
+    // on the next successful open.
+    if (pendingRequestIds.size > 0) {
+      for (const reqId of pendingRequestIds) {
+        const errorResponse = JSON.stringify({
+          jsonrpc: '2.0',
+          id: reqId,
+          error: { code: -32000, message: 'Connection to daemon lost before response received' }
+        });
+        safeStdoutWrite(errorResponse + '\n');
+      }
+      pendingRequestIds.clear();
+      pendingRequestTimes.clear();
+    }
 
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       const delay = calculateReconnectDelay();
@@ -310,19 +357,7 @@ function connect(projectPath: string): void {
       writeLog(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
       reconnectTimer = setTimeout(() => connect(projectPath), delay);
     } else {
-      // Send error responses for all pending requests before exiting
-      for (const reqId of pendingRequestIds) {
-        const errorResponse = JSON.stringify({
-          jsonrpc: '2.0',
-          id: reqId,
-          error: { code: -32000, message: 'Lost connection to daemon after max retries' }
-        });
-        safeStdoutWrite(errorResponse + '\n');
-      }
-      pendingRequestIds.clear();
-      pendingRequestTimes.clear();
-
-      // Also send errors for queued messages
+      // Also send errors for queued messages that never made it out
       for (const msg of pendingMessages) {
         try {
           const parsed = JSON.parse(msg);
@@ -394,24 +429,20 @@ function connect(projectPath: string): void {
             }
             safeSend(currentWebSocket!, payload);
           } else {
-            // Queue message for when connection is restored
-            pendingMessages.push(payload);
-            if (pendingMessages.length > 100) {
-              // Prevent unbounded queue growth - send error for dropped message
-              const droppedMsg = pendingMessages.shift()!;
-              try {
-                const droppedParsed = JSON.parse(droppedMsg);
-                if (droppedParsed.id !== undefined && droppedParsed.id !== null) {
-                  // Send error response for dropped request
-                  const errorResponse = JSON.stringify({
-                    jsonrpc: '2.0',
-                    id: droppedParsed.id,
-                    error: { code: -32000, message: 'Message dropped: queue overflow while disconnected' }
-                  });
-                  safeStdoutWrite(errorResponse + '\n');
-                }
-              } catch { /* ignore parse errors for dropped messages */ }
-              writeLog('Message queue overflow, dropped oldest message');
+            // Queue message for when connection is restored. If at cap, drop the
+            // NEWEST (this incoming) message to preserve ordering of already-queued
+            // messages.
+            if (pendingMessages.length >= 100) {
+              const droppedId = (parsed.id !== undefined && parsed.id !== null) ? parsed.id : null;
+              const errorResponse = JSON.stringify({
+                jsonrpc: '2.0',
+                id: droppedId,
+                error: { code: -32000, message: 'Message dropped: queue overflow while disconnected' }
+              });
+              safeStdoutWrite(errorResponse + '\n');
+              writeLog('Message queue overflow, dropped newest message');
+            } else {
+              pendingMessages.push(payload);
             }
           }
         } catch {

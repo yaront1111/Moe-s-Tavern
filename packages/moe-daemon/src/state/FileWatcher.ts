@@ -32,7 +32,8 @@ export class FileWatcher {
     const normalized = path.resolve(filePath);
     this.ignorePaths.add(normalized);
     // Auto-expire after 500ms to prevent leaks
-    setTimeout(() => this.ignorePaths.delete(normalized), 500);
+    const t = setTimeout(() => this.ignorePaths.delete(normalized), 500);
+    if (t.unref) t.unref();
   }
 
   start(): void {

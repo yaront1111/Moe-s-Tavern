@@ -1514,7 +1514,7 @@ describe('StateManager', () => {
   });
 
   describe('chat system fixes', () => {
-    it('getMessages returns empty array for invalid sinceId', async () => {
+    it('getMessages returns the read window when sinceId is not found (cursor expired)', async () => {
       setupMoeFolder();
       createTestEpic();
       await stateManager.load();
@@ -1528,9 +1528,11 @@ describe('StateManager', () => {
       await stateManager.sendMessage({ channel: channel.id, sender: 'w1', content: 'hello' });
       await stateManager.sendMessage({ channel: channel.id, sender: 'w1', content: 'world' });
 
-      // Use a sinceId that doesn't exist — should return empty, not all messages
+      // Cursor not in the (now-bounded) read window: treat as expired cursor
+      // and return the full window so clients can resync instead of stalling.
       const msgs = await stateManager.getMessages(channel.id, { sinceId: 'msg-nonexistent' });
-      expect(msgs).toEqual([]);
+      expect(msgs).toHaveLength(2);
+      expect(msgs.map((m) => m.content)).toEqual(['hello', 'world']);
     });
 
     it('messageExistsInChannel finds messages regardless of age', async () => {

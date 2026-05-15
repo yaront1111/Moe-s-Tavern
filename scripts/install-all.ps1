@@ -13,12 +13,16 @@ $root = Split-Path -Parent $PSScriptRoot
 Write-Host "Installing Moe daemon..."
 Set-Location "$root\packages\moe-daemon"
 npm install
+if ($LASTEXITCODE -ne 0) { throw "npm install failed in packages/moe-daemon (exit $LASTEXITCODE)" }
 npm run build
+if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/moe-daemon (exit $LASTEXITCODE)" }
 
 Write-Host "Installing Moe proxy..."
 Set-Location "$root\packages\moe-proxy"
 npm install
+if ($LASTEXITCODE -ne 0) { throw "npm install failed in packages/moe-proxy (exit $LASTEXITCODE)" }
 npm run build
+if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/moe-proxy (exit $LASTEXITCODE)" }
 
 function Resolve-PyCharmVersion([string]$Preferred) {
     $jbRoot = Join-Path $env:APPDATA "JetBrains"

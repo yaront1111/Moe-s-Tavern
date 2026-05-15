@@ -51,6 +51,11 @@ export function readLastLinesWithMetadata(filePath: string, maxLines: number): R
     const buffer = Buffer.allocUnsafe(DEFAULT_CHUNK_SIZE);
     const reverseLines: string[] = [];
     let position = stat.size;
+    // Accumulate the still-undecoded byte tail at the *front* of the file's
+    // read window. We decode bytes only after they're glued to the chunk
+    // immediately preceding them, so a multi-byte UTF-8 sequence that spans a
+    // chunk boundary is never split mid-character.
+    let leadingBytes: Buffer = Buffer.alloc(0);
     let remainder = '';
 
     while (position > 0 && reverseLines.length < maxLines) {
@@ -58,7 +63,31 @@ export function readLastLinesWithMetadata(filePath: string, maxLines: number): R
       position -= bytesToRead;
       fs.readSync(fd, buffer, 0, bytesToRead, position);
 
-      const chunk = buffer.toString('utf-8', 0, bytesToRead);
+      // Combine this chunk's bytes with the still-undecoded leading bytes from
+      // the previous (further-into-the-file) iteration.
+      const combinedBytes = Buffer.concat([
+        buffer.subarray(0, bytesToRead),
+        leadingBytes,
+      ]);
+
+      // If we haven't reached BOF yet, the first byte of combinedBytes may be
+      // the middle of a multi-byte UTF-8 character. Find the first valid UTF-8
+      // start byte; everything before it must wait for the next iteration.
+      let safeStart = 0;
+      if (position > 0) {
+        // UTF-8 continuation bytes have the high bits 10xxxxxx (0x80..0xBF).
+        // Scan forward until we land on a non-continuation byte (or up to 3
+        // bytes — the max number of continuation bytes that can precede a
+        // start byte in valid UTF-8).
+        const maxScan = Math.min(4, combinedBytes.length);
+        while (safeStart < maxScan && (combinedBytes[safeStart] & 0xc0) === 0x80) {
+          safeStart += 1;
+        }
+      }
+
+      leadingBytes = combinedBytes.subarray(0, safeStart);
+      const decodable = combinedBytes.subarray(safeStart);
+      const chunk = decodable.toString('utf-8');
       const combined = chunk + remainder;
       const parts = combined.split(/\r?\n/);
 
@@ -72,7 +101,10 @@ export function readLastLinesWithMetadata(filePath: string, maxLines: number): R
       }
     }
 
-    const hasUnreadOlderContent = position > 0 || (reverseLines.length >= maxLines && remainder.length > 0);
+    const hasUnreadOlderContent =
+      position > 0 ||
+      leadingBytes.length > 0 ||
+      (reverseLines.length >= maxLines && remainder.length > 0);
 
     if (reverseLines.length < maxLines && remainder.length > 0) {
       reverseLines.push(remainder);

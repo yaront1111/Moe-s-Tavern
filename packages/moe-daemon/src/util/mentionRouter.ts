@@ -27,7 +27,10 @@ export class MentionRouter {
   parseMentions(content: string, knownWorkerIds: string[], workers?: Worker[], teams?: Team[]): string[] {
     if (!content) return [];
 
-    const mentionRegex = /@([\w][\w-]*)/g;
+    // Match @<id> only when the @ is not preceded by another @ or a word char.
+    // This prevents emails (yaron@worker-alice.com) and "@@" injections from
+    // being parsed as mentions, while still allowing punctuation/whitespace prefixes.
+    const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
     const rawMentions: string[] = [];
     let match: RegExpExecArray | null;
     while ((match = mentionRegex.exec(content)) !== null) {
@@ -92,9 +95,10 @@ export class MentionRouter {
             if (id.toLowerCase().includes(searchTerm)) result.add(id);
           }
         }
-      } else if (knownWorkerIds.includes(mention)) {
-        // Direct worker ID mention
-        result.add(mention);
+      } else if (knownWorkerIds.includes(lower)) {
+        // Direct worker ID mention (worker IDs are stored lowercase, so
+        // match against the lower-cased candidate).
+        result.add(lower);
       }
     }
 

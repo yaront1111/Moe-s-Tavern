@@ -1492,6 +1492,7 @@ describe('MCP Tools', () => {
         'epicId',
         'generalChannelId',
         'id',
+        'priorHandoffCount',
         'priority',
         'rejectionDetails',
         'reopenCount',
@@ -2288,6 +2289,11 @@ describe('MCP Tools', () => {
     it('clears stale rejectionDetails after structured details are followed by reason-only rejection', async () => {
       const rejectTool = qaRejectTool(state);
 
+      // Raise the reopen cap so this test (which performs three rejections)
+      // doesn't trip the auto-flip-to-PLANNING path that newer qa_reject
+      // applies once reopenCount >= maxReopens.
+      await state.updateTask('task-1', { maxReopens: 10 } as Partial<import('../types/schema.js').Task>);
+
       await rejectTool.handler({
         taskId: 'task-1',
         reason: 'Initial structured rejection',
@@ -2315,7 +2321,9 @@ describe('MCP Tools', () => {
         reason: 'Reason-only rejection',
       }, state) as { rejectionDetails: null };
       expect(reasonOnlyResult.rejectionDetails).toBeNull();
-      expect(state.getTask('task-1')?.rejectionDetails).toBeNull();
+      // After omit-instead-of-null change: stale details are cleared by
+      // dropping the key entirely (schema is optional, not nullable).
+      expect(state.getTask('task-1')?.rejectionDetails).toBeUndefined();
 
       const context = await getContextTool(state).handler({ taskId: 'task-1' }, state) as {
         task: { rejectionDetails: null };
@@ -3318,6 +3326,31 @@ describe('MCP Tools', () => {
       expect(result.messages[0].content.length).toBeLessThanOrEqual(1000);
       expect(result.messages[0].contentTruncated).toBe(true);
       expect(result.truncated).toBe(20);
+    });
+
+    it('chat_wait fires on ANY message in subscribed channels (no mention required)', async () => {
+      // Regression: governors call chat_wait with `channels: ["#governors"]`
+      // and need to wake on every signal landing in that channel — not just
+      // ones that @-mention them. The mention/human filter only applies in
+      // the broad-scope (no `channels`) path.
+      const channel = await setupChat();
+      const tool = chatWaitTool(state);
+      const waitPromise = tool.handler({
+        workerId: 'worker-chat',
+        channels: [channel],
+        timeoutMs: 1000,
+      }, state) as Promise<{ hasMessage: boolean; messages?: Array<{ content: string }> }>;
+
+      // Plain status update from a different worker — no @-mention, no human sender.
+      await state.sendMessage({
+        channel,
+        sender: 'system',
+        content: 'status update from somebody else',
+      });
+      const result = await waitPromise;
+
+      expect(result.hasMessage).toBe(true);
+      expect(result.messages?.[0].content).toBe('status update from somebody else');
     });
 
     it('truncates chat_wait wake messages by default', async () => {

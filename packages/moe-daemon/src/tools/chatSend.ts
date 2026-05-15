@@ -48,6 +48,16 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
       const channel = state.getChannel(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
+      // Validate replyTo points to a real message in the same channel.
+      if (params.replyTo) {
+        if (typeof params.replyTo !== 'string') {
+          throw invalidInput('replyTo', 'must be a string');
+        }
+        if (!state.messageExistsInChannel(params.channel, params.replyTo)) {
+          throw invalidInput('replyTo', `message ${params.replyTo} not found in channel ${params.channel}`);
+        }
+      }
+
       const { message, routingTargets } = await state.sendMessage({
         channel: params.channel,
         sender,

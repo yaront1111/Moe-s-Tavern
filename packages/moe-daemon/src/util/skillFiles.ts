@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { atomicWriteText } from './atomicWrite.js';
 
 /**
  * Full content of every SKILL.md (and its SOURCE.md, when vendored), keyed by
@@ -1228,19 +1229,19 @@ export function writeSkillFiles(moePath: string): void {
       fs.mkdirSync(parent, { recursive: true });
     }
     if (!fs.existsSync(fullPath)) {
-      fs.writeFileSync(fullPath, content);
+      atomicWriteText(fullPath, content);
     }
   }
 
   // Write manifest (skip if already exists — user may have customized).
   const manifestPath = path.join(skillsDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
-    fs.writeFileSync(manifestPath, SKILL_MANIFEST);
+    atomicWriteText(manifestPath, SKILL_MANIFEST);
   }
 
   // Write attribution.
   const licensePath = path.join(skillsDir, 'LICENSE-VENDORED.md');
   if (!fs.existsSync(licensePath) && SKILL_LICENSE) {
-    fs.writeFileSync(licensePath, SKILL_LICENSE);
+    atomicWriteText(licensePath, SKILL_LICENSE);
   }
 }

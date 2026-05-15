@@ -6,7 +6,9 @@ import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
+import com.moe.util.MoeDuration
 import com.intellij.openapi.project.Project
+import java.time.Instant
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -128,6 +130,12 @@ class TaskDetailDialog(
             val reopenScroll = JScrollPane(readOnlyArea)
             reopenScroll.preferredSize = Dimension(520, 80)
             panel.add(reopenScroll)
+        }
+
+        // Metrics / Budget / Handoffs / Critique section
+        val metricsSection = buildMetricsSection()
+        if (metricsSection != null) {
+            panel.add(metricsSection)
         }
 
         // Comments section
@@ -272,6 +280,205 @@ class TaskDetailDialog(
             row.add(filesLabel, BorderLayout.SOUTH)
         }
 
+        return row
+    }
+
+    private fun buildMetricsSection(): JComponent? {
+        val metrics = task.metrics
+        val budget = task.budget
+        val handoffs = task.priorHandoffs.orEmpty()
+        val failedDod = task.failedDodItems.orEmpty()
+        val critique = task.planCritiqueResult
+
+        // Nothing to render? Return null to avoid empty sections.
+        if (metrics == null && budget == null && handoffs.isEmpty() && failedDod.isEmpty() && critique == null) {
+            return null
+        }
+
+        val container = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            border = BorderFactory.createTitledBorder(
+                JBUI.Borders.customLine(JBColor.border()),
+                MoeBundle.message("moe.label.metrics")
+            )
+        }
+
+        // Headline KPI rows
+        val kpis = JPanel(FlowLayout(FlowLayout.LEFT, 12, 2)).apply { isOpaque = false }
+        val planned = metrics?.plannedStepCount
+        val executed = metrics?.executedStepCount
+        if (planned != null || executed != null) {
+            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.steps"), "${executed ?: "-"} / ${planned ?: "-"}"))
+        }
+        metrics?.wallClockMs?.let {
+            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.wallClock"), MoeDuration.humanise(it)))
+        } ?: run {
+            // Derive from firstClaimAt if metrics.wallClockMs is unset
+            val first = MoeDuration.parseInstant(metrics?.firstClaimAt)
+            val done = MoeDuration.parseInstant(metrics?.doneAt)
+            if (first != null) {
+                val derived = MoeDuration.elapsedMs(first, done ?: Instant.now())
+                if (derived != null) {
+                    kpis.add(kpiLabel(MoeBundle.message("moe.metrics.wallClock"), MoeDuration.humanise(derived)))
+                }
+            }
+        }
+        (metrics?.reopenCount ?: task.reopenCount).let { reopenCount ->
+            if (reopenCount > 0 || metrics?.reopenCount != null) {
+                kpis.add(kpiLabel(MoeBundle.message("moe.metrics.reopen"), reopenCount.toString()))
+            }
+        }
+        metrics?.rejectCount?.let {
+            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.reject"), it.toString()))
+        }
+        budget?.wallClockMs?.let { cap ->
+            val first = MoeDuration.parseInstant(metrics?.firstClaimAt)
+            val done = MoeDuration.parseInstant(metrics?.doneAt)
+            val used = metrics?.wallClockMs ?: MoeDuration.elapsedMs(first, done ?: Instant.now()) ?: 0L
+            val remaining = (cap - used).coerceAtLeast(0L)
+            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.budgetRemaining"),
+                MoeDuration.humanise(remaining) + " / " + MoeDuration.humanise(cap)))
+        }
+        container.add(kpis)
+
+        // Critique panel
+        if (critique != null) {
+            val isBlock = critique.verdict == "block"
+            val panelBg = if (isBlock) {
+                JBColor(Color(0xFEE2E2), Color(0x321C1C))
+            } else {
+                JBColor(Color(0xDCFCE7), Color(0x1F2D1F))
+            }
+            val critiquePanel = JPanel(BorderLayout()).apply {
+                isOpaque = true
+                background = panelBg
+                border = JBUI.Borders.empty(6, 8)
+            }
+            val verdictText = MoeBundle.message("moe.metrics.critiquePrefix") + " " + critique.verdict.uppercase()
+            val header = JBLabel(verdictText).apply {
+                font = font.deriveFont(Font.BOLD)
+            }
+            critiquePanel.add(header, BorderLayout.NORTH)
+            val concerns = critique.concerns
+            if (!concerns.isNullOrEmpty()) {
+                val list = JBTextArea(concerns.joinToString("\n") { "• $it" }).apply {
+                    isEditable = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    isOpaque = false
+                }
+                critiquePanel.add(list, BorderLayout.CENTER)
+            }
+            if (!critique.reviewedBy.isNullOrBlank() || !critique.reviewedAt.isNullOrBlank()) {
+                val by = critique.reviewedBy ?: "unknown"
+                val at = critique.reviewedAt ?: ""
+                critiquePanel.add(JBLabel("$by  $at").apply {
+                    foreground = JBColor.GRAY
+                    font = JBUI.Fonts.smallFont()
+                }, BorderLayout.SOUTH)
+            }
+            container.add(critiquePanel)
+        }
+
+        // Failed DoD list
+        if (failedDod.isNotEmpty()) {
+            // Group by item to surface per-item failure counts
+            val grouped = failedDod.groupingBy { it.item }.eachCount()
+            val text = grouped.entries.joinToString("\n") { (item, count) ->
+                if (count > 1) "• $item  ($count failures)" else "• $item"
+            }
+            val section = JPanel(BorderLayout()).apply {
+                isOpaque = false
+                border = JBUI.Borders.emptyTop(6)
+            }
+            section.add(JBLabel(MoeBundle.message("moe.metrics.failedDod")).apply {
+                font = font.deriveFont(Font.BOLD)
+            }, BorderLayout.NORTH)
+            val area = JBTextArea(text).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+            }
+            val scroll = JScrollPane(area)
+            scroll.preferredSize = Dimension(520, 80)
+            section.add(scroll, BorderLayout.CENTER)
+            container.add(section)
+        }
+
+        // Prior handoffs (collapsible-style: render with titled border per handoff)
+        if (handoffs.isNotEmpty()) {
+            val section = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                isOpaque = false
+                border = JBUI.Borders.emptyTop(6)
+            }
+            section.add(JBLabel(MoeBundle.message("moe.metrics.handoffs", handoffs.size)).apply {
+                font = font.deriveFont(Font.BOLD)
+            })
+            for ((i, h) in handoffs.withIndex()) {
+                val header = buildString {
+                    append("#").append(i + 1)
+                    if (!h.from.isNullOrBlank()) append(" from ").append(h.from)
+                    if (!h.to.isNullOrBlank()) append(" → ").append(h.to)
+                    if (!h.createdAt.isNullOrBlank()) append("  (").append(h.createdAt).append(")")
+                }
+                val sub = JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    isOpaque = false
+                    border = BorderFactory.createTitledBorder(
+                        JBUI.Borders.customLine(JBColor.border()),
+                        header
+                    )
+                }
+                sub.add(handoffBlock(MoeBundle.message("moe.metrics.handoff.whatIsDone"), h.whatIsDone))
+                sub.add(handoffBlock(MoeBundle.message("moe.metrics.handoff.whatRemains"), h.whatRemains))
+                sub.add(handoffBlock(MoeBundle.message("moe.metrics.handoff.pitfalls"), h.pitfalls))
+                sub.add(handoffBlock(MoeBundle.message("moe.metrics.handoff.openQuestions"), h.openQuestions))
+                section.add(sub)
+            }
+            val sectionScroll = JScrollPane(section)
+            sectionScroll.preferredSize = Dimension(520, 200)
+            sectionScroll.border = JBUI.Borders.empty()
+            container.add(sectionScroll)
+        }
+
+        return container
+    }
+
+    private fun kpiLabel(label: String, value: String): JComponent {
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+        }
+        panel.add(JBLabel(label).apply {
+            foreground = JBColor.GRAY
+            font = JBUI.Fonts.smallFont()
+        })
+        panel.add(JBLabel(value).apply {
+            font = font.deriveFont(Font.BOLD)
+        })
+        return panel
+    }
+
+    private fun handoffBlock(label: String, value: String?): JComponent {
+        val row = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(2, 4)
+        }
+        val header = JBLabel(label).apply {
+            foreground = JBColor.GRAY
+            font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+        }
+        row.add(header, BorderLayout.NORTH)
+        val display = if (value.isNullOrBlank()) "—" else value
+        val area = JBTextArea(display).apply {
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            isOpaque = false
+        }
+        row.add(area, BorderLayout.CENTER)
         return row
     }
 

@@ -22,6 +22,7 @@ import type {
     ChatChannel,
     PinEntry,
     Decision,
+    MetricsAggregate,
 } from '../types/moe';
 
 // Re-export types for backward compatibility with existing importers.
@@ -119,6 +120,9 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     private readonly _onError = new vscode.EventEmitter<{ operation?: string; message: string }>();
     public readonly onError = this._onError.event;
+
+    private readonly _onMetrics = new vscode.EventEmitter<MetricsAggregate>();
+    public readonly onMetrics = this._onMetrics.event;
 
     private daemonShuttingDown = false;
     private manualDisconnect = false;
@@ -281,6 +285,20 @@ export class MoeDaemonClient implements vscode.Disposable {
             const message = err instanceof Error ? err.message : String(err);
             log(`Failed to send ${type}: ${message}`);
             this._onError.fire({ operation: type, message });
+            // Tear down the half-dead socket so the next connect() does not
+            // early-return on a stale ws reference, and so a subsequent
+            // sendMessage call can't sneak past the OPEN check on the same
+            // broken socket.
+            const ws = this.ws;
+            this.ws = undefined;
+            this.stopPingInterval();
+            this.stateReady = false;
+            this.stateReadyPromise = new Promise<void>((resolve) => {
+                this.stateReadyResolve = resolve;
+            });
+            if (ws) {
+                try { ws.close(); } catch { /* ignore close errors on dead socket */ }
+            }
             this.setConnectionState('disconnected');
             this.scheduleReconnect();
         }
@@ -369,6 +387,16 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     requestActivityLog(limit?: number): void {
         this.sendMessage('GET_ACTIVITY_LOG', limit ? { limit } : {});
+    }
+
+    /**
+     * Request aggregated task metrics from the daemon. Mirrors the JetBrains
+     * `requestMetrics` plumbing. The daemon agent is wiring `moe.list_metrics`
+     * — until that lands the response is simply absent and consumers should
+     * render gracefully.
+     */
+    listMetrics(opts: { epicId?: string; sinceIso?: string; limit?: number } = {}): void {
+        this.sendMessage('GET_METRICS', opts);
     }
 
     // =========================================================================
@@ -750,6 +778,18 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this._onActivityLog.fire(payload);
                     break;
 
+                case 'METRICS':
+                    // Daemon emits a MetricsAggregate-shaped payload. Tolerate
+                    // missing fields — consumers must already handle absence.
+                    this._onMetrics.fire({
+                        firstPassApprovalPct: payload?.firstPassApprovalPct,
+                        avgWallClockMs: payload?.avgWallClockMs,
+                        avgReopenCount: payload?.avgReopenCount,
+                        totalCompleted: payload?.totalCompleted,
+                        perEpic: Array.isArray(payload?.perEpic) ? payload.perEpic : []
+                    });
+                    break;
+
                 case 'MESSAGE_CREATED':
                     this._onMessageCreated.fire(payload);
                     break;
@@ -942,5 +982,6 @@ export class MoeDaemonClient implements vscode.Disposable {
         this._onDecisionProposed.dispose();
         this._onDecisionResolved.dispose();
         this._onError.dispose();
+        this._onMetrics.dispose();
     }
 }

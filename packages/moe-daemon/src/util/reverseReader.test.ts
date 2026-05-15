@@ -153,6 +153,29 @@ describe('readLastLines', () => {
 
     expect(readLastLines(filePath, 2)).toEqual(['line-2', 'line-3']);
   });
+
+  it('preserves multi-byte UTF-8 sequences that span chunk boundaries', () => {
+    const dir = createTempDir('moe-reverse-reader-');
+    const filePath = path.join(dir, 'utf8.log');
+
+    // Build a file larger than DEFAULT_CHUNK_SIZE (8 KiB) where 4-byte emoji
+    // sequences ("😀" = F0 9F 98 80) sit astride the 8 KiB read boundary.
+    // If the reader splits a chunk mid-character it will emit replacement
+    // chars (U+FFFD) and the line comparison will fail.
+    const padLine = `${'a'.repeat(80)}-pad`; // 84 bytes + '\n'
+    const padLines: string[] = [];
+    while (padLines.join('\n').length < 8 * 1024 + 200) {
+      padLines.push(padLine);
+    }
+    const emojiLine = `head-${'😀'.repeat(20)}-tail`;
+    const tailLine = `final-${'é'.repeat(50)}-line`;
+    const allLines = [...padLines, emojiLine, tailLine];
+    writeLines(filePath, allLines);
+
+    const result = readLastLines(filePath, 2);
+    expect(result).toEqual([emojiLine, tailLine]);
+    expect(result.join('')).not.toContain('�');
+  });
 });
 
 describe('activity log tail integration', () => {

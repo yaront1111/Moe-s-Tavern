@@ -3,8 +3,11 @@ import { MoeError, MoeErrorCode } from './errors.js';
 import { logger } from './logger.js';
 
 // Deprecation warning dedupe: we log at most once per (task, tool) pair per daemon
-// lifetime so a misbehaving client doesn't flood the log.
-const deprecationWarned = new Set<string>();
+// lifetime so a misbehaving client doesn't flood the log. The set is bounded so
+// a long-running daemon doesn't accumulate one entry per task forever — Map
+// preserves insertion order so we can evict the oldest entry on overflow.
+const DEPRECATION_WARN_MAX_ENTRIES = 1000;
+const deprecationWarned = new Map<string, true>();
 function displayToolName(toolName: string): string {
   if (!toolName || toolName === 'unknown') return 'this tool';
   return toolName.startsWith('moe.') ? toolName : `moe.${toolName}`;
@@ -13,7 +16,13 @@ function displayToolName(toolName: string): string {
 function warnMissingWorkerId(taskId: string, tool: string): void {
   const key = `${taskId}:${tool}`;
   if (deprecationWarned.has(key)) return;
-  deprecationWarned.add(key);
+  if (deprecationWarned.size >= DEPRECATION_WARN_MAX_ENTRIES) {
+    // Evict the oldest insertion (FIFO) — sufficient as an LRU approximation
+    // given each key is only ever inserted once.
+    const oldest = deprecationWarned.keys().next().value;
+    if (oldest !== undefined) deprecationWarned.delete(oldest);
+  }
+  deprecationWarned.set(key, true);
   logger.warn(
     { taskId, tool },
     'workerId missing — ownership check skipped (legacy-client fallback, will become a hard error in a future release)'

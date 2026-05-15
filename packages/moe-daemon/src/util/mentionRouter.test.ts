@@ -302,6 +302,42 @@ describe('MentionRouter', () => {
       expect(result.targets).toEqual([]);
     });
 
+    it('ignores standalone @ with no identifier following', () => {
+      expect(router.parseMentions('email me @ work', workerIds)).toEqual([]);
+      expect(router.parseMentions('@', workerIds)).toEqual([]);
+      expect(router.parseMentions('@@worker-alice', workerIds)).toEqual([]);
+    });
+
+    it('does not match @ inside email-like tokens preceded by a word char', () => {
+      const result = router.parseMentions('contact yaron@worker-alice.com', workerIds);
+      expect(result).toEqual([]);
+    });
+
+    it('still matches mentions adjacent to punctuation', () => {
+      expect(router.parseMentions('(@worker-alice) ping', workerIds)).toEqual(['worker-alice']);
+      expect(router.parseMentions('hey,@worker-alice!', workerIds)).toEqual(['worker-alice']);
+    });
+
+    it('does not double-increment hop counter for repeated mentions in one message', () => {
+      const msg = makeMessage({
+        sender: 'worker-alice',
+        content: '@worker-bob @worker-bob ping'
+      });
+      const result = router.route(msg, workers);
+      expect(result.hopCount).toBe(1);
+      expect(result.targets).toEqual(['worker-bob']);
+    });
+
+    it('agent messages with no resolvable mentions do not increment hop counter', () => {
+      const msg = makeMessage({
+        sender: 'worker-alice',
+        content: '@nonexistent-worker hello'
+      });
+      const result = router.route(msg, workers);
+      expect(result.targets).toEqual([]);
+      expect(result.hopCount).toBe(0);
+    });
+
     it('per-channel isolation', () => {
       const ch1Msg = makeMessage({
         channel: 'chan-1',

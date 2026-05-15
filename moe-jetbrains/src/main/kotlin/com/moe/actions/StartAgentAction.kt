@@ -47,3 +47,14 @@ class StartQAAction : AnAction("Start QA") {
         e.presentation.isEnabled = e.project != null
     }
 }
+
+class StartGovernorAction : AnAction("Start Governor") {
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        TerminalAgentLauncher.startAgent(project, "governor")
+    }
+
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabled = e.project != null
+    }
+}

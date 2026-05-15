@@ -231,14 +231,21 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 {
   taskId: string,
   workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
-  steps: { description: string; affectedFiles?: string[] }[]
+  steps: { description: string; affectedFiles?: string[] }[],
+  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? },
+  budget?: { wallClockMs?: number }  // soft cap on first-claim → DONE
 }
 ```
+
+`affectedFiles` paths must be project-relative (no absolute paths, no `..` traversal); the daemon normalizes separators and deduplicates. At claim time, overlapping affectedFiles across WORKING tasks surface as a `fileCollision` warning on `moe.claim_next_task` — advisory only, the claim still succeeds.
 
 **Notes:**
 - **Enforced rails:** Only `forbiddenPatterns` and global `requiredPatterns` are strictly enforced.
 - **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
+- **Step bounds:** max 100 steps, each `description` ≤2000 chars, each `affectedFiles` ≤50 entries.
+- `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
+- **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count + DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
 
 **Returns:**
 ```typescript
@@ -473,12 +480,15 @@ Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`.
   statuses: string[],
   epicId?: string,
   workerId?: string,
-  replaceExisting?: boolean,  // Take over from existing worker
-  taskId?: string             // Claim this specific task (must be in one of `statuses`)
+  replaceExisting?: boolean,       // Take over from existing worker
+  taskId?: string,                 // Claim this specific task (must be in one of `statuses`)
+  preferAdjacentInEpic?: boolean   // default: true — rank candidates in the worker's last epic ahead of others
 }
 ```
 
 When `taskId` is provided the priority/order ranking is bypassed — you get the named task or an error. The task must be in one of the requested `statuses`; if it's already assigned to someone else, pass `replaceExisting: true` to take over.
+
+With `preferAdjacentInEpic` on (default), candidates in the caller's currently-recorded epic (or explicit `epicId`) are ranked ahead of other epics before priority/order — so a worker waking from `wait_for_task` picks up the next adjacent task instead of jumping to an unrelated epic.
 
 **Returns:**
 ```typescript
@@ -495,18 +505,28 @@ When `taskId` is provided the priority/order ranking is bypassed — you get the
     reopenReason,
     rejectionDetails,
     roleChannelId,
-    generalChannelId
+    generalChannelId,
+    priorHandoffCount: number       // 0 when no prior handoffs
   },
   reopenWarning?: string,
   chatHint?: string,
+  handoffHint?: string,             // present when priorHandoffs exist
+  fileCollision?: Array<{ task: string, files: string[] }>,  // advisory only
   nextAction: {
-    tool: 'moe.get_context' | 'moe.wait_for_task',
+    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance',
     args: object,
     reason: string,
     recommendedSkill?: { name: string, reason: string }
   }
 }
 ```
+
+**Notes:**
+- On first claim the daemon stamps `task.metrics.firstClaimAt` (idempotent).
+- After the claim, the daemon re-evaluates `task.budget` (warn at 80%, escalate at 100% to `#governors`).
+- `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`.
+- When `task.priorHandoffs` is non-empty, `nextAction.tool` is `moe.get_handoff_history` (instead of `moe.get_context`) so the worker reads the handoff before redoing finished work.
+- Governors short-circuit: a caller whose team role is `governor` gets `nextAction.tool = "moe.enter_governance"` and never claims a task.
 
 `claim_next_task` is intentionally lean: it does **not** return project rails, epic details, task descriptions, definition of done, task rails, implementation plans, chat history, or memory payloads. Call `moe.get_context` after a successful claim to fetch the full, token-budgeted context.
 
@@ -707,8 +727,15 @@ Release a task from its assigned worker (clears `assignedWorkerId`, status uncha
 **Parameters:**
 ```typescript
 {
-  taskId: string,   // Required
-  reason?: string   // Optional human-readable reason
+  taskId: string,                 // Required
+  reason?: string,                // Optional human-readable reason (clamped to 2000 chars)
+  handoffNote?: {                 // Optional but strongly recommended
+    whatIsDone: string,           // Required if handoffNote present (≤4000 chars)
+    whatRemains: string,          // Required if handoffNote present (≤4000 chars)
+    pitfalls?: string,            // ≤4000 chars
+    openQuestions?: string        // ≤4000 chars
+  },
+  workerId?: string               // Caller worker ID (auto-injected by proxy)
 }
 ```
 
@@ -717,16 +744,20 @@ Release a task from its assigned worker (clears `assignedWorkerId`, status uncha
 {
   success: true,
   taskId: string,
-  previousWorkerId: string | null,  // null if task was already unassigned
-  status: TaskStatus,               // unchanged
-  message: string
+  previousWorkerId: string | null,   // null if task was already unassigned
+  status: TaskStatus,                // unchanged
+  priorHandoffCount?: number,        // length of priorHandoffs after this release
+  message: string,
+  warning?: string                   // set when called without handoffNote
 }
 ```
 
 **Side effects:**
 - Sets `task.assignedWorkerId = null`.
+- When `handoffNote` is provided, builds a `HandoffNote` (with `releasedBy`, `releasedAt`, optional `reason`) and **prepends** it to `task.priorHandoffs` (newest-first, capped at 20).
+- Without `handoffNote`, the chat broadcast tags the release `(released without handoff)` and the response includes `warning: "release_task called without handoffNote; next claimer will lack context."`.
 - If the released worker exists and `worker.currentTaskId === taskId`, sets the worker to `IDLE` with `currentTaskId = null`.
-- Posts a system message to `#general`.
+- Posts the release line to `#general`, `#workers`, and `#governors`.
 - Activity event: `WORKER_RELEASED`.
 
 ---
@@ -830,22 +861,41 @@ QA approves a task in REVIEW status, moving it to DONE.
 
 ### moe.qa_reject
 
-QA rejects a task in REVIEW status, moving it back to WORKING for fixes.
+QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or to PLANNING when reopen/DoD thresholds trip.
 
 **Parameters:**
 ```typescript
-{ taskId: string, reason: string, workerId?: string }
+{
+  taskId: string,
+  reason: string,                  // max 2000 chars
+  failedDodItems?: string[],       // max 20
+  issues?: QAIssue[],              // max 20; type ∈ test_failure|lint|security|missing_feature|regression|other
+  workerId?: string
+}
 ```
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "WORKING", reopenCount, reason, message }
+{
+  success: true, taskId, status: "WORKING" | "PLANNING",
+  reopenCount, maxReopens, exceededReopenCap: boolean,
+  repeatedFailedDodItem?: string,
+  reason, rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
+  failedDodItems: FailedDodItem[],
+  message,
+  nextAction
+}
 ```
 
 **Notes:**
-- Increments `reopenCount`
-- Sets `reopenReason` so the worker knows what to fix
-- Worker should address the feedback and call `moe.complete_task` again
+- Increments `reopenCount` and `metrics.rejectCount`; sets `reopenReason`.
+- Appends a `RejectionHistoryEntry` to `rejectionHistory[]` (newest-first, capped at 20).
+- Populates `failedDodItems[]` (append-only, capped at last 100) — every supplied DoD item is recorded with `rejectedAt` + `rejectedBy`.
+- **Auto-flip to `PLANNING`** when either:
+  - `reopenCount ≥ maxReopens` (default 3 via `MAX_REOPENS_DEFAULT`; per-task override `task.maxReopens`), OR
+  - the **same DoD item has failed ≥2 times** in `failedDodItems[]`.
+- On auto-flip, posts a heads-up to `#architects`; on every rejection, cross-posts `❌ QA rejected ...` to `#governors`.
+- When `settings.memory.autoSave.qaRejection` is true (default), the daemon auto-saves a `gotcha` memory entry summarizing the rejection.
 
 **Errors:**
 - `taskId is required`
@@ -1111,8 +1161,10 @@ Long-poll for chat messages mentioning this worker or from humans.
 
 **Notes:**
 - Follows the same long-poll pattern as `moe.wait_for_task`
-- Only wakes for messages where `workerId` is in `mentions` or `sender` is "human"
+- When `channels` is explicitly provided, wakes on **any** message in those channels — the subscription set is the filter (matches the governor `#governors` watch pattern).
+- When `channels` is omitted (broad scope), only wakes for messages where `workerId` is in `mentions` or `sender` is `"human"`.
 - Cancels any previous wait for the same worker
+- Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
 
 ## Memory Tools
 
@@ -1198,3 +1250,204 @@ Save a summary of your session before ending. The next agent on this task will s
 - Stored in `.moe/memory/sessions/{workerId}_{taskId}.json`
 - Visible in `moe.get_context` response as `memory.lastSession`
 - Enables session continuity when agents are relaunched
+
+## Governance Control-Plane Tools
+
+### moe.get_handoff_history
+
+Return prior handoff notes + `priorAttempt` for a task. Workers picking up a released task should call this **before** `moe.get_context` so they don't redo finished work — `moe.claim_next_task` advertises this tool in `nextAction` when `priorHandoffs` is non-empty.
+
+**Parameters:**
+```typescript
+{ taskId: string }
+```
+
+**Returns:**
+```typescript
+{
+  taskId: string,
+  priorHandoffs: HandoffNote[],    // newest-first
+  priorAttempt: PriorAttempt | null
+}
+```
+
+---
+
+### moe.list_metrics
+
+Return per-task `TaskMetrics` plus an aggregate over the full filtered set. Aggregate is defined (zeroed) even when no tasks match the filter.
+
+**Parameters:**
+```typescript
+{
+  epicId?: string,        // restrict to a single epic
+  sinceIso?: string,      // ISO 8601 cutoff; tasks last touched at/after this time
+  limit?: number          // cap on per-task entries (default 100, max 1000); aggregate is always over the full filtered set
+}
+```
+
+**Returns:**
+```typescript
+{
+  aggregate: {
+    taskCount, doneCount, avgWallClockMs,
+    firstPassApprovalPct,           // 0..100; first-pass = DONE with rejectCount===0
+    avgReopenCount,
+    totalRejectCount, totalExecutedStepCount
+  },
+  tasks: Array<{ taskId, epicId, status, title, metrics: TaskMetrics }>,
+  totalMatched: number              // size of filtered set before `limit` is applied
+}
+```
+
+**Notes:**
+- Per-task entries are sorted newest-first by `metrics.doneAt → metrics.firstClaimAt → updatedAt → createdAt`.
+- `sinceIso` uses the most recent lifecycle timestamp available on each task, so in-flight tasks aren't excluded just because they haven't reached DONE.
+
+---
+
+### moe.request_replan
+
+Worker (or governor) hands the task back to the architect for a fresh plan. Snapshots the current `implementationPlan` + `stepsCompleted` into `task.priorAttempt`, clears the plan, flips the task to `PLANNING`, and cross-posts a `🔁 Replan requested` line to `#architects`. Use when the discovered problem is the plan itself, not a transient blocker (which goes through `moe.report_blocked`).
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  reason: string,        // max 2000 chars; why the existing plan is unworkable
+  stepId?: string,       // optional: step where the plan broke down (annotates chat post)
+  workerId?: string
+}
+```
+
+**Preconditions:**
+- Task must be in `WORKING`.
+- Caller must own the task (`assertWorkerOwns`).
+
+**Returns:**
+```typescript
+{
+  success: true,
+  taskId,
+  status: "PLANNING",
+  priorAttempt: PriorAttempt,
+  message,
+  nextAction: { tool: "moe.wait_for_task", args, reason }
+}
+```
+
+**Side effects:**
+- Sets `task.reopenReason = reason` and `task.priorAttempt = { attemptedAt, reason, implementationPlan, stepsCompleted }`.
+- Resets `implementationPlan = []` and `stepsCompleted = []`.
+- Marks the assigned worker `IDLE` with `currentTaskId = null`.
+- Activity event: `TASK_REOPENED`.
+
+---
+
+### moe.set_task_budget
+
+Set or clear the wall-clock budget on a task. Daemon warns at 80% and escalates at 100% in `#governors`. Re-evaluates the budget immediately, so tightening the cap on an in-flight task fires the warning right away if the new threshold has already been crossed.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  wallClockMs?: number   // soft cap on first-claim → DONE; omit or 0 to clear
+}
+```
+
+`wallClockMs` (when not clearing) must be a finite positive number.
+
+**Returns:**
+```typescript
+{ success: true, taskId, budget: TaskBudget | null }
+```
+
+**Notes:**
+- Preserves existing `warnedAt`/`escalatedAt` marks when the cap is adjusted upward.
+
+---
+
+### moe.submit_plan_critique
+
+Governor-only. Record a structured critique of a submitted plan. `verdict='block'` flips the task back to `PLANNING` with concerns posted to `#architects`; `verdict='pass'` is informational. **Does not auto-approve** — humans still own approval.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  verdict: 'pass' | 'block',
+  concerns?: string[],   // max 20 entries, ≤1000 chars each; required when verdict='block'
+  workerId?: string
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true, taskId, status,
+  verdict: 'pass' | 'block',
+  concerns: string[],
+  planCritiqueResult: { verdict, concerns?, reviewedBy, reviewedAt }
+}
+```
+
+**Notes:**
+- `block` only flips the task back to `PLANNING` when its current status is `AWAITING_APPROVAL` or `WORKING`. If a human has already advanced the task past those, the critique becomes purely advisory.
+- On `block`, posts `🚫 plan blocked on <id>` to `#architects` (with bulleted concerns) and a one-line summary to `#governors`. On `pass`, posts `✅ critique passed: <id>` to `#governors`.
+- Clears `task.pendingPlanCritique` once a critique lands (idempotent).
+
+---
+
+## Plugin WebSocket Messages
+
+The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
+
+### `GET_METRICS` → `METRICS`
+
+Dashboard query for per-epic + project-wide metrics.
+
+**Request:**
+```typescript
+{ type: 'GET_METRICS', payload?: { epicId?: string, sinceIso?: string } }
+```
+
+**Response:**
+```typescript
+{
+  type: 'METRICS',
+  payload: {
+    firstPassApprovalPct?: number,     // omitted when no DONE tasks
+    avgWallClockMs?: number,           // omitted when no completed tasks have wall-clock data
+    avgReopenCount?: number,           // omitted on empty task set
+    totalCompleted?: number,
+    perEpic: Array<{
+      epicId: string,
+      epicTitle?: string,
+      completed: number,
+      avgReopenCount?: number,
+      avgWallClockMs?: number
+    }>
+  }
+}
+```
+
+`sinceIso` must be a parseable ISO 8601 timestamp or the server returns `{ type: 'ERROR', message: 'GET_METRICS sinceIso must be ISO 8601' }`. Optional aggregate fields stay `undefined` (not zero) when nothing has happened yet, so the UI can render empty-state cells.
+
+### `AGENT_TOOL_EVENT` (one-way)
+
+Fire-and-forget telemetry emitted by `@moe/claude-plugin`'s `PostToolUse` hook. The daemon writes one `AGENT_TOOL_EVENT` activity-log entry per message and does not respond.
+
+**Message:**
+```typescript
+{
+  type: 'AGENT_TOOL_EVENT',
+  payload: {
+    workerId?: string,   // defaults to "unknown"
+    tool?: string,       // defaults to "unknown"
+    args?: unknown,      // currently ignored by the daemon
+    result?: unknown,    // currently ignored by the daemon
+    durationMs?: number
+  }
+}
+```

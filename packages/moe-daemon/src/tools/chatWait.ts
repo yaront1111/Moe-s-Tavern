@@ -68,11 +68,27 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       };
 
       if (!params.workerId) throw missingRequired('workerId');
+      if (typeof params.workerId !== 'string') {
+        throw invalidInput('workerId', 'must be a string');
+      }
       if (
         params.maxContentChars !== undefined &&
         (typeof params.maxContentChars !== 'number' || !Number.isFinite(params.maxContentChars) || params.maxContentChars < 0)
       ) {
         throw invalidInput('maxContentChars', 'must be a non-negative finite number');
+      }
+      if (params.channels !== undefined) {
+        if (!Array.isArray(params.channels)) {
+          throw invalidInput('channels', 'must be an array of channel IDs');
+        }
+        for (const ch of params.channels) {
+          if (typeof ch !== 'string' || !ch) {
+            throw invalidInput('channels', 'each channel ID must be a non-empty string');
+          }
+          if (!state.getChannel(ch)) {
+            throw invalidInput('channels', `unknown channel: ${ch}`);
+          }
+        }
       }
 
       // Cancel any existing chat waiter for this worker
@@ -115,20 +131,43 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         }
 
         const unsubscribe = state.subscribe((event) => {
+          // If a channel this waiter cares about is deleted, resolve with a
+          // clear error so the caller doesn't hang on a phantom subscription.
+          if (event.type === 'CHANNEL_DELETED') {
+            const deletedChannelId = (event.payload as { id?: string } | undefined)?.id;
+            if (deletedChannelId && channelSet && channelSet.has(deletedChannelId)) {
+              cleanup();
+              logger.info(
+                { workerId, channel: deletedChannelId },
+                'Chat wait aborted: subscribed channel was deleted'
+              );
+              resolve({
+                hasMessage: false,
+                cancelled: true,
+                error: `Channel ${deletedChannelId} was deleted while waiting`
+              });
+            }
+            return;
+          }
+
           if (event.type !== 'MESSAGE_CREATED') return;
 
           const message = event.payload as ChatMessage;
 
-          // Filter by channel if specified
-          if (channelSet && !channelSet.has(message.channel)) return;
-
-          // Use routing targets (expanded from @all, loop guards applied) for delivery,
-          // falling back to raw mentions if routingTargets not present
-          const targets = (event as { routingTargets?: string[] }).routingTargets ?? message.mentions ?? [];
-          const isRelevant = targets.includes(workerId) ||
-            message.sender === 'human';
-
-          if (!isRelevant) return;
+          if (channelSet) {
+            // Caller subscribed to specific channels — the subscription set
+            // IS the filter. Any message in those channels is relevant (this
+            // matches the governor's "watch #governors for any signal"
+            // expectation in docs/roles/governor.md).
+            if (!channelSet.has(message.channel)) return;
+          } else {
+            // No explicit channel filter — fall back to the conservative
+            // mention/human filter so workers in broad-scope chat_wait
+            // aren't woken on every chatter.
+            const targets = (event as { routingTargets?: string[] }).routingTargets ?? message.mentions ?? [];
+            const isRelevant = targets.includes(workerId) || message.sender === 'human';
+            if (!isRelevant) return;
+          }
 
           cleanup();
           logger.info({ workerId, messageId: message.id, sender: message.sender }, 'Chat message received, waking worker');

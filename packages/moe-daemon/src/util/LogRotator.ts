@@ -33,18 +33,22 @@ export class LogRotator {
   constructor(logPath: string, options?: LogRotatorOptions) {
     this.logPath = logPath;
 
-    // Read from env vars or use provided options or defaults
-    const envMaxSize = process.env.LOG_MAX_SIZE_MB;
-    const envRetention = process.env.LOG_RETENTION_COUNT;
+    // Read from env vars or use provided options or defaults. Reject NaN,
+    // Infinity, negative, and zero values; fall back to the default instead.
+    const parsePositive = (raw: string | undefined, fallback: number): number => {
+      if (!raw) return fallback;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
 
-    this.maxSizeBytes = (
-      options?.maxSizeMB ??
-      (envMaxSize ? parseInt(envMaxSize, 10) : DEFAULT_MAX_SIZE_MB)
-    ) * 1024 * 1024;
+    const maxSizeMB = options?.maxSizeMB && options.maxSizeMB > 0
+      ? options.maxSizeMB
+      : parsePositive(process.env.LOG_MAX_SIZE_MB, DEFAULT_MAX_SIZE_MB);
+    this.maxSizeBytes = maxSizeMB * 1024 * 1024;
 
-    this.retentionCount =
-      options?.retentionCount ??
-      (envRetention ? parseInt(envRetention, 10) : DEFAULT_RETENTION_COUNT);
+    this.retentionCount = options?.retentionCount && options.retentionCount > 0
+      ? options.retentionCount
+      : parsePositive(process.env.LOG_RETENTION_COUNT, DEFAULT_RETENTION_COUNT);
   }
 
   /**
