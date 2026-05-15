@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("architect", "worker", "qa")]
+    [ValidateSet("architect", "worker", "qa", "governor")]
     [string]$Role = "worker",
 
     [string]$Project,
@@ -57,10 +57,11 @@ if ($Loop -and $NoLoop) {
     exit 2
 }
 
-# Architect defaults to interactive TUI because planning is a conversation.
-# Worker and QA stay opt-in. Explicit -Interactive:$false on the command line
-# wins over this default.
-if ($Role -eq "architect" -and -not $PSBoundParameters.ContainsKey('Interactive')) {
+# Architect and governor default to interactive TUI: planning is a conversation,
+# and governance is an interactive oversight task where the operator wants to
+# steer escalation decisions in real time. Worker and QA stay opt-in. Explicit
+# -Interactive:$false on the command line wins over this default.
+if ($Role -in @("architect", "governor") -and -not $PSBoundParameters.ContainsKey('Interactive')) {
     $Interactive = $true
 }
 

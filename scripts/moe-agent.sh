@@ -253,9 +253,9 @@ if [ "$LOOP_REQUESTED" = true ] && [ "$NO_LOOP" = true ]; then
 fi
 
 # Validate role
-if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
+if [[ ! "$ROLE" =~ ^(architect|worker|qa|governor)$ ]]; then
     echo -e "${RED}Invalid role: $ROLE${NC}"
-    echo "Valid roles: architect, worker, qa"
+    echo "Valid roles: architect, worker, qa, governor"
     exit 1
 fi
 
@@ -277,14 +277,15 @@ if [ "$CLI_TYPE" = "gemini" ] && [ "$GEMINI_EXEC" = false ]; then
 fi
 
 # Resolve final INTERACTIVE: explicit --interactive / --no-interactive wins,
-# otherwise architect defaults to true (planning is a conversation), worker
-# and qa default to false. Note: the bash sibling does not yet implement a
-# --print stream-json fallback the way moe-agent.ps1 does, so on bash today
-# Claude always runs in TUI regardless of this flag. The flag is wired up for
-# forward parity and to keep the loop-decoupling logic symmetric.
+# otherwise architect + governor default to true (planning is a conversation,
+# governance is interactive oversight), worker and qa default to false. Note:
+# the bash sibling does not yet implement a --print stream-json fallback the
+# way moe-agent.ps1 does, so on bash today Claude always runs in TUI regardless
+# of this flag. The flag is wired up for forward parity and to keep the
+# loop-decoupling logic symmetric.
 if [ -n "$INTERACTIVE_REQUESTED" ]; then
     INTERACTIVE="$INTERACTIVE_REQUESTED"
-elif [ "$ROLE" = "architect" ]; then
+elif [ "$ROLE" = "architect" ] || [ "$ROLE" = "governor" ]; then
     INTERACTIVE=true
 else
     INTERACTIVE=false

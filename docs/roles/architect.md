@@ -26,16 +26,8 @@ Ownership, ordering, context fetches, and approval flow are enforced by the runt
 
 On `MoeError`, read `error.data.nextAction` and do what it says. If requirements are ambiguous or rails conflict, use `moe.report_blocked` instead of submitting a speculative plan.
 
-## Governance Mode
+## Idle behavior
 
-When `moe.claim_next_task {statuses:["PLANNING"]}` returns `hasNext: false` and your worker is already registered, the daemon will recommend `moe.enter_governance` as the next action. Call it. You become the on-call architect overseeing in-flight work.
+When `moe.claim_next_task {statuses:["PLANNING"]}` returns `hasNext: false`, the daemon will recommend `moe.wait_for_task` as the next action. Call it — you block until a new PLANNING task is announced in `#architects` ("📋 New plan needed: …"), then resume.
 
-Duties while governing:
-- **Watch chat.** `moe.chat_wait` fires when anyone @mentions you (or `@architects`) in `#general`, `#architects`, `#workers`, or `#qa`. Reply via `moe.chat_send` per the Mention Response Protocol *before* any other tool call.
-- **Scan for drift.** Between chat ticks, periodically call `moe.list_tasks {statuses:["WORKING","REVIEW"]}` and skim each task's plan vs progress. If a worker is off-plan or stuck, ping them in `#workers` with the specific concern.
-- **Re-plan on QA escalation.** If a QA rejection makes the original plan unworkable, flip the task back to PLANNING via `moe.set_task_status` and re-claim it.
-- **Resume planning automatically.** New PLANNING tasks announce themselves in `#architects` ("📋 New plan needed: …"). When you see one, drop the chat_wait loop and call `moe.claim_next_task` again.
-
-Releasing a task that an agent is hung on: call `moe.release_task {taskId}`. Status is preserved; another worker can claim it next.
-
-Identifying stale agents: `moe.list_workers {onlyStale: true}` shows agents whose `lastActivityAt` exceeds the liveness threshold, including any task assignments they still hold.
+You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and `wait_for_task` will surface it like any chat ping. See `docs/roles/governor.md` for the full division of labor.

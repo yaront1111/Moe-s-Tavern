@@ -69,7 +69,8 @@ object TerminalAgentLauncher {
     private val roleTabNames = mapOf(
         "architect" to "Moe Planner",
         "worker" to "Moe Coder",
-        "qa" to "Moe QA"
+        "qa" to "Moe QA",
+        "governor" to "Moe Governor"
     )
 
     enum class AgentProvider(val displayName: String, val command: String) {
@@ -193,7 +194,7 @@ object TerminalAgentLauncher {
 
     fun startAgents(project: Project, agentCommand: String? = null) {
         val ctx = resolveContext(project, agentCommand) ?: return
-        val roles = listOf("architect", "worker", "qa")
+        val roles = listOf("architect", "worker", "qa", "governor")
         ApplicationManager.getApplication().executeOnPooledThread {
             for ((index, role) in roles.withIndex()) {
                 try {
@@ -281,6 +282,7 @@ object TerminalAgentLauncher {
      *
      * - Architect: always (planning benefits from clarifying questions in the REPL).
      * - Worker: always — hands-on coding sessions want the TUI.
+     * - Governor: always — oversight is interactive; the operator steers escalations.
      * - QA: never — verification is mechanical, --print stream-json is preferable.
      *
      * Codex / Gemini providers ignore this gate: they have their own native TUI vs
@@ -292,7 +294,7 @@ object TerminalAgentLauncher {
         agentCommand: String,
         codexExec: Boolean
     ): Boolean =
-        (role == "architect" || role == "worker") &&
+        (role == "architect" || role == "worker" || role == "governor") &&
             !codexExec &&
             AgentProvider.fromCommand(agentCommand) == AgentProvider.CLAUDE
 

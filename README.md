@@ -50,12 +50,12 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Plan Approval** | Review AI implementation plans before execution |
 | **Persistent Memory** | Project knowledge base with BM25 search that grows with every task ([details](docs/MEMORY.md)) |
 | **Skills System** | 11 vendored skills (planning, TDD, systematic-debugging, adversarial-self-review, regression-check, receiving-code-review, …) auto-loaded per role ([manifest](docs/skills/manifest.json)) |
-| **Governance Mode** | Architect can `release_task` + `enter_governance` to revise rails on a live task, then hand it back to a worker |
+| **Dedicated Governor** | A fourth, always-on agent role that watches for stale workers, drift, QA rejection loops, and human escalations — separate from planning, so the architect stays focused |
 | **Branch Safety** | Wrapper post-flight refuses to commit on `main`/`master` and peels onto `moe/work-<date>` automatically |
 | **Self-Healing Daemon** | Supervisor auto-restarts on crash with exponential backoff |
 | **Runtime-Driven Workflow** | Per-task agent respawn, streaming output, trimmed prompts — long sessions stay responsive |
 | **Agent Chat** | Real-time messaging with @mentions, channels, and a Mention Response Protocol that forces tagged agents to reply |
-| **Multi-Agent** | Architect, worker, and QA roles across Claude, Codex, Gemini, and any MCP-compatible agent |
+| **Multi-Agent** | Architect, worker, QA, and governor roles across Claude, Codex, Gemini, and any MCP-compatible agent |
 | **MCP Protocol** | 50+ tools including `release_task`, `enter_governance`, `list_workers`, `propose_rail`, memory (`recall`/`remember`/`reflect`), chat, teams |
 | **Real-time Sync** | Live updates via WebSocket |
 | **Activity Log** | Complete audit trail with log rotation |
@@ -278,9 +278,10 @@ moe/
 │   │   ├── explore-before-assume/, writing-plans/
 │   │   └── using-git-worktrees/
 │   └── roles/
-│       ├── architect.md  # Plan mode, governance mode, memory guidance
+│       ├── architect.md  # Plan mode, conversational planning, memory guidance
 │       ├── worker.md     # Branch safety, skills usage, mention protocol
-│       └── qa.md
+│       ├── qa.md
+│       └── governor.md   # Oversight, escalation ladder, signal cheat sheet
 └── scripts/             # Agent launcher & install scripts
     ├── moe-agent.sh     # Mac/Linux agent launcher (pre-flight + post-flight)
     ├── moe-agent.ps1    # Windows agent launcher (pre-flight + post-flight)
@@ -292,7 +293,7 @@ moe/
 
 ## Agent Roles — Architect, Worker, QA
 
-Moe runs every task through a three-role pipeline. Each role claims tasks in a specific status, owns a different MCP toolset, and is wired to its own skill bundle. Humans are the gate between roles (or you can dial that gate down with [Approval Modes](#approval-modes)).
+Moe runs every task through a four-role pipeline: architect plans, worker codes, QA reviews, and a dedicated governor watches the fleet. Each role claims tasks in a specific status (the governor doesn't claim — it oversees), owns a different MCP toolset, and is wired to its own skill bundle. Humans are the gate between roles (or you can dial that gate down with [Approval Modes](#approval-modes)).
 
 ```mermaid
 flowchart LR
@@ -302,7 +303,8 @@ flowchart LR
     WK -->|worker: moe.complete_task| RV[REVIEW]
     RV -->|qa: qa_approve| DN[DONE]
     RV -->|qa: qa_reject| WK
-    WK -.->|architect: release_task + enter_governance| PL
+    RV -.->|governor: set_task_status (rejection loop)| PL
+    WK -.->|governor: release_task| WK
 ```
 
 ### 1. Architect — the planner
@@ -310,7 +312,8 @@ flowchart LR
 - Claims `PLANNING` tasks via `moe.claim_next_task {workerId:"architect"}`.
 - Explores the codebase, then submits an implementation plan with `moe.submit_plan` (steps, files, rails, DoD).
 - Can **propose new rails** with `moe.propose_rail` and route them to humans for approval.
-- Can **enter governance mode** on a live task: call `moe.release_task` to detach a stuck worker, then `moe.enter_governance` to revise plan/rails before handing it back.
+- Runs in interactive TUI by default — uses `superpowers:brainstorming` to clarify ambiguities with the human before drafting.
+- On an empty PLANNING queue, idles via `moe.wait_for_task` until the next plan is needed. Oversight is **not** the architect's job — see Governor.
 - Skills auto-loaded: `moe-planning`, `writing-plans`, `explore-before-assume`.
 - Role guide: [`docs/roles/architect.md`](docs/roles/architect.md).
 
@@ -330,6 +333,14 @@ flowchart LR
 - **FAIL** → `moe.qa_reject` with structured `rejectionDetails` so the worker has actionable feedback (task drops back to `WORKING`, never to `BACKLOG`).
 - Skill auto-loaded: `moe-qa-loop`.
 - Role guide: [`docs/roles/qa.md`](docs/roles/qa.md).
+
+### 4. Governor — the overseer
+
+- Never claims tasks. `moe.claim_next_task` routes governors straight to `moe.enter_governance`.
+- Watches `#governors` for auto-pushed signals: `🚧` worker blocks, `❌` QA rejections, `⚠️` stale-worker alerts, `🔓` task releases, and `📋` new PLANNING announcements (informational).
+- Triages: ping a worker, ping the architect, `moe.propose_rail` for rail conflicts, `moe.release_task` for hard hangs, `moe.set_task_status` back to PLANNING for QA rejection loops.
+- Runs in interactive TUI by default — the human steers escalation decisions via the REPL.
+- Role guide: [`docs/roles/governor.md`](docs/roles/governor.md).
 
 ### Cross-cutting
 

@@ -140,6 +140,19 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
       } catch { /* never block tool */ }
 
+      // Cross-post structured rejection to #governors so the governor's chat_wait
+      // surfaces it. Governor triages: first rejection = let the worker fix in
+      // WORKING; repeated rejections on the same DoD item = flip back to PLANNING.
+      try {
+        const reopenCount = (updated.reopenCount ?? 0);
+        const reopenTag = reopenCount > 1 ? ` (reopen #${reopenCount})` : '';
+        const reasonSummary = params.reason.length > 200 ? params.reason.slice(0, 200) + '…' : params.reason;
+        await state.postToRoleChannel(
+          'governors',
+          `❌ QA rejected ${params.taskId}${reopenTag}: ${reasonSummary}`
+        );
+      } catch { /* never block tool */ }
+
       // Auto-extract memory for QA rejections by default: they encode concrete,
       // reusable failure patterns. Projects can disable this in settings.memory
       // if the signal/noise ratio is poor.

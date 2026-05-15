@@ -769,9 +769,11 @@ List all registered workers with liveness derived from `lastActivityAt`. Use to 
 
 ### moe.enter_governance
 
-Architect transitions from planning to governance after the PLANNING queue empties. Sets the worker status to `GOVERNING`, broadcasts presence to `#general` and `#architects`, and returns a `chat_wait` `nextAction` so the architect oversees in-flight work via chat.
+**Governor-only.** A governor worker transitions into governance mode to watch chat, drift, stale workers, and QA rejections. Sets the worker status to `GOVERNING`, broadcasts presence to `#general` and `#governors`, and returns a `chat_wait` `nextAction` for the multi-channel watch loop.
 
-`moe.claim_next_task` automatically suggests this tool as `nextAction` when an architect-style claim (`statuses: ["PLANNING"]`) finds no claimable work and the worker is already registered.
+Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLANNING queue get a `wait_for_task` nextAction from `moe.claim_next_task`; governance belongs to the governor role.
+
+`moe.claim_next_task` automatically returns this tool as `nextAction` when the caller's team role is `governor` (governors never claim tasks).
 
 **Parameters:**
 ```typescript
@@ -784,7 +786,7 @@ Architect transitions from planning to governance after the PLANNING queue empti
   success: true,
   workerId: string,
   status: "GOVERNING",
-  channels: Array<{ id: string, name: string }>,  // general/architects/workers/qa, those that exist
+  channels: Array<{ id: string, name: string }>,  // general/architects/workers/qa/governors, those that exist
   governanceDuties: string[],
   nextAction: { tool: "moe.chat_wait", args: { workerId, channels, timeoutMs }, reason: string }
 }
@@ -792,11 +794,16 @@ Architect transitions from planning to governance after the PLANNING queue empti
 
 **Side effects:**
 - `worker.status = "GOVERNING"`, `worker.currentTaskId = null`.
-- System message in `#general`: `🧭 {workerId} is now governing — @mention them on plan questions, drift, or rejections.`
-- Same message in `#architects`.
+- System message in `#general`: `🧭 {workerId} is now governing — @mention them on stuck workers, rejections, or escalations.`
+- Same message in `#governors`.
 - Activity event: `WORKER_GOVERNING`.
 
-**Resuming planning.** When any task transitions into PLANNING (via `moe.create_task` or `moe.set_task_status`), the daemon posts `📋 New plan needed: …` to `#architects`. The governing architect's `chat_wait` fires; they call `moe.claim_next_task` to resume planning.
+**Auto-push signals.** While a governor's `chat_wait` is blocked on `#governors`, the daemon cross-posts these events so the loop wakes:
+- `🚧 {worker} blocked on {taskId}: {reason}` (from `moe.report_blocked`).
+- `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
+- `🔓 {worker} released task: {title}` (from `moe.release_task`).
+- `⚠️ {worker} stale on {taskId} — last activity {N}s ago` (from the daemon's stale-worker watcher; only fires when at least one governor is online).
+- `📋 New plan needed: {title} ({id})` (cross-post of the PLANNING announcement; informational — governors never claim PLANNING tasks).
 
 ---
 

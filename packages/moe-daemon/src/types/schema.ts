@@ -97,7 +97,7 @@ export interface Project {
 
 export const CURRENT_SCHEMA_VERSION = 6;
 
-export type TeamRole = 'architect' | 'worker' | 'qa';
+export type TeamRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 export interface Team {
   id: string;

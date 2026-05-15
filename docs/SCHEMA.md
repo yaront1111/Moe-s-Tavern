@@ -445,7 +445,7 @@ type WorkerStatus =
   | 'AWAITING_APPROVAL' // Plan submitted, waiting
   | 'CODING'            // Executing steps
   | 'BLOCKED'           // Stuck, needs human help
-  | 'GOVERNING';        // Architect overseeing in-flight work via chat (set by moe.enter_governance)
+  | 'GOVERNING';        // Governor overseeing in-flight work via chat (set by moe.enter_governance)
 ```
 
 **Example:**
@@ -486,7 +486,7 @@ type WorkerStatus =
 Teams are logical groupings of workers. Teams can be role-based (architect/worker/qa) or project-wide (no role). Team members bypass the per-epic per-status constraint, allowing multiple workers to work on different tasks in the same epic simultaneously.
 
 ```typescript
-type TeamRole = 'architect' | 'worker' | 'qa';
+type TeamRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 interface Team {
   // Identity
@@ -799,7 +799,7 @@ type ActivityEventType =
   | 'WORKER_ERROR'
   | 'WORKER_BLOCKED'
   | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
-  | 'WORKER_GOVERNING'   // Architect entered governance mode via moe.enter_governance
+  | 'WORKER_GOVERNING'   // Governor entered governance mode via moe.enter_governance
   
   // Proposal
   | 'PROPOSAL_CREATED'

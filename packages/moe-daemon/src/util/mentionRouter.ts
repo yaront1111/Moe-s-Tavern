@@ -22,7 +22,7 @@ export class MentionRouter {
 
   /**
    * Parse @mentions from message content, matching against known worker IDs.
-   * Supports group mentions: @all, @architects, @workers, @qa
+   * Supports group mentions: @all, @architects, @workers, @qa, @governors
    */
   parseMentions(content: string, knownWorkerIds: string[], workers?: Worker[], teams?: Team[]): string[] {
     if (!content) return [];
@@ -57,9 +57,24 @@ export class MentionRouter {
       if (lower === 'all') {
         // @all → all known workers
         for (const id of knownWorkerIds) result.add(id);
-      } else if (lower === 'architects' || lower === 'workers' || lower === 'qa') {
-        // Map group mention to team role
-        const targetRole = lower === 'architects' ? 'architect' : lower === 'workers' ? 'worker' : 'qa';
+      } else if (
+        lower === 'architects' ||
+        lower === 'workers' ||
+        lower === 'qa' ||
+        lower === 'governor' ||
+        lower === 'governors'
+      ) {
+        // Map group mention to team role. 'qa' is its own thing (no plural form
+        // in the schema); 'governor' / 'governors' both resolve to the governor
+        // role so users can write either.
+        const targetRole =
+          lower === 'architects'
+            ? 'architect'
+            : lower === 'workers'
+              ? 'worker'
+              : lower === 'qa'
+                ? 'qa'
+                : 'governor';
 
         // Primary: resolve by team.role lookup
         let matched = false;
@@ -72,7 +87,7 @@ export class MentionRouter {
 
         // Fallback: if no teams exist, match by ID substring (backwards compat)
         if (!matched) {
-          const searchTerm = targetRole; // 'architect', 'worker', or 'qa'
+          const searchTerm = targetRole; // 'architect', 'worker', 'qa', or 'governor'
           for (const id of knownWorkerIds) {
             if (id.toLowerCase().includes(searchTerm)) result.add(id);
           }

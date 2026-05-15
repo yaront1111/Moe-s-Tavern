@@ -40,6 +40,24 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           throw invalidState('StateManager', 'unloaded', 'loaded');
         }
 
+        // Governors never claim tasks — they oversee. Route them straight to
+        // enter_governance. The role is derived from the worker's team, so a
+        // fresh first-time caller without a registered worker falls through to
+        // the normal claim path (so onboarding doesn't break).
+        if (params.workerId) {
+          const team = state.getTeamForWorker(params.workerId);
+          if (team?.role === 'governor') {
+            return {
+              hasNext: false,
+              nextAction: {
+                tool: 'moe.enter_governance',
+                args: { workerId: params.workerId },
+                reason: 'Governors do not claim tasks. Enter governance to watch chat, drift, and rejections.'
+              }
+            };
+          }
+        }
+
         let tasks: Task[];
         if (params.taskId) {
           const requested = state.getTask(params.taskId);
@@ -76,26 +94,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         }
 
       if (tasks.length === 0) {
-        // Architect entering an empty PLANNING queue → suggest governance instead of just waiting.
-        // Only when the caller is an architect-style claim (PLANNING status) AND a worker entity
-        // is already registered (so a fresh first-time caller still gets the original wait_for_task).
-        const isArchitectClaim =
-          statuses.includes('PLANNING') &&
-          !statuses.includes('WORKING') &&
-          !statuses.includes('REVIEW');
-        const knownWorker = params.workerId ? state.getWorker(params.workerId) : null;
-
-        if (isArchitectClaim && params.workerId && knownWorker) {
-          return {
-            hasNext: false,
-            nextAction: {
-              tool: 'moe.enter_governance',
-              args: { workerId: params.workerId },
-              reason: 'No PLANNING tasks left. Switch to governance: oversee in-flight work via chat until new plans are needed.'
-            }
-          };
-        }
-
+        // No tasks available — block on wait_for_task regardless of role. Architects
+        // on an empty PLANNING queue idle here too; governance is owned by the
+        // separate governor role (which is short-circuited above before this point).
         return {
           hasNext: false,
           nextAction: {

@@ -38,6 +38,20 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `PowerShell governor Claude command opts into interactive TUI`() {
+        val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\Cordum",
+            role = "governor",
+            scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = emptyMap(),
+            agentCommand = "claude"
+        )
+
+        assertTrue(command.contains("-Role governor"))
+        assertTrue(command.contains("-Interactive"))
+    }
+
+    @Test
     fun `PowerShell qa Claude command stays in print mode`() {
         val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
             basePath = "D:\\Cordum",

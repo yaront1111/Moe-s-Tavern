@@ -54,10 +54,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         }
 
         const reasonSuffix = params.reason ? ` (${params.reason})` : '';
+        const releaseMsg = `🔓 ${previousWorkerId} released task: ${updated.title}${reasonSuffix}`;
         try {
-          await state.postToGeneral(
-            `${previousWorkerId} released task: ${updated.title}${reasonSuffix}`
-          );
+          await state.postToGeneral(releaseMsg);
+        } catch { /* never block tool */ }
+        try {
+          await state.postToRoleChannel('governors', releaseMsg);
         } catch { /* never block tool */ }
 
         return {

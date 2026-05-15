@@ -33,10 +33,12 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');
       }
 
-      // Cross-post blocked message to task channel and general channel
-      const blockedMsg = `${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
+      // Cross-post blocked message to task channel, general, and #governors
+      // so the on-call governor's chat_wait wakes on the block event.
+      const blockedMsg = `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
       try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
       try { await state.postToGeneral(blockedMsg); } catch { /* never block tool */ }
+      try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
 
       // wait_for_task requires both workerId and statuses. Only emit the hint
       // when we can populate them; otherwise omit nextAction to avoid a guaranteed-to-throw suggestion.

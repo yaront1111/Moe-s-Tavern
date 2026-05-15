@@ -193,6 +193,11 @@ export class StateManager {
   private activityFlushResolvers: Array<() => void> = [];
   private blockedTimeoutInterval?: NodeJS.Timeout;
   private proposalPurgeInterval?: NodeJS.Timeout;
+  private staleWorkerInterval?: NodeJS.Timeout;
+  // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
+  // until the staleness clears (worker becomes alive again) or the assignment
+  // moves to a different task.
+  private alertedStaleAssignments = new Set<string>();
   private readonly blockedTimeoutMs: number;
   private readonly staleWorkerTimeoutMs: number;
   private mentionRouter: MentionRouter;
@@ -228,6 +233,7 @@ export class StateManager {
   clearEmitter(): void {
     this.stopBlockedTimeoutCheck();
     this.stopProposalPurgeInterval();
+    this.stopStaleWorkerWatcher();
     this.subscribers.clear();
     this.subscriberErrorCounts.clear();
     this.emitter = undefined;
@@ -356,6 +362,78 @@ export class StateManager {
     if (this.proposalPurgeInterval) {
       clearInterval(this.proposalPurgeInterval);
       this.proposalPurgeInterval = undefined;
+    }
+  }
+
+  /**
+   * Start periodic stale-worker watcher. Posts ⚠️ alerts to #governors when a
+   * worker still holds a task assignment but hasn't pinged in more than the
+   * liveness timeout. Silent when no governor is online (avoids log noise in
+   * single-architect setups). Default cadence: 60 seconds.
+   */
+  startStaleWorkerWatcher(intervalMs = 60_000, livenessTimeoutMs = 120_000): void {
+    this.stopStaleWorkerWatcher();
+    this.staleWorkerInterval = setInterval(() => {
+      this.checkStaleWorkers(livenessTimeoutMs).catch((err) => {
+        logger.error({ error: err }, 'Error checking stale workers');
+      });
+    }, intervalMs);
+    if (this.staleWorkerInterval.unref) {
+      this.staleWorkerInterval.unref();
+    }
+  }
+
+  stopStaleWorkerWatcher(): void {
+    if (this.staleWorkerInterval) {
+      clearInterval(this.staleWorkerInterval);
+      this.staleWorkerInterval = undefined;
+    }
+  }
+
+  /**
+   * Walk workers; for each with a stale assignment AND not previously alerted,
+   * post a one-line ⚠️ message to #governors. Gated on a governor being alive
+   * (alive = lastActivityAt within livenessTimeoutMs, team.role === 'governor').
+   */
+  async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
+    const now = Date.now();
+
+    // Cheap pre-check: is any governor alive? If not, skip the whole loop.
+    let governorAlive = false;
+    for (const w of this.workers.values()) {
+      const team = w.teamId ? this.teams.get(w.teamId) : null;
+      if (team?.role !== 'governor') continue;
+      const ts = w.lastActivityAt ? new Date(w.lastActivityAt).getTime() : 0;
+      if (ts > 0 && now - ts <= livenessTimeoutMs) {
+        governorAlive = true;
+        break;
+      }
+    }
+    if (!governorAlive) return;
+
+    const seenKeys = new Set<string>();
+    for (const w of this.workers.values()) {
+      if (!w.currentTaskId) continue;
+      const ts = w.lastActivityAt ? new Date(w.lastActivityAt).getTime() : 0;
+      const sinceMs = ts === 0 ? Number.POSITIVE_INFINITY : now - ts;
+      if (sinceMs <= livenessTimeoutMs) continue;
+
+      const key = `${w.id}:${w.currentTaskId}`;
+      seenKeys.add(key);
+      if (this.alertedStaleAssignments.has(key)) continue;
+
+      const secs = sinceMs === Number.POSITIVE_INFINITY ? 'unknown' : Math.floor(sinceMs / 1000) + 's';
+      const task = this.getTask(w.currentTaskId);
+      const taskTitle = task?.title || w.currentTaskId;
+      const alert = `⚠️ ${w.id} stale on ${w.currentTaskId} (${taskTitle}) — last activity ${secs} ago`;
+      try { await this.postToRoleChannel('governors', alert); } catch { /* never throw */ }
+      this.alertedStaleAssignments.add(key);
+    }
+
+    // Clear memoization for assignments that are no longer stale (worker recovered
+    // or task reassigned), so future staleness triggers a fresh alert.
+    for (const key of this.alertedStaleAssignments) {
+      if (!seenKeys.has(key)) this.alertedStaleAssignments.delete(key);
     }
   }
 
@@ -857,7 +935,7 @@ export class StateManager {
     if (value === undefined || value === null) {
       return null;
     }
-    return this.validateEnumValue(value, 'role', ['architect', 'worker', 'qa'] as const);
+    return this.validateEnumValue(value, 'role', ['architect', 'worker', 'qa', 'governor'] as const);
   }
 
   private validateTeamMaxSize(value: unknown): number {
@@ -1058,6 +1136,7 @@ export class StateManager {
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
       this.startProposalPurgeInterval();
+      this.startStaleWorkerWatcher();
     });
 
     return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
@@ -1907,10 +1986,9 @@ export class StateManager {
     this.emit({ type: 'TASK_CREATED', payload: task });
 
     if (task.status === 'PLANNING') {
-      this.postToRoleChannel(
-        'architects',
-        `📋 New plan needed: ${task.title} (${task.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
-      ).catch(() => {});
+      const planAnnouncement = `📋 New plan needed: ${task.title} (${task.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`;
+      this.postToRoleChannel('architects', planAnnouncement).catch(() => {});
+      this.postToRoleChannel('governors', planAnnouncement).catch(() => {});
     }
 
     return task;
@@ -2046,13 +2124,14 @@ export class StateManager {
       const actor = updated.assignedWorkerId || 'unknown';
       this.postSystemMessage(taskId, `Task moved to ${updates.status} by ${actor}`).catch(() => {});
 
-      // When a task lands on PLANNING, ping #architects so any governing architect
-      // sees it via chat_wait and can resume planning.
+      // When a task lands on PLANNING, ping #architects so an architect on
+      // wait_for_task sees it and can claim. Also cross-post to #governors so
+      // the governor's chat_wait surfaces the event (informational — governor
+      // never claims PLANNING tasks themselves).
       if (updates.status === 'PLANNING') {
-        this.postToRoleChannel(
-          'architects',
-          `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
-        ).catch(() => {});
+        const planAnnouncement = `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`;
+        this.postToRoleChannel('architects', planAnnouncement).catch(() => {});
+        this.postToRoleChannel('governors', planAnnouncement).catch(() => {});
       }
     }
 
@@ -2898,7 +2977,7 @@ export class StateManager {
       }
     } catch { /* directory may not exist */ }
 
-    for (const roleName of ['workers', 'architects', 'qa']) {
+    for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
       if (existingNames.has(roleName)) continue;
       try {
         const channelId = generateId('chan');
