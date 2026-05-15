@@ -80,6 +80,35 @@ if [ -z "$PROJECT" ]; then
     fi
 fi
 
+# Find python: python3 on Unix, `py -3` on Windows, or plain python if 3.x.
+# Actually runs `--version` since `command -v python3` on Windows can resolve
+# to the Microsoft Store shim that prints "Python was not found" when executed.
+find_python() {
+    if command -v python3 &> /dev/null && python3 --version &> /dev/null 2>&1; then
+        echo "python3"
+        return 0
+    fi
+    if command -v py &> /dev/null && py -3 --version &> /dev/null 2>&1; then
+        echo "py -3"
+        return 0
+    fi
+    if command -v python &> /dev/null; then
+        local v
+        v=$(python --version 2>&1)
+        if [[ "$v" == *"Python 3."* ]]; then
+            echo "python"
+            return 0
+        fi
+    fi
+    echo ""
+    return 1
+}
+PYTHON_CMD=$(find_python)
+if [ -z "$PYTHON_CMD" ]; then
+    echo "Error: python3 (or py -3) not found on PATH" >&2
+    exit 1
+fi
+
 # Find node
 find_node() {
     if command -v node &> /dev/null; then
@@ -131,7 +160,7 @@ find_proxy() {
     local config_file="$HOME/.moe/config.json"
     if [ -f "$config_file" ]; then
         local install_path
-        install_path=$(python3 -c "import json; print(json.load(open('$config_file')).get('installPath',''))" 2>/dev/null || true)
+        install_path=$($PYTHON_CMD -c "import json; print(json.load(open('$config_file')).get('installPath',''))" 2>/dev/null || true)
         if [ -n "$install_path" ]; then
             local global_proxy="$install_path/packages/moe-proxy/dist/index.js"
             if [ -f "$global_proxy" ]; then
@@ -168,22 +197,15 @@ if [ ! -f "$DAEMON_FILE" ]; then
     exit 1
 fi
 
-# Build JSON-RPC request
-REQUEST=$(python3 -c "
-import json, sys
-tool = '$TOOL_NAME'
-args = json.loads('$TOOL_ARGS')
-req = {
-    'jsonrpc': '2.0',
-    'id': 1,
-    'method': 'tools/call',
-    'params': {
-        'name': tool,
-        'arguments': args
-    }
-}
-print(json.dumps(req))
-" 2>/dev/null)
+# Build JSON-RPC request (node handles JSON/shell quoting more robustly than python+heredoc)
+REQUEST=$("$NODE_CMD" -e "
+const tool = process.argv[1];
+const args = JSON.parse(process.argv[2]);
+process.stdout.write(JSON.stringify({
+  jsonrpc: '2.0', id: 1, method: 'tools/call',
+  params: { name: tool, arguments: args }
+}));
+" "$TOOL_NAME" "$TOOL_ARGS" 2>/dev/null)
 
 if [ -z "$REQUEST" ]; then
     echo "Error: failed to build JSON-RPC request. Check your arguments are valid JSON." >&2
@@ -198,36 +220,40 @@ if [ -z "$RESULT" ]; then
     exit 1
 fi
 
-# Extract the result content from JSON-RPC response
-python3 -c "
-import json, sys
-
-for line in '''$RESULT'''.strip().split('\n'):
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        resp = json.loads(line)
-        if 'error' in resp:
-            print(json.dumps(resp['error'], indent=2))
-            sys.exit(1)
-        if 'result' in resp:
-            result = resp['result']
-            # MCP tool results have content array
-            if isinstance(result, dict) and 'content' in result:
-                for item in result['content']:
-                    if item.get('type') == 'text':
-                        try:
-                            parsed = json.loads(item['text'])
-                            print(json.dumps(parsed, indent=2))
-                        except:
-                            print(item['text'])
-                sys.exit(0)
-            print(json.dumps(result, indent=2))
-            sys.exit(0)
-    except json.JSONDecodeError:
-        continue
-
-print('Error: could not parse response')
-sys.exit(1)
-" 2>/dev/null
+# Extract the result content from JSON-RPC response via stdin
+printf '%s' "$RESULT" | "$NODE_CMD" -e "
+let input = '';
+process.stdin.on('data', d => input += d);
+process.stdin.on('end', () => {
+  const lines = input.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    let resp;
+    try { resp = JSON.parse(line); } catch { continue; }
+    if (resp.error) {
+      process.stdout.write(JSON.stringify(resp.error, null, 2) + '\n');
+      process.exit(1);
+    }
+    if (resp.result) {
+      const r = resp.result;
+      if (r && typeof r === 'object' && Array.isArray(r.content)) {
+        for (const item of r.content) {
+          if (item.type === 'text') {
+            let text = item.text;
+            try {
+              const parsed = JSON.parse(text);
+              process.stdout.write(JSON.stringify(parsed, null, 2) + '\n');
+            } catch {
+              process.stdout.write(text + '\n');
+            }
+          }
+        }
+        process.exit(0);
+      }
+      process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+      process.exit(0);
+    }
+  }
+  process.stderr.write('Error: could not parse response\n');
+  process.exit(1);
+});
+"

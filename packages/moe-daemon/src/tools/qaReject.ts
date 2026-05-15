@@ -2,6 +2,9 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { QAIssue, QAIssueType, RejectionDetails } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
+import { assertWorkerOwns } from '../util/enforcement.js';
+import { resolveMemorySettings } from '../util/memorySettings.js';
+import { logger } from '../util/logger.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -37,7 +40,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
             required: ['type', 'description']
           },
           description: 'Structured list of issues found during review'
-        }
+        },
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId', 'reason'],
       additionalProperties: false
@@ -48,6 +52,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reason?: string;
         failedDodItems?: string[];
         issues?: QAIssue[];
+        workerId?: string;
       };
 
       if (!params.taskId) {
@@ -96,8 +101,12 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'REVIEW');
       }
 
-      // Build rejection details (only if structured feedback provided)
-      let rejectionDetails: RejectionDetails | undefined;
+      assertWorkerOwns(task, params.workerId);
+      const handoffWorkerId = task.assignedWorkerId || params.workerId;
+
+      // Build rejection details when structured feedback is provided. Reason-only
+      // rejections must explicitly clear any stale details from previous cycles.
+      let rejectionDetails: RejectionDetails | null = null;
       if (params.failedDodItems?.length || params.issues?.length) {
         rejectionDetails = {};
         if (params.failedDodItems?.length) {
@@ -113,10 +122,8 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reopenCount: task.reopenCount + 1,
         reopenReason: params.reason,
         reviewCompletedAt: new Date().toISOString(),
+        rejectionDetails,
       };
-      if (rejectionDetails) {
-        updatePayload.rejectionDetails = rejectionDetails;
-      }
 
       const updated = await state.updateTask(
         params.taskId,
@@ -124,10 +131,51 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         'QA_REJECTED'
       );
 
+      // Use the captured assignee because updateTask clears assignedWorkerId on
+      // REVIEW -> WORKING handoff. touchWorker skips missing worker records.
+      await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
+
       // Post system message to task channel
       try {
         await state.postSystemMessage(params.taskId, `QA rejected: ${params.reason}`);
       } catch { /* never block tool */ }
+
+      // Auto-extract memory for QA rejections by default: they encode concrete,
+      // reusable failure patterns. Projects can disable this in settings.memory
+      // if the signal/noise ratio is poor.
+      const memorySettings = resolveMemorySettings(state.project?.settings);
+      if (params.workerId && memorySettings.autoSave.qaRejection) {
+        try {
+          const mm = state.getMemoryManager();
+          const reasonCapped = params.reason.slice(0, 2000);
+          const issueSummary = (params.issues || [])
+            .slice(0, 10)
+            .map((i) => `[${i.type}] ${i.description.slice(0, 500)}${i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : ''}`)
+            .join('\n');
+          const failedDod = (params.failedDodItems || []).slice(0, 10).join('\n').slice(0, 2000);
+          const bodyParts = [
+            `Task "${updated.title}" was rejected by QA (reopen #${updated.reopenCount}).`,
+            `Reason: ${reasonCapped}`,
+            failedDod ? `Failed DoD items:\n${failedDod}` : '',
+            issueSummary ? `Issues:\n${issueSummary}` : '',
+          ].filter(Boolean);
+          await mm.addEntry({
+            workerId: params.workerId,
+            type: 'gotcha',
+            content: bodyParts.join('\n\n').slice(0, 5000),
+            // epicId stays out of tags — dedicated field handles epic filtering.
+            tags: ['qa-rejection'],
+            files: Array.from(new Set((params.issues || []).map(i => i.file).filter((f): f is string => !!f))).slice(0, 20),
+            taskId: updated.id,
+            epicId: updated.epicId,
+          });
+        } catch (err) {
+          logger.warn({
+            taskId: updated.id,
+            error: err instanceof Error ? err.message : String(err),
+          }, 'qaReject memory auto-extract failed');
+        }
+      }
 
       return {
         success: true,
@@ -135,8 +183,17 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         status: updated.status,
         reopenCount: updated.reopenCount,
         reason: params.reason,
-        rejectionDetails: rejectionDetails || null,
-        message: `Task ${updated.id} rejected and moved to WORKING. Worker should address: ${params.reason}`
+        rejectionDetails,
+        message: `Task ${updated.id} rejected and moved to WORKING. Worker should address: ${params.reason}`,
+        nextAction: {
+          tool: 'moe.save_session_summary',
+          args: {
+            workerId: params.workerId,
+            taskId: updated.id,
+            summary: `Rejected task ${updated.id}: ${params.reason}`
+          },
+          reason: 'Record your review findings; next QA rotation will benefit.'
+        }
       };
     }
   };

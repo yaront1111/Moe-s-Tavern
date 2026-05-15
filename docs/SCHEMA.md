@@ -104,6 +104,13 @@ interface ProjectSettings {
   // Commit message pattern
   commitPattern: string;         // default: "feat({epicId}): {taskTitle}"
 
+  // Auto-commit + push on worker `complete_task`. When true (default), the
+  // agent wrapper runs `git add -A && git commit && git push` against the
+  // current branch after a worker moves a task to REVIEW (first pass or
+  // retry after qa_reject). Commits use the user's configured git identity;
+  // no Claude/Codex attribution is added. Set false to disable.
+  autoCommit?: boolean;          // default: true
+
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
   // Example: { "REVIEW": 2 } limits review to 2 tasks at a time
@@ -113,6 +120,19 @@ interface ProjectSettings {
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
   chatAutoCreateChannels?: boolean;   // default: true — auto-create channels for epics/tasks
+
+  // Memory/token-budget settings (all optional, defaults applied at runtime)
+  memory?: {
+    autoInject?: 'off' | 'summary' | 'full'; // default: summary
+    maxAutoResults?: number;                 // default: 1
+    maxAutoChars?: number;                   // default: 500 total chars
+    autoSave?: {
+      completedTask?: boolean;     // default: false
+      firstPassApproval?: boolean; // default: false
+      qaRejection?: boolean;       // default: true
+      reopenedApproval?: boolean;  // default: true
+    };
+  };
 }
 ```
 
@@ -268,7 +288,11 @@ interface Task {
   
   // Ordering
   order: number;
-  
+
+  // Ownership + ordering bookkeeping (Phase 3; both optional)
+  contextFetchedBy?: string[];   // De-duplicated workerIds that invoked moe.get_context for this task
+  stepsCompleted?: string[];     // Ordered stepIds already marked COMPLETED
+
   // Timestamps
   createdAt: string;
   updatedAt: string;
@@ -420,7 +444,8 @@ type WorkerStatus =
   | 'PLANNING'          // Creating implementation plan
   | 'AWAITING_APPROVAL' // Plan submitted, waiting
   | 'CODING'            // Executing steps
-  | 'BLOCKED';          // Stuck, needs human help
+  | 'BLOCKED'           // Stuck, needs human help
+  | 'GOVERNING';        // Architect overseeing in-flight work via chat (set by moe.enter_governance)
 ```
 
 **Example:**
@@ -773,6 +798,8 @@ type ActivityEventType =
   | 'WORKER_DISCONNECTED'
   | 'WORKER_ERROR'
   | 'WORKER_BLOCKED'
+  | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
+  | 'WORKER_GOVERNING'   // Architect entered governance mode via moe.enter_governance
   
   // Proposal
   | 'PROPOSAL_CREATED'
@@ -1006,4 +1033,67 @@ function generateId(prefix: string): string {
     └────│   BLOCKED    │───────────────────┘
          │              │    resolved
          └──────────────┘
+```
+
+---
+
+## Memory System
+
+### MemoryEntry
+
+Stored in `.moe/memory/knowledge.jsonl` (one JSON object per line).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | `"mem-{uuid8}"` |
+| `type` | MemoryType | `convention`, `gotcha`, `pattern`, `decision`, `procedure`, `insight` |
+| `content` | string | The knowledge text (max 2000 chars) |
+| `tags` | string[] | Searchable tags (max 10, auto-generated + manual) |
+| `source.files` | string[] | Related file paths |
+| `source.taskId` | string\|null | Originating task |
+| `source.epicId` | string\|null | Originating epic |
+| `source.workerId` | string\|null | Who created this memory |
+| `confidence` | number | 0.0-2.0, starts at 1.0. Rises when helpful, falls when unhelpful. |
+| `accessCount` | number | How many times this memory has been retrieved |
+| `helpfulCount` | number | Agent feedback: marked helpful |
+| `unhelpfulCount` | number | Agent feedback: marked unhelpful |
+| `createdAt` | string | ISO 8601 timestamp |
+| `lastAccessedAt` | string | ISO 8601 timestamp |
+| `supersededBy` | string\|null | ID of newer entry that replaces this |
+| `contentHash` | string | First 8 chars of SHA-256 (deduplication) |
+
+### SessionSummary
+
+Stored in `.moe/memory/sessions/{workerId}_{taskId}.json`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | `"sess-{uuid8}"` |
+| `workerId` | string | Which agent wrote this |
+| `taskId` | string | Which task this covers |
+| `role` | string | architect, worker, or qa |
+| `summary` | string | What was accomplished and key findings |
+| `memoriesCreated` | string[] | IDs of memories saved during this session |
+| `completedSteps` | string[] | Step IDs completed (workers) |
+| `createdAt` | string | ISO 8601 timestamp |
+
+### PlanningNotes
+
+Stored on task as `task.planningNotes` when architect submits a plan.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `approachesConsidered` | string | What alternatives were evaluated and why rejected |
+| `codebaseInsights` | string | Patterns, conventions, architecture discovered |
+| `risks` | string | Edge cases and potential issues |
+| `keyFiles` | string[] | Critical files the worker should understand |
+
+### Memory Data Files
+
+```
+.moe/memory/
+├── knowledge.jsonl           # Append-only knowledge base (JSONL)
+├── knowledge.archive.jsonl   # Archived entries after pruning
+└── sessions/                 # Session summaries
+    └── {workerId}_{taskId}.json
 ```

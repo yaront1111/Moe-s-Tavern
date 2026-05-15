@@ -137,7 +137,8 @@ export class EpicDetailPanel implements vscode.Disposable {
     }
 
     private getWebviewContent(): string {
-        const nonce = getNonce();
+        const webview = this.panel.webview;
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'epicDetail.js'));
         const epic = this.epicId && this.state
             ? this.state.epics.find((e) => e.id === this.epicId)
             : undefined;
@@ -155,7 +156,7 @@ export class EpicDetailPanel implements vscode.Disposable {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${webview.cspSource};">
     <title>${isEdit ? 'Edit Epic' : 'Create Epic'}</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -297,88 +298,8 @@ export class EpicDetailPanel implements vscode.Disposable {
         <button class="btn-secondary" id="cancelBtn">Cancel</button>
     </div>
 
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-        const isEdit = ${isEdit ? 'true' : 'false'};
-        const epicId = '${epicIdVal}';
-
-        const titleInput = document.getElementById('titleInput');
-        const descInput = document.getElementById('descInput');
-        const archInput = document.getElementById('archInput');
-        const railsInput = document.getElementById('railsInput');
-        const titleError = document.getElementById('titleError');
-
-        function getTrimmedTitle() {
-            return titleInput.value.trim();
-        }
-
-        function getRails() {
-            return railsInput.value
-                .split('\\n')
-                .map(function(line) { return line.trim(); })
-                .filter(function(line) { return line.length > 0; });
-        }
-
-        function validateTitle() {
-            const valid = getTrimmedTitle().length > 0;
-            titleError.style.display = valid ? 'none' : 'block';
-            return valid;
-        }
-
-        titleInput.addEventListener('input', function() {
-            validateTitle();
-        });
-
-        if (isEdit) {
-            var saveBtn = document.getElementById('saveBtn');
-            if (saveBtn) {
-                saveBtn.addEventListener('click', function() {
-                    if (!validateTitle()) { return; }
-                    var statusSelect = document.getElementById('statusSelect');
-                    vscode.postMessage({
-                        type: 'save',
-                        epicId: epicId,
-                        title: getTrimmedTitle(),
-                        description: descInput.value.trim(),
-                        architectureNotes: archInput.value.trim(),
-                        epicRails: getRails(),
-                        status: statusSelect ? statusSelect.value : 'PLANNED'
-                    });
-                });
-            }
-
-            var deleteBtn = document.getElementById('deleteBtn');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', function() {
-                    vscode.postMessage({ type: 'delete', epicId: epicId });
-                });
-            }
-        } else {
-            var createBtn = document.getElementById('createBtn');
-            if (createBtn) {
-                createBtn.addEventListener('click', function() {
-                    if (!validateTitle()) { return; }
-                    vscode.postMessage({
-                        type: 'create',
-                        title: getTrimmedTitle(),
-                        description: descInput.value.trim(),
-                        architectureNotes: archInput.value.trim(),
-                        epicRails: getRails()
-                    });
-                });
-            }
-        }
-
-        var cancelBtn = document.getElementById('cancelBtn');
-        if (cancelBtn) {
-            cancelBtn.addEventListener('click', function() {
-                vscode.postMessage({ type: 'cancel' });
-            });
-        }
-
-        // Focus title on load
-        titleInput.focus();
-    </script>
+    <div id="initial-data" data-is-edit="${isEdit ? 'true' : 'false'}" data-epic-id="${epicIdVal}" style="display:none;"></div>
+    <script src="${scriptUri}"></script>
 </body>
 </html>`;
     }

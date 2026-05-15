@@ -1,0 +1,119 @@
+{
+  "id": "task-be739e59",
+  "epicId": "epic-0110ece1",
+  "title": "[HIGH] Preserve MoeError JSON-RPC codes in MCP adapter",
+  "description": "Deep sweep finding: packages/moe-daemon/src/server/McpAdapter.ts catches tool errors and always returns JSON-RPC code -32000, discarding MoeError.code values such as INVALID_INPUT (-32602) and NOT_ALLOWED (-32003). Additionally util/errors.ts formats messages with enum reverse lookup despite duplicate numeric enum values, so messages can show the wrong category name (e.g. NOT_FOUND may render as STEP_NOT_FOUND).",
+  "definitionOfDone": [
+    "McpAdapter detects MoeError and returns its actual code/message without exposing stack traces.",
+    "Non-MoeError failures still return safe internal error responses.",
+    "MoeError message formatting uses an explicit code-name field or unique names so duplicate numeric values do not produce misleading prefixes.",
+    "Regression tests cover invalid input, not allowed, and generic thrown Error cases.",
+    "packages/moe-daemon npm test and build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Update MoeError formatting to avoid duplicate enum reverse-lookup names while preserving numeric code values and safe client messages.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/errors.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/errors.ts",
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "note": "Updated MoeError formatting to stop using duplicate numeric enum reverse lookups. MoeError now stores an explicit codeName; factories and direct callers pass stable names (MISSING_REQUIRED, NOT_FOUND, NOT_ALLOWED, etc.), while numeric JSON-RPC code values remain unchanged. Added a red/green formatting regression in enforcement.test: before fix missingRequired rendered as [INVALID_ID]; after fix explicit-name test passes. Verification: `npx vitest run src/util/enforcement.test.ts -t \"explicit names\"` failed before fix then passed; full `npx vitest run src/util/enforcement.test.ts` passed 14/14.",
+      "startedAt": "2026-04-30T13:25:11.689Z",
+      "completedAt": "2026-04-30T13:27:19.078Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update McpAdapter tool error handling to detect MoeError, return the actual JSON-RPC code and safe data, and keep generic error handling at -32000.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "note": "Updated McpAdapter tool error handling to detect MoeError and return its actual JSON-RPC code/message with compact safe data `{ tool, codeName }`; generic thrown Error remains -32000 with tool-only data and no stack exposure. Added red/green adapter regressions for invalid input, not allowed, and not found: before fix they failed because all returned -32000; after fix the MoeError tests pass. Verification: `npx vitest run src/server/McpAdapter.test.ts -t \"preserves MoeError\"` failed before adapter change then passed; full `npx vitest run src/server/McpAdapter.test.ts` passed 16/16.",
+      "startedAt": "2026-04-30T13:27:24.443Z",
+      "completedAt": "2026-04-30T13:28:38.308Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests for invalid input (-32602), not allowed (-32003), not found/invalid state as appropriate, and generic Error fallback; run daemon test/build validation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.test.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/util/errors.ts",
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "note": "Completed regression and validation. Added tests for MoeError formatting with duplicate numeric codes, McpAdapter invalid-input (-32602), not-allowed (-32003), not-found (-32001), invalid-state (-32002), and preserved generic Error fallback (-32000 existing test). Red/green evidence: explicit-name test failed before formatting fix (`[INVALID_ID]` instead of `[MISSING_REQUIRED]`); adapter MoeError tests failed before adapter fix because responses were -32000; both passed after fixes. Adversarial review: client error.data contains only `{ tool, codeName }`, no args/context/stack; generic errors still -32000; existing STEP_NOT_FOUND behavior preserved via specific notFound code names. Verification: targeted tests passed; final daemon `npm test` passed 25 files / 433 tests; `npm run build` passed; `git diff --check` on affected files exited 0 (CRLF warnings only).",
+      "startedAt": "2026-04-30T13:28:46.517Z",
+      "completedAt": "2026-04-30T13:30:54.582Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [
+    {
+      "id": "comment-c687d6d7",
+      "author": "architect-2992",
+      "content": "Token-budget check: when preserving MoeError codes, keep JSON-RPC error payloads safe and compact. Do not include stacks, full request args, or large context blobs in error.data.",
+      "timestamp": "2026-04-28T08:03:57.704Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.204Z",
+  "updatedAt": "2026-04-30T17:44:15.855Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.323Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: import MoeError in McpAdapter and use toClientObject/code; replace reverse enum formatting with explicit codeName argument/map. Rejected: parsing code names out of message strings.",
+    "codebaseInsights": "Many tools throw MoeError with specific JSON-RPC-compatible codes, but McpAdapter currently collapses all tool errors to -32000. MoeError enum has duplicate numeric values, so reverse enum name lookup is misleading.",
+    "risks": "Do not expose stack traces or sensitive context. Preserve generic -32000 behavior for unexpected errors while improving structured error handling for known MoeError cases.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/server/McpAdapter.test.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.324Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T13:25:11.689Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T13:32:38.505Z",
+  "reviewStartedAt": "2026-04-30T13:32:38.505Z",
+  "reviewCompletedAt": "2026-04-30T17:44:15.855Z"
+}

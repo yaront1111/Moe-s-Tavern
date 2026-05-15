@@ -33,24 +33,48 @@ export enum MoeErrorCode {
   TIMEOUT = -32000,
 }
 
+const DEFAULT_CODE_NAMES: Record<number, string> = {
+  [MoeErrorCode.INVALID_INPUT]: 'INVALID_INPUT',
+  [MoeErrorCode.NOT_FOUND]: 'NOT_FOUND',
+  [MoeErrorCode.INVALID_STATE]: 'INVALID_STATE',
+  [MoeErrorCode.NOT_ALLOWED]: 'NOT_ALLOWED',
+  [MoeErrorCode.INTERNAL_ERROR]: 'INTERNAL_ERROR',
+};
+
+const SPECIFIC_NOT_FOUND_CODE_NAMES = new Set([
+  'TASK_NOT_FOUND',
+  'EPIC_NOT_FOUND',
+  'WORKER_NOT_FOUND',
+  'STEP_NOT_FOUND',
+]);
+
+function notFoundCodeName(entity: string): string {
+  const candidate = `${entity.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_NOT_FOUND`;
+  return SPECIFIC_NOT_FOUND_CODE_NAMES.has(candidate) ? candidate : 'NOT_FOUND';
+}
+
 /**
  * Standardized error class for Moe operations.
  * Provides consistent error message format across all tools.
  */
 export class MoeError extends Error {
   readonly code: MoeErrorCode;
+  readonly codeName: string;
   readonly context?: Record<string, unknown>;
 
   constructor(
     code: MoeErrorCode,
     message: string,
-    context?: Record<string, unknown>
+    context?: Record<string, unknown>,
+    codeName?: string
   ) {
     // Format: [CATEGORY] message
-    const formattedMessage = `[${MoeErrorCode[code]}] ${message}`;
+    const resolvedCodeName = codeName || DEFAULT_CODE_NAMES[code] || 'INTERNAL_ERROR';
+    const formattedMessage = `[${resolvedCodeName}] ${message}`;
     super(formattedMessage);
     this.name = 'MoeError';
     this.code = code;
+    this.codeName = resolvedCodeName;
     this.context = context;
 
     // Maintains proper stack trace for where our error was thrown
@@ -66,7 +90,7 @@ export class MoeError extends Error {
     return {
       name: this.name,
       code: this.code,
-      codeName: MoeErrorCode[this.code],
+      codeName: this.codeName,
       message: this.message,
       context: this.context,
     };
@@ -89,7 +113,8 @@ export function notFound(entity: string, id: string): MoeError {
   return new MoeError(
     MoeErrorCode.NOT_FOUND,
     `${entity} not found: ${id}`,
-    { entity, id }
+    { entity, id },
+    notFoundCodeName(entity)
   );
 }
 
@@ -97,7 +122,8 @@ export function invalidInput(field: string, reason: string): MoeError {
   return new MoeError(
     MoeErrorCode.INVALID_INPUT,
     `Invalid ${field}: ${reason}`,
-    { field, reason }
+    { field, reason },
+    'INVALID_INPUT'
   );
 }
 
@@ -105,7 +131,8 @@ export function missingRequired(field: string): MoeError {
   return new MoeError(
     MoeErrorCode.MISSING_REQUIRED,
     `Missing required field: ${field}`,
-    { field }
+    { field },
+    'MISSING_REQUIRED'
   );
 }
 
@@ -113,7 +140,8 @@ export function invalidState(entity: string, currentState: string, expectedState
   return new MoeError(
     MoeErrorCode.INVALID_STATE,
     `${entity} is in ${currentState} state, expected ${expectedState}`,
-    { entity, currentState, expectedState }
+    { entity, currentState, expectedState },
+    'INVALID_STATE'
   );
 }
 
@@ -121,7 +149,8 @@ export function notAllowed(operation: string, reason: string): MoeError {
   return new MoeError(
     MoeErrorCode.NOT_ALLOWED,
     `${operation} not allowed: ${reason}`,
-    { operation, reason }
+    { operation, reason },
+    'NOT_ALLOWED'
   );
 }
 
@@ -129,6 +158,7 @@ export function alreadyExists(entity: string, id: string): MoeError {
   return new MoeError(
     MoeErrorCode.ALREADY_EXISTS,
     `${entity} already exists: ${id}`,
-    { entity, id }
+    { entity, id },
+    'ALREADY_EXISTS'
   );
 }

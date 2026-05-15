@@ -14,19 +14,23 @@ import type {
   Epic,
   ImplementationStep,
   MoeStateSnapshot,
+  MemorySettings,
   PinEntry,
   Project,
   ProjectSettings,
   RailProposal,
   StepStatus,
   Task,
+  TaskStatus,
   TaskComment,
   TaskPriority,
   Team,
   TeamRole,
-  Worker
+  Worker,
+  WorkerStatus
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
+import { invalidInput } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { logger, createContextLogger } from '../util/logger.js';
@@ -45,7 +49,9 @@ import {
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
-import { readLastLines } from '../util/reverseReader.js';
+import { readLastLinesWithMetadata } from '../util/reverseReader.js';
+import { MemoryManager } from '../knowledge/MemoryManager.js';
+import { resolveMemorySettings } from '../util/memorySettings.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -55,6 +61,10 @@ const PROPOSAL_PURGE_INTERVAL_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_INTER
 const PROPOSAL_SNAPSHOT_RETENTION_MS = parseInt(process.env.MOE_PROPOSAL_SNAPSHOT_RETENTION_MS || `${DAY_IN_MS}`, 10);
 const MAX_COMMENTS_PER_TASK_DEFAULT = 200;
 const MAX_COMMENTS_PER_TASK_ENV = parseInt(process.env.MOE_MAX_COMMENTS_PER_TASK || `${MAX_COMMENTS_PER_TASK_DEFAULT}`, 10);
+const ACTIVITY_TEXT_PREVIEW_CHARS = 200;
+const ACTIVITY_TRUNCATED_SUFFIX = ' [truncated]';
+const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW']);
+const CLEANUP_ELIGIBLE_WORKER_STATUSES = new Set<WorkerStatus>(['IDLE', 'READING_CONTEXT', 'AWAITING_APPROVAL']);
 export const MAX_COMMENTS_PER_TASK = Number.isFinite(MAX_COMMENTS_PER_TASK_ENV) && MAX_COMMENTS_PER_TASK_ENV > 0
   ? MAX_COMMENTS_PER_TASK_ENV
   : MAX_COMMENTS_PER_TASK_DEFAULT;
@@ -170,6 +180,11 @@ export class StateManager {
   private emitter?: (event: StateChangeEvent) => void;
   private subscribers = new Set<StateSubscriber>();
   private subscriberErrorCounts = new Map<StateSubscriber, number>();
+  // Lock ordering: this.mutex → channelMutex (per-channel, from messageMutexes)
+  // Always acquire this.mutex first if both are needed.
+  // Methods like claimNextTask hold this.mutex and call sendMessage which
+  // acquires channelMutex — never reverse this order or deadlocks will occur.
+  // activityMutex is independent and can be acquired in any order.
   private readonly mutex = new AsyncMutex();
   private readonly activityMutex = new AsyncMutex();
   private readonly messageMutexes = new Map<string, AsyncMutex>();
@@ -182,6 +197,9 @@ export class StateManager {
   private readonly staleWorkerTimeoutMs: number;
   private mentionRouter: MentionRouter;
   private fileWatcher?: import('./FileWatcher.js').FileWatcher;
+  /** In-memory per-worker per-channel unread message counts */
+  private unreadCounts = new Map<string, Map<string, number>>();
+  private memoryManager: MemoryManager;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -189,6 +207,11 @@ export class StateManager {
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
     this.mentionRouter = new MentionRouter(4);
+    this.memoryManager = new MemoryManager(this.moePath);
+  }
+
+  getMemoryManager(): MemoryManager {
+    return this.memoryManager;
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
@@ -208,6 +231,44 @@ export class StateManager {
     this.subscribers.clear();
     this.subscriberErrorCounts.clear();
     this.emitter = undefined;
+  }
+
+  /** Increment unread count for a worker on a channel. */
+  private incrementUnread(workerId: string, channelId: string): void {
+    let workerMap = this.unreadCounts.get(workerId);
+    if (!workerMap) {
+      workerMap = new Map();
+      this.unreadCounts.set(workerId, workerMap);
+    }
+    workerMap.set(channelId, (workerMap.get(channelId) || 0) + 1);
+  }
+
+  /** Get unread message summary for a worker. Returns null if no unreads. */
+  getUnreadSummary(workerId: string): { total: number; channels: Record<string, number> } | null {
+    const workerMap = this.unreadCounts.get(workerId);
+    if (!workerMap || workerMap.size === 0) return null;
+    let total = 0;
+    const channels: Record<string, number> = {};
+    for (const [channelId, count] of workerMap) {
+      if (count > 0) {
+        total += count;
+        channels[channelId] = count;
+      }
+    }
+    return total > 0 ? { total, channels } : null;
+  }
+
+  /** Clear unread counts for a worker. If channelId provided, clear only that channel. */
+  clearUnread(workerId: string, channelId?: string): void {
+    if (channelId) {
+      const workerMap = this.unreadCounts.get(workerId);
+      if (workerMap) {
+        workerMap.delete(channelId);
+        if (workerMap.size === 0) this.unreadCounts.delete(workerId);
+      }
+    } else {
+      this.unreadCounts.delete(workerId);
+    }
   }
 
   /**
@@ -327,6 +388,15 @@ export class StateManager {
       if (isNaN(lastActivity) || lastActivity === 0) continue;
 
       if (now - lastActivity > this.staleWorkerTimeoutMs) {
+        if (!this.isWorkerEligibleForStaleCleanup(worker)) {
+          const assignedTaskIds = this.getTasksAssignedToWorker(worker.id).map((task) => task.id);
+          logger.warn(
+            { workerId: worker.id, lastActivityAt: worker.lastActivityAt, status: worker.status, assignedTaskIds },
+            'Worker exceeded stale timeout but owns or may own active work; preserving worker and task assignment'
+          );
+          continue;
+        }
+
         logger.info({ workerId: worker.id, lastActivityAt: worker.lastActivityAt }, 'Deleting stale worker (exceeded timeout)');
         await this.deleteWorker(worker.id);
         deletedCount++;
@@ -482,6 +552,388 @@ export class StateManager {
     return comments.slice(-MAX_COMMENTS_PER_TASK);
   }
 
+  private requirePlainObject(value: unknown, fieldName: string): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw invalidInput(fieldName, 'must be an object');
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private rejectUnknownFields(input: Record<string, unknown>, allowedFields: readonly string[], objectName: string): void {
+    const allowed = new Set(allowedFields);
+    for (const field of Object.keys(input)) {
+      if (!allowed.has(field)) {
+        throw invalidInput(field, `is not a supported ${objectName} field`);
+      }
+    }
+  }
+
+  private validateStringValue(
+    value: unknown,
+    fieldName: string,
+    options: { maxLength: number; allowEmpty?: boolean; trim?: boolean; truncate?: boolean; allowNewlines?: boolean } = { maxLength: 1000 }
+  ): string {
+    if (typeof value !== 'string') {
+      throw invalidInput(fieldName, 'must be a string');
+    }
+    const normalized = options.trim ? value.trim() : value;
+    if (!options.allowEmpty && normalized.trim().length === 0) {
+      throw invalidInput(fieldName, 'cannot be empty');
+    }
+    if (normalized.includes('\u0000') || (!options.allowNewlines && /[\r\n]/.test(normalized))) {
+      throw invalidInput(fieldName, 'cannot contain control characters');
+    }
+    if (normalized.length > options.maxLength) {
+      if (options.truncate) {
+        return normalized.substring(0, options.maxLength);
+      }
+      throw invalidInput(fieldName, `must be ${options.maxLength} characters or fewer`);
+    }
+    return normalized;
+  }
+
+  private validateBooleanValue(value: unknown, fieldName: string): boolean {
+    if (typeof value !== 'boolean') {
+      throw invalidInput(fieldName, 'must be a boolean');
+    }
+    return value;
+  }
+
+  private validateIntegerValue(value: unknown, fieldName: string, min: number, max: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+      throw invalidInput(fieldName, 'must be an integer');
+    }
+    if (value < min || value > max) {
+      throw invalidInput(fieldName, `must be between ${min} and ${max}`);
+    }
+    return value;
+  }
+
+  private validateEnumValue<T extends string>(value: unknown, fieldName: string, allowedValues: readonly T[]): T {
+    if (typeof value !== 'string' || !allowedValues.includes(value as T)) {
+      throw invalidInput(fieldName, `must be one of: ${allowedValues.join(', ')}`);
+    }
+    return value as T;
+  }
+
+  private validateStringArrayValue(
+    value: unknown,
+    fieldName: string,
+    maxItems: number,
+    maxItemLength: number
+  ): string[] {
+    if (!Array.isArray(value)) {
+      throw invalidInput(fieldName, 'must be an array');
+    }
+    if (value.length > maxItems) {
+      throw invalidInput(fieldName, `must contain ${maxItems} items or fewer`);
+    }
+    return value.map((item, index) => {
+      if (typeof item !== 'string') {
+        throw invalidInput(`${fieldName}[${index}]`, 'must be a string');
+      }
+      return this.validateStringValue(item, `${fieldName}[${index}]`, {
+        maxLength: maxItemLength,
+        allowEmpty: false,
+        trim: false,
+        truncate: true,
+      });
+    });
+  }
+
+  private validatePatternSetting(value: unknown, fieldName: string): string {
+    const pattern = this.validateStringValue(value, fieldName, {
+      maxLength: 256,
+      allowEmpty: true,
+      trim: false,
+    });
+    if (/[`$[\]|;&<>]/.test(pattern)) {
+      throw invalidInput(fieldName, 'contains unsupported characters');
+    }
+    return pattern;
+  }
+
+  private validateMemorySettingsUpdate(value: unknown, existing?: MemorySettings): MemorySettings {
+    const input = this.requirePlainObject(value, 'memory');
+    this.rejectUnknownFields(input, ['autoInject', 'maxAutoResults', 'maxAutoChars', 'autoSave'], 'memory setting');
+
+    const merged = resolveMemorySettings({ memory: existing });
+    const next: MemorySettings = { ...merged, autoSave: { ...merged.autoSave } };
+
+    if (input.autoInject !== undefined) {
+      next.autoInject = this.validateEnumValue(input.autoInject, 'memory.autoInject', ['off', 'summary', 'full'] as const);
+    }
+    if (input.maxAutoResults !== undefined) {
+      next.maxAutoResults = this.validateIntegerValue(input.maxAutoResults, 'memory.maxAutoResults', 0, 10);
+    }
+    if (input.maxAutoChars !== undefined) {
+      next.maxAutoChars = this.validateIntegerValue(input.maxAutoChars, 'memory.maxAutoChars', 0, 10000);
+    }
+    if (input.autoSave !== undefined) {
+      const autoSave = this.requirePlainObject(input.autoSave, 'memory.autoSave');
+      this.rejectUnknownFields(
+        autoSave,
+        ['completedTask', 'firstPassApproval', 'qaRejection', 'reopenedApproval'],
+        'memory auto-save setting'
+      );
+      next.autoSave = { ...(next.autoSave ?? {}) };
+      for (const field of ['completedTask', 'firstPassApproval', 'qaRejection', 'reopenedApproval'] as const) {
+        if (autoSave[field] !== undefined) {
+          next.autoSave[field] = this.validateBooleanValue(autoSave[field], `memory.autoSave.${field}`);
+        }
+      }
+    }
+
+    return next;
+  }
+
+  private validateSettingsUpdate(settings: Partial<ProjectSettings>): ProjectSettings {
+    if (!this.project) {
+      throw new Error('Project not loaded');
+    }
+    const input = this.requirePlainObject(settings, 'settings');
+    this.rejectUnknownFields(input, [
+      'approvalMode',
+      'speedModeDelayMs',
+      'autoCreateBranch',
+      'branchPattern',
+      'commitPattern',
+      'agentCommand',
+      'enableAgentTeams',
+      'columnLimits',
+      'chatEnabled',
+      'chatMaxAgentHops',
+      'autoCommit',
+      'memory',
+    ], 'project setting');
+
+    const next: ProjectSettings = { ...this.project.settings };
+
+    if (input.approvalMode !== undefined) {
+      next.approvalMode = this.validateEnumValue(input.approvalMode, 'approvalMode', ['CONTROL', 'SPEED', 'TURBO'] as const);
+    }
+    if (input.speedModeDelayMs !== undefined) {
+      next.speedModeDelayMs = this.validateIntegerValue(input.speedModeDelayMs, 'speedModeDelayMs', 0, 60000);
+    }
+    if (input.autoCreateBranch !== undefined) {
+      next.autoCreateBranch = this.validateBooleanValue(input.autoCreateBranch, 'autoCreateBranch');
+    }
+    if (input.branchPattern !== undefined) {
+      next.branchPattern = this.validatePatternSetting(input.branchPattern, 'branchPattern');
+    }
+    if (input.commitPattern !== undefined) {
+      next.commitPattern = this.validatePatternSetting(input.commitPattern, 'commitPattern');
+    }
+    if (input.agentCommand !== undefined) {
+      next.agentCommand = this.validateStringValue(input.agentCommand, 'agentCommand', {
+        maxLength: 256,
+        trim: true,
+      });
+    }
+    if (input.enableAgentTeams !== undefined) {
+      next.enableAgentTeams = this.validateBooleanValue(input.enableAgentTeams, 'enableAgentTeams');
+    }
+    if (input.chatEnabled !== undefined) {
+      next.chatEnabled = this.validateBooleanValue(input.chatEnabled, 'chatEnabled');
+    }
+    if (input.chatMaxAgentHops !== undefined) {
+      next.chatMaxAgentHops = this.validateIntegerValue(input.chatMaxAgentHops, 'chatMaxAgentHops', 1, 20);
+    }
+    if (input.autoCommit !== undefined) {
+      next.autoCommit = this.validateBooleanValue(input.autoCommit, 'autoCommit');
+    }
+    if (input.columnLimits !== undefined) {
+      const incoming = this.requirePlainObject(input.columnLimits, 'columnLimits');
+      const merged: Record<string, number> = { ...(next.columnLimits || {}) };
+      for (const [key, value] of Object.entries(incoming)) {
+        this.validateEnumValue(key, 'columnLimits key', ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'DONE', 'ARCHIVED'] as const);
+        merged[key] = this.validateIntegerValue(value, `columnLimits.${key}`, 1, 1000);
+      }
+      next.columnLimits = merged;
+    }
+    if (input.memory !== undefined) {
+      next.memory = this.validateMemorySettingsUpdate(input.memory, next.memory);
+    }
+
+    return next;
+  }
+
+  private validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
+    const input = this.requirePlainObject(updates, 'updates');
+    this.rejectUnknownFields(input, ['title', 'description', 'architectureNotes', 'epicRails', 'status', 'order'], 'epic update');
+
+    const sanitized: Partial<Epic> = {};
+    if (input.title !== undefined) {
+      sanitized.title = this.validateStringValue(input.title, 'title', {
+        maxLength: 500,
+        trim: false,
+        truncate: true,
+      });
+    }
+    if (input.description !== undefined) {
+      sanitized.description = this.validateStringValue(input.description, 'description', {
+        maxLength: 10000,
+        allowEmpty: true,
+        trim: false,
+        truncate: true,
+        allowNewlines: true,
+      });
+    }
+    if (input.architectureNotes !== undefined) {
+      sanitized.architectureNotes = this.validateStringValue(input.architectureNotes, 'architectureNotes', {
+        maxLength: 50000,
+        allowEmpty: true,
+        trim: false,
+        truncate: true,
+        allowNewlines: true,
+      });
+    }
+    if (input.epicRails !== undefined) {
+      sanitized.epicRails = this.validateStringArrayValue(input.epicRails, 'epicRails', 100, 1000);
+    }
+    if (input.status !== undefined) {
+      sanitized.status = this.validateEnumValue(input.status, 'status', ['PLANNED', 'ACTIVE', 'COMPLETED'] as const);
+    }
+    if (input.order !== undefined) {
+      sanitized.order = this.validateIntegerValue(input.order, 'order', 0, Number.MAX_SAFE_INTEGER);
+    }
+    return sanitized;
+  }
+
+  private activityStringPreview(value: string): string {
+    if (value.length <= ACTIVITY_TEXT_PREVIEW_CHARS) {
+      return value;
+    }
+    return `${value.slice(0, ACTIVITY_TEXT_PREVIEW_CHARS)}${ACTIVITY_TRUNCATED_SUFFIX}`;
+  }
+
+  private epicCreatedActivityPayload(epic: Epic): Record<string, unknown> {
+    return {
+      epicId: epic.id,
+      title: this.activityStringPreview(epic.title),
+      status: epic.status,
+      order: epic.order,
+    };
+  }
+
+  private epicUpdatedActivityPayload(epic: Epic, updates: Partial<Epic>): Record<string, unknown> {
+    const changedFields = Object.keys(updates);
+    const payload: Record<string, unknown> = {
+      epicId: epic.id,
+      changedFields,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'title')) {
+      payload.title = this.activityStringPreview(epic.title);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'status')) {
+      payload.status = epic.status;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'order')) {
+      payload.order = epic.order;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'description')) {
+      payload.descriptionLength = epic.description.length;
+      payload.descriptionPreview = this.activityStringPreview(epic.description);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'architectureNotes')) {
+      payload.architectureNotesLength = epic.architectureNotes.length;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'epicRails')) {
+      payload.epicRailsCount = epic.epicRails.length;
+    }
+
+    return payload;
+  }
+
+  private validateTeamName(value: unknown): string {
+    return this.validateStringValue(value, 'name', {
+      maxLength: 200,
+      trim: true,
+    });
+  }
+
+  private validateTeamRole(value: unknown): TeamRole | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    return this.validateEnumValue(value, 'role', ['architect', 'worker', 'qa'] as const);
+  }
+
+  private validateTeamMaxSize(value: unknown): number {
+    return this.validateIntegerValue(value, 'maxSize', 1, 1000);
+  }
+
+  private validateMemberIds(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      throw invalidInput('memberIds', 'must be an array');
+    }
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const rawId of value) {
+      const id = validateEntityId(rawId, 'memberIds');
+      if (seen.has(id)) {
+        throw invalidInput('memberIds', 'must not contain duplicate IDs');
+      }
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  private validateCreateTeamInput(input: { name: string; role?: TeamRole | null; maxSize?: number }): { name: string; role: TeamRole | null; maxSize: number } {
+    const raw = this.requirePlainObject(input, 'team');
+    this.rejectUnknownFields(raw, ['name', 'role', 'maxSize'], 'team');
+    const maxSize = raw.maxSize === undefined ? 10 : this.validateTeamMaxSize(raw.maxSize);
+    return {
+      name: this.validateTeamName(raw.name),
+      role: this.validateTeamRole(raw.role),
+      maxSize,
+    };
+  }
+
+  private validateTeamUpdates(team: Team, updates: Partial<Team>): Partial<Team> {
+    const input = this.requirePlainObject(updates, 'updates');
+    this.rejectUnknownFields(input, ['name', 'role', 'memberIds', 'maxSize'], 'team update');
+
+    const sanitized: Partial<Team> = {};
+    if (input.name !== undefined) {
+      sanitized.name = this.validateTeamName(input.name);
+    }
+    if (input.role !== undefined) {
+      sanitized.role = this.validateTeamRole(input.role);
+    }
+    if (input.memberIds !== undefined) {
+      sanitized.memberIds = this.validateMemberIds(input.memberIds);
+    }
+    if (input.maxSize !== undefined) {
+      sanitized.maxSize = this.validateTeamMaxSize(input.maxSize);
+    }
+
+    const nextMemberIds = sanitized.memberIds ?? team.memberIds;
+    const nextMaxSize = sanitized.maxSize ?? team.maxSize;
+    if (nextMemberIds.length > nextMaxSize) {
+      throw invalidInput('maxSize', 'must be at least the number of members');
+    }
+
+    return sanitized;
+  }
+
+  private sanitizeStringIdArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of value) {
+      if (typeof item !== 'string') continue;
+      const trimmed = item.slice(0, 200);
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      out.push(trimmed);
+      if (out.length >= 500) break;
+    }
+    return out;
+  }
+
   private sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
     if (!Array.isArray(plan)) return [];
     const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
@@ -542,7 +994,11 @@ export class StateManager {
       const normalized = this.normalizeProject(rawProject as Partial<Project>);
       this.project = normalized;
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
-        fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
+        try {
+          fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
+        } catch (error) {
+          logger.error({ error, projectFile }, 'Failed to write normalized project.json');
+        }
       }
 
       this.epics = this.loadEntities<Epic>(path.join(this.moePath, 'epics'));
@@ -552,6 +1008,12 @@ export class StateManager {
         const updates: Partial<Task> = {};
         if (!task.priority) updates.priority = 'MEDIUM' as TaskPriority;
         if (!Array.isArray(task.comments)) updates.comments = [];
+        if (task.contextFetchedBy !== undefined && !Array.isArray(task.contextFetchedBy)) {
+          updates.contextFetchedBy = [];
+        }
+        if (task.stepsCompleted !== undefined && !Array.isArray(task.stepsCompleted)) {
+          updates.stepsCompleted = [];
+        }
         if (Object.keys(updates).length > 0) {
           this.tasks.set(id, { ...task, ...updates });
         }
@@ -562,6 +1024,16 @@ export class StateManager {
         if (worker.teamId === undefined) {
           this.workers.set(id, { ...worker, teamId: null });
         }
+      }
+      const orphanAssignedTasks = Array.from(this.tasks.values()).filter((task) => this.isTaskAssignedToMissingWorker(task));
+      if (orphanAssignedTasks.length > 0) {
+        logger.info(
+          {
+            count: orphanAssignedTasks.length,
+            taskIds: orphanAssignedTasks.map((task) => task.id).slice(0, 20),
+          },
+          'Found task assignments for missing workers; treating them as claimable'
+        );
       }
       this.teams = this.loadEntities<Team>(path.join(this.moePath, 'teams'));
       this.channels = this.loadEntities<ChatChannel>(path.join(this.moePath, 'channels'));
@@ -579,6 +1051,9 @@ export class StateManager {
 
       // Re-initialize MentionRouter with project-configured maxHops
       this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
+
+      // Load knowledge base
+      await this.memoryManager.load();
 
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
@@ -634,6 +1109,46 @@ export class StateManager {
   }
 
   /**
+   * A task is exposed as claimable when it is unassigned, or when the recorded
+   * assignee is orphaned (no worker record exists). The claim path repairs the
+   * orphan before assigning the next worker.
+   */
+  isTaskClaimable(task: Task): boolean {
+    return !task.assignedWorkerId || this.isTaskAssignedToMissingWorker(task);
+  }
+
+  isTaskAssignedToMissingWorker(task: Task): boolean {
+    return Boolean(task.assignedWorkerId && !this.workers.has(task.assignedWorkerId));
+  }
+
+  private getTasksAssignedToWorker(workerId: string): Task[] {
+    return Array.from(this.tasks.values()).filter((task) => task.assignedWorkerId === workerId);
+  }
+
+  private hasActiveTaskAssignment(workerId: string): boolean {
+    return this.getTasksAssignedToWorker(workerId).some((task) => ACTIVE_ASSIGNMENT_STATUSES.has(task.status));
+  }
+
+  private isWorkerEligibleForStaleCleanup(worker: Worker): boolean {
+    if (this.hasActiveTaskAssignment(worker.id)) {
+      return false;
+    }
+    return CLEANUP_ELIGIBLE_WORKER_STATUSES.has(worker.status);
+  }
+
+  async touchWorker(workerId?: string | null, updates: Partial<Worker> = {}, event?: ActivityEventType): Promise<Worker | null> {
+    if (!workerId || !this.workers.has(workerId)) {
+      return null;
+    }
+    try {
+      return await this.updateWorker(workerId, updates, event);
+    } catch (error) {
+      logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat');
+      return null;
+    }
+  }
+
+  /**
    * Get all workers that are currently assigned to tasks in a specific epic.
    */
   getWorkersByEpic(epicId: string): Worker[] {
@@ -667,46 +1182,48 @@ export class StateManager {
     type: ChatChannel['type'];
     linkedEntityId?: string;
   }): Promise<ChatChannel> {
-    if (!this.project) throw new Error('Project not loaded');
+    return this.mutex.runExclusive(async () => {
+      if (!this.project) throw new Error('Project not loaded');
 
-    const name = opts.name?.trim();
-    if (!name) throw new Error('Channel name is required');
+      const name = opts.name?.trim();
+      if (!name) throw new Error('Channel name is required');
 
-    const validTypes = ['general', 'role', 'custom'] as const;
-    if (!validTypes.includes(opts.type)) {
-      throw new Error(`Invalid channel type: ${opts.type}`);
-    }
-
-    // Check for duplicate channels
-    for (const existing of this.channels.values()) {
-      if (existing.name === name && existing.type === opts.type) {
-        throw new Error('Channel with this name and type already exists');
+      const validTypes = ['general', 'role', 'custom'] as const;
+      if (!validTypes.includes(opts.type)) {
+        throw new Error(`Invalid channel type: ${opts.type}`);
       }
-    }
 
-    const channel: ChatChannel = {
-      id: generateId('chan'),
-      name,
-      type: opts.type,
-      linkedEntityId: opts.linkedEntityId ?? null,
-      createdAt: new Date().toISOString()
-    };
+      // Check for duplicate channels (must be inside mutex to prevent TOCTOU race)
+      for (const existing of this.channels.values()) {
+        if (existing.name === name && existing.type === opts.type) {
+          throw new Error('Channel with this name and type already exists');
+        }
+      }
 
-    await this.writeEntity('channels', channel.id, channel);
+      const channel: ChatChannel = {
+        id: generateId('chan'),
+        name,
+        type: opts.type,
+        linkedEntityId: opts.linkedEntityId ?? null,
+        createdAt: new Date().toISOString()
+      };
 
-    // Create empty messages JSONL file
-    const messagesDir = path.join(this.moePath, 'messages');
-    if (!fs.existsSync(messagesDir)) {
-      fs.mkdirSync(messagesDir, { recursive: true });
-    }
-    const messagesFile = path.join(messagesDir, `${channel.id}.jsonl`);
-    fs.writeFileSync(messagesFile, '');
+      await this.writeEntity('channels', channel.id, channel);
 
-    this.channels.set(channel.id, channel);
-    this.emit({ type: 'CHANNEL_CREATED', payload: channel });
-    this.appendActivity('CHANNEL_CREATED', { channelId: channel.id, name: channel.name, channelType: channel.type });
+      // Create empty messages JSONL file
+      const messagesDir = path.join(this.moePath, 'messages');
+      if (!fs.existsSync(messagesDir)) {
+        fs.mkdirSync(messagesDir, { recursive: true });
+      }
+      const messagesFile = path.join(messagesDir, `${channel.id}.jsonl`);
+      fs.writeFileSync(messagesFile, '');
 
-    return channel;
+      this.channels.set(channel.id, channel);
+      this.emit({ type: 'CHANNEL_CREATED', payload: channel });
+      this.appendActivity('CHANNEL_CREATED', { channelId: channel.id, name: channel.name, channelType: channel.type });
+
+      return channel;
+    });
   }
 
   async sendMessage(opts: {
@@ -774,6 +1291,13 @@ export class StateManager {
         throw new Error(`Failed to write message: ${err.message}`);
       }
     });
+
+    // Track unread counts for targeted workers (before emit so counts are ready when subscribers wake)
+    for (const targetId of routingTargets) {
+      if (targetId !== opts.sender) {
+        this.incrementUnread(targetId, opts.channel);
+      }
+    }
 
     this.emit({ type: 'MESSAGE_CREATED', payload: message, routingTargets });
     this.appendActivity('MESSAGE_CREATED', {
@@ -883,39 +1407,61 @@ export class StateManager {
     }
   }
 
+  /**
+   * Post a system message to a role channel by name (e.g. 'architects').
+   * Silently skips if no matching channel is found. Never throws.
+   */
+  async postToRoleChannel(roleName: string, content: string): Promise<void> {
+    try {
+      let target: ChatChannel | null = null;
+      for (const ch of this.channels.values()) {
+        if (ch.type === 'role' && ch.name === roleName) {
+          target = ch;
+          break;
+        }
+      }
+      if (!target) return;
+      await this.sendMessage({ channel: target.id, sender: 'system', content });
+    } catch (error) {
+      logger.warn({ error, roleName }, 'Failed to post to role channel');
+    }
+  }
+
   async deleteChannel(channelId: string): Promise<void> {
-    const channel = this.channels.get(channelId);
-    if (!channel) throw new Error(`Channel not found: ${channelId}`);
+    await this.mutex.runExclusive(async () => {
+      const channel = this.channels.get(channelId);
+      if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
-    // Remove channel JSON file
-    const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
-    try {
-      fs.unlinkSync(channelFile);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') throw error;
-    }
+      // Remove channel JSON file
+      const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
+      try {
+        fs.unlinkSync(channelFile);
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') throw error;
+      }
 
-    // Remove messages JSONL file
-    const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
-    try {
-      fs.unlinkSync(messagesFile);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') throw error;
-    }
+      // Remove messages JSONL file
+      const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
+      try {
+        fs.unlinkSync(messagesFile);
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') throw error;
+      }
 
-    // Remove pins file for this channel
-    const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
-    try {
-      if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
-    } catch {
-      // Silently ignore if pins file doesn't exist
-    }
+      // Remove pins file for this channel
+      const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
+      try {
+        if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
+      } catch {
+        // Silently ignore if pins file doesn't exist
+      }
 
-    this.channels.delete(channelId);
-    this.emit({ type: 'CHANNEL_DELETED', payload: channel });
-    this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
+      this.channels.delete(channelId);
+      this.emit({ type: 'CHANNEL_DELETED', payload: channel });
+      this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
+    });
   }
 
   // ---- Pin methods ----
@@ -1028,49 +1574,52 @@ export class StateManager {
     proposedBy: string;
     channel?: string;
   }): Promise<Decision> {
-    const content = sanitizeString(opts.content, 'content', 10240);
-    if (!content) throw new Error('Decision content is required');
+    // Lock ordering: this.mutex → channelMutex (sendMessage acquires channelMutex internally)
+    return this.mutex.runExclusive(async () => {
+      const content = sanitizeString(opts.content, 'content', 10240);
+      if (!content) throw new Error('Decision content is required');
 
-    const decision: Decision = {
-      id: generateId('dec'),
-      proposedBy: opts.proposedBy,
-      content,
-      status: 'proposed',
-      approvedBy: null,
-      channel: opts.channel ?? null,
-      messageId: null,
-      createdAt: new Date().toISOString(),
-      resolvedAt: null
-    };
+      const decision: Decision = {
+        id: generateId('dec'),
+        proposedBy: opts.proposedBy,
+        content,
+        status: 'proposed',
+        approvedBy: null,
+        channel: opts.channel ?? null,
+        messageId: null,
+        createdAt: new Date().toISOString(),
+        resolvedAt: null
+      };
 
-    const decisionsDir = path.join(this.moePath, 'decisions');
-    fs.mkdirSync(decisionsDir, { recursive: true });
-    const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
-    this.decisions.set(decision.id, decision);
-
-    // Post a system message to the channel if provided
-    if (opts.channel && this.channels.has(opts.channel)) {
-      const { message: msg } = await this.sendMessage({
-        channel: opts.channel,
-        sender: opts.proposedBy,
-        content: `[Decision Proposed] ${content}`,
-        decisionId: decision.id
-      });
-      decision.messageId = msg.id;
-      // Re-write with messageId linked
+      const decisionsDir = path.join(this.moePath, 'decisions');
+      fs.mkdirSync(decisionsDir, { recursive: true });
+      const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
       fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
       this.decisions.set(decision.id, decision);
-    }
 
-    this.emit({ type: 'DECISION_PROPOSED', payload: decision });
-    this.appendActivity('DECISION_PROPOSED', {
-      decisionId: decision.id,
-      proposedBy: decision.proposedBy,
-      content: decision.content
+      // Post a system message to the channel if provided
+      if (opts.channel && this.channels.has(opts.channel)) {
+        const { message: msg } = await this.sendMessage({
+          channel: opts.channel,
+          sender: opts.proposedBy,
+          content: `[Decision Proposed] ${content}`,
+          decisionId: decision.id
+        });
+        decision.messageId = msg.id;
+        // Re-write with messageId linked
+        fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+        this.decisions.set(decision.id, decision);
+      }
+
+      this.emit({ type: 'DECISION_PROPOSED', payload: decision });
+      this.appendActivity('DECISION_PROPOSED', {
+        decisionId: decision.id,
+        proposedBy: decision.proposedBy,
+        content: decision.content
+      });
+
+      return decision;
     });
-
-    return decision;
   }
 
   async approveDecision(id: string, approvedBy: string): Promise<Decision> {
@@ -1150,14 +1699,15 @@ export class StateManager {
   async createTeam(input: { name: string; role?: TeamRole | null; maxSize?: number }): Promise<Team> {
     if (!this.project) throw new Error('Project not loaded');
 
+    const validated = this.validateCreateTeamInput(input);
     const now = new Date().toISOString();
     const team: Team = {
       id: generateId('team'),
       projectId: this.project.id,
-      name: input.name,
-      role: input.role ?? null,
+      name: validated.name,
+      role: validated.role,
       memberIds: [],
-      maxSize: input.maxSize ?? 10,
+      maxSize: validated.maxSize,
       createdAt: now,
       updatedAt: now
     };
@@ -1173,15 +1723,16 @@ export class StateManager {
     const team = this.teams.get(teamId);
     if (!team) throw new Error(`Team not found: ${teamId}`);
 
+    const sanitizedUpdates = this.validateTeamUpdates(team, updates);
     const updated: Team = {
       ...team,
-      ...updates,
+      ...sanitizedUpdates,
       updatedAt: new Date().toISOString()
     };
 
     await this.writeEntity('teams', teamId, updated);
     this.teams.set(teamId, updated);
-    this.appendActivity('TEAM_UPDATED', updates as Record<string, unknown>);
+    this.appendActivity('TEAM_UPDATED', sanitizedUpdates as Record<string, unknown>);
     this.emit({ type: 'TEAM_UPDATED', payload: updated });
     return updated;
   }
@@ -1355,6 +1906,13 @@ export class StateManager {
     this.appendActivity('TASK_CREATED', { title: task.title }, task);
     this.emit({ type: 'TASK_CREATED', payload: task });
 
+    if (task.status === 'PLANNING') {
+      this.postToRoleChannel(
+        'architects',
+        `📋 New plan needed: ${task.title} (${task.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
+      ).catch(() => {});
+    }
+
     return task;
   }
 
@@ -1387,6 +1945,7 @@ export class StateManager {
 
     await this.writeEntity('epics', epic.id, epic);
     this.epics.set(epic.id, epic);
+    this.appendActivity('EPIC_CREATED', this.epicCreatedActivityPayload(epic), undefined, undefined, undefined, epic);
     this.emit({ type: 'EPIC_CREATED', payload: epic });
 
     return epic;
@@ -1422,6 +1981,12 @@ export class StateManager {
     if (sanitized.implementationPlan !== undefined) {
       sanitized.implementationPlan = this.sanitizeImplementationPlan(sanitized.implementationPlan);
     }
+    if (sanitized.contextFetchedBy !== undefined) {
+      sanitized.contextFetchedBy = this.sanitizeStringIdArray(sanitized.contextFetchedBy);
+    }
+    if (sanitized.stepsCompleted !== undefined) {
+      sanitized.stepsCompleted = this.sanitizeStringIdArray(sanitized.stepsCompleted);
+    }
 
     const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(sanitized, 'comments');
     let normalizedUpdates: Partial<Task> = sanitized;
@@ -1453,10 +2018,10 @@ export class StateManager {
       }
     }
 
-    // Only clear assignedWorkerId on transitions where a new role should claim the task (B29)
-    const CLEAR_WORKER_STATUSES = new Set(['BACKLOG', 'PLANNING', 'ARCHIVED']);
+    // Clear assignedWorkerId on any status change unless the caller explicitly sets a new one.
+    // When a task moves between columns, a different agent role should claim it.
     const statusChanged = normalizedUpdates.status !== undefined && normalizedUpdates.status !== task.status;
-    const shouldClearWorker = statusChanged && CLEAR_WORKER_STATUSES.has(normalizedUpdates.status!) && normalizedUpdates.assignedWorkerId === undefined;
+    const shouldClearWorker = statusChanged && normalizedUpdates.assignedWorkerId === undefined;
     const finalUpdates = shouldClearWorker
       ? { ...normalizedUpdates, assignedWorkerId: null }
       : normalizedUpdates;
@@ -1480,6 +2045,15 @@ export class StateManager {
     if (updates.status && updates.status !== task.status) {
       const actor = updated.assignedWorkerId || 'unknown';
       this.postSystemMessage(taskId, `Task moved to ${updates.status} by ${actor}`).catch(() => {});
+
+      // When a task lands on PLANNING, ping #architects so any governing architect
+      // sees it via chat_wait and can resume planning.
+      if (updates.status === 'PLANNING') {
+        this.postToRoleChannel(
+          'architects',
+          `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
+        ).catch(() => {});
+      }
     }
 
     return updated;
@@ -1541,14 +2115,16 @@ export class StateManager {
       throw new Error(`Epic not found: ${epicId}`);
     }
 
+    const sanitizedUpdates = this.validateEpicUpdates(updates);
     const updated: Epic = {
       ...epic,
-      ...updates,
+      ...sanitizedUpdates,
       updatedAt: new Date().toISOString()
     };
 
     await this.writeEntity('epics', epicId, updated);
     this.epics.set(epicId, updated);
+    this.appendActivity('EPIC_UPDATED', this.epicUpdatedActivityPayload(updated, sanitizedUpdates), undefined, undefined, undefined, updated);
     this.emit({ type: 'EPIC_UPDATED', payload: updated });
     return updated;
   }
@@ -1558,25 +2134,7 @@ export class StateManager {
       throw new Error('Project not loaded');
     }
 
-    // Sanitize columnLimits: merge with existing, validate values are positive integers
-    let columnLimits = this.project.settings.columnLimits;
-    if (settings.columnLimits !== undefined) {
-      const incoming = settings.columnLimits || {};
-      const merged: Record<string, number> = { ...(columnLimits || {}) };
-      for (const [key, value] of Object.entries(incoming)) {
-        if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-          throw new Error(`Invalid column limit for ${key}: must be a positive integer`);
-        }
-        merged[key] = value;
-      }
-      columnLimits = merged;
-    }
-
-    const updatedSettings: ProjectSettings = {
-      ...this.project.settings,
-      ...settings,
-      columnLimits
-    };
+    const updatedSettings = this.validateSettingsUpdate(settings);
 
     const updatedProject: Project = {
       ...this.project,
@@ -1762,6 +2320,9 @@ export class StateManager {
         }
       }
 
+      // Clean up unread counts for this worker
+      this.unreadCounts.delete(workerId);
+
       this.appendActivity('WORKER_DISCONNECTED', { workerId: worker.id }, undefined, worker);
       this.emit({ type: 'WORKER_DELETED', payload: worker });
     });
@@ -1770,6 +2331,8 @@ export class StateManager {
   /**
    * Purge all workers at startup. Since the daemon is (re)starting,
    * no workers are connected yet — all existing files are guaranteed stale.
+   * Any remaining task assignments are orphaned after the purge, so clear them
+   * explicitly with activity events to make the tasks claimable.
    */
   async purgeAllWorkers(): Promise<void> {
     await this.mutex.runExclusive(async () => {
@@ -1793,41 +2356,47 @@ export class StateManager {
         logger.error({ error }, 'Failed to read workers directory during purge');
       }
 
-      // Clear stale assignedWorkerId references on tasks
-      const workerIds = new Set(Array.from(this.workers.keys()));
-      if (workerIds.size > 0) {
-        for (const task of this.tasks.values()) {
-          if (task.assignedWorkerId && workerIds.has(task.assignedWorkerId)) {
-            const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
-            this.tasks.set(task.id, updated);
-            try {
-              await this.writeEntity('tasks', task.id, updated);
-            } catch (error) {
-              logger.error({ error, taskId: task.id }, 'Failed to clear task assignedWorkerId during purge');
-            }
-          }
-        }
+      // Clear workers map
+      this.workers.clear();
 
-        // Clear stale memberIds from teams
-        for (const team of this.teams.values()) {
-          const cleanedMembers = team.memberIds.filter((id) => !workerIds.has(id));
-          if (cleanedMembers.length !== team.memberIds.length) {
-            const updated = { ...team, memberIds: cleanedMembers, updatedAt: new Date().toISOString() };
-            this.teams.set(team.id, updated);
-            try {
-              await this.writeEntity('teams', team.id, updated);
-            } catch (error) {
-              logger.error({ error, teamId: team.id }, 'Failed to clear team memberIds during purge');
-            }
+      // Clear assignedWorkerId references that are now orphaned.
+      let clearedAssignments = 0;
+      for (const task of this.tasks.values()) {
+        if (task.assignedWorkerId && this.isTaskAssignedToMissingWorker(task)) {
+          const previousWorkerId = task.assignedWorkerId;
+          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+          this.tasks.set(task.id, updated);
+          try {
+            await this.writeEntity('tasks', task.id, updated);
+            this.appendActivity('WORKER_DISCONNECTED', {
+              workerId: previousWorkerId,
+              reason: 'startup-worker-purge'
+            }, updated);
+            this.emit({ type: 'TASK_UPDATED', payload: updated });
+            clearedAssignments++;
+          } catch (error) {
+            logger.error({ error, taskId: task.id }, 'Failed to clear orphan task assignedWorkerId during worker purge');
           }
         }
       }
 
-      // Clear workers map
-      this.workers.clear();
+      // Clear stale memberIds from teams; all worker records have been purged.
+      for (const team of this.teams.values()) {
+        if (team.memberIds.length === 0) continue;
+        const updated = { ...team, memberIds: [], updatedAt: new Date().toISOString() };
+        this.teams.set(team.id, updated);
+        try {
+          await this.writeEntity('teams', team.id, updated);
+          this.emit({ type: 'TEAM_UPDATED', payload: updated });
+        } catch (error) {
+          logger.error({ error, teamId: team.id }, 'Failed to clear team memberIds during purge');
+        }
+      }
 
       if (deletedCount > 0) {
-        logger.info({ count: deletedCount }, 'Purged stale workers from previous run');
+        logger.info({ count: deletedCount, clearedAssignments }, 'Purged stale workers from previous run');
+      } else if (clearedAssignments > 0) {
+        logger.info({ clearedAssignments }, 'Cleared orphan task assignments during worker purge');
       }
     });
   }
@@ -1862,6 +2431,13 @@ export class StateManager {
 
     await this.writeEntity('proposals', proposalId, updated);
     this.proposals.set(proposalId, updated);
+    this.appendActivity(
+      'PROPOSAL_APPROVED',
+      { proposalType: updated.proposalType, targetScope: updated.targetScope, reason: updated.reason },
+      this.tasks.get(updated.taskId),
+      undefined,
+      updated
+    );
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
 
     try {
@@ -1953,6 +2529,13 @@ export class StateManager {
 
     await this.writeEntity('proposals', proposalId, updated);
     this.proposals.set(proposalId, updated);
+    this.appendActivity(
+      'PROPOSAL_REJECTED',
+      { proposalType: updated.proposalType, targetScope: updated.targetScope, reason: updated.reason },
+      this.tasks.get(updated.taskId),
+      undefined,
+      updated
+    );
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
     return updated;
   }
@@ -1994,7 +2577,8 @@ export class StateManager {
     payload: Record<string, unknown>,
     task?: Task,
     worker?: Worker,
-    proposal?: RailProposal
+    proposal?: RailProposal,
+    epic?: Epic
   ): void {
     // Track pending writes so flush can wait for all writes to complete
     this.pendingActivityWrites++;
@@ -2009,7 +2593,7 @@ export class StateManager {
       id: generateId('evt'),
       timestamp: new Date().toISOString(),
       projectId: this.project.id,
-      epicId: task?.epicId,
+      epicId: task?.epicId || epic?.id,
       taskId: task?.id,
       workerId: worker?.id || proposal?.workerId,
       event,
@@ -2046,7 +2630,8 @@ export class StateManager {
     payload: Record<string, unknown>,
     task?: Task,
     worker?: Worker,
-    proposal?: RailProposal
+    proposal?: RailProposal,
+    epic?: Epic
   ): Promise<void> {
     if (!this.project) return;
 
@@ -2054,7 +2639,7 @@ export class StateManager {
       id: generateId('evt'),
       timestamp: new Date().toISOString(),
       projectId: this.project.id,
-      epicId: task?.epicId,
+      epicId: task?.epicId || epic?.id,
       taskId: task?.id,
       workerId: worker?.id || proposal?.workerId,
       event,
@@ -2124,18 +2709,26 @@ export class StateManager {
    * Invalid entries are skipped with a warning log.
    */
   getActivityLog(limit = 100): ActivityEvent[] {
+    return this.getActivityLogWindow(limit).events;
+  }
+
+  /**
+   * Read a bounded activity log tail and report whether older raw log lines were omitted.
+   * Returns events in reverse chronological order (newest first).
+   */
+  getActivityLogWindow(limit = 100): { events: ActivityEvent[]; hasMoreOlderLines: boolean; linesRead: number } {
     const logPath = path.join(this.moePath, 'activity.log');
     if (!fs.existsSync(logPath)) {
-      return [];
+      return { events: [], hasMoreOlderLines: false, linesRead: 0 };
     }
 
     try {
       const safeLimit = Math.max(0, Math.trunc(limit));
       if (safeLimit === 0) {
-        return [];
+        return { events: [], hasMoreOlderLines: false, linesRead: 0 };
       }
 
-      const lines = readLastLines(logPath, safeLimit);
+      const { lines, hasMoreOlderLines } = readLastLinesWithMetadata(logPath, safeLimit);
       const events: ActivityEvent[] = [];
       let skippedCount = 0;
 
@@ -2165,10 +2758,14 @@ export class StateManager {
 
       // readLastLines returns chronological order within the tail window.
       // Convert to reverse chronological order for API compatibility.
-      return events.reverse().slice(0, safeLimit);
+      return {
+        events: events.reverse().slice(0, safeLimit),
+        hasMoreOlderLines,
+        linesRead: lines.length,
+      };
     } catch (error) {
       logger.error({ error }, 'Failed to read activity log');
-      return [];
+      return { events: [], hasMoreOlderLines: false, linesRead: 0 };
     }
   }
 
@@ -2348,7 +2945,7 @@ export class StateManager {
       id: project.id || generateId('proj'),
       schemaVersion: project.schemaVersion || CURRENT_SCHEMA_VERSION,
       name: sanitizeString(project.name, 'projectName', 256, path.basename(this.projectPath)),
-      rootPath: project.rootPath || this.projectPath,
+      rootPath: this.projectPath,
       globalRails: {
         techStack: sanitizeStringArray(project.globalRails?.techStack, 50, 256),
         forbiddenPatterns: sanitizeStringArray(project.globalRails?.forbiddenPatterns, 100, 1000),
@@ -2368,6 +2965,7 @@ export class StateManager {
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
         chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
         chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
+        memory: resolveMemorySettings(project.settings),
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now
