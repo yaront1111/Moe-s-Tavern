@@ -208,6 +208,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.architect"), "architect"))
                     popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.worker"), "worker"))
                     popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.qa"), "qa"))
+                    popup.add(buildProviderMenu(MoeBundle.message("moe.panel.agentsMenu.governor"), "governor"))
                     popup.show(e.component, e.x, e.y)
                 }
             })
@@ -258,12 +259,20 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val proposalPanel = ProposalPanel(project)
         val activityLogPanel = ActivityLogPanel(project)
         val chatPanel = ChatPanel(project)
+        val metricsPanel = MetricsPanel(project)
 
         val tabbedPane = JTabbedPane().apply {
             addTab(MoeBundle.message("moe.tab.board"), scroll)
             addTab(MoeBundle.message("moe.tab.proposals"), proposalPanel)
             addTab(MoeBundle.message("moe.tab.activityLog"), activityLogPanel)
             addTab(MoeBundle.message("moe.tab.chat"), chatPanel)
+            addTab(MoeBundle.message("moe.tab.metrics"), metricsPanel)
+        }
+        // Drive metrics polling based on tab visibility (cheaper than continuous polling).
+        tabbedPane.addChangeListener {
+            val idx = tabbedPane.selectedIndex
+            val component = if (idx >= 0) tabbedPane.getComponentAt(idx) else null
+            metricsPanel.setTabVisible(component === metricsPanel)
         }
         add(tabbedPane, BorderLayout.CENTER)
 
@@ -271,6 +280,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         Disposer.register(this, proposalPanel)
         Disposer.register(this, activityLogPanel)
         Disposer.register(this, chatPanel)
+        Disposer.register(this, metricsPanel)
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
@@ -293,7 +303,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         service.addListener(stateListener!!)
 
-        service.connect()
+        // connect() performs blocking IO (daemon.json read, port probe, process spawn).
+        // Run off the EDT to avoid freezing the UI while the tool window initializes.
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+            if (!panelDisposed) service.connect()
+        }
 
         reloadProjectSelector()
         projectSelector.addActionListener {
@@ -352,7 +366,12 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
         popup.add(JSeparator())
         popup.add(JMenuItem("Restart Daemon").apply {
-            addActionListener { service.restartDaemon() }
+            addActionListener {
+                // restartDaemon() reads daemon.json, terminates processes, and re-runs
+                // connect() which is blocking. Move off the EDT.
+                com.intellij.openapi.application.ApplicationManager.getApplication()
+                    .executeOnPooledThread { service.restartDaemon() }
+            }
         })
 
         popup.show(e.component, e.x, e.y)

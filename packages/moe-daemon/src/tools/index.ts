@@ -10,6 +10,7 @@ import { startStepTool } from './startStep.js';
 import { completeStepTool } from './completeStep.js';
 import { completeTaskTool } from './completeTask.js';
 import { reportBlockedTool } from './reportBlocked.js';
+import { requestReplanTool } from './requestReplan.js';
 import { proposeRailTool } from './proposeRail.js';
 import { listTasksTool } from './listTasks.js';
 import { getNextTaskTool } from './getNextTask.js';
@@ -44,6 +45,10 @@ import { rememberTool } from './remember.js';
 import { recallTool } from './recall.js';
 import { reflectTool } from './reflect.js';
 import { saveSessionSummaryTool } from './saveSessionSummary.js';
+import { getHandoffHistoryTool } from './getHandoffHistory.js';
+import { listMetricsTool } from './listMetrics.js';
+import { setTaskBudgetTool } from './setTaskBudget.js';
+import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -63,6 +68,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     completeStepTool(state),
     completeTaskTool(state),
     reportBlockedTool(state),
+    requestReplanTool(state),
     proposeRailTool(state),
     listTasksTool(state),
     getNextTaskTool(state),
@@ -97,5 +103,9 @@ export function getTools(state: StateManager): ToolDefinition[] {
     recallTool(state),
     reflectTool(state),
     saveSessionSummaryTool(state),
+    getHandoffHistoryTool(state),
+    listMetricsTool(state),
+    setTaskBudgetTool(state),
+    submitPlanCritiqueTool(state),
   ];
 }

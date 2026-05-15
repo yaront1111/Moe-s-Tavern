@@ -38,9 +38,22 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       assertWorkerOwns(task, params.workerId);
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
+      // Capture metrics: doneAt + wallClockMs (first claim → DONE). If no
+      // firstClaimAt was recorded (legacy task), wallClockMs stays undefined.
+      const nowIso = new Date().toISOString();
+      const priorMetrics = task.metrics ?? {};
+      const nextMetrics: typeof priorMetrics = { ...priorMetrics, doneAt: nowIso };
+      if (priorMetrics.firstClaimAt) {
+        const start = Date.parse(priorMetrics.firstClaimAt);
+        const end = Date.parse(nowIso);
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+          nextMetrics.wallClockMs = end - start;
+        }
+      }
+
       const updated = await state.updateTask(
         params.taskId,
-        { status: 'DONE', reviewCompletedAt: new Date().toISOString() },
+        { status: 'DONE', reviewCompletedAt: nowIso, metrics: nextMetrics },
         'QA_APPROVED'
       );
 

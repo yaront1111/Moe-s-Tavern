@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("architect", "worker", "qa")]
+    [ValidateSet("architect", "worker", "qa", "governor")]
     [string]$Role = "worker",
 
     [string]$Project,
@@ -34,6 +34,16 @@
     # Use gemini headless mode (non-interactive, --yolo) instead of interactive
     [switch]$GeminiExec,
 
+    # Force claude into interactive TUI mode (no --print, no stream-json parser).
+    # Use when you want to drive the agent yourself — typing into the REPL after
+    # the pre-flight has claimed a task and loaded the role/MCP context.
+    # The polling loop is unaffected: each loop iteration spawns a fresh CLI
+    # invocation, so per-task cache replay is the same as --print mode (no
+    # multi-turn replay cost compounding). Architect defaults to interactive
+    # because planning benefits from clarifying questions; worker and qa stay
+    # opt-in (JetBrains opts the worker in for hands-on coding sessions).
+    [switch]$Interactive,
+
     # Explicit model override (e.g. "claude-opus-4-7", "claude-sonnet-4-6").
     # When empty, the launcher picks a per-role default — architect → Opus,
     # worker/qa → Sonnet. Per-project overrides via .moe/project.json
@@ -42,9 +52,22 @@
     [string]$Model = ""
 )
 
+# Fail fast on unhandled cmdlet errors. Per-call `-ErrorAction SilentlyContinue`
+# overrides this for spots that intentionally rely on non-terminating errors
+# (Resolve-Path with missing paths, Get-Process for stale PIDs, etc.).
+$ErrorActionPreference = 'Stop'
+
 if ($Loop -and $NoLoop) {
     Write-Error "Conflicting switches: -Loop and -NoLoop cannot be used together. Choose -Loop for polling mode or -NoLoop for single-shot mode."
     exit 2
+}
+
+# Architect and governor default to interactive TUI: planning is a conversation,
+# and governance is an interactive oversight task where the operator wants to
+# steer escalation decisions in real time. Worker and QA stay opt-in. Explicit
+# -Interactive:$false on the command line wins over this default.
+if ($Role -in @("architect", "governor") -and -not $PSBoundParameters.ContainsKey('Interactive')) {
+    $Interactive = $true
 }
 
 function Load-Registry {
@@ -191,7 +214,9 @@ if (-not (Test-Path $moeDir)) {
 
 $env:MOE_PROJECT_PATH = $projectPath
 if (-not $WorkerId) {
-    $shortId = [guid]::NewGuid().ToString().Substring(0, 4)
+    # 8 hex chars (~4 billion space) — 4 chars (~65K space) collided under
+    # simultaneous multi-agent launches from JetBrains.
+    $shortId = [guid]::NewGuid().ToString().Substring(0, 8)
     $WorkerId = "$Role-$shortId"
 }
 $env:MOE_WORKER_ID = $WorkerId
@@ -265,7 +290,9 @@ if (-not $NoStartDaemon) {
             exit 1
         }
         Write-Host "Starting Moe daemon for $projectPath..."
-        Start-Process -FilePath "node" -ArgumentList "`"$daemonScript`" start --project `"$projectPath`"" -WindowStyle Hidden
+        # Pass arguments as an array so paths containing spaces or quotes survive
+        # Windows command-line escaping (Start-Process re-quotes each element).
+        Start-Process -FilePath "node" -ArgumentList @("$daemonScript", "start", "--project", "$projectPath") -WindowStyle Hidden
 
         # Wait for daemon to be ready (poll for up to 10 seconds)
         $maxWait = 10
@@ -300,6 +327,10 @@ $statusMap = @{
     architect = @("PLANNING")
     worker    = @("WORKING")
     qa        = @("REVIEW")
+    # Governor doesn't claim tasks via statuses — see enter_governance branch
+    # in the preflight section. Empty array keeps the $claimJson serializer
+    # well-defined for the fallback/legacy code paths.
+    governor  = @()
 }
 $statuses = $statusMap[$Role]
 
@@ -446,6 +477,8 @@ elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
 # Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
 $geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)
+# Claude defaults to --print (one-shot stream); -Interactive flips it to TUI.
+$claudeInteractive = ($cliType -eq "claude") -and $Interactive
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 if ($cliType -eq "codex") {
@@ -605,16 +638,39 @@ if ($Delay -gt 0) {
 # If -Team not specified, use role-based default name
 $teamContext = ""
 if (-not $Team) {
-    $defaultTeams = @{ architect = "Architects"; worker = "Workers"; qa = "QA" }
+    $defaultTeams = @{ architect = "Architects"; worker = "Workers"; qa = "QA"; governor = "Governors" }
     $Team = $defaultTeams[$Role]
 }
+# Local resilient RPC parser used before Invoke-MoeRpc is defined. Handles
+# powershell.exe 5.1's stderr-as-ErrorRecord noise by merging streams (2>&1),
+# stringifying, dropping proxy diagnostic lines, and scanning for JSON.
+function Invoke-MoeRpcRaw {
+    param([string]$RpcJson)
+    $output = $RpcJson | & node $proxyScript 2>&1
+    $stringLines = @()
+    foreach ($entry in @($output)) {
+        $stringLines += (("$entry") -split "`r?`n")
+    }
+    # @(...) force-wraps to an array. Where-Object returns a bare string when
+    # only one line matches, and indexing a string yields a [char] not the line.
+    $jsonLines = @($stringLines | Where-Object {
+        $t = $_.Trim()
+        $t.Length -gt 0 -and -not $t.StartsWith('[moe-proxy]')
+    })
+    for ($i = $jsonLines.Count - 1; $i -ge 0; $i--) {
+        try {
+            return ($jsonLines[$i] | ConvertFrom-Json -ErrorAction Stop)
+        } catch { continue }
+    }
+    return $null
+}
+
 if ($Team) {
     Write-Host "Setting up team '$Team' for role '$Role'..."
-    $nodeExe = "node"
     $createTeamJson = ConvertTo-Json @{ name = $Team } -Compress
     $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + $createTeamJson + '}}'
     try {
-        $createResult = $createRpc | & $nodeExe $proxyScript 2>$null | ConvertFrom-Json
+        $createResult = Invoke-MoeRpcRaw -RpcJson $createRpc
         if ($createResult -and $createResult.result -and $createResult.result.content -and $createResult.result.content.Count -gt 0) {
             $teamObj = $createResult.result.content[0].text | ConvertFrom-Json
             $teamId = $teamObj.team.id
@@ -622,7 +678,7 @@ if ($Team) {
 
             $joinJson = ConvertTo-Json @{ teamId = $teamId; workerId = $WorkerId } -Compress
             $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + $joinJson + '}}'
-            $joinRpc | & $nodeExe $proxyScript 2>$null | Out-Null
+            Invoke-MoeRpcRaw -RpcJson $joinRpc | Out-Null
             Write-Host "Worker $WorkerId joined team '$Team'"
             $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
         } else {
@@ -653,8 +709,13 @@ function Invoke-MoeRpc {
 
     $prevEnv = $env:MOE_PROJECT_PATH
     $env:MOE_PROJECT_PATH = $projectPath
+    # Merge stderr into stdout (2>&1) and force every record to its string form.
+    # Windows PowerShell 5.1's powershell.exe converts native-command stderr into
+    # ErrorRecord objects that break ConvertFrom-Json on a per-pipeline-record
+    # basis even when 2>$null is in place; merging + stringifying yields a clean
+    # stream of lines we can scan for the JSON-RPC response.
     try {
-        $raw = $rpc | & node $proxyScript 2>$null
+        $raw = ($rpc | & node $proxyScript 2>&1) | ForEach-Object { "$_" }
     } catch {
         $env:MOE_PROJECT_PATH = $prevEnv
         return $null
@@ -662,9 +723,18 @@ function Invoke-MoeRpc {
     $env:MOE_PROJECT_PATH = $prevEnv
     if (-not $raw) { return $null }
 
-    # Take the last valid JSON line from the response
-    $lines = ($raw -split "`n") | Where-Object { $_.Trim().Length -gt 0 }
-    foreach ($line in ($lines | Sort-Object -Descending { [Array]::IndexOf($lines, $_) })) {
+    # Split any embedded newlines, drop empties + the proxy's own diagnostic lines,
+    # then scan from the bottom for the last valid JSON-RPC response.
+    $allLines = @()
+    foreach ($entry in @($raw)) {
+        $allLines += ($entry -split "`r?`n")
+    }
+    $lines = @($allLines | Where-Object {
+        $trimmed = $_.Trim()
+        $trimmed.Length -gt 0 -and -not $trimmed.StartsWith('[moe-proxy]')
+    })
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+        $line = $lines[$i]
         try {
             $d = $line | ConvertFrom-Json -ErrorAction Stop
             if ($d.error) {
@@ -734,10 +804,16 @@ if ($cliType -eq "gemini") {
 }
 $loopEnabled = (($AutoClaim -or $Loop) -and (-not $NoLoop) -and ($PollInterval -gt 0))
 if ($codexInteractive -or $geminiInteractive) {
+    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+    # would just respawn the same TUI on top of the previous one. Claude's
+    # interactive mode is fine to loop: each iteration spawns a fresh CLI
+    # invocation, so per-task cache replay matches --print mode.
     $loopEnabled = $false
     if (-not $NoLoop) {
         Write-Host "Interactive mode: polling disabled"
     }
+} elseif ($claudeInteractive -and $loopEnabled) {
+    Write-Host "Claude interactive mode: polling enabled (each task spawns a fresh TUI)"
 }
 if ($loopEnabled) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
@@ -817,7 +893,29 @@ do {
         }
         $preflightPending = Invoke-MoeRpc -Tool "get_pending_questions" -Args @{}
 
-        $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+        if ($Role -eq 'governor') {
+            # Governors do NOT claim tasks. They enter governance mode once per
+            # session and then live in chat_wait / mention loops. See
+            # docs/roles/governor.md — claim_next_task would 1) reject the
+            # governor workerId and 2) be the wrong tool entirely.
+            try {
+                $govResult = Invoke-MoeRpc -Tool "enter_governance" -Args @{ workerId = $WorkerId }
+                if ($null -eq $govResult) {
+                    Write-Host "[WARN] enter_governance returned no result; continuing anyway." -ForegroundColor Yellow
+                } else {
+                    Write-Host "[OK] Entered governance mode as $WorkerId." -ForegroundColor Green
+                }
+            } catch {
+                Write-Host "[WARN] enter_governance failed: $_ — continuing; the agent can retry from inside the CLI." -ForegroundColor Yellow
+            }
+            # Synthesize the claim shape downstream code expects. Governor has
+            # no task to claim, so hasNext=false routes through the no-task
+            # banner path (which the role doc + system prompt remap to the
+            # chat_wait loop).
+            $claim = [pscustomobject]@{ hasNext = $false }
+        } else {
+            $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+        }
         if ($null -ne $claim) {
             # Worker is registered by team-setup join_team (above) when teams are
             # enabled, and re-registered by claim_next_task on a successful claim.
@@ -883,7 +981,7 @@ do {
         # <routed_mentions> banner injected below gives the model a focused list.
         # Match directly on workerId, on @all, or on the role-group tag this
         # worker belongs to (architects/workers/qa).
-        $roleGroupTag = switch ($Role) { "architect" { "architects" } "worker" { "workers" } "qa" { "qa" } default { "" } }
+        $roleGroupTag = switch ($Role) { "architect" { "architects" } "worker" { "workers" } "qa" { "qa" } "governor" { "governors" } default { "" } }
         $buckets = @()
         if ($preflightGeneralUnread -and $preflightGeneralUnread.messages) { $buckets += ,$preflightGeneralUnread.messages }
         if ($preflightTaskUnread    -and $preflightTaskUnread.messages)    { $buckets += ,$preflightTaskUnread.messages }
@@ -1101,6 +1199,11 @@ $mentionsJson
             "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Then call moe.save_session_summary with what you did, and use moe.remember to save any non-obvious gotchas. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
             "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
         }
+    } elseif ($AutoClaim -and $Role -eq 'governor') {
+        # Governor enters governance mode and lives in a chat_wait loop on
+        # #governors. They never claim tasks. The wrapper has already called
+        # moe.enter_governance; the agent now subscribes to channel signals.
+        $claimPromptBody = "You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. Loop forever. Do NOT call moe.claim_next_task."
     } elseif ($AutoClaim -and $preflightNoTask) {
         # No-task case: wrapper's outer loop handles the poll/sleep cycle at the
         # PowerShell level, so we don't launch the CLI just to call wait_for_task.
@@ -1247,7 +1350,12 @@ $mentionsJson
         # launching the CLI entirely. The outer do/while loop will sleep
         # PollInterval seconds and retry pre-flight. Avoids paying for a CLI
         # session whose only job would be to call moe.wait_for_task.
-        if ($AutoClaim -and $preflightNoTask) {
+        #
+        # Governor is excluded: governors never claim tasks (preflightNoTask is
+        # synthesized true on every iteration), but they DO need an interactive
+        # Claude session so the human can drive governance decisions. Skipping
+        # the launch would leave the governor terminal dead.
+        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor') {
             Write-Host "[no-task] Skipping CLI launch — wrapper will poll again in $PollInterval s." -ForegroundColor DarkGray
             $script:CliExitCode = 0
             # Jump past the launch block to the post-flight cleanup.
@@ -1287,9 +1395,12 @@ $mentionsJson
             # is silent during tool-call phases (sometimes minutes), which is
             # indistinguishable from a hang.
             #
-            # Opt-out: set MOE_NO_PRINT_MODE=1 to keep the legacy interactive TUI
-            # (use only when actively debugging — costs ~20-50x more per task).
-            $usePrintMode = ($env:MOE_NO_PRINT_MODE -ne "1")
+            # Opt-out: -Interactive switches to the full TUI so the operator can
+            # drive the agent (clarifying questions, follow-ups, etc.). Because
+            # each polling-loop iteration spawns a fresh CLI invocation, the
+            # cached prefix is paid once per task in either mode — there is no
+            # multi-turn replay penalty for interactive mode.
+            $usePrintMode = -not $Interactive
             $printArgs = @()
             if ($usePrintMode) {
                 $printArgs = @(
@@ -1299,6 +1410,21 @@ $mentionsJson
                     "--include-partial-messages",
                     "--verbose"
                 )
+            }
+
+            # Prompt-cache stability. The default Claude Code system prompt
+            # bakes in per-launch / per-machine sections (cwd, env info, memory
+            # paths, git status) AHEAD of our --append-system-prompt-file
+            # content, so the volatile bits sit at the front of the prefix and
+            # invalidate the cache on every launch. This flag moves them into
+            # the first user message, leaving the stable default system prompt
+            # + our role/CLAUDE.md/skills as a contiguous cacheable prefix.
+            # Safe with --append-system-prompt-file (only ignored if
+            # --system-prompt is set, which we never pass). Opt out via
+            # MOE_NO_DYNAMIC_PROMPT_EXCLUDE=1 if it regresses behaviour.
+            $cacheArgs = @()
+            if (-not $env:MOE_NO_DYNAMIC_PROMPT_EXCLUDE) {
+                $cacheArgs = @("--exclude-dynamic-system-prompt-sections")
             }
 
             # Inline stream-json parser. Reads one JSON line at a time, prints
@@ -1375,7 +1501,7 @@ $mentionsJson
             }
 
             if ($userPromptForCli) {
-                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" --effort max $($printArgs -join ' ') `"<prompt>`""
+                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort max $($printArgs -join ' ') `"<prompt>`""
                 if ($usePrintMode) {
                     # Stream output through the parser. ForEach-Object processes
                     # lines as they arrive (no buffering), so the user sees
@@ -1383,20 +1509,20 @@ $mentionsJson
                     $script:moeToolJson = ""
                     $script:moeToolName = $null
                     $script:moeInText = $false
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max @printArgs "$userPromptForCli" 2>&1 | ForEach-Object { & $parseStreamJson $_ }
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1 | ForEach-Object { & $parseStreamJson $_ }
                     $script:CliExitCode = $LASTEXITCODE
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max @printArgs "$userPromptForCli"
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
                 }
             } else {
-                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" --effort max $($printArgs -join ' ')"
+                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort max $($printArgs -join ' ')"
                 if ($usePrintMode) {
                     $script:moeToolJson = ""
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max @printArgs 2>&1 | ForEach-Object { & $parseStreamJson $_ }
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1 | ForEach-Object { & $parseStreamJson $_ }
                     $script:CliExitCode = $LASTEXITCODE
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" --effort max @printArgs
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs
                     $script:CliExitCode = $LASTEXITCODE
                 }
             }

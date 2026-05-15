@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { maybeApplyBudgetWarnings } from '../util/budget.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -84,12 +85,21 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         ? prevCompleted
         : [...prevCompleted, params.stepId];
 
-      await state.updateTask(
+      const priorMetrics = task.metrics ?? {};
+      const nextMetrics = {
+        ...priorMetrics,
+        executedStepCount: (priorMetrics.executedStepCount ?? 0) + 1,
+      };
+
+      const updatedTask = await state.updateTask(
         task.id,
-        { implementationPlan: steps, stepsCompleted },
+        { implementationPlan: steps, stepsCompleted, metrics: nextMetrics },
         'STEP_COMPLETED'
       );
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
+
+      // Best-effort budget check — never blocks step completion.
+      await maybeApplyBudgetWarnings(state, updatedTask).catch(() => {});
 
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
@@ -121,7 +131,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
             return {
               tool: 'moe.start_step',
               args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
-              reason: `Advance to step ${stepNum + 1}: ${nextStep.description.slice(0, 80)}`,
+              reason: `Advance to next pending step ${nextStep.stepId}: ${nextStep.description.slice(0, 80)}`,
               recommendedSkill: isFinal
                 ? recommendSkillFor('worker', 'final_step')
                 : isTestStep

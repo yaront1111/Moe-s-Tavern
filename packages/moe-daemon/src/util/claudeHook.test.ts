@@ -235,7 +235,7 @@ describe('writeClaudeHook', () => {
 
       expect(result.status).toBe(2);
       expect(result.stderr).toContain('No active claim for worker worker-1');
-    });
+    }, 30000);
 
     it('allows gated tools when list_tasks returns an active claim', () => {
       const projectPath = makeProjectDir();

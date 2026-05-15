@@ -114,7 +114,7 @@ exit 2
 export interface ClaudeHookWriteResult {
   settingsWritten: boolean;
   settingsMerged: boolean;
-  settingsSkippedReason?: 'already-present' | 'invalid-json' | 'write-failed';
+  settingsSkippedReason?: 'already-present' | 'invalid-json' | 'write-failed' | 'too-large';
   hookWritten: boolean;
   hookSkippedReason?: 'user-modified' | 'write-failed';
   shHookWritten: boolean;
@@ -159,6 +159,26 @@ function mergeOrWriteSettings(settingsPath: string, result: ClaudeHookWriteResul
       logger.warn({ error, settingsPath }, 'Failed to write Claude settings');
       result.settingsSkippedReason = 'write-failed';
     }
+    return;
+  }
+
+  // Cap at 1 MB: settings.json is a small JSON file in practice. Anything
+  // larger is almost certainly a corrupt/abused file and we'd rather skip
+  // than load it into memory.
+  const SETTINGS_MAX_BYTES = 1024 * 1024;
+  try {
+    const stat = fs.statSync(settingsPath);
+    if (stat.size > SETTINGS_MAX_BYTES) {
+      logger.warn(
+        { settingsPath, size: stat.size, max: SETTINGS_MAX_BYTES },
+        'Skipping Claude settings: file exceeds size cap'
+      );
+      result.settingsSkippedReason = 'too-large';
+      return;
+    }
+  } catch (error) {
+    logger.warn({ error, settingsPath }, 'Failed to stat Claude settings');
+    result.settingsSkippedReason = 'write-failed';
     return;
   }
 

@@ -178,6 +178,61 @@ export interface RejectionDetails {
   issues?: QAIssue[];
 }
 
+export interface TaskMetrics {
+  plannedStepCount?: number;
+  executedStepCount?: number;
+  reopenCount?: number;
+  rejectCount?: number;
+  wallClockMs?: number;
+  firstClaimAt?: string;
+  doneAt?: string;
+}
+
+export interface TaskBudget {
+  wallClockMs?: number;
+  warnedAt?: string;
+  escalatedAt?: string;
+}
+
+export interface HandoffNote {
+  from?: string;
+  to?: string;
+  createdAt?: string;
+  whatIsDone?: string;
+  whatRemains?: string;
+  pitfalls?: string;
+  openQuestions?: string;
+}
+
+export interface FailedDodEntry {
+  item: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+}
+
+export interface PlanCritiqueResult {
+  verdict: 'pass' | 'block';
+  concerns?: string[];
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
+export interface EpicMetricsAggregate {
+  epicId: string;
+  epicTitle?: string;
+  completed: number;
+  avgReopenCount?: number;
+  avgWallClockMs?: number;
+}
+
+export interface MetricsAggregate {
+  firstPassApprovalPct?: number;
+  avgWallClockMs?: number;
+  avgReopenCount?: number;
+  totalCompleted?: number;
+  perEpic: EpicMetricsAggregate[];
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -207,6 +262,11 @@ export interface Task {
   reviewCompletedAt?: string;
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
+  metrics?: TaskMetrics;
+  budget?: TaskBudget;
+  priorHandoffs?: HandoffNote[];
+  failedDodItems?: FailedDodEntry[];
+  planCritiqueResult?: PlanCritiqueResult;
 }
 
 export interface Worker {

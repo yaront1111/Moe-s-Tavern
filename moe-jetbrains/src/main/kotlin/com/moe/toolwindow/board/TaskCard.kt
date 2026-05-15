@@ -2,12 +2,14 @@ package com.moe.toolwindow.board
 
 import com.moe.model.Task
 import com.moe.util.MoeBundle
+import com.moe.util.MoeDuration
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
+import java.time.Instant
 import java.awt.BorderLayout
 import java.awt.Cursor
 import java.awt.datatransfer.StringSelection
@@ -133,6 +135,51 @@ class TaskCard(
             })
         }
 
+        // Reopen badge (orange) when reopenCount > 0
+        val reopenCount = task.metrics?.reopenCount ?: task.reopenCount
+        if (reopenCount > 0) {
+            val orange = JBColor(java.awt.Color(255, 152, 0), java.awt.Color(255, 183, 77))
+            meta.add(JBLabel("↻ $reopenCount").apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont()
+                foreground = java.awt.Color.WHITE
+                background = orange
+                toolTipText = "Reopened $reopenCount time(s)"
+            })
+        }
+
+        // Handoff badge (blue) when priorHandoffs is non-empty
+        val handoffCount = task.priorHandoffs?.size ?: 0
+        if (handoffCount > 0) {
+            val blue = JBColor(java.awt.Color(59, 130, 246), java.awt.Color(96, 165, 250))
+            meta.add(JBLabel("🤝 $handoffCount").apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont()
+                foreground = java.awt.Color.WHITE
+                background = blue
+                toolTipText = "$handoffCount prior hand-off(s)"
+            })
+        }
+
+        // Plan critique blocked chip (red)
+        val critique = task.planCritiqueResult
+        if (critique?.verdict == "block") {
+            val red = JBColor(java.awt.Color(220, 53, 69), java.awt.Color(255, 80, 80))
+            val concerns = critique.concerns
+                ?.takeIf { it.isNotEmpty() }
+                ?.joinToString("; ")
+            meta.add(JBLabel("⚠ critique blocked").apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                foreground = java.awt.Color.WHITE
+                background = red
+                toolTipText = concerns ?: "Plan critique returned 'block'"
+            })
+        }
+
         val content = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = JBUI.Borders.empty(2, 8, 2, 6)
@@ -182,6 +229,18 @@ class TaskCard(
         }
         if (onPrevious != null || onNext != null) {
             content.add(arrows, BorderLayout.EAST)
+        }
+
+        // Budget badge (bottom-right). Only rendered when we have something
+        // meaningful to show — either a budget cap or a firstClaimAt timestamp.
+        val budgetBadge = buildBudgetBadge()
+        if (budgetBadge != null) {
+            val south = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+                isOpaque = false
+                border = JBUI.Borders.emptyTop(2)
+            }
+            south.add(budgetBadge)
+            content.add(south, BorderLayout.SOUTH)
         }
 
         add(stripe, BorderLayout.WEST)
@@ -263,6 +322,67 @@ class TaskCard(
 
     private fun humanizeStatus(status: String): String {
         return status.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+
+    /**
+     * Build the bottom-right budget badge. Returns null when neither a budget
+     * nor a first-claim timestamp is available — we don't want to spam every
+     * card with an empty placeholder.
+     */
+    private fun buildBudgetBadge(): JBLabel? {
+        val budgetMs = task.budget?.wallClockMs
+        val firstClaimAt = MoeDuration.parseInstant(task.metrics?.firstClaimAt)
+        val doneAt = MoeDuration.parseInstant(task.metrics?.doneAt)
+
+        // Nothing to render if we have no budget AND no claim timestamp.
+        if (budgetMs == null && firstClaimAt == null) return null
+
+        // Compute used wall-clock: prefer metrics.wallClockMs when present,
+        // otherwise derive from firstClaimAt -> doneAt (or now).
+        val now = Instant.now()
+        val derivedUsed = MoeDuration.elapsedMs(firstClaimAt, doneAt ?: now)
+        val usedMs = task.metrics?.wallClockMs ?: derivedUsed ?: 0L
+
+        val ratio = if (budgetMs != null && budgetMs > 0) usedMs.toDouble() / budgetMs.toDouble() else 0.0
+        val color: JBColor = when {
+            budgetMs == null -> JBColor(java.awt.Color(0x6B7280), java.awt.Color(0xA7ABB1)) // neutral
+            ratio > 1.0 -> JBColor(java.awt.Color(220, 53, 69), java.awt.Color(255, 80, 80)) // red
+            ratio >= 0.8 -> JBColor(java.awt.Color(245, 158, 11), java.awt.Color(251, 191, 36)) // yellow
+            else -> JBColor(java.awt.Color(22, 163, 74), java.awt.Color(34, 197, 94)) // green
+        }
+
+        val usedText = MoeDuration.humanise(usedMs)
+        val labelText = if (budgetMs != null) {
+            "${usedText} / ${MoeDuration.humanise(budgetMs)}"
+        } else {
+            usedText
+        }
+
+        val tooltip = buildString {
+            append("Budget: ")
+            if (firstClaimAt != null) {
+                append("started ").append(task.metrics?.firstClaimAt)
+            } else {
+                append("no start timestamp")
+            }
+            if (budgetMs != null) {
+                append(", used ").append(MoeDuration.humanise(usedMs))
+                append(" of ").append(MoeDuration.humanise(budgetMs))
+            } else {
+                append(", used ").append(MoeDuration.humanise(usedMs))
+            }
+            task.budget?.warnedAt?.let { append(", warned ").append(it) }
+            task.budget?.escalatedAt?.let { append(", escalated ").append(it) }
+        }
+
+        return JBLabel(labelText).apply {
+            isOpaque = true
+            border = JBUI.Borders.empty(1, 6)
+            font = JBUI.Fonts.smallFont()
+            foreground = java.awt.Color.WHITE
+            background = color
+            toolTipText = tooltip
+        }
     }
 
     /**

@@ -15,6 +15,9 @@ import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
+import { backfillTaskMetrics } from './state/migrations/backfillTaskMetrics.js';
+import { startStaleWorkerWatcher } from './state/staleWorkerWatcher.js';
+import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
 import { writeSkillFiles } from './util/skillFiles.js';
@@ -152,24 +155,30 @@ function removeStaleLock(projectPath: string, context: string): boolean {
 
 function acquireLock(projectPath: string): boolean {
   const lockPath = lockFilePath(projectPath);
-  try {
-    // O_EXCL ensures atomic creation - fails if file exists
-    const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-    fs.writeSync(fd, JSON.stringify({
-      pid: process.pid,
-      projectPath: canonicalProjectPath(projectPath),
-      createdAt: new Date().toISOString(),
-    }));
-    fs.closeSync(fd);
-    return true;
-  } catch (err: any) {
-    if (err.code === 'EEXIST') {
-      if (removeStaleLock(projectPath, 'acquireLock')) {
-        return acquireLock(projectPath);
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      // O_EXCL ensures atomic creation - fails if file exists
+      const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+      fs.writeSync(fd, JSON.stringify({
+        pid: process.pid,
+        projectPath: canonicalProjectPath(projectPath),
+        createdAt: new Date().toISOString(),
+      }));
+      fs.closeSync(fd);
+      return true;
+    } catch (err: any) {
+      if (err.code === 'EEXIST') {
+        // Try to clear a stale lock and retry; otherwise give up.
+        if (!removeStaleLock(projectPath, 'acquireLock')) {
+          return false;
+        }
+        continue;
       }
+      return false;
     }
-    return false;
   }
+  return false;
 }
 
 function releaseLock(projectPath: string): void {
@@ -313,12 +322,22 @@ async function closeHttpServer(server: http.Server, timeoutMs: number = HTTP_CLO
   });
 }
 
+/**
+ * Returns true unless we can confirm the process is gone. `process.kill(pid, 0)`
+ * throws ESRCH when the PID is not running and EPERM when it exists but the
+ * current user can't signal it — only ESRCH proves death. Anything else is
+ * treated as "still alive" to stay conservative; we'd rather refuse to clean
+ * a stale daemon.json than tear down a live daemon owned by another user.
+ */
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === 'ESRCH') return false;
+    // EPERM (or anything else) → process exists, we just lack permission.
+    return true;
   }
 }
 
@@ -439,7 +458,13 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     logger.info({ port: existingValidation.info.port, pid: existingValidation.info.pid }, 'Moe daemon already running');
     return;
   }
-  if (existing) cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
+  if (existing) {
+    const existingPid = isDaemonInfoShape(existing) ? existing.pid : null;
+    if (existingPid && !isProcessAlive(existingPid)) {
+      logger.info({ pid: existingPid }, '[lock] cleaned stale daemon.json (pid not running)');
+    }
+    cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
+  }
 
   // Acquire lock to prevent race conditions
   if (!acquireLock(projectPath)) {
@@ -457,10 +482,28 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     return;
   }
 
-  const port = await findAvailablePort(preferredPort || DEFAULT_PORT);
-  const state = new StateManager({ projectPath });
-  await state.load();
-  await state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
+  let port: number;
+  let state: StateManager;
+  try {
+    port = await findAvailablePort(preferredPort || DEFAULT_PORT);
+    state = new StateManager({ projectPath });
+    await state.load();
+    await state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
+    // Backfill missing TaskMetrics from the activity log. Idempotent — only
+    // fills fields that are currently undefined; never overwrites.
+    try {
+      const backfillResult = await backfillTaskMetrics(state);
+      if (backfillResult.backfilled > 0) {
+        logger.info({ backfilled: backfillResult.backfilled }, 'backfilled task metrics');
+      }
+    } catch (err) {
+      logger.warn({ error: err }, 'task metrics backfill failed (non-fatal)');
+    }
+  } catch (initError) {
+    logger.error({ error: initError }, 'Failed to initialize daemon');
+    releaseLock(projectPath);
+    throw initError;
+  }
 
   const startTime = Date.now();
 
@@ -543,6 +586,10 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   state.setFileWatcher(watcher);
   watcher.start();
 
+  // Optional auto-release safety net — opt-in via MOE_AUTO_RELEASE_STALE_WORKERS=1.
+  // No-op when unset, so this is purely additive.
+  const staleWatcher = startStaleWorkerWatcher(state);
+
   const info: DaemonInfo = {
     port,
     pid: process.pid,
@@ -561,6 +608,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
 
   // Guard against multiple shutdown calls
   let isShuttingDown = false;
+  let shutdownExitCode = 0;
 
   const shutdown = async () => {
     if (isShuttingDown) {
@@ -588,6 +636,12 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
       }
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
+
+    try {
+      staleWatcher.stop();
+    } catch (error) {
+      logger.error({ error }, 'Error stopping stale-worker watcher');
+    }
 
     try {
       await watcher.stop();
@@ -627,7 +681,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     }
 
     clearTimeout(forceExitTimeout);
-    process.exit(0);
+    process.exit(shutdownExitCode);
   };
 
   process.on('SIGTERM', shutdown);
@@ -636,13 +690,15 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   // Handle uncaught errors gracefully
   process.on('uncaughtException', (error) => {
     logger.fatal({ error }, 'Uncaught exception');
+    // Propagate non-zero exit through shutdown() so supervisor sees the failure.
+    shutdownExitCode = 1;
     // Safety timeout in case shutdown() hangs
     const safetyTimeout = setTimeout(() => {
       try { releaseLock(projectPath); } catch { /* best effort */ }
       process.exit(1);
     }, 5000);
     safetyTimeout.unref();
-    shutdown().then(() => process.exit(1)).catch(() => process.exit(1));
+    shutdown().catch(() => process.exit(1));
   });
 
   process.on('unhandledRejection', (reason) => {
@@ -715,7 +771,7 @@ async function superviseDaemon(projectPath: string, preferredPort?: number): Pro
       restartTimestamps.push(now);
       restartTimestamps = restartTimestamps.filter(t => now - t < SUPERVISOR_RESTART_WINDOW_MS);
 
-      if (restartTimestamps.length > SUPERVISOR_MAX_RESTARTS) {
+      if (restartTimestamps.length >= SUPERVISOR_MAX_RESTARTS) {
         logger.error(
           { restarts: restartTimestamps.length, windowMs: SUPERVISOR_RESTART_WINDOW_MS },
           'Too many restarts, supervisor giving up'
@@ -774,6 +830,10 @@ async function stopDaemon(projectPath: string): Promise<void> {
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
   if (!validation.valid || !validation.info) {
+    const pid = isDaemonInfoShape(info) ? info.pid : null;
+    if (pid && !isProcessAlive(pid)) {
+      logger.info({ pid }, '[stop] daemon.json found but pid not running; removing stale file');
+    }
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
     logger.info('Daemon not running or daemon.json is stale');
     return;
@@ -793,13 +853,19 @@ async function statusDaemon(projectPath: string): Promise<void> {
   }
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
-  logger.info({
-    status: validation.valid ? 'running' : 'stopped',
-    reason: validation.reason,
-    port: isDaemonInfoShape(info) ? info.port : undefined,
-    pid: isDaemonInfoShape(info) ? info.pid : undefined,
-    projectPath: isDaemonInfoShape(info) ? info.projectPath : undefined
-  }, 'Daemon status');
+  const pid = isDaemonInfoShape(info) ? info.pid : null;
+  const pidDead = pid !== null && !isProcessAlive(pid);
+  if (!validation.valid && pidDead) {
+    logger.info({ pid }, 'Daemon not running (stale daemon.json removed: pid dead)');
+  } else {
+    logger.info({
+      status: validation.valid ? 'running' : 'stopped',
+      reason: validation.reason,
+      port: isDaemonInfoShape(info) ? info.port : undefined,
+      pid: isDaemonInfoShape(info) ? info.pid : undefined,
+      projectPath: isDaemonInfoShape(info) ? info.projectPath : undefined
+    }, 'Daemon status');
+  }
   if (!validation.valid) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
 }
 
@@ -916,8 +982,17 @@ async function main() {
       initProject(projectPath, name);
       await superviseDaemon(projectPath, port);
       break;
+    case 'doctor': {
+      const result = await runDoctor(projectPath);
+      for (const line of result.output) {
+        // Use stdout directly — doctor output is human-readable, not structured logs.
+        process.stdout.write(line + '\n');
+      }
+      process.exit(result.exitCode);
+      break;
+    }
     default:
-      logger.info('Usage: moe-daemon [start|stop|status|init] [--project <path>] [--port <port>] [--name <name>]');
+      logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--name <name>]');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }

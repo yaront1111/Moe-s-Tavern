@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies for build)
-RUN npm ci
+RUN npm install --no-audit --no-fund
 
 # Copy source code
 COPY . .
@@ -28,7 +28,7 @@ RUN addgroup -g 1001 -S moe && \
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --omit=dev && \
+RUN npm install --no-audit --no-fund --omit=dev && \
     npm cache clean --force
 
 # Copy built files from builder

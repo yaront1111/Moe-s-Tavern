@@ -34,7 +34,7 @@ function makeWorker(id: string, overrides: Partial<Worker> = {}): Worker {
   };
 }
 
-function makeTeam(id: string, role: 'architect' | 'worker' | 'qa' | null, memberIds: string[] = []): Team {
+function makeTeam(id: string, role: 'architect' | 'worker' | 'qa' | 'governor' | null, memberIds: string[] = []): Team {
   return {
     id,
     projectId: 'proj-test',
@@ -232,14 +232,16 @@ describe('MentionRouter', () => {
     const architectTeam = makeTeam('team-arch', 'architect');
     const workerTeam = makeTeam('team-work', 'worker');
     const qaTeam = makeTeam('team-qa', 'qa');
-    const teams = [architectTeam, workerTeam, qaTeam];
+    const governorTeam = makeTeam('team-gov', 'governor');
+    const teams = [architectTeam, workerTeam, qaTeam, governorTeam];
 
     // Workers with teamIds that DON'T match their name (the key test)
     const teamWorkers = [
       makeWorker('agent-alpha', { teamId: 'team-arch' }),    // architect by team role, not by name
       makeWorker('agent-beta', { teamId: 'team-work' }),     // worker by team role, not by name
       makeWorker('agent-gamma', { teamId: 'team-qa' }),      // qa by team role, not by name
-      makeWorker('agent-delta', { teamId: null })            // no team
+      makeWorker('agent-delta', { teamId: 'team-gov' }),     // governor by team role, not by name
+      makeWorker('agent-epsilon', { teamId: null })          // no team
     ];
     const teamWorkerIds = teamWorkers.map((w) => w.id);
 
@@ -258,17 +260,29 @@ describe('MentionRouter', () => {
       expect(result).toEqual(['agent-gamma']);
     });
 
+    it('@governors resolves via team.role, not ID substring', () => {
+      const result = router.parseMentions('@governors worker is stuck', teamWorkerIds, teamWorkers, teams);
+      expect(result).toEqual(['agent-delta']);
+    });
+
+    it('@governor (singular) also resolves to the governor role', () => {
+      const result = router.parseMentions('@governor escalate this', teamWorkerIds, teamWorkers, teams);
+      expect(result).toEqual(['agent-delta']);
+    });
+
     it('falls back to ID substring when no teams exist', () => {
       const noTeamWorkers = [
         makeWorker('architect-1'),
         makeWorker('worker-1'),
-        makeWorker('qa-reviewer')
+        makeWorker('qa-reviewer'),
+        makeWorker('governor-on-call')
       ];
       const ids = noTeamWorkers.map((w) => w.id);
-      const result = router.parseMentions('@architects @workers @qa', ids, noTeamWorkers, []);
+      const result = router.parseMentions('@architects @workers @qa @governors', ids, noTeamWorkers, []);
       expect(result).toContain('architect-1');
       expect(result).toContain('worker-1');
       expect(result).toContain('qa-reviewer');
+      expect(result).toContain('governor-on-call');
     });
 
     it('route() passes teams for group mention resolution', () => {
@@ -286,6 +300,42 @@ describe('MentionRouter', () => {
       const msg = makeMessage({ sender: 'human', content: '@worker-alice hello' });
       const result = router.route(msg, []);
       expect(result.targets).toEqual([]);
+    });
+
+    it('ignores standalone @ with no identifier following', () => {
+      expect(router.parseMentions('email me @ work', workerIds)).toEqual([]);
+      expect(router.parseMentions('@', workerIds)).toEqual([]);
+      expect(router.parseMentions('@@worker-alice', workerIds)).toEqual([]);
+    });
+
+    it('does not match @ inside email-like tokens preceded by a word char', () => {
+      const result = router.parseMentions('contact yaron@worker-alice.com', workerIds);
+      expect(result).toEqual([]);
+    });
+
+    it('still matches mentions adjacent to punctuation', () => {
+      expect(router.parseMentions('(@worker-alice) ping', workerIds)).toEqual(['worker-alice']);
+      expect(router.parseMentions('hey,@worker-alice!', workerIds)).toEqual(['worker-alice']);
+    });
+
+    it('does not double-increment hop counter for repeated mentions in one message', () => {
+      const msg = makeMessage({
+        sender: 'worker-alice',
+        content: '@worker-bob @worker-bob ping'
+      });
+      const result = router.route(msg, workers);
+      expect(result.hopCount).toBe(1);
+      expect(result.targets).toEqual(['worker-bob']);
+    });
+
+    it('agent messages with no resolvable mentions do not increment hop counter', () => {
+      const msg = makeMessage({
+        sender: 'worker-alice',
+        content: '@nonexistent-worker hello'
+      });
+      const result = router.route(msg, workers);
+      expect(result.targets).toEqual([]);
+      expect(result.hopCount).toBe(0);
     });
 
     it('per-channel isolation', () => {

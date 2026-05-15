@@ -18,6 +18,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     public static readonly viewType = 'moe.board';
     private _view?: vscode.WebviewView;
     private _webviewReady = false;
+    private disposed = false;
+    private pushStateTimeout: NodeJS.Timeout | undefined;
     private readonly disposables: vscode.Disposable[] = [];
 
     constructor(
@@ -27,18 +29,21 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Listen for state changes
         this.disposables.push(
             daemonClient.onStateChanged((state) => {
+                if (this.disposed) return;
                 this.updateBoard(state);
             })
         );
 
         this.disposables.push(
             daemonClient.onConnectionChanged((status) => {
+                if (this.disposed) return;
                 this.updateConnectionStatus(status);
             })
         );
 
         this.disposables.push(
             daemonClient.onActivityLog((events) => {
+                if (this.disposed) return;
                 if (this._view && this._webviewReady) {
                     this._view.webview.postMessage({
                         type: 'activityLog',
@@ -50,6 +55,11 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     dispose(): void {
+        this.disposed = true;
+        if (this.pushStateTimeout) {
+            clearTimeout(this.pushStateTimeout);
+            this.pushStateTimeout = undefined;
+        }
         this.disposables.forEach(d => d.dispose());
         this.disposables.length = 0;
     }
@@ -66,6 +76,10 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         webviewView.onDidDispose(() => {
             this._view = undefined;
             this._webviewReady = false;
+            if (this.pushStateTimeout) {
+                clearTimeout(this.pushStateTimeout);
+                this.pushStateTimeout = undefined;
+            }
         });
 
         webviewView.onDidChangeVisibility(() => {
@@ -196,9 +210,12 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         // Set HTML after handler is registered
         webviewView.webview.html = this.getHtmlContent(webviewView.webview);
 
-        // Push current state directly — don't rely on webview sending 'ready'.
-        // Use retries to handle cases where webview JS hasn't loaded yet.
+        // Push state once now and once more after a short delay as a safety net
+        // for the case where the webview JS hasn't installed its message
+        // listener yet. Once the webview sends 'ready' it will receive a fresh
+        // snapshot, so we don't need additional retries.
         const pushState = () => {
+            if (this.disposed || !this._view) return;
             dbg(`pushState: connState=${this.daemonClient.connectionState}, hasState=${!!this.daemonClient.currentState}`);
             this.updateConnectionStatus(this.daemonClient.connectionState);
             if (this.daemonClient.currentState) {
@@ -206,9 +223,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             }
         };
         pushState();
-        setTimeout(pushState, 300);
-        setTimeout(pushState, 1000);
-        setTimeout(pushState, 3000);
+        if (this.pushStateTimeout) {
+            clearTimeout(this.pushStateTimeout);
+        }
+        this.pushStateTimeout = setTimeout(() => {
+            this.pushStateTimeout = undefined;
+            if (this._webviewReady) return;
+            pushState();
+        }, 300);
     }
 
     refresh(): void {
@@ -478,6 +500,26 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             background: #ffc107;
             color: #000;
             font-weight: bold;
+        }
+        .chip-reopen {
+            background: #ff9800;
+            color: #fff;
+        }
+        .chip-handoff {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .chip-critique {
+            background: #dc3545;
+            color: #fff;
+            font-weight: bold;
+        }
+        .task-budget {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            font-weight: normal;
+            margin-left: 4px;
+            white-space: nowrap;
         }
         .task-worker {
             display: inline-block;
@@ -927,12 +969,4 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 </html>`;
     }
 
-    private getNonce(): string {
-        let text = '';
-        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        for (let i = 0; i < 32; i++) {
-            text += possible.charAt(Math.floor(Math.random() * possible.length));
-        }
-        return text;
-    }
 }

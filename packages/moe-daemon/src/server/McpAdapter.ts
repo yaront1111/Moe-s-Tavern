@@ -143,6 +143,8 @@ export class McpAdapter {
     }
   }
 
+  // Returns null when the request (or every request in a batch) is a
+  // JSON-RPC notification — notifications have no `id` and produce no response.
   async handle(
     request: JsonRpcRequest | JsonRpcRequest[],
     options: McpHandleOptions = {}

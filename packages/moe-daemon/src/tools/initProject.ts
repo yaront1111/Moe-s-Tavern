@@ -122,8 +122,8 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
       );
       fs.writeFileSync(path.join(moePath, 'messages', `${channelId}.jsonl`), '');
 
-      // Create role-based channels: #workers, #architects, #qa
-      for (const roleName of ['workers', 'architects', 'qa']) {
+      // Create role-based channels: #workers, #architects, #qa, #governors
+      for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
         const roleChannelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
         const roleChannel = {
           id: roleChannelId,

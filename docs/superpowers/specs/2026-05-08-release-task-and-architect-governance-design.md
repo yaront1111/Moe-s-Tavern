@@ -1,8 +1,11 @@
 ---
 date: 2026-05-08
-status: approved
+status: superseded
+supersededBy: dedicated-governor-role (2026-05-15)
 authors: yaront1111
 ---
+
+> **⚠️ SUPERSEDED 2026-05-15.** The "architect governance mode" described below was replaced by a dedicated `governor` role — a separate always-on agent that owns oversight, while the architect focuses on planning only. The `moe.enter_governance` tool still exists but is now governor-only; the `isArchitectClaim → enter_governance` recommendation in `claim_next_task` was deleted. See `docs/roles/governor.md` for the current playbook. The release-task half of this spec remains in effect.
 
 # Release Task + Architect Governance Mode
 

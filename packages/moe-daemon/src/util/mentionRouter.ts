@@ -22,12 +22,15 @@ export class MentionRouter {
 
   /**
    * Parse @mentions from message content, matching against known worker IDs.
-   * Supports group mentions: @all, @architects, @workers, @qa
+   * Supports group mentions: @all, @architects, @workers, @qa, @governors
    */
   parseMentions(content: string, knownWorkerIds: string[], workers?: Worker[], teams?: Team[]): string[] {
     if (!content) return [];
 
-    const mentionRegex = /@([\w][\w-]*)/g;
+    // Match @<id> only when the @ is not preceded by another @ or a word char.
+    // This prevents emails (yaron@worker-alice.com) and "@@" injections from
+    // being parsed as mentions, while still allowing punctuation/whitespace prefixes.
+    const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
     const rawMentions: string[] = [];
     let match: RegExpExecArray | null;
     while ((match = mentionRegex.exec(content)) !== null) {
@@ -57,9 +60,24 @@ export class MentionRouter {
       if (lower === 'all') {
         // @all → all known workers
         for (const id of knownWorkerIds) result.add(id);
-      } else if (lower === 'architects' || lower === 'workers' || lower === 'qa') {
-        // Map group mention to team role
-        const targetRole = lower === 'architects' ? 'architect' : lower === 'workers' ? 'worker' : 'qa';
+      } else if (
+        lower === 'architects' ||
+        lower === 'workers' ||
+        lower === 'qa' ||
+        lower === 'governor' ||
+        lower === 'governors'
+      ) {
+        // Map group mention to team role. 'qa' is its own thing (no plural form
+        // in the schema); 'governor' / 'governors' both resolve to the governor
+        // role so users can write either.
+        const targetRole =
+          lower === 'architects'
+            ? 'architect'
+            : lower === 'workers'
+              ? 'worker'
+              : lower === 'qa'
+                ? 'qa'
+                : 'governor';
 
         // Primary: resolve by team.role lookup
         let matched = false;
@@ -72,14 +90,15 @@ export class MentionRouter {
 
         // Fallback: if no teams exist, match by ID substring (backwards compat)
         if (!matched) {
-          const searchTerm = targetRole; // 'architect', 'worker', or 'qa'
+          const searchTerm = targetRole; // 'architect', 'worker', 'qa', or 'governor'
           for (const id of knownWorkerIds) {
             if (id.toLowerCase().includes(searchTerm)) result.add(id);
           }
         }
-      } else if (knownWorkerIds.includes(mention)) {
-        // Direct worker ID mention
-        result.add(mention);
+      } else if (knownWorkerIds.includes(lower)) {
+        // Direct worker ID mention (worker IDs are stored lowercase, so
+        // match against the lower-cased candidate).
+        result.add(lower);
       }
     }
 

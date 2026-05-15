@@ -5,6 +5,10 @@ import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
 import com.intellij.openapi.diagnostic.Logger
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.channels.FileLock
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,36 +23,138 @@ object MoeProjectRegistry {
     private val log = Logger.getInstance(MoeProjectRegistry::class.java)
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
-    private fun registryFile(): File {
+    private const val LOCK_TIMEOUT_MS = 5000L
+    private const val LOCK_RETRY_DELAY_MS = 50L
+
+    private fun registryDir(): File {
         val home = System.getProperty("user.home")
         val dir = File(home, ".moe")
         if (!dir.exists()) {
             dir.mkdirs()
         }
-        return File(dir, "projects.json")
+        return dir
     }
 
-    fun listProjects(): List<MoeProjectInfo> {
+    private fun registryFile(): File {
+        return File(registryDir(), "projects.json")
+    }
+
+    private fun lockFile(): File {
+        return File(registryDir(), "projects.json.lock")
+    }
+
+    /**
+     * Acquires an exclusive cross-process file lock on projects.json.lock and runs [block].
+     * Falls back to JVM-level synchronized after the timeout so we never deadlock.
+     */
+    private fun <T> withRegistryLock(block: () -> T): T {
+        val lockTarget = lockFile()
+        try {
+            RandomAccessFile(lockTarget, "rw").use { raf ->
+                val channel = raf.channel
+                var fileLock: FileLock? = null
+                val deadline = System.currentTimeMillis() + LOCK_TIMEOUT_MS
+                while (fileLock == null && System.currentTimeMillis() < deadline) {
+                    fileLock = try {
+                        channel.tryLock()
+                    } catch (ex: Exception) {
+                        log.debug("tryLock threw, retrying: ${ex.message}")
+                        null
+                    }
+                    if (fileLock == null) {
+                        try {
+                            Thread.sleep(LOCK_RETRY_DELAY_MS)
+                        } catch (ex: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            throw ex
+                        }
+                    }
+                }
+                if (fileLock == null) {
+                    log.warn("Failed to acquire projects.json.lock within ${LOCK_TIMEOUT_MS}ms; proceeding under JVM lock only")
+                    return synchronized(MoeProjectRegistry) { block() }
+                }
+                try {
+                    return block()
+                } finally {
+                    try {
+                        fileLock.release()
+                    } catch (ex: Exception) {
+                        log.debug("Failed to release file lock: ${ex.message}")
+                    }
+                }
+            }
+        } catch (ex: InterruptedException) {
+            throw ex
+        } catch (ex: Exception) {
+            log.warn("Failed to open lock file ${lockTarget.absolutePath}, falling back to JVM lock", ex)
+            return synchronized(MoeProjectRegistry) { block() }
+        }
+    }
+
+    /** Atomically write [content] to [target] via temp file + ATOMIC_MOVE. */
+    private fun atomicWrite(target: File, content: String) {
+        val parent = target.parentFile
+        if (parent != null && !parent.exists()) {
+            parent.mkdirs()
+        }
+        val tmp = File.createTempFile("projects-", ".json.tmp", parent)
+        try {
+            tmp.writeText(content)
+            try {
+                Files.move(
+                    tmp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(
+                    tmp.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+        } finally {
+            if (tmp.exists()) {
+                try { tmp.delete() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun readProjectsRaw(): List<MoeProjectInfo> {
         val file = registryFile()
         if (!file.exists()) return emptyList()
         return try {
             val type = object : TypeToken<List<MoeProjectInfo>>() {}.type
-            val list = gson.fromJson<List<MoeProjectInfo>>(file.readText(), type) ?: emptyList()
-            list
-                .filter { File(it.path).exists() }
-                .sortedByDescending { it.lastOpenedAt }
-        } catch (_: Exception) {
+            gson.fromJson<List<MoeProjectInfo>>(file.readText(), type) ?: emptyList()
+        } catch (ex: Exception) {
+            log.debug("Failed to parse projects.json: ${ex.message}")
             emptyList()
         }
+    }
+
+    /**
+     * Lock-free read. Safe because writers use atomic rename, so readers either see
+     * the previous committed file or the new committed file — never a partial write.
+     */
+    fun listProjects(): List<MoeProjectInfo> {
+        return readProjectsRaw()
+            .filter { File(it.path).exists() }
+            .sortedByDescending { it.lastOpenedAt }
     }
 
     fun registerProject(path: String, name: String) {
         val normalized = normalizePath(path)
         val now = Instant.now().toString()
-        val existing = listProjects().filterNot { pathsEqual(it.path, normalized) }.toMutableList()
-        existing.add(MoeProjectInfo(normalized, name, now))
-        val file = registryFile()
-        file.writeText(gson.toJson(existing.sortedByDescending { it.lastOpenedAt }))
+        withRegistryLock {
+            val existing = readProjectsRaw()
+                .filterNot { pathsEqual(it.path, normalized) }
+                .toMutableList()
+            existing.add(MoeProjectInfo(normalized, name, now))
+            val sorted = existing.sortedByDescending { it.lastOpenedAt }
+            atomicWrite(registryFile(), gson.toJson(sorted))
+        }
     }
 
     private fun normalizePath(path: String): String {

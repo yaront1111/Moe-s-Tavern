@@ -781,10 +781,62 @@
             if (header) { header.classList.remove('dragging'); }
         }
 
+        function humaniseDurationMs(ms) {
+            if (ms == null) { return '-'; }
+            if (ms <= 0) { return '0s'; }
+            var totalSec = Math.floor(ms / 1000);
+            var days = Math.floor(totalSec / 86400);
+            var hours = Math.floor((totalSec % 86400) / 3600);
+            var minutes = Math.floor((totalSec % 3600) / 60);
+            var seconds = totalSec % 60;
+            if (days > 0) { return hours > 0 ? days + 'd ' + hours + 'h' : days + 'd'; }
+            if (hours > 0) { return minutes > 0 ? hours + 'h ' + minutes + 'm' : hours + 'h'; }
+            if (minutes > 0) { return (seconds > 0 && minutes < 5) ? minutes + 'm ' + seconds + 's' : minutes + 'm'; }
+            return seconds + 's';
+        }
+
+        function budgetSuffix(task) {
+            var budget = task.budget;
+            var metrics = task.metrics;
+            var capMs = budget && budget.wallClockMs;
+            var firstClaimAt = metrics && metrics.firstClaimAt;
+            if (capMs == null && !firstClaimAt) { return ''; }
+
+            var usedMs = metrics && metrics.wallClockMs;
+            if (usedMs == null && firstClaimAt) {
+                var from = Date.parse(firstClaimAt);
+                var toIso = metrics && metrics.doneAt;
+                var to = toIso ? Date.parse(toIso) : Date.now();
+                if (!isNaN(from) && !isNaN(to)) {
+                    usedMs = Math.max(0, to - from);
+                }
+            }
+            usedMs = usedMs == null ? 0 : usedMs;
+
+            var ratio = capMs && capMs > 0 ? usedMs / capMs : 0;
+            var mark = '✓';            // ✓ green
+            if (capMs == null) {
+                mark = '';
+            } else if (ratio > 1.0) {
+                mark = '✗';            // ✗ red
+            } else if (ratio >= 0.8) {
+                mark = '⚠';            // ⚠ yellow
+            }
+            var text = capMs != null
+                ? humaniseDurationMs(usedMs) + '/' + humaniseDurationMs(capMs)
+                : humaniseDurationMs(usedMs);
+            var label = '[' + text + (mark ? ' ' + mark : '') + ']';
+            var tooltip = capMs != null
+                ? 'Budget: used ' + humaniseDurationMs(usedMs) + ' of ' + humaniseDurationMs(capMs)
+                : 'Wall-clock: ' + humaniseDurationMs(usedMs);
+            return '  <span class="task-budget" title="' + escapeHtml(tooltip) + '">' + escapeHtml(label) + '</span>';
+        }
+
         function renderTaskCard(task, epics, columnStatus) {
             const taskId = escapeHtml(task.id);
             const titleText = escapeHtml(task.title || '');
             const taskStatus = escapeHtml(task.status || '');
+            const budgetHtml = budgetSuffix(task);
 
             // Description preview (first ~120 chars)
             let descHtml = '';
@@ -843,6 +895,26 @@
                 chips += '<span class="chip chip-question" title="Pending question">?</span>';
             }
 
+            // Reopen badge
+            var reopenCount = (task.metrics && task.metrics.reopenCount != null)
+                ? task.metrics.reopenCount
+                : (task.reopenCount || 0);
+            if (reopenCount > 0) {
+                chips += '<span class="chip chip-reopen" title="Reopened ' + reopenCount + ' time(s)">↻ ' + reopenCount + '</span>';
+            }
+
+            // Prior handoff badge
+            var handoffCount = (task.priorHandoffs && task.priorHandoffs.length) || 0;
+            if (handoffCount > 0) {
+                chips += '<span class="chip chip-handoff" title="' + handoffCount + ' prior hand-off(s)">🤝 ' + handoffCount + '</span>';
+            }
+
+            // Plan critique blocked
+            if (task.planCritiqueResult && task.planCritiqueResult.verdict === 'block') {
+                var concerns = (task.planCritiqueResult.concerns || []).join('; ');
+                chips += '<span class="chip chip-critique" title="' + escapeHtml(concerns || 'Plan critique blocked') + '">⚠ critique blocked</span>';
+            }
+
             // Task ID chip (last 4 chars uppercase)
             if (task.id) {
                 const idShort = task.id.slice(-4).toUpperCase();
@@ -878,7 +950,7 @@
                      data-status="${taskStatus}"
                      data-drag="task">
                     <div class="task-title-row">
-                        <div class="task-title">${titleText}</div>
+                        <div class="task-title">${titleText}${budgetHtml}</div>
                         ${navHtml}
                     </div>
                     ${descHtml}

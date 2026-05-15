@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'custom';
-export type AgentRole = 'architect' | 'worker' | 'qa';
+export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 interface ResolvedScript {
     scriptPath: string;
@@ -14,6 +14,7 @@ const TERMINAL_NAMES: Record<AgentRole, string> = {
     architect: 'Moe Planner',
     worker: 'Moe Coder',
     qa: 'Moe QA',
+    governor: 'Moe Governor',
 };
 
 /**
@@ -84,13 +85,23 @@ function resolveAgentScript(
     return null;
 }
 
-function randomHex4(): string {
+function randomHex8(): string {
     const chars = '0123456789abcdef';
     let result = '';
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
         result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return result;
+}
+
+// Escape for a PowerShell single-quoted string: double any embedded single quote.
+function psQuote(value: string): string {
+    return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+// Escape for a Bash single-quoted string: close, insert escaped quote, reopen.
+function shQuote(value: string): string {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 function buildPowerShellCommand(
@@ -105,18 +116,19 @@ function buildPowerShellCommand(
     let prefix = '';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {
-            prefix += `$env:${key}='${value}'; `;
+            prefix += `$env:${key}=${psQuote(value)}; `;
         }
     }
 
-    let cmd = `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -Command "& '${scriptPath}' -Role ${role} -Project '${workspacePath}' -WorkerId '${workerId}' -Command '${command}'"`;
+    // Role is restricted by the AgentRole type so no quoting needed.
+    const inner =
+        `& ${psQuote(scriptPath)} -Role ${role} -Project ${psQuote(workspacePath)} ` +
+        `-WorkerId ${psQuote(workerId)} -Command ${psQuote(command)}` +
+        (teamName ? ` -Team ${psQuote(teamName)}` : '');
 
-    if (teamName) {
-        // Insert -Team before the closing quote
-        cmd = `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -Command "& '${scriptPath}' -Role ${role} -Project '${workspacePath}' -WorkerId '${workerId}' -Command '${command}' -Team '${teamName}'"`;
-    }
-
-    return cmd;
+    // Outer -Command argument is wrapped in double quotes; inner single-quoted
+    // strings cannot break out of those double quotes.
+    return `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -Command "${inner}"`;
 }
 
 function buildBashCommand(
@@ -131,14 +143,16 @@ function buildBashCommand(
     let prefix = '';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {
-            prefix += `${key}='${value}' `;
+            prefix += `${key}=${shQuote(value)} `;
         }
     }
 
-    let cmd = `${prefix}bash '${scriptPath}' --role ${role} --project '${workspacePath}' --worker-id '${workerId}' --command '${command}'`;
+    let cmd =
+        `${prefix}bash ${shQuote(scriptPath)} --role ${role} --project ${shQuote(workspacePath)} ` +
+        `--worker-id ${shQuote(workerId)} --command ${shQuote(command)}`;
 
     if (teamName) {
-        cmd += ` --team '${teamName}'`;
+        cmd += ` --team ${shQuote(teamName)}`;
     }
 
     return cmd;
@@ -169,7 +183,7 @@ export function launchAgent(
             return;
         }
 
-        const workerId = `${role}-${randomHex4()}`;
+        const workerId = `${role}-${randomHex8()}`;
 
         let command: string;
         if (provider === 'custom') {
@@ -221,7 +235,7 @@ export function launchAgent(
 }
 
 /**
- * Launch all three Moe agents (architect, worker, qa) with staggered starts.
+ * Launch all Moe agents (architect, worker, qa, governor) with staggered starts.
  */
 export function launchAllAgents(
     provider: AgentProvider,
@@ -235,4 +249,7 @@ export function launchAllAgents(
     setTimeout(() => {
         launchAgent('qa', provider, extensionPath, options);
     }, 3000);
+    setTimeout(() => {
+        launchAgent('governor', provider, extensionPath, options);
+    }, 4500);
 }

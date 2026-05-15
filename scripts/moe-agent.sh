@@ -133,6 +133,7 @@ LOOP_REQUESTED=false
 TEAM=""
 CODEX_EXEC=false
 GEMINI_EXEC=false
+INTERACTIVE_REQUESTED=""
 MODEL=""
 
 # Parse arguments
@@ -194,6 +195,14 @@ while [[ $# -gt 0 ]]; do
             GEMINI_EXEC=true
             shift
             ;;
+        --interactive)
+            INTERACTIVE_REQUESTED=true
+            shift
+            ;;
+        --no-interactive)
+            INTERACTIVE_REQUESTED=false
+            shift
+            ;;
         --model)
             MODEL="$2"
             shift 2
@@ -218,6 +227,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
+            echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
+            echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
             echo "  --model MODEL            Claude model override (defaults: architect=opus-4-7, worker/qa=sonnet-4-6)"
             echo "  --help, -h               Show this help"
             echo ""
@@ -242,15 +253,62 @@ if [ "$LOOP_REQUESTED" = true ] && [ "$NO_LOOP" = true ]; then
 fi
 
 # Validate role
-if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
+if [[ ! "$ROLE" =~ ^(architect|worker|qa|governor)$ ]]; then
     echo -e "${RED}Invalid role: $ROLE${NC}"
-    echo "Valid roles: architect, worker, qa"
+    echo "Valid roles: architect, worker, qa, governor"
     exit 1
 fi
 
-# Detect CLI type from command name
+# Detect CLI type from command name. Parse $COMMAND once into a binary + argv array so quoted multi-word paths
+# (e.g. "C:\Program Files\claude\claude.exe") AND inline args
+# (e.g. "claude --foo") both round-trip correctly. The previous
+# `${COMMAND%% *}` would split the first space, mangling either case.
+COMMAND_BIN=""
+COMMAND_ARGV=()
+parse_command_into_argv() {
+    local line="$1"
+    local python_bin="${PYTHON_CMD:-python3}"
+    if command -v "$python_bin" &> /dev/null; then
+        # NUL-separated so argv elements containing whitespace survive read.
+        local parsed
+        parsed=$("$python_bin" -c 'import shlex,sys
+for t in shlex.split(sys.argv[1], posix=True):
+    sys.stdout.write(t + "\0")' "$line" 2>/dev/null) || return 1
+        COMMAND_ARGV=()
+        while IFS= read -r -d "" tok; do
+            COMMAND_ARGV+=("$tok")
+        done <<< "$parsed"
+        COMMAND_BIN="${COMMAND_ARGV[0]:-}"
+        if [ ${#COMMAND_ARGV[@]} -gt 0 ]; then
+            COMMAND_ARGV=("${COMMAND_ARGV[@]:1}")
+        fi
+        return 0
+    fi
+    # Fallback if python is unavailable. Strip one layer of surrounding quotes
+    # and treat the rest as a single binary path (no extra args). Good enough
+    # for the dominant case (`claude` / `codex` / a single quoted path).
+    local stripped="$line"
+    stripped="${stripped#\"}"
+    stripped="${stripped%\"}"
+    stripped="${stripped#\'}"
+    stripped="${stripped%\'}"
+    COMMAND_BIN="$stripped"
+    COMMAND_ARGV=()
+    return 0
+}
+parse_command_first_token() {
+    # Convenience wrapper that returns just the first token. Used during
+    # CLI-type detection before find_python has fully run (the function above
+    # tolerates a missing PYTHON_CMD but is overkill for that path).
+    parse_command_into_argv "$1"
+    printf '%s\n' "$COMMAND_BIN"
+}
+
 CLI_TYPE="claude"
-CMD_BASE=$(basename "${COMMAND%% *}")
+CMD_FIRST=$(parse_command_first_token "$COMMAND")
+CMD_BASE=$(basename "$CMD_FIRST")
+# Strip Windows extension so `claude.exe` / `codex.cmd` etc. still match.
+CMD_BASE="${CMD_BASE%.*}"
 if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
 elif [ "$CMD_BASE" = "gemini" ]; then
@@ -263,6 +321,25 @@ fi
 GEMINI_INTERACTIVE=false
 if [ "$CLI_TYPE" = "gemini" ] && [ "$GEMINI_EXEC" = false ]; then
     GEMINI_INTERACTIVE=true
+fi
+
+# Resolve final INTERACTIVE: explicit --interactive / --no-interactive wins,
+# otherwise architect + governor default to true (planning is a conversation,
+# governance is interactive oversight), worker and qa default to false. Note:
+# the bash sibling does not yet implement a --print stream-json fallback the
+# way moe-agent.ps1 does, so on bash today Claude always runs in TUI regardless
+# of this flag. The flag is wired up for forward parity and to keep the
+# loop-decoupling logic symmetric.
+if [ -n "$INTERACTIVE_REQUESTED" ]; then
+    INTERACTIVE="$INTERACTIVE_REQUESTED"
+elif [ "$ROLE" = "architect" ] || [ "$ROLE" = "governor" ]; then
+    INTERACTIVE=true
+else
+    INTERACTIVE=false
+fi
+CLAUDE_INTERACTIVE=false
+if [ "$CLI_TYPE" = "claude" ] && [ "$INTERACTIVE" = true ]; then
+    CLAUDE_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -317,6 +394,11 @@ if [ -z "$PYTHON_CMD" ]; then
     exit 1
 fi
 echo -e "${GREEN}[OK]${NC} Using python3: $PYTHON_CMD"
+
+# Re-parse $COMMAND now that PYTHON_CMD is resolved, so quoted paths and
+# inline args are split correctly via shlex (the initial parse during
+# CLI-type detection may have hit the no-python fallback).
+parse_command_into_argv "$COMMAND"
 
 # Read install path from ~/.moe/config.json
 get_moe_install_path() {
@@ -384,18 +466,19 @@ fi
 # Resolve project path
 if [ -z "$PROJECT" ]; then
     if [ -n "$PROJECT_NAME" ]; then
-        # Look up in registry
+        # Look up in registry. Pass PROJECT_NAME via argv to prevent shell->python
+        # injection if the name contains single quotes or backslashes.
         registry=$(load_registry)
         PROJECT=$(echo "$registry" | $PYTHON_CMD -c "
 import json, sys
 data = json.load(sys.stdin)
-name = '$PROJECT_NAME'
+name = sys.argv[1]
 for p in data:
     if p.get('name') == name:
         print(p.get('path', ''))
         sys.exit(0)
 sys.exit(1)
-" 2>/dev/null)
+" "$PROJECT_NAME" 2>/dev/null)
         if [ -z "$PROJECT" ]; then
             echo -e "${RED}Project not found in registry: $PROJECT_NAME${NC}"
             echo "Use --list-projects to see registered projects."
@@ -432,7 +515,9 @@ fi
 # Set environment variables
 export MOE_PROJECT_PATH="$PROJECT"
 if [ -z "$WORKER_ID" ]; then
-    SHORT_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 4)
+    # 8 hex chars (~4 billion space) -- 4 chars (~65K space) collided under
+    # simultaneous multi-agent launches from JetBrains.
+    SHORT_ID=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 8)
     WORKER_ID="${ROLE}-${SHORT_ID}"
 fi
 export MOE_WORKER_ID="$WORKER_ID"
@@ -841,6 +926,7 @@ if [ -z "$TEAM" ]; then
         architect) TEAM="Architects" ;;
         worker)    TEAM="Workers" ;;
         qa)        TEAM="QA" ;;
+        governor)  TEAM="Governors" ;;
     esac
 fi
 if [ -n "$TEAM" ]; then
@@ -918,6 +1004,12 @@ case $ROLE in
     qa)
         STATUSES='["REVIEW"]'
         ;;
+    governor)
+        # Governor does NOT claim tasks via statuses -- uses enter_governance
+        # in the preflight section below. Empty array keeps CLAIM_JSON
+        # well-defined for legacy/fallback prompt branches.
+        STATUSES='[]'
+        ;;
 esac
 
 echo ""
@@ -994,10 +1086,14 @@ except Exception:
 " "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
 fi
 if [ -z "$RESOLVED_MODEL" ]; then
+    # All roles default to Opus 4.7 -- matches moe-agent.ps1. The projects this
+    # wrapper runs against are large, deeply-coupled stacks where the
+    # planning/review/implementation quality difference dominates the per-token
+    # cost difference. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
         architect) RESOLVED_MODEL="claude-opus-4-7" ;;
-        worker)    RESOLVED_MODEL="claude-sonnet-4-6" ;;
-        qa)        RESOLVED_MODEL="claude-sonnet-4-6" ;;
+        worker)    RESOLVED_MODEL="claude-opus-4-7" ;;
+        qa)        RESOLVED_MODEL="claude-opus-4-7" ;;
     esac
 fi
 if [ -n "$RESOLVED_MODEL" ]; then
@@ -1052,10 +1148,16 @@ if [ "$NO_LOOP" = true ]; then
 fi
 
 if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ]; then
+    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+    # would just respawn the same TUI on top of the previous one. Claude's
+    # interactive mode is fine to loop: each iteration spawns a fresh CLI
+    # invocation, so per-task cache replay matches --print mode.
     LOOP_ENABLED=false
     if [ "$NO_LOOP" = false ]; then
         echo "Interactive mode: polling disabled"
     fi
+elif [ "$CLAUDE_INTERACTIVE" = true ] && [ "$LOOP_ENABLED" = true ]; then
+    echo "Claude interactive mode: polling enabled (each task spawns a fresh TUI)"
 fi
 
 if [ "$LOOP_ENABLED" = true ]; then
@@ -1223,8 +1325,24 @@ except Exception:
         # 3. Check pending questions
         PREFLIGHT_PENDING=$(moe_rpc get_pending_questions "{}" 2>/dev/null || echo "")
 
-        # 4. Claim next task (auto-registers the worker)
-        CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+        # 4. Claim next task (auto-registers the worker).
+        # Governors do NOT claim tasks. They enter governance mode once per
+        # session and then live in chat_wait / mention loops. See
+        # docs/roles/governor.md -- claim_next_task would reject the governor
+        # workerId and is semantically wrong here. Synthesize a hasNext:false
+        # claim result so downstream code routes through the no-task banner
+        # (which the role doc remaps to the chat_wait loop).
+        if [ "$ROLE" = "governor" ]; then
+            GOV_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1]}))" "$WORKER_ID" 2>/dev/null || echo "{}")
+            if moe_rpc enter_governance "$GOV_ARGS" > /dev/null 2>&1; then
+                echo -e "${GREEN}[OK]${NC} Entered governance mode as $WORKER_ID."
+            else
+                echo -e "${YELLOW}[WARN]${NC} enter_governance failed -- continuing; agent can retry from inside the CLI."
+            fi
+            CLAIM_RESULT='{"hasNext":false}'
+        else
+            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+        fi
         if [ -n "$CLAIM_RESULT" ]; then
             HAS_NEXT=$($PYTHON_CMD -c "
 import json, sys
@@ -1404,6 +1522,7 @@ except Exception:
                 architect) ROLE_GROUP_TAG="architects" ;;
                 worker)    ROLE_GROUP_TAG="workers" ;;
                 qa)        ROLE_GROUP_TAG="qa" ;;
+                governor)  ROLE_GROUP_TAG="governors" ;;
             esac
             MENTIONS_RESULT=$(PREFLIGHT_GENERAL_UNREAD="$PREFLIGHT_GENERAL_UNREAD" \
                               PREFLIGHT_TASK_UNREAD="$PREFLIGHT_TASK_UNREAD" \
@@ -1468,6 +1587,9 @@ PYEOF
             ;;
         qa)
             ROLE_STATUS_DESC="You handle tasks in REVIEW status (the REVIEW column on the board)."
+            ;;
+        governor)
+            ROLE_STATUS_DESC="You govern in-flight work via moe.enter_governance + chat_wait. You do NOT claim tasks."
             ;;
     esac
     SYSTEM_APPEND="Role: $ROLE. $ROLE_STATUS_DESC Always use Moe MCP tools."
@@ -1639,6 +1761,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
                     PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
             esac
+        elif [ "$ROLE" = "governor" ]; then
+            # Governor: enter_governance was already invoked in the preflight
+            # short-circuit. Now subscribe to #governors and #general via
+            # chat_wait — never call claim_next_task.
+            PROMPT_BODY="You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. Loop forever. Do NOT call moe.claim_next_task."
         elif [ "$PREFLIGHT_NO_TASK" = true ]; then
             PROMPT_BODY="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
         else
@@ -1669,8 +1796,8 @@ $PROMPT_BODY"
 
     if [ "$CLI_TYPE" = "codex" ]; then
         # Check codex is available
-        if ! command -v "$COMMAND" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Codex command not found: $COMMAND. Install codex CLI first."
+        if ! command -v "$COMMAND_BIN" &> /dev/null; then
+            echo -e "${RED}[ERROR]${NC} Codex command not found: $COMMAND_BIN. Install codex CLI first."
             exit 1
         fi
 
@@ -1711,10 +1838,10 @@ $PROMPT_BODY"
             # Non-interactive exec mode
             echo -e "Starting Codex (exec, headless)..."
             echo ""
-            echo "Command: $COMMAND exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
             set +e
 
-            $COMMAND exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -1723,10 +1850,10 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"$PROJECT\" \"<prompt>\""
             set +e
 
-            $COMMAND -C "$PROJECT" "$SHORT_PROMPT"
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "$PROJECT" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -1734,8 +1861,8 @@ $PROMPT_BODY"
         fi
     elif [ "$CLI_TYPE" = "gemini" ]; then
         # Check gemini is available
-        if ! command -v "$COMMAND" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Gemini command not found: $COMMAND. Install Gemini CLI first (npm install -g @anthropic-ai/gemini-cli or see https://github.com/google-gemini/gemini-cli)."
+        if ! command -v "$COMMAND_BIN" &> /dev/null; then
+            echo -e "${RED}[ERROR]${NC} Gemini command not found: $COMMAND_BIN. Install Gemini CLI first (npm install -g @anthropic-ai/gemini-cli or see https://github.com/google-gemini/gemini-cli)."
             exit 1
         fi
 
@@ -1774,10 +1901,10 @@ $PROMPT_BODY"
             # Non-interactive headless mode
             echo -e "Starting Gemini (headless, --yolo)..."
             echo ""
-            echo "Command: $COMMAND --prompt \"<prompt>\" --yolo"
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt \"<prompt>\" --yolo"
             set +e
 
-            (cd "$PROJECT" && $COMMAND --prompt "$SHORT_PROMPT" --yolo)
+            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt "$SHORT_PROMPT" --yolo)
 
             CLI_EXIT_CODE=$?
 
@@ -1786,10 +1913,10 @@ $PROMPT_BODY"
             # Interactive mode
             echo "Starting Gemini (interactive)..."
             echo ""
-            echo "Command: $COMMAND --prompt-interactive \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-interactive \"<prompt>\""
             set +e
 
-            (cd "$PROJECT" && $COMMAND --prompt-interactive "$SHORT_PROMPT")
+            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -1824,12 +1951,26 @@ $PROMPT_BODY"
             MODEL_ARGS=(--model "$RESOLVED_MODEL")
         fi
 
+        # Prompt-cache stability. The default Claude Code system prompt bakes
+        # in per-launch / per-machine sections (cwd, env info, memory paths,
+        # git status) AHEAD of our --append-system-prompt-file content, so
+        # the volatile bits sit at the front of the prefix and invalidate the
+        # cache on every launch. This flag moves them into the first user
+        # message, leaving the stable default system prompt + our role /
+        # CLAUDE.md / skills as a contiguous cacheable prefix. Safe with
+        # --append-system-prompt-file (only ignored if --system-prompt is
+        # set, which we never pass). Opt out via MOE_NO_DYNAMIC_PROMPT_EXCLUDE=1.
+        CACHE_ARGS=()
+        if [ "$CLI_TYPE" = "claude" ] && [ -z "${MOE_NO_DYNAMIC_PROMPT_EXCLUDE:-}" ]; then
+            CACHE_ARGS=(--exclude-dynamic-system-prompt-sections)
+        fi
+
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""
             set +e
 
-            (cd "$PROJECT" && "$COMMAND" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max "$PROMPT")
+            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "$PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -1837,7 +1978,7 @@ $PROMPT_BODY"
         else
             set +e
 
-            (cd "$PROJECT" && "$COMMAND" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max)
+            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)
 
             CLI_EXIT_CODE=$?
 

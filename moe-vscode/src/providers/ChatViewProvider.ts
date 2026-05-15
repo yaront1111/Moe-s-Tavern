@@ -8,6 +8,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     private _view?: vscode.WebviewView;
     private _webviewReady = false;
     private readonly disposables: vscode.Disposable[] = [];
+    private viewDisposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly extensionUri: vscode.Uri,
@@ -104,6 +105,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     dispose(): void {
         this.disposables.forEach(d => d.dispose());
         this.disposables.length = 0;
+        this.viewDisposables.forEach(d => d.dispose());
+        this.viewDisposables.length = 0;
     }
 
     resolveWebviewView(
@@ -111,17 +114,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         _context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken
     ): void {
+        // Release any listeners from a prior view to avoid leaking handlers
+        // when the webview is re-resolved (visibility toggle, reload).
+        this.viewDisposables.forEach(d => d.dispose());
+        this.viewDisposables = [];
+
         this._view = webviewView;
         this._webviewReady = false;
 
-        this.disposables.push(
+        this.viewDisposables.push(
             webviewView.onDidDispose(() => {
                 this._view = undefined;
                 this._webviewReady = false;
             })
         );
 
-        this.disposables.push(
+        this.viewDisposables.push(
             webviewView.onDidChangeVisibility(() => {
                 if (webviewView.visible && this._webviewReady) {
                     this.postToWebview({ type: 'updateConnection', status: this.daemonClient.connectionState });
@@ -138,7 +146,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         };
 
         // Register message handler BEFORE setting HTML to avoid race condition
-        this.disposables.push(
+        this.viewDisposables.push(
             webviewView.webview.onDidReceiveMessage((message) => {
                 this.handleWebviewMessage(message);
             })
@@ -679,12 +687,4 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 </html>`;
     }
 
-    private getNonce(): string {
-        let text = '';
-        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        for (let i = 0; i < 32; i++) {
-            text += possible.charAt(Math.floor(Math.random() * possible.length));
-        }
-        return text;
-    }
 }

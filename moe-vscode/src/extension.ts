@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
+import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { MoeDaemonClient } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
@@ -40,6 +41,15 @@ export function activate(context: vscode.ExtensionContext) {
     const chatProvider = new ChatViewProvider(context.extensionUri, daemonClient);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('moe.chat', chatProvider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
+
+    // Initialize metrics view provider
+    const metricsProvider = new MetricsViewProvider(context.extensionUri, daemonClient);
+    context.subscriptions.push(metricsProvider);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('moe.metrics', metricsProvider, {
             webviewOptions: { retainContextWhenHidden: true }
         })
     );
@@ -290,6 +300,7 @@ export function activate(context: vscode.ExtensionContext) {
                     { label: 'Start Architect', role: 'architect' as AgentRole },
                     { label: 'Start Worker', role: 'worker' as AgentRole },
                     { label: 'Start QA', role: 'qa' as AgentRole },
+                    { label: 'Start Governor', role: 'governor' as AgentRole },
                 ];
 
                 const selected = await vscode.window.showQuickPick(items, {
@@ -339,7 +350,7 @@ export function activate(context: vscode.ExtensionContext) {
                     customCommand: providerChoice.customCommand,
                     teamName,
                 });
-                vscode.window.showInformationMessage('Starting all agents (architect, worker, qa)...');
+                vscode.window.showInformationMessage('Starting all agents (architect, worker, qa, governor)...');
             } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 vscode.window.showErrorMessage(`Failed to start agents: ${errMsg}`);
@@ -354,7 +365,9 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             daemonClient.requestActivityLog(50);
+            let timeoutHandle: NodeJS.Timeout | undefined;
             const disposable = daemonClient.onActivityLog((events) => {
+                if (timeoutHandle) { clearTimeout(timeoutHandle); }
                 disposable.dispose();
                 const lines = events.map(e => {
                     const ts = new Date(e.timestamp).toLocaleTimeString();
@@ -367,6 +380,11 @@ export function activate(context: vscode.ExtensionContext) {
                     (textDoc) => vscode.window.showTextDocument(textDoc, { preview: true })
                 );
             });
+            // Bail if the daemon never replies — avoid leaking the listener.
+            timeoutHandle = setTimeout(() => {
+                disposable.dispose();
+                vscode.window.showWarningMessage('Activity log request timed out.');
+            }, 10000);
         })
     );
 

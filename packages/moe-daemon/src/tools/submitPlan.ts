@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
@@ -55,6 +56,14 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
           },
           additionalProperties: false
+        },
+        budget: {
+          type: 'object',
+          description: 'Soft wall-clock budget (first-claim → DONE). Daemon warns at 80% and escalates at 100% in #governors.',
+          properties: {
+            wallClockMs: { type: 'number', description: 'Soft cap in milliseconds; must be > 0' }
+          },
+          additionalProperties: false
         }
       },
       required: ['taskId', 'steps'],
@@ -71,6 +80,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           risks?: string;
           keyFiles?: string[];
         };
+        budget?: { wallClockMs?: number };
       };
 
       const task = state.getTask(params.taskId);
@@ -92,7 +102,11 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         throw invalidInput('steps', 'maximum 100 steps allowed');
       }
 
-      // Validate each step has a non-empty description
+      // Validate each step has a non-empty description + normalize affectedFiles.
+      // Normalization happens up-front (before rails check) so the rail-text
+      // built below sees canonical paths and the persisted plan matches what
+      // the collision detector compares against.
+      const normalizedSteps: { description: string; affectedFiles: string[] }[] = [];
       for (let i = 0; i < params.steps.length; i++) {
         const step = params.steps[i];
         if (!step.description || typeof step.description !== 'string' || step.description.trim().length === 0) {
@@ -101,17 +115,25 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (step.description.length > 2000) {
           throw invalidInput('steps', `Step ${i + 1} description too long (max 2000 chars)`);
         }
+        if (step.affectedFiles !== undefined && !Array.isArray(step.affectedFiles)) {
+          throw invalidInput('steps', `Step ${i + 1} affectedFiles must be a string[]`);
+        }
         if (step.affectedFiles && step.affectedFiles.length > 50) {
           throw invalidInput('steps', `Step ${i + 1} has too many affected files (max 50)`);
         }
+        const normalizedFiles = normalizeAffectedFiles(
+          step.affectedFiles,
+          `steps[${i}].affectedFiles`
+        );
+        normalizedSteps.push({ description: step.description, affectedFiles: normalizedFiles });
       }
 
       const epic = state.getEpic(task.epicId);
       const project = state.project;
       if (!project) throw notFound('Project', 'current');
 
-      const planText = params.steps
-        .map((step) => `${step.description} ${(step.affectedFiles || []).join(' ')}`)
+      const planText = normalizedSteps
+        .map((step) => `${step.description} ${step.affectedFiles.join(' ')}`)
         .join(' ');
 
       const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
@@ -141,17 +163,23 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         );
       }
 
-      const implementationPlan = params.steps.map((step, idx) => ({
+      const implementationPlan = normalizedSteps.map((step, idx) => ({
         stepId: `step-${idx + 1}`,
         description: step.description,
         status: 'PENDING' as const,
-        affectedFiles: step.affectedFiles || []
+        affectedFiles: step.affectedFiles
       }));
+
+      // Carry forward existing metrics (firstClaimAt populated by claim path)
+      // but refresh plannedStepCount whenever a new plan lands.
+      const existingMetrics = task.metrics ?? {};
+      const updatedMetrics = { ...existingMetrics, plannedStepCount: implementationPlan.length };
 
       const updatePayload: Record<string, unknown> = {
         implementationPlan,
         status: 'AWAITING_APPROVAL',
         planSubmittedAt: new Date().toISOString(),
+        metrics: updatedMetrics,
       };
       if (params.planningNotes) {
         updatePayload.planningNotes = {
@@ -159,6 +187,16 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           codebaseInsights: params.planningNotes.codebaseInsights?.slice(0, 5000),
           risks: params.planningNotes.risks?.slice(0, 5000),
           keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
+        };
+      }
+      if (params.budget && typeof params.budget.wallClockMs === 'number') {
+        if (!Number.isFinite(params.budget.wallClockMs) || params.budget.wallClockMs <= 0) {
+          throw invalidInput('budget.wallClockMs', 'must be a positive number of milliseconds');
+        }
+        // Preserve existing warn/escalate marks if architect resubmits a plan.
+        updatePayload.budget = {
+          ...(task.budget ?? {}),
+          wallClockMs: params.budget.wallClockMs,
         };
       }
 
@@ -178,15 +216,23 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         finalStatus = 'WORKING';
         message = 'Plan auto-approved (TURBO mode). Ready to work.';
       } else if (approvalMode === 'SPEED') {
-        // Delayed auto-approval
+        // Delayed auto-approval. Run the status re-check inside the state
+        // mutex (via approveTask) to avoid a TOCTOU race with concurrent
+        // manual approve/reject calls.
         const delayMs = project.settings.speedModeDelayMs || 2000;
         const timeoutId = setTimeout(async () => {
           try {
-            const currentTask = state.getTask(task.id);
-            // Only auto-approve if still in AWAITING_APPROVAL (not manually rejected/approved)
-            if (currentTask && currentTask.status === 'AWAITING_APPROVAL') {
-              await state.updateTask(task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_AUTO_APPROVED');
-            }
+            // approveTask acquires the StateManager mutex and re-checks that
+            // status === 'AWAITING_APPROVAL' inside the locked section.
+            await state.runExclusive(async () => {
+              const currentTask = state.getTask(task.id);
+              if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
+              await state.updateTask(
+                task.id,
+                { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+                'PLAN_AUTO_APPROVED'
+              );
+            });
           } catch (error) {
             // Log error via activity log so task doesn't get stuck silently
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -206,6 +252,46 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       try {
         await state.postSystemMessage(task.id, `Implementation plan submitted (${implementationPlan.length} steps)`);
       } catch { /* never block tool */ }
+
+      // CONTROL mode: post a structured critique request to #governors so a
+      // governor can flag concerns before the human approves. Informational
+      // — does not change approve semantics, does not block plan flow.
+      if (approvalMode === 'CONTROL') {
+        try {
+          const dodList = (task.definitionOfDone || []).slice(0, 5);
+          const dodSummary = dodList.length > 0
+            ? dodList.map((d) => `• ${d.slice(0, 120)}`).join('\n')
+            : '(no DoD items)';
+          const summary = `📋 Plan ready for critique — ${task.title} (${task.id})\n`
+            + `Steps: ${implementationPlan.length}\n`
+            + `DoD:\n${dodSummary}\n`
+            + `Call moe.submit_plan_critique { taskId: "${task.id}", verdict: "pass" | "block", concerns? } to weigh in.`;
+          await state.postToRoleChannel('governors', summary);
+        } catch { /* never block tool */ }
+        // Set pendingPlanCritique if at least one governor is online so
+        // downstream consumers (UI, get_handoff_history, etc.) can see the
+        // task is parked awaiting critique. Active = registered with team
+        // role 'governor'. We use a separate update to avoid clobbering the
+        // status transition's worker-clearing logic.
+        try {
+          const governors: string[] = [];
+          for (const team of state.teams.values()) {
+            if (team.role !== 'governor') continue;
+            for (const memberId of team.memberIds) {
+              const w = state.getWorker(memberId);
+              if (w) governors.push(memberId);
+            }
+          }
+          if (governors.length > 0) {
+            await state.updateTask(task.id, {
+              pendingPlanCritique: {
+                criticWorkerId: governors[0],
+                requestedAt: new Date().toISOString(),
+              },
+            });
+          }
+        } catch { /* never block tool */ }
+      }
 
       // If plan is already active (TURBO), tell the architect the next move
       // is session summary — they're done. Otherwise point them at check_approval.

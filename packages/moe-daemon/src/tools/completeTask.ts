@@ -31,8 +31,9 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       assertWorkerOwns(task, params.workerId);
       assertAllStepsCompleted(task);
 
-      // Update worker to IDLE before status change (which clears assignedWorkerId).
-      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'IDLE', currentTaskId: null });
+      // Capture the worker to IDLE *after* the task update so a failed updateTask
+      // doesn't leave the worker idle while the task is still WORKING (half-applied state).
+      const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       const now = new Date().toISOString();
       const updated = await state.updateTask(
@@ -40,6 +41,10 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         { status: 'REVIEW', prLink: params.prLink || task.prLink, completedAt: now, reviewStartedAt: now },
         'TASK_COMPLETED'
       );
+
+      // updateTask clears assignedWorkerId on WORKING -> REVIEW handoff; touchWorker
+      // skips missing worker records and never blocks a successfully completed task.
+      await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
 
       if (params.prLink) {
         state.appendActivity('PR_OPENED', { prLink: params.prLink }, updated);

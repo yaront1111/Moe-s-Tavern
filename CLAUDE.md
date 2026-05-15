@@ -37,6 +37,8 @@ node packages/moe-proxy/dist/index.js          # MCP stdio bridge
 - Daemon is the sole writer of `.moe/`. Never edit those files by hand — go through MCP tools.
 - Run `npm test` in `packages/moe-daemon` after touching daemon code.
 - Workers tend to over-index on VS Code; push back and prioritize JetBrains parity.
+- Stale-worker auto-release safety net: set `MOE_AUTO_RELEASE_STALE_WORKERS=1` to enable, `MOE_AUTO_RELEASE_DRY_RUN=1` to log without mutating. Off by default.
+- `node packages/moe-daemon/dist/index.js doctor --project <path>` runs a local health check (exit 0 on green).
 
 ## Reference
 

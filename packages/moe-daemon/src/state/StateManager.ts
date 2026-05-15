@@ -50,6 +50,7 @@ import {
   validateEntityId
 } from '../util/sanitize.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
+import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
 import { MemoryManager } from '../knowledge/MemoryManager.js';
 import { resolveMemorySettings } from '../util/memorySettings.js';
 
@@ -191,8 +192,15 @@ export class StateManager {
   private logRotator?: LogRotator;
   private pendingActivityWrites = 0;
   private activityFlushResolvers: Array<() => void> = [];
+  private lastActivityBackpressureWarn = 0;
+  private droppedActivityWrites = 0;
   private blockedTimeoutInterval?: NodeJS.Timeout;
   private proposalPurgeInterval?: NodeJS.Timeout;
+  private staleWorkerInterval?: NodeJS.Timeout;
+  // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
+  // until the staleness clears (worker becomes alive again) or the assignment
+  // moves to a different task.
+  private alertedStaleAssignments = new Set<string>();
   private readonly blockedTimeoutMs: number;
   private readonly staleWorkerTimeoutMs: number;
   private mentionRouter: MentionRouter;
@@ -228,6 +236,7 @@ export class StateManager {
   clearEmitter(): void {
     this.stopBlockedTimeoutCheck();
     this.stopProposalPurgeInterval();
+    this.stopStaleWorkerWatcher();
     this.subscribers.clear();
     this.subscriberErrorCounts.clear();
     this.emitter = undefined;
@@ -235,6 +244,12 @@ export class StateManager {
 
   /** Increment unread count for a worker on a channel. */
   private incrementUnread(workerId: string, channelId: string): void {
+    // Guard against routing targets that don't correspond to a registered
+    // worker — otherwise we'd accumulate unread entries for ghost IDs forever.
+    if (!this.workers.has(workerId)) {
+      logger.debug({ workerId, channelId }, 'Skipping unread increment: worker not in registry');
+      return;
+    }
     let workerMap = this.unreadCounts.get(workerId);
     if (!workerMap) {
       workerMap = new Map();
@@ -356,6 +371,78 @@ export class StateManager {
     if (this.proposalPurgeInterval) {
       clearInterval(this.proposalPurgeInterval);
       this.proposalPurgeInterval = undefined;
+    }
+  }
+
+  /**
+   * Start periodic stale-worker watcher. Posts ⚠️ alerts to #governors when a
+   * worker still holds a task assignment but hasn't pinged in more than the
+   * liveness timeout. Silent when no governor is online (avoids log noise in
+   * single-architect setups). Default cadence: 60 seconds.
+   */
+  startStaleWorkerWatcher(intervalMs = 60_000, livenessTimeoutMs = 120_000): void {
+    this.stopStaleWorkerWatcher();
+    this.staleWorkerInterval = setInterval(() => {
+      this.checkStaleWorkers(livenessTimeoutMs).catch((err) => {
+        logger.error({ error: err }, 'Error checking stale workers');
+      });
+    }, intervalMs);
+    if (this.staleWorkerInterval.unref) {
+      this.staleWorkerInterval.unref();
+    }
+  }
+
+  stopStaleWorkerWatcher(): void {
+    if (this.staleWorkerInterval) {
+      clearInterval(this.staleWorkerInterval);
+      this.staleWorkerInterval = undefined;
+    }
+  }
+
+  /**
+   * Walk workers; for each with a stale assignment AND not previously alerted,
+   * post a one-line ⚠️ message to #governors. Gated on a governor being alive
+   * (alive = lastActivityAt within livenessTimeoutMs, team.role === 'governor').
+   */
+  async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
+    const now = Date.now();
+
+    // Cheap pre-check: is any governor alive? If not, skip the whole loop.
+    let governorAlive = false;
+    for (const w of this.workers.values()) {
+      const team = w.teamId ? this.teams.get(w.teamId) : null;
+      if (team?.role !== 'governor') continue;
+      const ts = w.lastActivityAt ? new Date(w.lastActivityAt).getTime() : 0;
+      if (ts > 0 && now - ts <= livenessTimeoutMs) {
+        governorAlive = true;
+        break;
+      }
+    }
+    if (!governorAlive) return;
+
+    const seenKeys = new Set<string>();
+    for (const w of this.workers.values()) {
+      if (!w.currentTaskId) continue;
+      const ts = w.lastActivityAt ? new Date(w.lastActivityAt).getTime() : 0;
+      const sinceMs = ts === 0 ? Number.POSITIVE_INFINITY : now - ts;
+      if (sinceMs <= livenessTimeoutMs) continue;
+
+      const key = `${w.id}:${w.currentTaskId}`;
+      seenKeys.add(key);
+      if (this.alertedStaleAssignments.has(key)) continue;
+
+      const secs = sinceMs === Number.POSITIVE_INFINITY ? 'unknown' : Math.floor(sinceMs / 1000) + 's';
+      const task = this.getTask(w.currentTaskId);
+      const taskTitle = task?.title || w.currentTaskId;
+      const alert = `⚠️ ${w.id} stale on ${w.currentTaskId} (${taskTitle}) — last activity ${secs} ago`;
+      try { await this.postToRoleChannel('governors', alert); } catch { /* never throw */ }
+      this.alertedStaleAssignments.add(key);
+    }
+
+    // Clear memoization for assignments that are no longer stale (worker recovered
+    // or task reassigned), so future staleness triggers a fresh alert.
+    for (const key of this.alertedStaleAssignments) {
+      if (!seenKeys.has(key)) this.alertedStaleAssignments.delete(key);
     }
   }
 
@@ -518,7 +605,12 @@ export class StateManager {
         logger.error({ error }, 'Error in state emitter');
       }
     }
-    for (const sub of this.subscribers) {
+    // Snapshot subscribers so a synchronous unsubscribe inside a handler
+    // doesn't skip siblings.
+    const subscribers = [...this.subscribers];
+    for (const sub of subscribers) {
+      // Skip subscribers that were removed during this dispatch.
+      if (!this.subscribers.has(sub)) continue;
       try {
         sub(event);
         this.subscriberErrorCounts.delete(sub);
@@ -857,7 +949,7 @@ export class StateManager {
     if (value === undefined || value === null) {
       return null;
     }
-    return this.validateEnumValue(value, 'role', ['architect', 'worker', 'qa'] as const);
+    return this.validateEnumValue(value, 'role', ['architect', 'worker', 'qa', 'governor'] as const);
   }
 
   private validateTeamMaxSize(value: unknown): number {
@@ -995,7 +1087,7 @@ export class StateManager {
       this.project = normalized;
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
         try {
-          fs.writeFileSync(projectFile, JSON.stringify(normalized, null, 2));
+          atomicWriteJson(projectFile, normalized);
         } catch (error) {
           logger.error({ error, projectFile }, 'Failed to write normalized project.json');
         }
@@ -1058,6 +1150,7 @@ export class StateManager {
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
       this.startProposalPurgeInterval();
+      this.startStaleWorkerWatcher();
     });
 
     return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
@@ -1244,9 +1337,10 @@ export class StateManager {
       throw new Error('Message content exceeds 10KB limit');
     }
 
-    // Parse raw @mentions from text content
+    // Parse raw @mentions from text content. Keep this pattern in sync with
+    // util/mentionRouter.ts so daemon-side parsing matches the router.
     const rawMentions: string[] = [];
-    const mentionRegex = /@(\w[\w-]*)/g;
+    const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
     let match: RegExpExecArray | null;
     while ((match = mentionRegex.exec(content)) !== null) {
       if (!rawMentions.includes(match[1])) {
@@ -1309,6 +1403,36 @@ export class StateManager {
     return { message, routingTargets };
   }
 
+  /**
+   * Read up to the last `maxBytes` of a JSONL file. Truncates any partial
+   * leading line so callers always receive complete JSON records.
+   * TODO: replace with a per-channel offset index for true cursor-based reads.
+   */
+  private readTailJsonl(filePath: string, maxBytes: number): string {
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(filePath, 'r');
+      const stat = fs.fstatSync(fd);
+      const size = stat.size;
+      if (size === 0) return '';
+      const readLen = Math.min(maxBytes, size);
+      const buf = Buffer.allocUnsafe(readLen);
+      const start = size - readLen;
+      fs.readSync(fd, buf, 0, readLen, start);
+      let text = buf.toString('utf-8');
+      // Drop the first (possibly partial) line if we didn't read from start.
+      if (start > 0) {
+        const nl = text.indexOf('\n');
+        text = nl >= 0 ? text.slice(nl + 1) : '';
+      }
+      return text;
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch { /* ignore */ }
+      }
+    }
+  }
+
   async getMessages(
     channelId: string,
     opts?: { sinceId?: string; limit?: number }
@@ -1319,9 +1443,12 @@ export class StateManager {
     const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
     if (!fs.existsSync(messagesFile)) return [];
 
+    // Bound the read to the last 1 MB of the JSONL file to avoid loading
+    // arbitrarily large channels into memory.
+    // TODO: replace with a per-channel index so old messages remain reachable.
     let raw: string;
     try {
-      raw = fs.readFileSync(messagesFile, 'utf-8');
+      raw = this.readTailJsonl(messagesFile, 1024 * 1024);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') return [];
@@ -1344,8 +1471,9 @@ export class StateManager {
       if (idx >= 0) {
         result = messages.slice(idx + 1);
       } else {
-        // Stale/invalid cursor — return empty so clients re-sync explicitly
-        result = [];
+        // Cursor expired (older than the bounded window) — surface the full
+        // window so clients can resync rather than appearing stuck on empty.
+        result = messages;
       }
     }
 
@@ -1355,7 +1483,8 @@ export class StateManager {
 
   /**
    * Check if a message exists in a channel's JSONL file.
-   * Scans line-by-line and returns early on match.
+   * Bounded to the last 1 MB — sufficient for recent-message callers
+   * (e.g. pinMessage). Older messages cannot be referenced.
    */
   messageExistsInChannel(channelId: string, messageId: string): boolean {
     const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
@@ -1363,7 +1492,7 @@ export class StateManager {
 
     let raw: string;
     try {
-      raw = fs.readFileSync(messagesFile, 'utf-8');
+      raw = this.readTailJsonl(messagesFile, 1024 * 1024);
     } catch {
       return false;
     }
@@ -1486,7 +1615,7 @@ export class StateManager {
     if (!fs.existsSync(pinsDir)) {
       fs.mkdirSync(pinsDir, { recursive: true });
     }
-    fs.writeFileSync(this.getPinsFilePath(channelId), JSON.stringify(pins, null, 2));
+    atomicWriteJson(this.getPinsFilePath(channelId), pins);
   }
 
   getPins(channelId: string): PinEntry[] {
@@ -1594,7 +1723,7 @@ export class StateManager {
       const decisionsDir = path.join(this.moePath, 'decisions');
       fs.mkdirSync(decisionsDir, { recursive: true });
       const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
-      fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+      atomicWriteJson(decisionFile, decision);
       this.decisions.set(decision.id, decision);
 
       // Post a system message to the channel if provided
@@ -1607,7 +1736,7 @@ export class StateManager {
         });
         decision.messageId = msg.id;
         // Re-write with messageId linked
-        fs.writeFileSync(decisionFile, JSON.stringify(decision, null, 2));
+        atomicWriteJson(decisionFile, decision);
         this.decisions.set(decision.id, decision);
       }
 
@@ -1635,7 +1764,7 @@ export class StateManager {
     };
 
     const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+    atomicWriteJson(decisionFile, updated);
     this.decisions.set(id, updated);
 
     this.emit({ type: 'DECISION_RESOLVED', payload: updated });
@@ -1659,7 +1788,7 @@ export class StateManager {
     };
 
     const decisionFile = path.join(this.moePath, 'decisions', `${id}.json`);
-    fs.writeFileSync(decisionFile, JSON.stringify(updated, null, 2));
+    atomicWriteJson(decisionFile, updated);
     this.decisions.set(id, updated);
 
     this.emit({ type: 'DECISION_RESOLVED', payload: updated });
@@ -1907,10 +2036,9 @@ export class StateManager {
     this.emit({ type: 'TASK_CREATED', payload: task });
 
     if (task.status === 'PLANNING') {
-      this.postToRoleChannel(
-        'architects',
-        `📋 New plan needed: ${task.title} (${task.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
-      ).catch(() => {});
+      const planAnnouncement = `📋 New plan needed: ${task.title} (${task.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`;
+      this.postToRoleChannel('architects', planAnnouncement).catch(() => {});
+      this.postToRoleChannel('governors', planAnnouncement).catch(() => {});
     }
 
     return task;
@@ -2046,13 +2174,14 @@ export class StateManager {
       const actor = updated.assignedWorkerId || 'unknown';
       this.postSystemMessage(taskId, `Task moved to ${updates.status} by ${actor}`).catch(() => {});
 
-      // When a task lands on PLANNING, ping #architects so any governing architect
-      // sees it via chat_wait and can resume planning.
+      // When a task lands on PLANNING, ping #architects so an architect on
+      // wait_for_task sees it and can claim. Also cross-post to #governors so
+      // the governor's chat_wait surfaces the event (informational — governor
+      // never claims PLANNING tasks themselves).
       if (updates.status === 'PLANNING') {
-        this.postToRoleChannel(
-          'architects',
-          `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`
-        ).catch(() => {});
+        const planAnnouncement = `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`;
+        this.postToRoleChannel('architects', planAnnouncement).catch(() => {});
+        this.postToRoleChannel('governors', planAnnouncement).catch(() => {});
       }
     }
 
@@ -2142,9 +2271,9 @@ export class StateManager {
       updatedAt: new Date().toISOString()
     };
 
-    await fs.promises.writeFile(
+    await atomicWriteJsonAsync(
       path.join(this.moePath, 'project.json'),
-      JSON.stringify(updatedProject, null, 2)
+      updatedProject
     );
     this.project = updatedProject;
     this.emit({ type: 'SETTINGS_UPDATED', payload: updatedProject });
@@ -2183,6 +2312,10 @@ export class StateManager {
   }
 
   async approveTask(taskId: string): Promise<Task> {
+    // NOTE: callers MUST hold the StateManager mutex (e.g. via
+    // WebSocketServer.withMutex / state.runExclusive) so that the status
+    // re-check and updateTask happen atomically. The mutex is non-reentrant,
+    // so this method does not acquire it directly.
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     if (task.status !== 'AWAITING_APPROVAL') {
@@ -2471,9 +2604,9 @@ export class StateManager {
         globalRails: { ...this.project.globalRails, customRules: rails },
         updatedAt: new Date().toISOString()
       };
-      await fs.promises.writeFile(
+      await atomicWriteJsonAsync(
         path.join(this.moePath, 'project.json'),
-        JSON.stringify(this.project, null, 2)
+        this.project
       );
     } else if (targetScope === 'EPIC') {
       const task = this.tasks.get(taskId);
@@ -2580,6 +2713,26 @@ export class StateManager {
     proposal?: RailProposal,
     epic?: Epic
   ): void {
+    // Backpressure: if the activity write queue is unbounded, drop new writes
+    // and warn at most once every 30 s so the log doesn't spam either.
+    if (this.pendingActivityWrites > 1000) {
+      this.droppedActivityWrites++;
+      const now = Date.now();
+      if (now - this.lastActivityBackpressureWarn > 30_000) {
+        logger.warn(
+          {
+            pending: this.pendingActivityWrites,
+            dropped: this.droppedActivityWrites,
+            event
+          },
+          'Activity log backpressure: dropping writes'
+        );
+        this.lastActivityBackpressureWarn = now;
+        this.droppedActivityWrites = 0;
+      }
+      return;
+    }
+
     // Track pending writes so flush can wait for all writes to complete
     this.pendingActivityWrites++;
 
@@ -2821,9 +2974,9 @@ export class StateManager {
           linkedEntityId: null,
           createdAt: new Date().toISOString()
         };
-        fs.writeFileSync(
+        atomicWriteJson(
           path.join(channelsDir, `${channelId}.json`),
-          JSON.stringify(generalChannel, null, 2)
+          generalChannel
         );
         // Create empty JSONL message file
         fs.writeFileSync(path.join(this.moePath, 'messages', `${channelId}.jsonl`), '');
@@ -2844,7 +2997,7 @@ export class StateManager {
             const worker = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
             if (!worker.chatCursors) {
               worker.chatCursors = {};
-              fs.writeFileSync(filePath, JSON.stringify(worker, null, 2));
+              atomicWriteJson(filePath, worker);
             }
           } catch (error) {
             logger.warn({ error, file }, 'Failed to backfill chatCursors for worker');
@@ -2898,7 +3051,7 @@ export class StateManager {
       }
     } catch { /* directory may not exist */ }
 
-    for (const roleName of ['workers', 'architects', 'qa']) {
+    for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
       if (existingNames.has(roleName)) continue;
       try {
         const channelId = generateId('chan');
@@ -2909,7 +3062,7 @@ export class StateManager {
           linkedEntityId: null,
           createdAt: new Date().toISOString()
         };
-        fs.writeFileSync(path.join(channelsDir, `${channelId}.json`), JSON.stringify(channel, null, 2));
+        atomicWriteJson(path.join(channelsDir, `${channelId}.json`), channel);
         fs.writeFileSync(path.join(messagesDir, `${channelId}.jsonl`), '');
       } catch (error) {
         logger.warn({ error, roleName }, 'Failed to create role channel during v6 migration');
@@ -2992,7 +3145,7 @@ export class StateManager {
     if (this.fileWatcher) {
       this.fileWatcher.ignorePath(filePath);
     }
-    fs.writeFileSync(filePath, JSON.stringify(entity, null, 2));
+    atomicWriteJson(filePath, entity);
   }
 
   /**

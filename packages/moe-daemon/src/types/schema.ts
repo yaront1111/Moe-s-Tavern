@@ -97,7 +97,14 @@ export interface Project {
 
 export const CURRENT_SCHEMA_VERSION = 6;
 
-export type TeamRole = 'architect' | 'worker' | 'qa';
+/**
+ * Default cap on QA reopen cycles. After this many rejections, qa_reject
+ * sends the task back to PLANNING for re-planning instead of WORKING.
+ * Override per-task via `task.maxReopens`.
+ */
+export const MAX_REOPENS_DEFAULT = 3;
+
+export type TeamRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 export interface Team {
   id: string;
@@ -156,6 +163,111 @@ export interface RejectionDetails {
 }
 
 /**
+ * Historical rejection entry kept across QA reject cycles. Adds the rejection
+ * `reason` and timestamp on top of the raw structured details so the worker
+ * (and architect) can audit recurring failure patterns.
+ */
+export interface RejectionHistoryEntry {
+  reason: string;
+  rejectedAt: string;
+  reopenCount: number;
+  failedDodItems?: string[];
+  issues?: QAIssue[];
+}
+
+/**
+ * Snapshot of the work performed in a prior task attempt — preserved by
+ * `moe.request_replan` so the architect can see what was built before
+ * the task was flipped back to PLANNING.
+ */
+export interface PriorAttempt {
+  attemptedAt: string;
+  reason: string;
+  implementationPlan: ImplementationStep[];
+  stepsCompleted: string[];
+}
+
+/**
+ * Handoff note recorded when a worker releases a task. Allows the next
+ * claimer to read what was done, what remains, and any pitfalls the
+ * previous worker encountered. Stored in `Task.priorHandoffs` (newest-first).
+ */
+export interface HandoffNote {
+  whatIsDone: string;
+  whatRemains: string;
+  pitfalls?: string;
+  openQuestions?: string;
+  releasedBy?: string;
+  releasedAt: string;
+  reason?: string;
+}
+
+/**
+ * Per-task metrics auto-populated by the daemon across the task lifecycle.
+ * `firstClaimAt` is set on the first claim_next_task; `doneAt` and
+ * `wallClockMs` populate when the task hits DONE (qa_approve).
+ */
+export interface TaskMetrics {
+  plannedStepCount?: number;
+  executedStepCount?: number;
+  reopenCount?: number;
+  rejectCount?: number;
+  wallClockMs?: number;     // first claim → DONE
+  firstClaimAt?: string;    // ISO
+  doneAt?: string;          // ISO
+  /**
+   * Total number of agent tool invocations attributed to this task — sourced
+   * from the AGENT_TOOL_EVENT WS hook posted by @moe/claude-plugin.
+   */
+  agentToolCallCount?: number;
+  /**
+   * Per-tool call counts, e.g. { Bash: 4, Read: 12, moe.complete_step: 1 }.
+   * Populated alongside `agentToolCallCount`. Optional so legacy tasks don't
+   * change shape until a new event lands.
+   */
+  agentToolBreakdown?: Record<string, number>;
+}
+
+/**
+ * Soft budget on first-claim → DONE wall-clock duration. Daemon posts a
+ * one-shot warning at 80% and an escalation at 100% to `#governors`.
+ *
+ * // TODO: token budget once Agent SDK is wired
+ */
+export interface TaskBudget {
+  wallClockMs?: number;
+  warnedAt?: string;
+  escalatedAt?: string;
+}
+
+/**
+ * Plan critique state. Governors call `moe.submit_plan_critique` after a
+ * plan is submitted to flag concerns BEFORE human approval. A `block`
+ * verdict flips the task back to PLANNING; `pass` is informational.
+ */
+export interface PendingPlanCritique {
+  criticWorkerId: string;
+  requestedAt: string;
+}
+
+export interface PlanCritiqueResult {
+  verdict: 'pass' | 'block';
+  concerns?: string[];
+  reviewedBy: string;
+  reviewedAt: string;
+}
+
+/**
+ * Per-DoD-item rejection record. Multiple rejections on the same item
+ * indicate a structural problem the architect — not the worker — should fix.
+ */
+export interface FailedDodItem {
+  item: string;
+  rejectedAt: string;
+  rejectedBy: string;
+}
+
+/**
  * Runtime-driven workflow hint attached to tool responses. Tells the agent
  * which MCP tool to call next and why — so the agent follows a server-authored
  * state machine instead of a prompt-authored workflow. Purely advisory; the
@@ -204,6 +316,23 @@ export interface Task {
   reopenCount: number;
   reopenReason: string | null;
   rejectionDetails?: RejectionDetails;
+  /**
+   * Accumulated history of QA rejections for this task. Newest entry first.
+   * Allows triage of recurring failure patterns and prevents the previous
+   * "overwrite-and-lose" behavior.
+   */
+  rejectionHistory?: RejectionHistoryEntry[];
+  /**
+   * Hard cap on QA reopen cycles before the task is auto-flipped back to
+   * PLANNING (architect picks it up rather than the worker spinning on the
+   * same rejection). Defaults to MAX_REOPENS_DEFAULT (3).
+   */
+  maxReopens?: number;
+  /**
+   * Snapshot of the prior implementation attempt — populated by
+   * `moe.request_replan` when work is shipped back to PLANNING.
+   */
+  priorAttempt?: PriorAttempt;
   createdBy: 'HUMAN' | 'WORKER';
   parentTaskId: string | null;
   priority: TaskPriority;
@@ -220,6 +349,25 @@ export interface Task {
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
   stepsCompleted?: string[];
+  /**
+   * Handoff notes accumulated when workers release the task. Newest-first.
+   * Surfaced to the next claimer via `moe.get_handoff_history`.
+   */
+  priorHandoffs?: HandoffNote[];
+  /** Auto-populated lifecycle metrics; see TaskMetrics. */
+  metrics?: TaskMetrics;
+  /** Soft wall-clock budget on first-claim → DONE; see TaskBudget. */
+  budget?: TaskBudget;
+  /** Set when submit_plan posts a critique request to governors. */
+  pendingPlanCritique?: PendingPlanCritique;
+  /** Result of a governor's plan critique; informational unless verdict='block'. */
+  planCritiqueResult?: PlanCritiqueResult;
+  /**
+   * Append-only log of DoD items that failed QA review. Used to auto-flip
+   * the task back to PLANNING when the SAME item fails ≥2 times, even if
+   * the global reopen cap hasn't been hit.
+   */
+  failedDodItems?: FailedDodItem[];
 }
 
 export interface Worker {
@@ -311,7 +459,8 @@ export const ACTIVITY_EVENT_TYPES = [
   'PIN_TOGGLED',
   'DECISION_PROPOSED',
   'DECISION_APPROVED',
-  'DECISION_REJECTED'
+  'DECISION_REJECTED',
+  'AGENT_TOOL_EVENT'
 ] as const;
 
 export type ActivityEventType = typeof ACTIVITY_EVENT_TYPES[number];

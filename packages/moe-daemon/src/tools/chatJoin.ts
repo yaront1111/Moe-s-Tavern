@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { missingRequired, notFound } from '../util/errors.js';
+import { invalidInput, missingRequired, notFound } from '../util/errors.js';
 
 export function chatJoinTool(_state: StateManager): ToolDefinition {
   return {
@@ -21,15 +21,39 @@ export function chatJoinTool(_state: StateManager): ToolDefinition {
       if (!params.channel) throw missingRequired('channel');
       if (!params.workerId) throw missingRequired('workerId');
 
+      // Validate worker identity — prevent forged join messages for non-existent workers
+      if (params.workerId !== 'human' && params.workerId !== 'system') {
+        let worker = state.getWorker(params.workerId);
+        if (!worker) {
+          worker = state.tryLoadWorkerFromDisk(params.workerId);
+        }
+        if (!worker) {
+          throw invalidInput('workerId', 'Unknown worker: workerId must be a registered worker, "human", or "system"');
+        }
+      }
+
       const channel = state.getChannel(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
-      // Post system join message
-      await state.sendMessage({
-        channel: params.channel,
-        sender: 'system',
-        content: `${params.workerId} joined #${channel.name}`
-      });
+      // Idempotency: if a join message for this worker already exists in the
+      // recent message window for this channel, skip the broadcast.
+      let alreadyMember = false;
+      try {
+        const recent = await state.getMessages(params.channel, { limit: 200 });
+        const joinMarker = `${params.workerId} joined #${channel.name}`;
+        alreadyMember = recent.some((m) => m.sender === 'system' && m.content === joinMarker);
+      } catch {
+        // If we can't read recent messages, fall through to the normal join.
+      }
+
+      // Post system join message (skip if worker is already a member)
+      if (!alreadyMember) {
+        await state.sendMessage({
+          channel: params.channel,
+          sender: 'system',
+          content: `${params.workerId} joined #${channel.name}`
+        });
+      }
 
       // Get online workers (active status or recent activity)
       const now = Date.now();

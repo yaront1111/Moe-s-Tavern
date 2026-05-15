@@ -3,7 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { TeamRole } from '../types/schema.js';
 import { missingRequired, invalidInput } from '../util/errors.js';
 
-const VALID_ROLES: TeamRole[] = ['architect', 'worker', 'qa'];
+const VALID_ROLES: TeamRole[] = ['architect', 'worker', 'qa', 'governor'];
 
 export function createTeamTool(_state: StateManager): ToolDefinition {
   return {
@@ -13,7 +13,7 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Team display name (e.g. "Coders")' },
-        role: { type: 'string', enum: VALID_ROLES, description: 'Team role: architect, worker, or qa (optional)' },
+        role: { type: 'string', enum: VALID_ROLES, description: 'Team role: architect, worker, qa, or governor (optional)' },
         maxSize: { type: 'number', description: 'Maximum number of members (default 10)' }
       },
       required: ['name'],

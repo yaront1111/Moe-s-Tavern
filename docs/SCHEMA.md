@@ -281,11 +281,23 @@ interface Task {
   // Reopening
   reopenCount: number;           // How many times sent back
   reopenReason: string | null;   // Why it was reopened
-  
+  rejectionDetails?: RejectionDetails;          // Latest structured QA feedback (cleared on next cycle)
+  rejectionHistory?: RejectionHistoryEntry[];   // Newest-first; capped at 20 entries
+  failedDodItems?: FailedDodItem[];             // Append-only DoD failure log; capped at last 100
+  maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)
+  priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
+  priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
+
+  // Governance / metrics
+  metrics?: TaskMetrics;                        // Lifecycle counters
+  budget?: TaskBudget;                          // Soft wall-clock cap
+  pendingPlanCritique?: PendingPlanCritique;    // Set by submit_plan in CONTROL mode
+  planCritiqueResult?: PlanCritiqueResult;      // Set by submit_plan_critique
+
   // Creation
   createdBy: 'HUMAN' | 'WORKER'; // Workers can propose subtasks
   parentTaskId: string | null;   // For subtasks
-  
+
   // Ordering
   order: number;
 
@@ -308,11 +320,13 @@ type TaskStatus =
 
 interface ImplementationStep {
   stepId: string;                // "step-1"
-  description: string;           // "Create LoginForm component"
+  description: string;           // "Create LoginForm component" (≤2000 chars; max 100 steps/plan)
   status: StepStatus;
-  affectedFiles: string[];       // ["src/components/LoginForm.tsx"]
+  affectedFiles: string[];       // project-relative paths; max 50/step
   startedAt?: string;            // When step started
   completedAt?: string;          // When step finished
+  note?: string;                 // Optional note from complete_step
+  modifiedFiles?: string[];      // Files actually touched in this step (set by complete_step)
 }
 
 type StepStatus =
@@ -394,6 +408,129 @@ type StepStatus =
 }
 ```
 
+### `affectedFiles` validation
+
+`ImplementationStep.affectedFiles` (and `moe.submit_plan` step input) is normalized + validated server-side:
+
+- Absolute paths and any segment containing `..` (parent traversal) are **rejected** with `INVALID_INPUT`.
+- Path separators are normalized to `/` and entries are deduplicated.
+- Max 50 entries per step; max 100 steps per plan; max 2000 chars per step description.
+- Overlap with another `WORKING` task's `affectedFiles` surfaces as a `fileCollision[]` warning on `moe.claim_next_task` — advisory only, never blocks the claim.
+
+### Task subtypes
+
+```typescript
+interface RejectionDetails {
+  failedDodItems?: string[];
+  issues?: QAIssue[];
+}
+
+interface QAIssue {
+  type: 'test_failure' | 'lint' | 'security' | 'missing_feature' | 'regression' | 'other';
+  description: string;       // ≤500 chars
+  file?: string;
+  line?: number;
+}
+
+/** Historical QA rejection entry. Stored newest-first in `task.rejectionHistory`, capped at 20. */
+interface RejectionHistoryEntry {
+  reason: string;            // ≤2000 chars
+  rejectedAt: string;        // ISO 8601
+  reopenCount: number;       // value after this rejection
+  failedDodItems?: string[];
+  issues?: QAIssue[];
+}
+
+/**
+ * Per-DoD-item rejection record. Append-only, capped at last 100 entries.
+ * When the same `item` appears ≥2 times, `moe.qa_reject` auto-flips the task
+ * back to PLANNING regardless of the global reopen cap — the spec, not the
+ * worker, is treated as the bug.
+ */
+interface FailedDodItem {
+  item: string;
+  rejectedAt: string;        // ISO 8601
+  rejectedBy: string;        // workerId of the rejecting QA agent
+}
+
+/** Snapshot preserved by `moe.request_replan` before clearing the plan. */
+interface PriorAttempt {
+  attemptedAt: string;       // ISO 8601
+  reason: string;            // ≤2000 chars
+  implementationPlan: ImplementationStep[];
+  stepsCompleted: string[];
+}
+
+/**
+ * Handoff note recorded when a worker releases a task. Stored newest-first in
+ * `task.priorHandoffs`, capped at 20. Surfaced via `moe.get_handoff_history`.
+ */
+interface HandoffNote {
+  whatIsDone: string;        // ≤4000 chars; required
+  whatRemains: string;       // ≤4000 chars; required
+  pitfalls?: string;         // ≤4000 chars
+  openQuestions?: string;    // ≤4000 chars
+  releasedBy?: string;       // workerId
+  releasedAt: string;        // ISO 8601
+  reason?: string;           // ≤2000 chars; copied from release_task `reason`
+}
+
+/**
+ * Auto-populated lifecycle counters. `firstClaimAt` is stamped on the first
+ * `moe.claim_next_task`; `wallClockMs` + `doneAt` populate on `moe.qa_approve`.
+ * `plannedStepCount` is refreshed every time a plan is (re-)submitted.
+ */
+interface TaskMetrics {
+  plannedStepCount?: number;
+  executedStepCount?: number;
+  reopenCount?: number;
+  rejectCount?: number;
+  wallClockMs?: number;      // first claim → DONE
+  firstClaimAt?: string;     // ISO 8601
+  doneAt?: string;           // ISO 8601
+  agentToolCallCount?: number;             // sum of AGENT_TOOL_EVENT for this task
+  agentToolBreakdown?: Record<string, number>;  // tool name → count
+}
+
+/**
+ * Soft wall-clock budget. The daemon checks `firstClaimAt + wallClockMs` on
+ * every WORKING-path tool call and posts a one-shot warning at 80% then an
+ * escalation at 100% to `#governors`. No hard kill — purely advisory.
+ */
+interface TaskBudget {
+  wallClockMs?: number;
+  warnedAt?: string;         // ISO 8601 — set once the 80% mark trips
+  escalatedAt?: string;      // ISO 8601 — set once the 100% mark trips
+}
+
+/** Set by `moe.submit_plan` (CONTROL mode) when a governor exists to critique. */
+interface PendingPlanCritique {
+  criticWorkerId: string;
+  requestedAt: string;
+}
+
+/** Written by `moe.submit_plan_critique`; clears `pendingPlanCritique`. */
+interface PlanCritiqueResult {
+  verdict: 'pass' | 'block';
+  concerns?: string[];       // each ≤1000 chars; required when verdict='block'
+  reviewedBy: string;        // workerId or "governor"
+  reviewedAt: string;        // ISO 8601
+}
+```
+
+### Reopen cap
+
+```typescript
+export const MAX_REOPENS_DEFAULT = 3;
+```
+
+`moe.qa_reject` auto-flips a task from `WORKING` back to `PLANNING` when either:
+
+1. `reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`, or
+2. The same DoD item has been recorded in `failedDodItems[]` two or more times.
+
+In both cases the architect (not the worker) is expected to pick up the re-plan; the daemon cross-posts a heads-up to `#architects` and emits a `TASK_REOPENED` activity event with the rejection history.
+
 ---
 
 ## Worker
@@ -445,7 +582,7 @@ type WorkerStatus =
   | 'AWAITING_APPROVAL' // Plan submitted, waiting
   | 'CODING'            // Executing steps
   | 'BLOCKED'           // Stuck, needs human help
-  | 'GOVERNING';        // Architect overseeing in-flight work via chat (set by moe.enter_governance)
+  | 'GOVERNING';        // Governor overseeing in-flight work via chat (set by moe.enter_governance)
 ```
 
 **Example:**
@@ -486,7 +623,7 @@ type WorkerStatus =
 Teams are logical groupings of workers. Teams can be role-based (architect/worker/qa) or project-wide (no role). Team members bypass the per-epic per-status constraint, allowing multiple workers to work on different tasks in the same epic simultaneously.
 
 ```typescript
-type TeamRole = 'architect' | 'worker' | 'qa';
+type TeamRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 interface Team {
   // Identity
@@ -799,7 +936,7 @@ type ActivityEventType =
   | 'WORKER_ERROR'
   | 'WORKER_BLOCKED'
   | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
-  | 'WORKER_GOVERNING'   // Architect entered governance mode via moe.enter_governance
+  | 'WORKER_GOVERNING'   // Governor entered governance mode via moe.enter_governance
   
   // Proposal
   | 'PROPOSAL_CREATED'
@@ -820,7 +957,11 @@ type ActivityEventType =
   // Decisions
   | 'DECISION_PROPOSED'
   | 'DECISION_APPROVED'
-  | 'DECISION_REJECTED';
+  | 'DECISION_REJECTED'
+
+  // Telemetry — one entry per `AGENT_TOOL_EVENT` WS message from the IDE plugin's
+  // PostToolUse hook. Payload: { workerId, tool, durationMs? }
+  | 'AGENT_TOOL_EVENT';
 ```
 
 **Example (one line per event):**

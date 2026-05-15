@@ -8,13 +8,20 @@ import com.moe.model.ChatMessage
 import com.moe.model.Decision
 import com.moe.model.PinEntry
 import com.moe.model.Epic
+import com.moe.model.EpicMetricsAggregate
+import com.moe.model.FailedDodItem
+import com.moe.model.HandoffNote
 import com.moe.model.ImplementationStep
+import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
+import com.moe.model.PlanCritiqueResult
 import com.moe.model.Project
 import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
 import com.moe.model.Task
+import com.moe.model.TaskBudget
 import com.moe.model.TaskComment
+import com.moe.model.TaskMetrics
 import com.moe.model.Team
 import com.moe.model.Worker
 
@@ -57,6 +64,24 @@ object MoeJson {
         } catch (_: Exception) {
             default
         }
+    }
+
+    private fun JsonObject.getIntOrNull(key: String): Int? {
+        val element = get(key) ?: return null
+        if (element.isJsonNull) return null
+        return try { element.asInt } catch (_: Exception) { null }
+    }
+
+    private fun JsonObject.getLongOrNull(key: String): Long? {
+        val element = get(key) ?: return null
+        if (element.isJsonNull) return null
+        return try { element.asLong } catch (_: Exception) { null }
+    }
+
+    private fun JsonObject.getDoubleOrNull(key: String): Double? {
+        val element = get(key) ?: return null
+        if (element.isJsonNull) return null
+        return try { element.asDouble } catch (_: Exception) { null }
     }
 
     private fun getBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean {
@@ -237,9 +262,109 @@ object MoeJson {
                 contextFetchedBy = obj.getStringListOrNull("contextFetchedBy"),
                 stepsCompleted = obj.getStringListOrNull("stepsCompleted"),
                 reopenCount = obj.getIntOrDefault("reopenCount", 0),
-                taskRails = obj.getStringListOrNull("taskRails")
+                taskRails = obj.getStringListOrNull("taskRails"),
+                metrics = parseTaskMetrics(obj),
+                budget = parseTaskBudget(obj),
+                priorHandoffs = parseHandoffs(obj),
+                failedDodItems = parseFailedDodItems(obj),
+                planCritiqueResult = parsePlanCritiqueResult(obj)
             )
         }
+    }
+
+    private fun parseTaskMetrics(obj: JsonObject): TaskMetrics? {
+        val element = obj.get("metrics") ?: return null
+        if (element.isJsonNull || !element.isJsonObject) return null
+        val m = element.asJsonObject
+        return TaskMetrics(
+            plannedStepCount = m.getIntOrNull("plannedStepCount"),
+            executedStepCount = m.getIntOrNull("executedStepCount"),
+            reopenCount = m.getIntOrNull("reopenCount"),
+            rejectCount = m.getIntOrNull("rejectCount"),
+            wallClockMs = m.getLongOrNull("wallClockMs"),
+            firstClaimAt = m.getStringOrNull("firstClaimAt"),
+            doneAt = m.getStringOrNull("doneAt")
+        )
+    }
+
+    private fun parseTaskBudget(obj: JsonObject): TaskBudget? {
+        val element = obj.get("budget") ?: return null
+        if (element.isJsonNull || !element.isJsonObject) return null
+        val b = element.asJsonObject
+        return TaskBudget(
+            wallClockMs = b.getLongOrNull("wallClockMs"),
+            warnedAt = b.getStringOrNull("warnedAt"),
+            escalatedAt = b.getStringOrNull("escalatedAt")
+        )
+    }
+
+    private fun parseHandoffs(obj: JsonObject): List<HandoffNote>? {
+        val element = obj.get("priorHandoffs") ?: return null
+        if (element.isJsonNull || !element.isJsonArray) return null
+        return element.asJsonArray.mapNotNull { el ->
+            if (!el.isJsonObject) return@mapNotNull null
+            val h = el.asJsonObject
+            HandoffNote(
+                from = h.getStringOrNull("from"),
+                to = h.getStringOrNull("to"),
+                createdAt = h.getStringOrNull("createdAt"),
+                whatIsDone = h.getStringOrNull("whatIsDone"),
+                whatRemains = h.getStringOrNull("whatRemains"),
+                pitfalls = h.getStringOrNull("pitfalls"),
+                openQuestions = h.getStringOrNull("openQuestions")
+            )
+        }
+    }
+
+    private fun parseFailedDodItems(obj: JsonObject): List<FailedDodItem>? {
+        val element = obj.get("failedDodItems") ?: return null
+        if (element.isJsonNull || !element.isJsonArray) return null
+        return element.asJsonArray.mapNotNull { el ->
+            if (!el.isJsonObject) return@mapNotNull null
+            val f = el.asJsonObject
+            val item = f.getStringOrNull("item") ?: return@mapNotNull null
+            FailedDodItem(
+                item = item,
+                rejectedAt = f.getStringOrNull("rejectedAt"),
+                rejectedBy = f.getStringOrNull("rejectedBy")
+            )
+        }
+    }
+
+    private fun parsePlanCritiqueResult(obj: JsonObject): PlanCritiqueResult? {
+        val element = obj.get("planCritiqueResult") ?: return null
+        if (element.isJsonNull || !element.isJsonObject) return null
+        val c = element.asJsonObject
+        val verdict = c.getStringOrNull("verdict") ?: return null
+        return PlanCritiqueResult(
+            verdict = verdict,
+            concerns = c.getStringListOrNull("concerns"),
+            reviewedBy = c.getStringOrNull("reviewedBy"),
+            reviewedAt = c.getStringOrNull("reviewedAt")
+        )
+    }
+
+    fun parseMetricsAggregate(obj: JsonObject): MetricsAggregate {
+        val perEpicArr = obj.get("perEpic")?.takeIf { it.isJsonArray }?.asJsonArray
+        val perEpic = perEpicArr?.mapNotNull { el ->
+            if (!el.isJsonObject) return@mapNotNull null
+            val e = el.asJsonObject
+            val id = e.getStringOrNull("epicId") ?: return@mapNotNull null
+            EpicMetricsAggregate(
+                epicId = id,
+                epicTitle = e.getStringOrNull("epicTitle"),
+                completed = e.getIntOrDefault("completed", 0),
+                avgReopenCount = e.getDoubleOrNull("avgReopenCount"),
+                avgWallClockMs = e.getLongOrNull("avgWallClockMs")
+            )
+        } ?: emptyList()
+        return MetricsAggregate(
+            firstPassApprovalPct = obj.getDoubleOrNull("firstPassApprovalPct"),
+            avgWallClockMs = obj.getLongOrNull("avgWallClockMs"),
+            avgReopenCount = obj.getDoubleOrNull("avgReopenCount"),
+            totalCompleted = obj.getIntOrNull("totalCompleted"),
+            perEpic = perEpic
+        )
     }
 
     private fun parseImplementationStep(obj: JsonObject): ImplementationStep {
@@ -281,7 +406,12 @@ object MoeJson {
             contextFetchedBy = obj.getStringListOrNull("contextFetchedBy"),
             stepsCompleted = obj.getStringListOrNull("stepsCompleted"),
             reopenCount = obj.getIntOrDefault("reopenCount", 0),
-            taskRails = obj.getStringListOrNull("taskRails")
+            taskRails = obj.getStringListOrNull("taskRails"),
+            metrics = parseTaskMetrics(obj),
+            budget = parseTaskBudget(obj),
+            priorHandoffs = parseHandoffs(obj),
+            failedDodItems = parseFailedDodItems(obj),
+            planCritiqueResult = parsePlanCritiqueResult(obj)
         )
     }
 

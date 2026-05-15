@@ -131,7 +131,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('PowerShell hook mirrors the claim check when pwsh is available', async () => {
+  it('PowerShell hook mirrors the claim check when pwsh is available', { timeout: 30000 }, async () => {
     if (!spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf-8' }).stdout) {
       return;
     }

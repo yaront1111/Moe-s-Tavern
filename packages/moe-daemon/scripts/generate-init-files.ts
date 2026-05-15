@@ -75,6 +75,7 @@ const output = `// =============================================================
 
 import fs from 'fs';
 import path from 'path';
+import { atomicWriteText } from './atomicWrite.js';
 
 /**
  * Full content of role docs, auto-generated from docs/roles/*.md.
@@ -148,12 +149,12 @@ export function writeInitFiles(moePath: string): void {
   for (const [filename, content] of Object.entries(ROLE_DOCS)) {
     const filePath = path.join(rolesDir, filename);
     if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, content);
+      atomicWriteText(filePath, content);
       continue;
     }
     const onDisk = fs.readFileSync(filePath, 'utf-8');
     if (shouldUpgradeGeneratedDoc(onDisk, content)) {
-      fs.writeFileSync(filePath, content);
+      atomicWriteText(filePath, content);
     }
   }
 
@@ -167,12 +168,12 @@ export function writeInitFiles(moePath: string): void {
     for (const [filename, content] of Object.entries(SUBAGENT_DOCS)) {
       const filePath = path.join(agentsDir, filename);
       if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, content);
+        atomicWriteText(filePath, content);
         continue;
       }
       const onDisk = fs.readFileSync(filePath, 'utf-8');
       if (shouldUpgradeGeneratedDoc(onDisk, content)) {
-        fs.writeFileSync(filePath, content);
+        atomicWriteText(filePath, content);
       }
     }
   }
@@ -183,7 +184,7 @@ export function writeInitFiles(moePath: string): void {
   // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
   const gitignorePath = path.join(moePath, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT);
+    atomicWriteText(gitignorePath, GITIGNORE_CONTENT);
   }
 }
 `;
