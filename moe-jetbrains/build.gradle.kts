@@ -1,10 +1,10 @@
-import org.jetbrains.intellij.tasks.BuildPluginTask
-import org.jetbrains.intellij.tasks.PrepareSandboxTask
+import org.jetbrains.intellij.platform.gradle.tasks.BuildPluginTask
+import org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask
 
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.3.21"
-    id("org.jetbrains.intellij") version "1.17.4"
+    id("org.jetbrains.intellij.platform") version "2.16.0"
 }
 
 group = "com.moe"
@@ -12,6 +12,9 @@ version = "0.6.0"
 
 repositories {
     mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
 }
 
 val repoRoot = rootDir.parentFile ?: rootDir
@@ -55,14 +58,23 @@ fun requireBundledAssets() {
 }
 
 dependencies {
+    intellijPlatform {
+        intellijIdeaCommunity("2025.2")
+    }
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
     testImplementation("junit:junit:4.13.2")
 }
 
-intellij {
-    version.set("2025.2")
-    type.set("IC")
+intellijPlatform {
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = "231"
+            untilBuild = provider { null }  // No upper bound
+        }
+    }
+    buildSearchableOptions = false
+    instrumentCode = false
 }
 
 java {
@@ -71,23 +83,9 @@ java {
 }
 
 tasks {
-    patchPluginXml {
-        sinceBuild.set("231")
-        untilBuild.set("")  // No upper bound - compatible with all future versions
-    }
-
     wrapper {
-        gradleVersion = "8.10.2"
+        gradleVersion = "9.5.1"
         distributionType = Wrapper.DistributionType.BIN
-    }
-
-    // Avoid requiring offline instrumentation dependencies.
-    named("instrumentCode") {
-        enabled = false
-    }
-
-    named("buildSearchableOptions") {
-        enabled = false
     }
 
     test {
@@ -106,75 +104,48 @@ tasks {
     }
 }
 
+// Bundle daemon, proxy, agent scripts, and docs into <pluginName>/ in the sandbox.
+// In IntelliJ Platform Gradle Plugin 2.x, prepareSandbox is the canonical place; buildPlugin
+// zips the sandbox automatically.
+val pluginContentRoot = "${rootProject.name}"
+
 tasks.named<PrepareSandboxTask>("prepareSandbox") {
     doFirst { requireBundledAssets() }
     from(bundledDaemonDir) {
-        into("daemon")
+        into("$pluginContentRoot/daemon")
     }
     from(bundledDaemonModules) {
-        into("daemon/node_modules")
+        into("$pluginContentRoot/daemon/node_modules")
         exclude("**/.bin/**")
     }
     from(bundledProxyDir) {
-        into("proxy")
+        into("$pluginContentRoot/proxy")
     }
     from(bundledProxyModules) {
-        into("proxy/node_modules")
+        into("$pluginContentRoot/proxy/node_modules")
         exclude("**/.bin/**")
     }
     from(bundledAgentScript) {
-        into("scripts")
+        into("$pluginContentRoot/scripts")
     }
     from(bundledAgentScriptSh) {
-        into("scripts")
+        into("$pluginContentRoot/scripts")
     }
     from(bundledRoleDocs) {
-        into("docs/roles")
+        into("$pluginContentRoot/docs/roles")
     }
     from(bundledAgentContext) {
-        into("docs")
+        into("$pluginContentRoot/docs")
     }
     from(bundledSkillsDir) {
-        into("docs/skills")
-    }
-}
-
-tasks.named<BuildPluginTask>("buildPlugin") {
-    doFirst { requireBundledAssets() }
-    from(bundledDaemonDir) {
-        into("daemon")
-    }
-    from(bundledDaemonModules) {
-        into("daemon/node_modules")
-        exclude("**/.bin/**")
-    }
-    from(bundledProxyDir) {
-        into("proxy")
-    }
-    from(bundledProxyModules) {
-        into("proxy/node_modules")
-        exclude("**/.bin/**")
-    }
-    from(bundledAgentScript) {
-        into("scripts")
-    }
-    from(bundledAgentScriptSh) {
-        into("scripts")
-    }
-    from(bundledRoleDocs) {
-        into("docs/roles")
-    }
-    from(bundledAgentContext) {
-        into("docs")
-    }
-    from(bundledSkillsDir) {
-        into("docs/skills")
+        into("$pluginContentRoot/docs/skills")
     }
 }
 
 kotlin {
-    // Use a Java 21 toolchain if available, but target Java 17 bytecode.
-    jvmToolchain(21)
+    // Target Java 17 bytecode; toolchain must match Java target (enforced by
+    // IntelliJ Platform Gradle Plugin 2.16+).
+    jvmToolchain(17)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
