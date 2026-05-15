@@ -1,0 +1,151 @@
+{
+  "id": "task-3245e6cf",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Bound and correctly account for MCP JSON-RPC batches",
+  "description": "Deep sweep finding: McpAdapter.handle applies the rate limiter once to an entire JSON-RPC batch, then processes every request concurrently with Promise.all. A large batch can bypass RATE_LIMIT_MAX_REQUESTS, consume memory/CPU, and run state-mutating tools concurrently even when individual tools do not all take StateManager's mutex. WebSocketServer.trackMcpWorker also ignores batch requests, so wait/chat waiters from batched calls are not tracked for disconnect cleanup. Fix batch handling with explicit size limits, per-request accounting, worker tracking, and safe execution semantics.",
+  "definitionOfDone": [
+    "MCP JSON-RPC batch size is capped with a configurable safe default; oversized batches return JSON-RPC errors without executing all items.",
+    "Rate limiting is charged per request in a batch, not once per array.",
+    "Batch workerId tracking covers each tools/call item so disconnect cleanup cancels wait_for_task/chat_wait waiters created by batched calls.",
+    "State-mutating tool calls in a batch are serialized or otherwise protected so concurrent batch execution cannot corrupt task/worker state.",
+    "Regression tests cover oversized batch rejection, per-request rate limiting, batch worker tracking, and mixed read/write batch behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add MAX_MCP_BATCH_SIZE configuration with a conservative default. In McpAdapter.handle, validate arrays before execution; for oversized batches, return error handling responses per request id where possible (or a single parse-level error if shape is invalid) without executing tool handlers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "note": "Added MOE_MCP_MAX_BATCH_SIZE parsing with conservative default 25 and early batch validation before execution. Oversized batches now return a compact single JSON-RPC error with no payload echo and no tool execution; empty batches get invalid-request. Added regression test and verified it failed before the fix (old behavior executed as an array), then targeted McpAdapter batch tests pass 3/3.",
+      "startedAt": "2026-04-30T15:27:16.684Z",
+      "completedAt": "2026-04-30T15:29:42.040Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Move rate-limit checks to per-request accounting. For arrays, apply the limiter to each request and return rate-limit errors for requests over quota. Preserve existing single-request behavior and add regression test coverage.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "note": "Moved rate limiting from one top-level check per handle() call to handleSingleWithRateLimit(), so each batch item is charged independently and later items get compact rate-limit errors over quota while earlier responses remain in order. TDD red: batch of 4 with RateLimiter(2) previously returned success for item 3; green targeted McpAdapter batch/rate tests pass 4/4.",
+      "startedAt": "2026-04-30T15:29:53.754Z",
+      "completedAt": "2026-04-30T15:31:00.543Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Change batch execution to safe sequencing for tools/call or add a mutating-tool guard so state-changing operations cannot run concurrently. Keep read-only lifecycle requests efficient if desired, but prefer correctness over parallelism.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "note": "Changed batch execution from Promise.all to ordered sequential handling, preserving response order while preventing concurrent tools/call handlers from mutating shared state simultaneously. TDD red: a detector tool observed concurrent in-flight calls under old Promise.all; green targeted McpAdapter batch tests pass 5/5.",
+      "startedAt": "2026-04-30T15:31:04.814Z",
+      "completedAt": "2026-04-30T15:31:53.899Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update WebSocketServer.trackMcpWorker to iterate batch arrays and extract workerId from each tools/call item. Add disconnect-cleanup tests for batched wait/chat worker IDs and run daemon npm test/build.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Updated WebSocketServer.trackMcpWorker to accept unknown/batch requests and inspect every batch item for tools/call arguments.workerId, with malformed entries ignored safely. Added disconnect-cleanup regression coverage proving batched wait_for_task/chat_wait worker IDs are tracked and cleanupMcpWorkers cancels both active waiters. Adversarial review also added malformed batch-member handling in McpAdapter so null/invalid items return compact -32600 errors and do not drop later responses. Red checks observed failures before fixes for oversized batch, per-request rate accounting, concurrent batch tools/call, malformed batch member, and batch worker tracking. Final verification: targeted McpAdapter+WebSocketServer tests pass 35/35; npm run build exit 0; full npm test -- --reporter=dot exit 0 with 25 files / 474 tests; git diff --check clean except CRLF warnings.",
+      "startedAt": "2026-04-30T15:32:02.658Z",
+      "completedAt": "2026-04-30T15:35:40.170Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Rejected: actual /mcp batch disconnect cleanup is incomplete. Targeted batch/WebSocket tests pass, but an integration repro still leaks a waiter: a batch with wait_for_task followed by chat_wait, then socket close while wait_for_task is pending, cancels the first waiter but then starts chat_wait after cleanup removed connection tracking. This fails the disconnect cleanup DoD and needs a real WebSocket regression test.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 14,
+  "comments": [
+    {
+      "id": "comment-674a74e7",
+      "author": "architect-2992",
+      "content": "Token-budget check: oversized/invalid JSON-RPC batch errors must be compact and must not echo the full batch. Cap batch size and charge rate limits per item.",
+      "timestamp": "2026-04-28T08:03:57.881Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:01:49.176Z",
+  "updatedAt": "2026-05-01T16:32:02.252Z",
+  "planSubmittedAt": "2026-04-28T08:02:19.408Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected simply disabling all batch support because JSON-RPC allows it and clients may use it for tools/list/ping. Prefer bounded batches and sequential execution for tools/call, or an explicit mutating-tool classification if parallel reads are retained.",
+    "codebaseInsights": "McpAdapter currently uses Promise.all for arrays and has no concept of read vs write tools. Some mutating tools are internally mutexed, but many rely on caller-side serialization. WebSocketServer.trackMcpWorker sees only top-level request.method.",
+    "risks": "Need preserve notifications with no response and mixed batch response ordering if tests expect JSON-RPC behavior. Avoid introducing deadlocks by wrapping tools that already use StateManager.runExclusive incorrectly. Include error handling and test coverage for invalid batch members.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/server/McpAdapter.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:02:19.410Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T15:27:16.684Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T21:01:25.709Z",
+  "reviewStartedAt": "2026-04-30T21:01:25.709Z",
+  "reviewCompletedAt": "2026-05-01T16:32:02.252Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Batch workerId tracking covers each tools/call item so disconnect cleanup cancels wait_for_task/chat_wait waiters created by batched calls.",
+      "Regression tests cover oversized batch rejection, per-request rate limiting, batch worker tracking, and mixed read/write batch behavior."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/server/McpAdapter.ts",
+        "line": 166,
+        "description": "Batch processing continues after the MCP socket closes. Repro: /mcp batch wait_for_task then chat_wait; close while wait_for_task is active. Cleanup cancels wait_for_task and deletes connection tracking, then the loop starts chat_wait after close, leaving activeChatWaiters until timeout. Abort remaining batch work on close or keep cleanup tied to later waiter creation."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "line": 470,
+        "description": "The batch worker cleanup test only calls private track/cleanup helpers with pre-populated waiters. It misses actual /mcp sequencing. Add an integration test that sends a real WebSocket batch, disconnects mid-batch while the first long-poll is pending, and asserts no activeWaiters/activeChatWaiters remain."
+      }
+    ]
+  }
+}

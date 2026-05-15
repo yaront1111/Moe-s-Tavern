@@ -11,6 +11,7 @@ import com.moe.model.Epic
 import com.moe.model.ImplementationStep
 import com.moe.model.MoeState
 import com.moe.model.Project
+import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
 import com.moe.model.Task
 import com.moe.model.TaskComment
@@ -21,12 +22,21 @@ object MoeJson {
     private fun JsonObject.getStringOrNull(key: String): String? {
         val element = get(key) ?: return null
         if (element.isJsonNull) return null
-        return element.asString
+        return try {
+            if (element.isJsonPrimitive) element.asString else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun JsonObject.getStringOrDefault(key: String, default: String): String {
         val element = get(key)
-        return if (element == null || element.isJsonNull) default else element.asString
+        if (element == null || element.isJsonNull) return default
+        return try {
+            if (element.isJsonPrimitive) element.asString else default
+        } catch (_: Exception) {
+            default
+        }
     }
 
     private fun JsonObject.getDoubleOrDefault(key: String, default: Double): Double {
@@ -39,6 +49,78 @@ object MoeJson {
         }
     }
 
+    private fun JsonObject.getIntOrDefault(key: String, default: Int): Int {
+        val element = get(key)
+        if (element == null || element.isJsonNull) return default
+        return try {
+            element.asInt
+        } catch (_: Exception) {
+            default
+        }
+    }
+
+    private fun getBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean {
+        val element = obj.get(key) ?: return default
+        if (element.isJsonNull) return default
+        return try { element.asBoolean } catch (_: Exception) { default }
+    }
+
+    private fun JsonObject.getStringListOrDefault(key: String, default: List<String> = emptyList()): List<String> {
+        val element = get(key)
+        if (element == null || element.isJsonNull || !element.isJsonArray) return default
+        return element.asJsonArray.mapNotNull {
+            try {
+                if (it.isJsonPrimitive) it.asString else null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun JsonObject.getStringListOrNull(key: String): List<String>? {
+        val element = get(key)
+        if (element == null || element.isJsonNull || !element.isJsonArray) return null
+        return element.asJsonArray.mapNotNull {
+            try {
+                if (it.isJsonPrimitive) it.asString else null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    private fun parseColumnLimits(settingsJson: JsonObject): Map<String, Int>? {
+        val columnLimits = settingsJson.get("columnLimits")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: return null
+        return columnLimits.entrySet().mapNotNull { (key, value) ->
+            val limit = try {
+                if (value.isJsonPrimitive) value.asInt else null
+            } catch (_: Exception) {
+                null
+            }
+            limit?.takeIf { it > 0 }?.let { key to it }
+        }.toMap().takeIf { it.isNotEmpty() }
+    }
+
+    private fun parseProjectSettings(settingsJson: JsonObject?): ProjectSettings {
+        val settings = settingsJson ?: JsonObject()
+        val approvalMode = settings.getStringOrDefault("approvalMode", "CONTROL")
+            .takeIf { it in setOf("CONTROL", "SPEED", "TURBO") }
+            ?: "CONTROL"
+        return ProjectSettings(
+            approvalMode = approvalMode,
+            speedModeDelayMs = settings.getIntOrDefault("speedModeDelayMs", 2000),
+            autoCreateBranch = getBooleanOrDefault(settings, "autoCreateBranch", true),
+            branchPattern = settings.getStringOrDefault("branchPattern", "moe/{epicId}/{taskId}"),
+            commitPattern = settings.getStringOrDefault("commitPattern", "feat({epicId}): {taskTitle}"),
+            agentCommand = settings.getStringOrDefault("agentCommand", "claude").ifBlank { "claude" },
+            enableAgentTeams = getBooleanOrDefault(settings, "enableAgentTeams", false),
+            columnLimits = parseColumnLimits(settings)
+        )
+    }
+
     fun parseState(payload: JsonObject): MoeState {
         val projectJson = payload.get("project")
             ?.takeIf { it.isJsonObject }
@@ -47,7 +129,12 @@ object MoeJson {
         val project = Project(
             id = projectJson.getStringOrDefault("id", "unknown"),
             name = projectJson.getStringOrDefault("name", "Unknown"),
-            rootPath = projectJson.getStringOrDefault("rootPath", "")
+            rootPath = projectJson.getStringOrDefault("rootPath", ""),
+            settings = parseProjectSettings(
+                projectJson.get("settings")
+                    ?.takeIf { it.isJsonObject }
+                    ?.asJsonObject
+            )
         )
 
         val epicsArray = payload.get("epics")
@@ -89,11 +176,7 @@ object MoeJson {
             val obj = element.asJsonObject
             val id = obj.getStringOrNull("id") ?: return@mapNotNull null
             val title = obj.getStringOrNull("title") ?: return@mapNotNull null
-            val rails = obj.get("epicRails")
-                ?.takeIf { it.isJsonArray }
-                ?.asJsonArray
-                ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-                ?: emptyList()
+            val rails = obj.getStringListOrDefault("epicRails")
             Epic(
                 id = id,
                 title = title,
@@ -125,22 +208,12 @@ object MoeJson {
             ?: emptyList()
     }
 
-    private fun getBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean {
-        val element = obj.get(key) ?: return default
-        if (element.isJsonNull) return default
-        return try { element.asBoolean } catch (_: Exception) { default }
-    }
-
     private fun parseTasks(array: JsonArray): List<Task> {
         return array.mapNotNull { element ->
             val obj = element.asJsonObject
             val id = obj.getStringOrNull("id") ?: return@mapNotNull null
             val epicId = obj.getStringOrNull("epicId") ?: return@mapNotNull null
-            val dod = obj.get("definitionOfDone")
-                ?.takeIf { it.isJsonArray }
-                ?.asJsonArray
-                ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-                ?: emptyList()
+            val dod = obj.getStringListOrDefault("definitionOfDone")
             val plan = obj.get("implementationPlan")
                 ?.takeIf { it.isJsonArray }
                 ?.asJsonArray
@@ -160,31 +233,31 @@ object MoeJson {
                 reopenReason = obj.getStringOrNull("reopenReason"),
                 assignedWorkerId = obj.getStringOrNull("assignedWorkerId"),
                 comments = parseComments(obj),
-                hasPendingQuestion = getBooleanOrDefault(obj, "hasPendingQuestion", false)
+                hasPendingQuestion = getBooleanOrDefault(obj, "hasPendingQuestion", false),
+                contextFetchedBy = obj.getStringListOrNull("contextFetchedBy"),
+                stepsCompleted = obj.getStringListOrNull("stepsCompleted"),
+                reopenCount = obj.getIntOrDefault("reopenCount", 0),
+                taskRails = obj.getStringListOrNull("taskRails")
             )
         }
     }
 
     private fun parseImplementationStep(obj: JsonObject): ImplementationStep {
-        val files = obj.get("affectedFiles")
-            ?.takeIf { it.isJsonArray }
-            ?.asJsonArray
-            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-            ?: emptyList()
+        val files = obj.getStringListOrDefault("affectedFiles")
         return ImplementationStep(
             stepId = obj.getStringOrDefault("stepId", "unknown"),
             description = obj.getStringOrDefault("description", ""),
             status = obj.getStringOrDefault("status", "PENDING"),
-            affectedFiles = files
+            affectedFiles = files,
+            modifiedFiles = obj.getStringListOrNull("modifiedFiles"),
+            note = obj.getStringOrNull("note"),
+            startedAt = obj.getStringOrNull("startedAt"),
+            completedAt = obj.getStringOrNull("completedAt")
         )
     }
 
     fun parseTask(obj: JsonObject): Task {
-        val dod = obj.get("definitionOfDone")
-            ?.takeIf { it.isJsonArray }
-            ?.asJsonArray
-            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-            ?: emptyList()
+        val dod = obj.getStringListOrDefault("definitionOfDone")
         val plan = obj.get("implementationPlan")
             ?.takeIf { it.isJsonArray }
             ?.asJsonArray
@@ -204,16 +277,16 @@ object MoeJson {
             reopenReason = obj.getStringOrNull("reopenReason"),
             assignedWorkerId = obj.getStringOrNull("assignedWorkerId"),
             comments = parseComments(obj),
-            hasPendingQuestion = getBooleanOrDefault(obj, "hasPendingQuestion", false)
+            hasPendingQuestion = getBooleanOrDefault(obj, "hasPendingQuestion", false),
+            contextFetchedBy = obj.getStringListOrNull("contextFetchedBy"),
+            stepsCompleted = obj.getStringListOrNull("stepsCompleted"),
+            reopenCount = obj.getIntOrDefault("reopenCount", 0),
+            taskRails = obj.getStringListOrNull("taskRails")
         )
     }
 
     fun parseEpic(obj: JsonObject): Epic {
-        val rails = obj.get("epicRails")
-            ?.takeIf { it.isJsonArray }
-            ?.asJsonArray
-            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-            ?: emptyList()
+        val rails = obj.getStringListOrDefault("epicRails")
         return Epic(
             id = obj.getStringOrDefault("id", "unknown"),
             title = obj.getStringOrDefault("title", "Untitled epic"),
@@ -276,11 +349,7 @@ object MoeJson {
     }
 
     fun parseTeam(obj: JsonObject): Team {
-        val memberIds = obj.get("memberIds")
-            ?.takeIf { it.isJsonArray }
-            ?.asJsonArray
-            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-            ?: emptyList()
+        val memberIds = obj.getStringListOrDefault("memberIds")
         val maxSize = obj.get("maxSize")?.let {
             if (it.isJsonNull) 10 else try { it.asInt } catch (_: Exception) { 10 }
         } ?: 10
@@ -311,11 +380,7 @@ object MoeJson {
     }
 
     fun parseChatMessage(obj: JsonObject): ChatMessage {
-        val mentions = obj.get("mentions")
-            ?.takeIf { it.isJsonArray }
-            ?.asJsonArray
-            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-            ?: emptyList()
+        val mentions = obj.getStringListOrDefault("mentions")
         return ChatMessage(
             id = obj.getStringOrDefault("id", "unknown"),
             channel = obj.getStringOrDefault("channel", ""),

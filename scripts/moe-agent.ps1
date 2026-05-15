@@ -1296,7 +1296,8 @@ $mentionsJson
                     "--print",
                     "--permission-mode", "bypassPermissions",
                     "--output-format", "stream-json",
-                    "--include-partial-messages"
+                    "--include-partial-messages",
+                    "--verbose"
                 )
             }
 

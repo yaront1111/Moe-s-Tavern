@@ -1,0 +1,136 @@
+{
+  "id": "task-7c97919a",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Cap get_activity_log limits and make filtered history reliable",
+  "description": "Deep sweep finding: packages/moe-daemon/src/tools/getActivityLog.ts accepts arbitrary positive limit/offset/maxPayloadChars values. Unfiltered requests can ask readLastLines for huge windows and produce oversized MCP responses. Filtered requests prefetch at most 1000 tail entries, so older matching task/epic/worker events are incorrectly invisible while hasMore can be misleading.",
+  "definitionOfDone": [
+    "get_activity_log validates/clamps limit, offset, and maxPayloadChars to documented safe bounds.",
+    "Filtered queries either scan/paginate reliably enough to find older matching events or clearly return pagination metadata that does not falsely imply full history was searched.",
+    "Response-size protections apply on both MCP tool path and plugin WebSocket GET_ACTIVITY_LOG path, or the plugin path has an explicit safe cap.",
+    "Regression tests cover overlarge limit/maxPayloadChars and filtered events older than the initial tail window.",
+    "packages/moe-daemon npm test and build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Validate and clamp limit, offset, and maxPayloadChars in getActivityLogTool with explicit invalid-input error handling; document safe maximums.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added safe normalization for get_activity_log limit/offset/maxPayloadChars with finite-number validation, documented defaults/max values, and clamping for overlarge values. maxPayloadChars=0 remains explicit no-truncation opt-out for backward compatibility. Targeted activity-log tests passed: npm test -- --run src/tools/tools.test.ts src/state/StateManager.test.ts -t \"get_activity_log|ActivityLog tool\" (13 passed, 254 skipped).",
+      "startedAt": "2026-04-30T14:55:14.984Z",
+      "completedAt": "2026-04-30T15:00:05.515Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a filtered activity-log read path or enhanced pagination metadata so taskId/epicId/workerId filters can find older matches without falsely reporting a complete search of only the last 1000 events.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/reverseReader.ts",
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/reverseReader.ts",
+        "packages/moe-daemon/src/tools/getActivityLog.ts"
+      ],
+      "note": "Added readLastLinesWithMetadata and StateManager.getActivityLogWindow so activity-log queries know when older lines were omitted. get_activity_log now scans a bounded larger window for filtered queries (up to 5000 lines), returns search metadata including complete/scanned counts, and sets hasMore conservatively when older lines may contain more matches. Targeted reverseReader/activity-log tests passed: 14 passed, 259 skipped.",
+      "startedAt": "2026-04-30T15:00:09.801Z",
+      "completedAt": "2026-04-30T15:00:27.068Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Apply comparable response-size caps/truncation to plugin WebSocket GET_ACTIVITY_LOG or route it through the same helper.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Routed plugin WebSocket GET_ACTIVITY_LOG through shared activity-log normalization/query helpers while preserving ACTIVITY_LOG payload as an array. Plugin path now uses the same default/capped limit and payload truncation behavior as the MCP tool. Targeted WebSocket/get_activity_log tests passed: 20 passed, 165 skipped.",
+      "startedAt": "2026-04-30T15:00:31.686Z",
+      "completedAt": "2026-04-30T15:01:08.564Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add regression tests for overlarge limits, maxPayloadChars, and filtered matches older than the tail prefetch window; run daemon test/build validation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "packages/moe-daemon/src/util/reverseReader.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added/verified regressions for clamped activity-log limits and maxPayloadChars, invalid numeric params, filtered matches older than the former 1000-line tail, and plugin WebSocket GET_ACTIVITY_LOG caps/truncation (including maxPayloadChars=0 staying bounded on WS). Red check: temporarily restored old 1000-line filtered scan and the older-match test failed; restored 5000-line scan and it passed. Validation: targeted vitest 3 files = 30 passed/254 skipped; npm run build passed; full npm test = 25 files/458 tests passed; git diff --check clean except CRLF warnings. Adversarial review: plugin path now forces bounded payloads even if caller requests maxPayloadChars=0; MCP keeps 0 as documented no-truncation opt-in for backward compatibility.",
+      "startedAt": "2026-04-30T15:01:29.397Z",
+      "completedAt": "2026-04-30T15:07:55.450Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [
+    {
+      "id": "comment-cf5efecc",
+      "author": "architect-2992",
+      "content": "Token-budget check: keep get_activity_log bounded by default, truncate payload fields, and provide explicit maxPayloadChars/limit opt-ins for full history only when needed.",
+      "timestamp": "2026-04-28T08:03:57.816Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.314Z",
+  "updatedAt": "2026-04-30T18:09:37.885Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.488Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: clamp limits and add a filtered reverse-reader path that scans chunks until enough matches or a documented scan cap. Rejected: returning unlimited full log content.",
+    "codebaseInsights": "MCP get_activity_log has payload truncation but no limit/maxPayloadChars cap. WebSocket GET_ACTIVITY_LOG bypasses truncation entirely. Filtered MCP queries prefetch a capped tail window before filtering.",
+    "risks": "Full historical scans can be expensive on large logs; choose bounded streaming/reverse scanning and honest hasMore metadata. Keep malformed-line error handling fail-safe.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/util/reverseReader.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.489Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T14:55:14.984Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T15:08:35.609Z",
+  "reviewStartedAt": "2026-04-30T15:08:35.609Z",
+  "reviewCompletedAt": "2026-04-30T18:09:37.885Z"
+}

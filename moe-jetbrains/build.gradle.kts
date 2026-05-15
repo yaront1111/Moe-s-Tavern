@@ -57,6 +57,7 @@ fun requireBundledAssets() {
 dependencies {
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
+    testImplementation("junit:junit:4.13.2")
 }
 
 intellij {
@@ -87,6 +88,21 @@ tasks {
 
     named("buildSearchableOptions") {
         enabled = false
+    }
+
+    test {
+        useJUnit()
+        jvmArgs("--add-opens=java.base/sun.nio.fs=ALL-UNNAMED")
+        doFirst {
+            jvmArgumentProviders.removeAll {
+                it.javaClass.name.contains("IntelliJPlatformArgumentProvider")
+            }
+            systemProperties.remove("java.system.class.loader")
+            val filteredJvmArgs = (jvmArgs ?: emptyList()).filterNot {
+                it.contains("java.system.class.loader")
+            }
+            setJvmArgs(filteredJvmArgs)
+        }
     }
 }
 

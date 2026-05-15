@@ -1,0 +1,125 @@
+{
+  "id": "task-29ca3d17",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Release architect and QA worker state after handoff",
+  "description": "Deep sweep finding: completeTaskTool explicitly sets the implementation worker to IDLE before moving WORKING -> REVIEW, but submitPlanTool and qaApproveTool/qaRejectTool do not do the analogous cleanup. Because StateManager.updateTask clears assignedWorkerId on status change, the architect/QA worker can remain in READING_CONTEXT (or another active status) with currentTaskId pointing at a task they no longer own. This skews presence, team coordination, stale cleanup, and next-task claiming. Fix role handoff tools to update worker state consistently.",
+  "definitionOfDone": [
+    "submit_plan sets the assigned architect worker to IDLE/currentTaskId null after plan submission/auto-approval handoff, without breaking CONTROL/SPEED/TURBO approval flows.",
+    "qa_approve and qa_reject set the assigned QA worker to IDLE/currentTaskId null when review is completed/rejected, without changing task status semantics.",
+    "Worker cleanup occurs before status changes that clear assignedWorkerId, or otherwise uses the captured prior assignee safely.",
+    "Missing worker records are handled gracefully and do not block task handoff.",
+    "Regression tests cover submit_plan TURBO and non-TURBO, qa_approve, qa_reject, and missing-worker error handling."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In submitPlanTool, capture the pre-update assignedWorkerId and update that worker to IDLE/currentTaskId null at the appropriate handoff point. For TURBO this can happen before/after auto-approval but must use the captured assignee because updateTask clears assignment on status change. For CONTROL/SPEED, document whether the architect is idled once the plan is submitted.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Captured the architect assignee before submit_plan status changes and idled that worker with currentTaskId=null via touchWorker before PLAN_SUBMITTED. Added TURBO, CONTROL, and missing-worker handoff regression coverage; submitPlan.test.ts passes 9/9.",
+      "startedAt": "2026-04-30T15:17:55.478Z",
+      "completedAt": "2026-04-30T15:22:24.822Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In qaApproveTool and qaRejectTool, capture the QA assignee before status update and set that worker to IDLE/currentTaskId null after successful review handoff. Handle missing worker records with a warning or silent skip, matching completeTask's non-blocking behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaOwnership.test.ts"
+      ],
+      "note": "Captured QA handoff assignees before qa_approve/qa_reject status updates, then idled those workers with currentTaskId=null using touchWorker after the successful review status change. Missing worker records are skipped by touchWorker. Added approve/reject cleanup plus missing-worker regression coverage; qaOwnership.test.ts passes 9/9.",
+      "startedAt": "2026-04-30T15:22:38.598Z",
+      "completedAt": "2026-04-30T15:23:15.845Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Refactor a small helper if duplication emerges (e.g., idleAssignedWorker(state, task, reason)), but avoid a broad StateManager status-change side effect that could surprise plugin-driven human moves. Keep error handling local and explicit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "note": "Reviewed duplication and kept the cleanup local/explicit rather than adding a broad StateManager side effect or helper: submit_plan cleans up before status handoff, while QA tools use captured assignees after successful review handoff. Combined submitPlan + qaOwnership targeted tests pass 18/18.",
+      "startedAt": "2026-04-30T15:23:21.555Z",
+      "completedAt": "2026-04-30T15:23:36.974Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add regression tests for architect worker cleanup in TURBO and non-TURBO plan submission, QA worker cleanup on approve/reject, and missing worker skip behavior. Run packages/moe-daemon npm test and npm run build.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/tools/qaOwnership.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/tools/qaOwnership.test.ts"
+      ],
+      "note": "Added regression coverage for architect cleanup in TURBO and CONTROL submit_plan, QA cleanup on approve/reject, and missing worker skip behavior. Confirmed red first: new tests failed 4 cleanup assertions before code changes. Adversarial review adjusted submit_plan cleanup to use the captured assignee after successful PLAN_SUBMITTED to avoid idling an architect if task write fails. Verification: targeted submitPlan+qaOwnership 18/18, npm run build passed, full daemon npm test -- --reporter=dot passed 25 files / 469 tests, git diff --check clean except CRLF warnings.",
+      "startedAt": "2026-04-30T15:23:50.780Z",
+      "completedAt": "2026-04-30T15:25:32.739Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:01:24.028Z",
+  "updatedAt": "2026-04-30T18:13:23.048Z",
+  "planSubmittedAt": "2026-04-28T08:01:38.541Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected relying on stale-worker timeout to eventually clear role workers because it leaves misleading state for up to 30 minutes and can interact badly with stale cleanup. Prefer immediate deterministic handoff cleanup.",
+    "codebaseInsights": "StateManager.updateTask clears assignedWorkerId on status changes. completeTask already captures and idles the implementation worker before changing status; submitPlan/QA tools should follow that pattern.",
+    "risks": "CONTROL/SPEED mode submit_plan has an awaiting-approval interval; decide whether architect remains active while waiting or is idled after submission. If idled immediately, check_approval still works by taskId/workerId. Include tests and clear comments.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "packages/moe-daemon/src/tools/qaOwnership.test.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:01:38.543Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T15:17:55.478Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T15:26:22.281Z",
+  "reviewStartedAt": "2026-04-30T15:26:22.281Z",
+  "reviewCompletedAt": "2026-04-30T18:13:23.048Z"
+}

@@ -1,0 +1,150 @@
+{
+  "id": "task-11d9333e",
+  "epicId": "epic-0110ece1",
+  "title": "[HIGH] Validate mutable project, epic, and team update payloads",
+  "description": "Deep sweep finding: StateManager.updateSettings sanitizes only columnLimits, StateManager.updateEpic blindly merges updates, and StateManager.createTeam/updateTeam accept unvalidated role/maxSize/memberIds. The /ws plugin path forwards UPDATE_SETTINGS/UPDATE_EPIC/CREATE_TEAM/UPDATE_TEAM directly, and MCP update_epic relies on StateManager for final normalization. This can persist invalid approvalMode/status values, overlong strings, changed ids/projectIds, invalid team roles, or unusable maxSize values. Fix by centralizing validation/sanitization for these mutable payloads and returning explicit errors for invalid values instead of corrupting project.json/epic/team files.",
+  "definitionOfDone": [
+    "updateSettings validates and normalizes every supported ProjectSettings field, rejects unknown/invalid values, and preserves existing settings not present in the payload.",
+    "updateEpic only allows title, description, architectureNotes, epicRails, status, and order; sanitizes lengths/arrays/status/order and cannot change id/projectId/createdAt.",
+    "createTeam/updateTeam validate name, role, maxSize, and memberIds; reject invalid roles, non-positive maxSize, duplicate members, and attempts to mutate immutable ids.",
+    "WebSocket and MCP paths surface structured errors without writing partial invalid data.",
+    "Regression tests cover invalid settings, invalid epic updates, invalid team updates, and valid updates still passing."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add centralized validation helpers in StateManager (or a small util) for ProjectSettings, Epic updates, and Team updates. Reuse existing sanitizeString/sanitizeStringArray/sanitizeEnum/sanitizeNumber patterns; allow only documented mutable fields, reject immutable id/projectId/createdAt/updatedAt changes, validate order/maxSize as finite positive numbers, and produce clear error handling messages for invalid input.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/sanitize.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/sanitize.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added centralized strict validation helpers in StateManager for plain-object payloads, unknown fields, strings, booleans, bounded integers, enums, arrays, memory settings, epic updates, settings updates, and team create/update payloads. Added regression tests first and confirmed they failed before the fix, then passed targeted validation tests. Verification: targeted StateManager validation tests passed 6/6 selected tests; targeted tools/WebSocket validation tests passed 4/4 selected tests.",
+      "startedAt": "2026-04-30T13:33:42.883Z",
+      "completedAt": "2026-04-30T13:40:22.098Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Apply the validators in updateSettings, createTeam, updateTeam, and updateEpic. Ensure valid partial updates merge with existing data, invalid updates do not call writeEntity/writeFile, and WebSocket/MCP callers surface structured errors. Keep the existing WebSocket withMutex behavior; do not duplicate conflicting validation in UI clients except where necessary for client-side affordance.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/createTeam.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Applied the new StateManager validators to updateSettings, updateEpic, createTeam, and updateTeam. Invalid payloads are rejected before writeFile/writeEntity, valid partial settings merge with existing values, and WebSocket/MCP paths now surface compact structured validation errors through existing error handling. No UI-side duplicate validation was added. Verification: npx vitest run src/state/StateManager.test.ts src/tools/tools.test.ts src/server/WebSocketServer.test.ts passed 3 files / 270 tests.",
+      "startedAt": "2026-04-30T13:40:25.634Z",
+      "completedAt": "2026-04-30T13:40:50.028Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests for invalid approvalMode/speedModeDelayMs/agentCommand settings, invalid epic status/order/id mutation, invalid team role/maxSize/memberIds, and valid settings/epic/team updates. Include both direct StateManager or tool tests and at least one WebSocket error-path test if existing test scaffolding supports it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added regression coverage for invalid approvalMode/speedModeDelayMs/agentCommand settings, invalid epic status/order/id mutation, invalid team role/maxSize/memberIds, valid settings and team updates, MCP tool rejection paths, and WebSocket error paths. RED verification before the fix: selected new StateManager tests failed because invalid settings/epic/team payloads were accepted and persisted. GREEN verification: npx vitest run src/state/StateManager.test.ts src/tools/tools.test.ts src/server/WebSocketServer.test.ts -t \"rejects invalid settings|invalid numeric and string settings|valid partial settings|rejects immutable|validates createTeam|validates updateTeam|accepts valid team|invalid team payloads|invalid updates without mutating|invalid settings updates|invalid team updates\" passed 3 files / 11 tests.",
+      "startedAt": "2026-04-30T13:40:58.447Z",
+      "completedAt": "2026-04-30T13:41:26.798Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run daemon verification before and after: npm test in packages/moe-daemon and npm run build. Confirm tests cover error handling and no persisted JSON changes occur for rejected payloads.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/createTeam.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Ran adversarial self-review and fixed two bypasses found during review: MCP update_epic no longer silently ignores unknown mutable fields, and WebSocket CREATE_TEAM now passes the full payload through StateManager validation so immutable/unknown fields are rejected. Also validated create_team maxSize before idempotent existing-team return. RED verification for these bypasses failed before the fixes; GREEN verification passed. Final verification: npm test passed 25 files / 446 tests; npm run build passed; git diff --check on affected files exited 0 (CRLF warnings only).",
+      "startedAt": "2026-04-30T13:41:36.527Z",
+      "completedAt": "2026-04-30T13:44:53.104Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 8,
+  "comments": [
+    {
+      "id": "comment-ad29698b",
+      "author": "architect-2992",
+      "content": "Token-budget check: validation errors should name the field/reason only. Do not echo whole project/epic/team update payloads or large rejected values into MCP responses/logs.",
+      "timestamp": "2026-04-28T08:03:57.851Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:58:34.224Z",
+  "updatedAt": "2026-04-30T17:47:18.834Z",
+  "planSubmittedAt": "2026-04-28T07:58:56.860Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected ad-hoc validation only in WebSocket because MCP paths and direct StateManager callers would still be able to persist invalid data. Rejected silently coercing all invalid inputs because operators need explicit errors for malformed UI/client payloads.",
+    "codebaseInsights": "createTask/createEpic already use sanitize helpers; updateTask has field-specific validation. Mirror that pattern for settings/epic/team updates rather than relying only on TypeScript casts in tool handlers. WebSocket handlers should remain thin but must receive errors from StateManager and send ERROR without partial writes.",
+    "risks": "Do not break existing valid settings saves from JetBrains/VS Code. Preserve unspecified settings fields. Avoid accepting additionalProperties into persisted settings, epic, or team records. Include error handling and test coverage for both success and rejection paths.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/tools/createTeam.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/sanitize.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:58:56.862Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T13:33:42.883Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T13:45:29.016Z",
+  "reviewStartedAt": "2026-04-30T13:45:29.016Z",
+  "reviewCompletedAt": "2026-04-30T17:47:18.834Z"
+}

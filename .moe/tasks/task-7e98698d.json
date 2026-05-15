@@ -1,0 +1,145 @@
+{
+  "id": "task-7e98698d",
+  "epicId": "epic-0110ece1",
+  "title": "[CRITICAL] Harden daemon.json liveness and project identity checks",
+  "description": "Deep sweep finding: the daemon CLI start/status/stop paths trust .moe/daemon.json primarily by PID. startDaemon returns early when the recorded pid is alive even if the port is closed or the pid was reused by an unrelated process; stopDaemon can send SIGTERM to that unrelated process if daemon.json has the requested projectPath. moe-proxy also reads daemon.json without checking projectPath, so a stale file can connect MCP calls to the wrong project's daemon. Fix lifecycle validation so PID, project identity, and port/health are verified before reusing or stopping a daemon.",
+  "definitionOfDone": [
+    "Daemon start/status/stop treat daemon.json as valid only when projectPath matches the requested project and the recorded port is reachable/healthy for the Moe daemon.",
+    "stopDaemon refuses to signal a process when liveness cannot be tied to the matching Moe daemon, and instead removes stale daemon.json/lock files safely.",
+    "Lock-file stale detection avoids being blocked forever by PID reuse where possible.",
+    "moe-proxy validates daemon.json projectPath against MOE_PROJECT_PATH/current working directory before connecting and returns a clear JSON-RPC error for mismatches.",
+    "Regression tests cover PID-alive/port-closed stale daemon.json, projectPath mismatch, proxy mismatch handling, and normal valid daemon reuse."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Introduce daemon-info validation helpers in packages/moe-daemon/src/index.ts: canonical projectPath comparison, finite port/pid validation, short port or /health probe, and stale-file cleanup. Use them before startDaemon returns early, before status reports running, and before stopDaemon signals a PID. Keep error handling best-effort for malformed files and unlink failures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Added daemon info validation helpers in index.ts: canonical project path comparison, finite port/pid shape checks, /health probe verifying healthy status and matching projectPath, and validation that also requires PID alive. startDaemon/superviseDaemon reuse daemon.json only after validation; status/stop validate before reporting/killing and stale cleanup removes daemon.json/lock best-effort. Build check: packages/moe-daemon `npm run build` passed after fixing type guards.",
+      "startedAt": "2026-04-30T12:39:33.877Z",
+      "completedAt": "2026-04-30T12:42:19.365Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Harden lock handling so lock files with dead or unverifiable owners are removed, while PID-reuse ambiguity does not permanently block startup. Add clear logging for stale daemon.json/lock cleanup without exposing stack traces to CLI users.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Hardened daemon.lock handling in index.ts. New locks store JSON {pid, projectPath, createdAt}; legacy PID-only locks still parse. acquireLock removes and retries only when stale/unverifiable (malformed, wrong project, dead owner, or older than MOE_LOCK_STALE_TIMEOUT_MS), and stale daemon cleanup removes locks only when stale rather than blindly deleting a fresh active lock. Logging includes compact reasons without stack traces. Validation: packages/moe-daemon `npm run build` passed.",
+      "startedAt": "2026-04-30T12:42:24.796Z",
+      "completedAt": "2026-04-30T12:43:16.240Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update moe-proxy readDaemonInfo paths to validate projectPath against MOE_PROJECT_PATH/process.cwd, reject malformed port/pid, and produce a clear JSON-RPC error instead of connecting to another project's daemon. Keep index.ts and utils.ts behavior consistent to avoid test-only divergence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/index.test.ts",
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Added proxy daemon.json validation with TDD. Red: new utils tests failed because projectPath mismatch and malformed port/pid were accepted. Green: readDaemonInfoResult now validates port/pid/projectPath, rejects mismatched projectPath with clear non-retryable error, and readDaemonInfo returns null for invalid info. Proxy index now uses readDaemonInfoResult and exits with JSON-RPC error instead of connecting/retrying on mismatched/malformed daemon.json. Validation: packages/moe-proxy `npm run build` passed; `npx vitest run src/utils.test.ts src/index.test.ts` => 2 files/36 tests passed.",
+      "startedAt": "2026-04-30T12:43:25.117Z",
+      "completedAt": "2026-04-30T12:45:19.118Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add regression tests for daemon CLI helper behavior (extract helpers if needed for testability) and proxy utils: project mismatch, port closed with live PID, malformed daemon.json, and valid daemon info. Run npm test/build in packages/moe-daemon and packages/moe-proxy.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-proxy/src/index.test.ts",
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/utils.ts",
+        "packages/moe-proxy/src/index.test.ts",
+        "packages/moe-proxy/src/utils.test.ts"
+      ],
+      "note": "Added daemon lifecycle regression tests for valid health/project identity, live PID with closed port, wrong-project daemon.json, malformed daemon info, safe stopDaemon cleanup/no SIGTERM, and stale PID-reuse-ambiguous locks. Added proxy tests for wrong-project and malformed daemon.json including JSON-RPC non-retryable error path. Validation: packages/moe-daemon npm test 25 files/412 tests passed; npm run build passed. packages/moe-proxy npm test 2 files/36 tests passed; npm run build passed.",
+      "startedAt": "2026-04-30T12:45:41.252Z",
+      "completedAt": "2026-04-30T12:49:44.984Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Rejecting because daemon validation still does not tie the recorded PID to the process serving the healthy Moe port. This leaves the critical PID-reuse stop/start/status risk partially unfixed even though the test suites pass.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:59:35.226Z",
+  "updatedAt": "2026-04-30T17:31:30.297Z",
+  "planSubmittedAt": "2026-04-28T07:59:56.047Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected command-line inspection of arbitrary PIDs as the only solution because it is platform-specific and brittle. Prefer projectPath match + port open/health response for reuse; for stop, avoid killing when health/project validation fails.",
+    "codebaseInsights": "VS Code and JetBrains already compare daemonInfo.projectPath to the current workspace and often probe the port. The daemon CLI/proxy should use a shared project-path comparison and port/health probe instead of raw process-alive checks alone.",
+    "risks": "Be careful not to hang start/stop on long network checks; reuse existing short socket timeout constants. Tests should mock port checks and process liveness rather than killing real processes. Include error handling and tests for malformed daemon.json.",
+    "keyFiles": [
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-proxy/src/index.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/src/utils.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:59:56.050Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T12:39:33.877Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T13:24:18.942Z",
+  "reviewStartedAt": "2026-04-30T13:24:18.942Z",
+  "reviewCompletedAt": "2026-04-30T17:31:30.297Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "stopDaemon refuses to signal a process when liveness cannot be tied to the matching Moe daemon, and instead removes stale daemon.json/lock files safely.",
+      "Regression tests cover PID-alive/port-closed stale daemon.json, projectPath mismatch, proxy mismatch handling, and normal valid daemon reuse."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 240,
+        "description": "`probeDaemonHealth` validates only /health status/projectPath while `validateDaemonInfoForProject` separately checks daemon.json.pid is alive. A stale daemon.json can point at a live unrelated/reused PID and a different healthy Moe port for the same project, causing `stopDaemon` to signal the unrelated PID. Include pid in /health and require it to equal daemon.json.pid before reuse/status/stop."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/index.test.ts",
+        "line": 82,
+        "description": "Add a regression for the missing PID-to-port tie: use a separate live PID (spawned child is fine) plus a mock healthy matching-project /health server from the test process, then assert validation is invalid and `stopDaemon` does not signal that PID. It should fail before adding pid equality to health validation."
+      }
+    ]
+  }
+}

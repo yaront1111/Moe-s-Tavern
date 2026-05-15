@@ -51,7 +51,7 @@ find_node() {
     # 4. nvm direct (find newest installed version)
     if [ -d "$HOME/.nvm/versions/node" ]; then
         local newest
-        newest=$(ls -d "$HOME/.nvm/versions/node"/v* 2>/dev/null | sort -V | tail -n1)
+        newest=$(find "$HOME/.nvm/versions/node" -maxdepth 1 -type d -name "v*" 2>/dev/null | sort -V | tail -n1)
         if [ -n "$newest" ] && [ -x "$newest/bin/node" ]; then
             echo "$newest/bin/node"
             return 0
@@ -124,15 +124,16 @@ PROJECT=""
 PROJECT_NAME=""
 WORKER_ID=""
 COMMAND="claude"
-COMMAND_ARGS=""
 LIST_PROJECTS=false
 NO_START_DAEMON=false
 AUTO_CLAIM=true
 POLL_INTERVAL=30
 NO_LOOP=false
+LOOP_REQUESTED=false
 TEAM=""
 CODEX_EXEC=false
 GEMINI_EXEC=false
+MODEL=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -173,6 +174,10 @@ while [[ $# -gt 0 ]]; do
             POLL_INTERVAL="$2"
             shift 2
             ;;
+        --loop)
+            LOOP_REQUESTED=true
+            shift
+            ;;
         --no-loop)
             NO_LOOP=true
             shift
@@ -189,6 +194,10 @@ while [[ $# -gt 0 ]]; do
             GEMINI_EXEC=true
             shift
             ;;
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Moe Agent Wrapper"
             echo ""
@@ -204,10 +213,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-start-daemon        Don't auto-start daemon"
             echo "  --no-auto-claim          Don't auto-claim a task on start"
             echo "  --poll-interval SECS     Seconds between task polls (default: 30)"
+            echo "  --loop                   Explicitly enable polling loop mode"
             echo "  --no-loop                Run once and exit (no polling)"
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
+            echo "  --model MODEL            Claude model override (defaults: architect=opus-4-7, worker/qa=sonnet-4-6)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -223,6 +234,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [ "$LOOP_REQUESTED" = true ] && [ "$NO_LOOP" = true ]; then
+    echo -e "${RED}Conflicting options: --loop and --no-loop cannot be used together${NC}" >&2
+    echo "Choose either --loop for polling mode or --no-loop for single-shot mode." >&2
+    exit 2
+fi
 
 # Validate role
 if [[ ! "$ROLE" =~ ^(architect|worker|qa)$ ]]; then
@@ -650,7 +667,7 @@ with open(config_file, "w") as f:
     f.write(content)
 PYEOF
 
-        if [ $? -eq 0 ] && [ -f "$CODEX_CONFIG_FILE" ]; then
+        if [ -f "$CODEX_CONFIG_FILE" ]; then
             echo -e "${GREEN}[OK]${NC} Codex MCP config written to: $CODEX_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Codex MCP config"
@@ -705,7 +722,7 @@ with open(config_file, 'w') as f:
 print(f"[OK] Gemini MCP config written to: {config_file}")
 GEMINIEOF
 
-        if [ $? -eq 0 ] && [ -f "$GEMINI_CONFIG_FILE" ]; then
+        if [ -f "$GEMINI_CONFIG_FILE" ]; then
             echo -e "${GREEN}[OK]${NC} Gemini MCP config written to: $GEMINI_CONFIG_FILE"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Gemini MCP config"
@@ -933,16 +950,9 @@ else
     echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
 fi
 
-# Load shared agent context (.moe/ first, then fallback to install docs/)
+# Agent context is no longer auto-injected; role doc + CLAUDE.md cover the same
+# ground without duplication. Per-task context comes from <claimed_task_context>.
 AGENT_CONTEXT=""
-AGENT_CONTEXT_PATH="$MOE_DIR/agent-context.md"
-if [ ! -f "$AGENT_CONTEXT_PATH" ]; then
-    AGENT_CONTEXT_PATH="$ROOT_DIR/docs/agent-context.md"
-fi
-if [ -f "$AGENT_CONTEXT_PATH" ]; then
-    AGENT_CONTEXT=$(cat "$AGENT_CONTEXT_PATH")
-    echo -e "${GREEN}[OK]${NC} Loaded agent context from: $AGENT_CONTEXT_PATH"
-fi
 
 # Read approval mode from project.json (lightweight, no jq dependency)
 APPROVAL_MODE=""
@@ -954,13 +964,44 @@ if [ -f "$PROJECT_JSON" ]; then
     fi
 fi
 
-# Read enableAgentTeams from project.json
-ENABLE_AGENT_TEAMS=""
+# Read enableAgentTeams from project.json. Subagents are now on by default for
+# every Moe role; explicit `false` opts out. Was previously opt-in for workers only.
+ENABLE_AGENT_TEAMS="true"
 if [ -f "$PROJECT_JSON" ]; then
-    ENABLE_AGENT_TEAMS=$(grep -o '"enableAgentTeams"[[:space:]]*:[[:space:]]*[a-z]*' "$PROJECT_JSON" 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*//' || true)
-    if [ "$ENABLE_AGENT_TEAMS" = "true" ]; then
+    RAW=$(grep -o '"enableAgentTeams"[[:space:]]*:[[:space:]]*[a-z]*' "$PROJECT_JSON" 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*//' || true)
+    if [ "$RAW" = "false" ]; then
+        ENABLE_AGENT_TEAMS="false"
+        echo -e "${GREEN}[OK]${NC} Agent Teams: disabled (project.json opt-out)"
+    else
         echo -e "${GREEN}[OK]${NC} Agent Teams: enabled"
     fi
+fi
+
+# Resolve Claude model for this role.
+# Precedence: --model flag -> project.json settings.models.<role> -> per-role default.
+# architect -> Opus (planning quality + 1M ctx for long task histories on reopens)
+# worker/qa -> Sonnet (~40% cheaper than Opus, fine for routine impl/review)
+RESOLVED_MODEL="$MODEL"
+if [ -z "$RESOLVED_MODEL" ] && [ -f "$PROJECT_JSON" ] && [ -n "$PYTHON_CMD" ]; then
+    RESOLVED_MODEL=$("$PYTHON_CMD" -c "
+import json, sys
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        d = json.load(f)
+    print((d.get('settings', {}).get('models', {}) or {}).get(sys.argv[2], '') or '')
+except Exception:
+    pass
+" "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
+fi
+if [ -z "$RESOLVED_MODEL" ]; then
+    case "$ROLE" in
+        architect) RESOLVED_MODEL="claude-opus-4-7" ;;
+        worker)    RESOLVED_MODEL="claude-sonnet-4-6" ;;
+        qa)        RESOLVED_MODEL="claude-sonnet-4-6" ;;
+    esac
+fi
+if [ -n "$RESOLVED_MODEL" ]; then
+    echo -e "${GREEN}[OK]${NC} Model: $RESOLVED_MODEL"
 fi
 
 # Load known issues if present
@@ -971,75 +1012,42 @@ if [ -f "$KNOWN_ISSUES_PATH" ]; then
     echo -e "${GREEN}[OK]${NC} Loaded known issues from: $KNOWN_ISSUES_PATH"
 fi
 
-# Expose Moe-vendored skills to the Claude Code Skill tool by mirroring
-# <project>/.moe/skills/<name>/ into <project>/.claude/skills/<name>/. Claude
-# Code only discovers project skills under .claude/skills/; it does not scan
-# .moe/skills/. Prefer symlink so .moe/skills/ edits propagate immediately;
-# fall back to copy if symlink creation fails.
-MOE_SKILLS_DIR="$MOE_DIR/skills"
-if [ -d "$MOE_SKILLS_DIR" ]; then
-    CLAUDE_SKILLS_DIR="$PROJECT/.claude/skills"
-    mkdir -p "$CLAUDE_SKILLS_DIR"
-    mirrored=0
-    skipped=0
-    for src in "$MOE_SKILLS_DIR"/*/; do
-        [ -d "$src" ] || continue
+# Skill discovery: the daemon surfaces phase-recommended skills via
+# nextAction.recommendedSkill on every MCP response. Skills live on disk under
+# .moe/skills/; the agent loads them via its host's Skill tool when relevant.
+
+# Mirror .moe/agents/<name>.md to .claude/agents/<name>.md so Claude Code's
+# subagent loader discovers them. Idempotent: only copies files that don't
+# already exist in the destination (preserves user customizations).
+if [ "$ENABLE_AGENT_TEAMS" = "true" ] && [ -d "$MOE_DIR/agents" ]; then
+    CLAUDE_AGENTS_DIR="$PROJECT/.claude/agents"
+    mkdir -p "$CLAUDE_AGENTS_DIR"
+    AGENT_MIRRORED=0
+    AGENT_SKIPPED=0
+    for src in "$MOE_DIR/agents"/*.md; do
+        [ -f "$src" ] || continue
         name=$(basename "$src")
-        dest="$CLAUDE_SKILLS_DIR/$name"
-        if [ -e "$dest" ] || [ -L "$dest" ]; then
-            skipped=$((skipped + 1))
+        dest="$CLAUDE_AGENTS_DIR/$name"
+        if [ -e "$dest" ]; then
+            AGENT_SKIPPED=$((AGENT_SKIPPED + 1))
             continue
         fi
-        # Skill loader requires SKILL.md at dest root
-        [ -f "${src}SKILL.md" ] || continue
-        if ln -s "$src" "$dest" 2>/dev/null; then
-            :
-        else
-            cp -R "$src" "$dest"
-        fi
-        mirrored=$((mirrored + 1))
+        cp "$src" "$dest"
+        AGENT_MIRRORED=$((AGENT_MIRRORED + 1))
     done
-    if [ $mirrored -gt 0 ] || [ $skipped -gt 0 ]; then
-        echo -e "${GREEN}[OK]${NC} Mirrored $mirrored skill(s) from .moe/skills/ to .claude/skills/ ($skipped already present)"
+    if [ $AGENT_MIRRORED -gt 0 ] || [ $AGENT_SKIPPED -gt 0 ]; then
+        echo -e "${GREEN}[OK]${NC} Subagents: mirrored $AGENT_MIRRORED, kept $AGENT_SKIPPED existing (.moe/agents/ -> .claude/agents/)"
     fi
 fi
 
-# Load skills manifest (lean: name, role, description per skill).
-# Bodies live in .moe/skills/<name>/SKILL.md and load on demand via the Skill tool.
-SKILLS_LIST=""
-SKILLS_MANIFEST_PATH="$MOE_DIR/skills/manifest.json"
-if [ -f "$SKILLS_MANIFEST_PATH" ] && [ -n "$NODE_CMD" ]; then
-    # Capture stderr separately so we can warn the user if parsing fails.
-    SKILLS_STDERR=$(mktemp 2>/dev/null || echo "/tmp/moe-skills-stderr.$$")
-    SKILLS_LIST=$("$NODE_CMD" -e "
-try {
-  const m = JSON.parse(require('fs').readFileSync(process.argv[1],'utf-8'));
-  if (!Array.isArray(m.skills)) {
-    process.stderr.write('manifest.skills is missing or not an array');
-    process.exit(2);
-  }
-  // Render each skill with its trigger context so the agent recognizes WHEN
-  // to invoke it, not just what it's about. Mirrors how Claude picks MCP
-  // tools -- description alone is topic-oriented; triggers are actionable.
-  const lines = m.skills.map(s => {
-    const triggers = Array.isArray(s.triggeredBy) && s.triggeredBy.length
-      ? '\n    when: ' + s.triggeredBy.join('; ')
-      : '';
-    return '- ' + s.name + ' (' + (s.role||'all') + '): ' + (s.description||'') + triggers;
-  });
-  process.stdout.write(lines.join('\n'));
-} catch (e) { process.stderr.write(String(e && e.message || e)); process.exit(2); }
-" "$SKILLS_MANIFEST_PATH" 2>"$SKILLS_STDERR" || true)
-    if [ -n "$SKILLS_LIST" ]; then
-        echo -e "${GREEN}[OK]${NC} Loaded skill manifest from: $SKILLS_MANIFEST_PATH"
-    elif [ -s "$SKILLS_STDERR" ]; then
-        echo -e "${YELLOW}[WARN]${NC} Skill manifest at $SKILLS_MANIFEST_PATH could not be parsed: $(cat "$SKILLS_STDERR")"
-    fi
-    rm -f "$SKILLS_STDERR"
+LOOP_ENABLED=false
+if [ "$AUTO_CLAIM" = true ] && [ "$POLL_INTERVAL" -gt 0 ] 2>/dev/null; then
+    LOOP_ENABLED=true
 fi
-
-LOOP_ENABLED=true
-if [ "$NO_LOOP" = true ] || [ "$POLL_INTERVAL" -le 0 ] 2>/dev/null; then
+if [ "$LOOP_REQUESTED" = true ] && [ "$POLL_INTERVAL" -gt 0 ] 2>/dev/null; then
+    LOOP_ENABLED=true
+fi
+if [ "$NO_LOOP" = true ]; then
     LOOP_ENABLED=false
 fi
 
@@ -1113,6 +1121,36 @@ sys.exit(1)
 " <<< "$raw"
 }
 
+post_flight() {
+    local exit_code="${CLI_EXIT_CODE:-0}"
+
+    if [ "${PREFLIGHT_OK:-false}" != "true" ] || [ -z "${PREFLIGHT_TASK_ID:-}" ]; then
+        return 0
+    fi
+
+    local summary
+    summary="$ROLE session ended (CLI exit=$exit_code). See task activity log for details."
+    if ! moe_rpc save_session_summary \
+        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'taskId':sys.argv[2],'summary':sys.argv[3]}))" \
+            "$WORKER_ID" "$PREFLIGHT_TASK_ID" "$summary" 2>/dev/null)" \
+        > /dev/null 2>&1; then
+        echo -e "${YELLOW}[WARN]${NC} post-flight save_session_summary failed" >&2
+    fi
+
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        local content
+        content="$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$exit_code)"
+        if ! moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$content" 2>/dev/null)" \
+            > /dev/null 2>&1; then
+            echo -e "${YELLOW}[WARN]${NC} post-flight chat_send failed" >&2
+        fi
+    fi
+
+    return 0
+}
+
 FIRST_RUN=true
 
 while [ "$LOOP_RUNNING" = true ]; do
@@ -1122,7 +1160,10 @@ while [ "$LOOP_RUNNING" = true ]; do
         sleep 2
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
+    IS_FIRST_ITERATION="$FIRST_RUN"
     FIRST_RUN=false
+
+    CLI_EXIT_CODE=0
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     # Claim the next task, fetch context, read chat backlog, recall memory.
@@ -1134,7 +1175,6 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_CONTEXT=""
     PREFLIGHT_GENERAL_UNREAD=""
     PREFLIGHT_TASK_UNREAD=""
-    PREFLIGHT_RECALL=""
     PREFLIGHT_PENDING=""
     PREFLIGHT_SKILL_NAME=""
     PREFLIGHT_SKILL_REASON=""
@@ -1164,11 +1204,15 @@ except Exception:
 " <<< "$CHANNELS_RESP" 2>/dev/null || echo "")
         fi
 
-        # 1. Join #general and read backlog (join is safe pre-claim; announce deferred to post-claim)
+        # 1. Join #general (only on first iteration; daemon-side join is idempotent
+        #    and re-joining every loop iteration is wasted RPC). Read unread each
+        #    iteration so routed mentions for THIS task surface in <routed_mentions>.
         if [ -n "$GENERAL_CHANNEL_ID" ]; then
-            moe_rpc chat_join \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
-                > /dev/null 2>&1 || true
+            if [ "$IS_FIRST_ITERATION" = true ]; then
+                moe_rpc chat_join \
+                    "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
+                    > /dev/null 2>&1 || true
+            fi
 
             # 2. Read unread #general messages
             PREFLIGHT_GENERAL_UNREAD=$(moe_rpc chat_read \
@@ -1222,6 +1266,58 @@ except Exception:
                     PREFLIGHT_CONTEXT=$(moe_rpc get_context \
                         "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
                         2>/dev/null || echo "")
+                    # Trim the get_context payload before injection. Full JSON is
+                    # 5-30KB; agents only need a working subset. Comments are
+                    # dropped (re-fetch via moe.get_context if needed); plan notes
+                    # are capped to 300 chars per step.
+                    if [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
+                        PREFLIGHT_CONTEXT_TRIMMED=$("$PYTHON_CMD" -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    proj = d.get('project') or {}
+    epic = d.get('epic') or {}
+    tk = d.get('task') or {}
+    plan = []
+    for s in (tk.get('implementationPlan') or []):
+        note = s.get('note') or ''
+        if isinstance(note, str) and len(note) > 300:
+            note = note[:300] + '...'
+        plan.append({
+            'stepId': s.get('stepId'),
+            'title': s.get('title'),
+            'description': s.get('description'),
+            'status': s.get('status'),
+            'note': note,
+            'modifiedFiles': s.get('modifiedFiles'),
+        })
+    out = {
+        'project': ({'id': proj.get('id'), 'name': proj.get('name'), 'globalRails': proj.get('globalRails')} if proj else None),
+        'epic': ({'id': epic.get('id'), 'title': epic.get('title'), 'epicRails': epic.get('epicRails')} if epic else None),
+        'task': ({
+            'id': tk.get('id'),
+            'title': tk.get('title'),
+            'description': tk.get('description'),
+            'status': tk.get('status'),
+            'reopenCount': tk.get('reopenCount'),
+            'reopenReason': tk.get('reopenReason'),
+            'rejectionDetails': tk.get('rejectionDetails'),
+            'definitionOfDone': tk.get('definitionOfDone'),
+            'implementationPlan': plan,
+            'taskRails': tk.get('taskRails'),
+        } if tk else None),
+        'allRails': d.get('allRails'),
+        'planningNotes': d.get('planningNotes'),
+        'nextAction': d.get('nextAction'),
+    }
+    sys.stdout.write(json.dumps(out, separators=(',', ':')))
+except Exception:
+    pass
+" <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || true)
+                        if [ -n "$PREFLIGHT_CONTEXT_TRIMMED" ]; then
+                            PREFLIGHT_CONTEXT="$PREFLIGHT_CONTEXT_TRIMMED"
+                        fi
+                    fi
                 fi
 
                 # 6. Read task channel backlog
@@ -1231,12 +1327,9 @@ except Exception:
                         2>/dev/null || echo "")
                 fi
 
-                # 7. Recall relevant memory by task title
-                if [ -n "$PREFLIGHT_TASK_TITLE" ]; then
-                    PREFLIGHT_RECALL=$(moe_rpc recall \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'query':sys.argv[1],'limit':10}))" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
-                        2>/dev/null || echo "")
-                fi
+                # 7. Memory recall is handled inside moe.get_context (memory.relevant
+                #    in <claimed_task_context> below). No separate preflight recall
+                #    call -- it duplicates the same search and burns tokens.
 
                 # 8. Extract phase-recommended skill from context.nextAction. We
                 #    DO NOT inline the body -- the agent loads it via the Skill tool.
@@ -1282,8 +1375,10 @@ except Exception:
                 PREFLIGHT_OK=true
                 echo -e "${GREEN}[OK]${NC} Pre-flight complete. Claimed: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
 
-                # Post-claim announce in #general (worker now registered, chat_send accepts it)
-                if [ -n "$GENERAL_CHANNEL_ID" ]; then
+                # Announce "online" once per wrapper-process lifetime. Per-task
+                # starts/completions are conveyed by post-flight session-end and
+                # the daemon's task-state events.
+                if [ -n "$GENERAL_CHANNEL_ID" ] && [ "$IS_FIRST_ITERATION" = true ]; then
                     moe_rpc chat_send \
                         "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, starting '+sys.argv[4]+': '+sys.argv[5]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
                         > /dev/null 2>&1 || true
@@ -1375,17 +1470,9 @@ PYEOF
             ROLE_STATUS_DESC="You handle tasks in REVIEW status (the REVIEW column on the board)."
             ;;
     esac
-    SYSTEM_APPEND="Role: $ROLE. $ROLE_STATUS_DESC
-CRITICAL: You MUST use Moe MCP tools (moe.claim_next_task, moe.get_context, moe.wait_for_task, etc.) for ALL task operations. NEVER read or parse .moe/ files directly. NEVER use bash, grep, python, or any other method to inspect .moe/ task files. The MCP tools are the ONLY correct way to interact with the task system."
+    SYSTEM_APPEND="Role: $ROLE. $ROLE_STATUS_DESC Always use Moe MCP tools."
     if [ "$AUTO_CLAIM" = true ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND Start by claiming the next task for your role."
-    fi
-
-    # Append agent context
-    if [ -n "$AGENT_CONTEXT" ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
-
-$AGENT_CONTEXT"
     fi
 
     # Append approval mode
@@ -1403,17 +1490,10 @@ Approval mode: $APPROVAL_MODE"
 $ROLE_DOC"
     fi
 
-    # Append available-skills index (manifest only, not bodies -- bodies load on
-    # demand via the Skill tool when relevant). The daemon also surfaces a
-    # nextAction.recommendedSkill field per MCP response.
-    if [ -n "$SKILLS_LIST" ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
-
-# Available Skills (load via the Skill tool when the situation calls for one)
-Each skill is deeper guidance for a specific phase of work. The daemon recommends one in nextAction.recommendedSkill when relevant -- invoke it via the host's Skill tool.
-
-$SKILLS_LIST"
-    fi
+    # The daemon surfaces a phase-recommended skill via nextAction.recommendedSkill
+    # on every MCP response -- the agent invokes it via the host's Skill tool when
+    # present. Full manifest is on disk at .moe/skills/manifest.json if the agent
+    # ever needs to browse what's available; we don't dump it into the prompt.
 
     # Append known issues
     if [ -n "$KNOWN_ISSUES" ]; then
@@ -1431,49 +1511,57 @@ $KNOWN_ISSUES"
 $TEAM_CONTEXT"
     fi
 
-    # Add pending questions instructions
-    SYSTEM_APPEND="$SYSTEM_APPEND
+    # Pending-question handling: pre-flight already calls get_pending_questions
+    # and the no-task banner instructs how to answer them when wait_for_task
+    # wakes with hasPendingQuestion:true. No standalone block needed.
 
-# Pending Questions
-Before claiming a task, call moe.get_pending_questions to check for unanswered human questions.
-For each pending question, call moe.add_comment with your workerId and a response in this format:
-  Q: <the human's question>
-  A: <your answer based on task context>
-This clears the pending flag so the question is answered for the next agent.
-If moe.wait_for_task returns hasPendingQuestion:true, call moe.get_pending_questions and answer them, then resume waiting."
-
-    # Add fallback CLI helper info
+    # Fallback CLI helper: only inject when MOE_FALLBACK_CLI=1 (rare edge case).
     moe_call="$SCRIPT_DIR/moe-call.sh"
-    if [ -f "$moe_call" ]; then
+    if [ "${MOE_FALLBACK_CLI:-}" = "1" ] && [ -f "$moe_call" ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
 
 # Fallback CLI
-If MCP tools (moe.*) are not available, use the CLI helper instead:
-  bash $moe_call <tool> '<json_args>' --project $PROJECT
-Examples:
-  bash $moe_call claim_next_task '{\"statuses\":[\"PLANNING\"],\"workerId\":\"$WORKER_ID\"}'
-  bash $moe_call get_context '{\"workerId\":\"$WORKER_ID\"}'
-  bash $moe_call submit_plan '{\"taskId\":\"task-xxx\",\"plan\":[...]}'
-  bash $moe_call add_comment '{\"taskId\":\"task-xxx\",\"content\":\"my message\",\"workerId\":\"$WORKER_ID\"}'
-  bash $moe_call wait_for_task '{\"statuses\":[\"PLANNING\"],\"workerId\":\"$WORKER_ID\",\"timeoutMs\":300000}'
+If MCP tools (moe.*) are not available, use: bash $moe_call <tool> '<json_args>' --project $PROJECT
 Run: bash $moe_call --help for full list."
     fi
 
-    # Append pre-flight results -- the agent starts already initialized.
+    # System prompt stays byte-identical across iterations so Anthropic's
+    # prompt cache (5min/1h TTL) can hit on the stable prefix. Per-task and
+    # per-iteration content (claimed_task_context, inbox, routed_mentions,
+    # skill JIT) goes into DYNAMIC_CONTEXT and is prepended to the user
+    # prompt -- NOT appended to SYSTEM_APPEND.
+    DYNAMIC_CONTEXT=""
     if [ "$PREFLIGHT_OK" = true ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
+        # Compute compact unread counts so we don't embed the full chat-read
+        # responses (each one can be several KB of token-burning JSON).
+        PREFLIGHT_GENERAL_COUNT=0
+        if [ -n "$PREFLIGHT_GENERAL_UNREAD" ] && [ -n "$PYTHON_CMD" ]; then
+            PREFLIGHT_GENERAL_COUNT=$("$PYTHON_CMD" -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(len(d.get('messages', []) or []))
+except Exception:
+    print(0)
+" <<< "$PREFLIGHT_GENERAL_UNREAD" 2>/dev/null || echo 0)
+        fi
+        PREFLIGHT_TASK_COUNT=0
+        if [ -n "$PREFLIGHT_TASK_UNREAD" ] && [ -n "$PYTHON_CMD" ]; then
+            PREFLIGHT_TASK_COUNT=$("$PYTHON_CMD" -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(len(d.get('messages', []) or []))
+except Exception:
+    print(0)
+" <<< "$PREFLIGHT_TASK_UNREAD" 2>/dev/null || echo 0)
+        fi
 
-# Pre-flight Complete (runtime-injected -- do not repeat)
+        DYNAMIC_CONTEXT="# Pre-flight Complete (runtime-injected -- do not repeat)
 You ARE: $ROLE agent, workerId=$WORKER_ID.
-The wrapper has ALREADY performed these steps before spawning you:
-- joined #general and announced presence
-- read unread #general messages (see <general_unread> below)
-- claimed task $PREFLIGHT_TASK_ID: $PREFLIGHT_TASK_TITLE
-- fetched its context (see <claimed_task_context> below)
-- read its task chat backlog (see <task_chat_backlog> below)
-- recalled relevant prior knowledge (see <relevant_memory> below)
+The wrapper has claimed your task and surfaced unread/memory counts in <inbox> below. Fetch the full content via moe.chat_read / moe.recall when it is relevant to your next step. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
 
-DO NOT call at session start: moe.chat_join, moe.chat_send, moe.chat_read, moe.claim_next_task, moe.get_context, moe.recall. They are done.
+DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
 
 Claimed task id: $PREFLIGHT_TASK_ID
 
@@ -1481,17 +1569,12 @@ Claimed task id: $PREFLIGHT_TASK_ID
 $PREFLIGHT_CONTEXT
 </claimed_task_context>
 
-<general_unread>
-$PREFLIGHT_GENERAL_UNREAD
-</general_unread>
-
-<task_chat_backlog>
-$PREFLIGHT_TASK_UNREAD
-</task_chat_backlog>
-
-<relevant_memory>
-$PREFLIGHT_RECALL
-</relevant_memory>
+<inbox>
+unread_general=$PREFLIGHT_GENERAL_COUNT
+unread_task=$PREFLIGHT_TASK_COUNT
+mentions=$PREFLIGHT_ROUTED_MENTIONS_COUNT (see <routed_mentions> below if > 0)
+memory_hits=see memory.relevant in <claimed_task_context>
+</inbox>
 
 <pending_questions>
 $PREFLIGHT_PENDING
@@ -1499,11 +1582,10 @@ $PREFLIGHT_PENDING
 
         # JIT reminder: point the agent at the phase-recommended skill. We do
         # NOT inline the body -- the agent loads it itself via the Skill tool.
-        # This is the nudge that keeps the agent from rationalizing past it.
         if [ -n "$PREFLIGHT_SKILL_NAME" ]; then
             JIT_NEXT_TOOL="${PREFLIGHT_SKILL_NEXT_TOOL:-your next Moe tool}"
             JIT_REASON="${PREFLIGHT_SKILL_REASON:-Phase-recommended for this task.}"
-            SYSTEM_APPEND="$SYSTEM_APPEND
+            DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 
 <system-reminder>
 Skill recommendation for this task's current phase: $PREFLIGHT_SKILL_NAME
@@ -1515,9 +1597,7 @@ If after loading you decide it truly does not apply here, say so explicitly in c
 </system-reminder>"
         fi
     elif [ "$PREFLIGHT_NO_TASK" = true ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
-
-# Pre-flight Complete: no claimable task
+        DYNAMIC_CONTEXT="# Pre-flight Complete: no claimable task
 The daemon reports no claimable task for role $ROLE right now.
 Your FIRST action MUST be moe.wait_for_task with statuses=$STATUSES, workerId=$WORKER_ID.
 When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
@@ -1525,13 +1605,12 @@ If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.ch
 If hasPendingQuestion:true, call moe.get_pending_questions and answer with moe.add_comment."
     fi
 
-    # Priority banner for unread messages routed at THIS worker. Injected LAST
-    # (so it's the most recent text before the user prompt) to maximize the
-    # chance the model acts on it before anything else. Role docs
-    # (.moe/roles/<role>.md) back this up with the "Mention Response Protocol"
-    # section -- the two work together.
+    # Priority banner for unread messages routed at THIS worker. Goes LAST in
+    # the dynamic context so it's the most recent text before the role-specific
+    # PROMPT body -- maximizes the chance the model replies before any other
+    # planned tool call.
     if [ "$PREFLIGHT_ROUTED_MENTIONS_COUNT" -gt 0 ] 2>/dev/null; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
+        DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 
 <system-reminder>
 # Incoming @mentions targeting you ($WORKER_ID)
@@ -1544,31 +1623,48 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
 </system-reminder>"
     fi
 
-    PROMPT=""
+    PROMPT_BODY=""
     if [ "$AUTO_CLAIM" = true ]; then
         if [ "$PREFLIGHT_OK" = true ]; then
-            # Lean per-role prompt -- everything else is already in the system prompt.
+            # Lean per-role prompt body -- DYNAMIC_CONTEXT (above) carries the
+            # per-task content; system prompt stays stable for cache hits.
             case $ROLE in
                 architect)
-                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 worker)
-                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 qa)
-                    PROMPT="Task $PREFLIGHT_TASK_ID is claimed and its full context is in your system prompt. If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
             esac
         elif [ "$PREFLIGHT_NO_TASK" = true ]; then
-            PROMPT="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
+            PROMPT_BODY="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
         else
             # Pre-flight was skipped or failed -- fall back to the legacy multi-step prompt
-            PROMPT="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
+            PROMPT_BODY="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
         fi
     else
         echo "Suggested first call:"
         echo "  moe.claim_next_task $CLAIM_JSON"
         echo ""
+    fi
+
+    # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
+    # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
+    if [ -n "$PROMPT_BODY" ]; then
+        if [ -n "$DYNAMIC_CONTEXT" ]; then
+            PROMPT="$DYNAMIC_CONTEXT
+
+$PROMPT_BODY"
+        else
+            PROMPT="$PROMPT_BODY"
+        fi
+    elif [ -n "$DYNAMIC_CONTEXT" ]; then
+        PROMPT="$DYNAMIC_CONTEXT"
+    else
+        PROMPT=""
     fi
 
     if [ "$CLI_TYPE" = "codex" ]; then
@@ -1616,13 +1712,25 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             echo -e "Starting Codex (exec, headless)..."
             echo ""
             echo "Command: $COMMAND exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
-            $COMMAND exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT" || true
+            set +e
+
+            $COMMAND exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         else
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
             echo "Command: $COMMAND -C \"$PROJECT\" \"<prompt>\""
-            $COMMAND -C "$PROJECT" "$SHORT_PROMPT" || true
+            set +e
+
+            $COMMAND -C "$PROJECT" "$SHORT_PROMPT"
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         fi
     elif [ "$CLI_TYPE" = "gemini" ]; then
         # Check gemini is available
@@ -1667,20 +1775,34 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             echo -e "Starting Gemini (headless, --yolo)..."
             echo ""
             echo "Command: $COMMAND --prompt \"<prompt>\" --yolo"
-            (cd "$PROJECT" && $COMMAND --prompt "$SHORT_PROMPT" --yolo) || true
+            set +e
+
+            (cd "$PROJECT" && $COMMAND --prompt "$SHORT_PROMPT" --yolo)
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         else
             # Interactive mode
             echo "Starting Gemini (interactive)..."
             echo ""
             echo "Command: $COMMAND --prompt-interactive \"<prompt>\""
-            (cd "$PROJECT" && $COMMAND --prompt-interactive "$SHORT_PROMPT") || true
+            set +e
+
+            (cd "$PROJECT" && $COMMAND --prompt-interactive "$SHORT_PROMPT")
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         fi
     else
-        # Enable CC Agent Teams for Claude workers when setting is on
+        # Enable Claude Code subagents for all Moe roles by default. Architects
+        # benefit hugely from Explore-style parallel research; workers fan out
+        # test runs; QA spawns a code-reviewer subagent. Opt-out via
+        # project.json settings.enableAgentTeams=false.
         unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-        if [ "$ROLE" = "worker" ] && [ "$ENABLE_AGENT_TEAMS" = "true" ]; then
+        if [ "$ENABLE_AGENT_TEAMS" = "true" ]; then
             export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-            echo -e "${GREEN}[OK]${NC} Agent Teams enabled for this worker session"
         fi
 
         # Write system prompt to a temp file to avoid command-line size/quoting issues
@@ -1688,21 +1810,47 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         SYSTEM_PROMPT_FILE=$(create_secure_temp)/system-prompt.md
         printf '%s' "$SYSTEM_APPEND" > "$SYSTEM_PROMPT_FILE"
 
+        # Token-budget debug: set MOE_DEBUG_PROMPT_SIZE=1 to print final
+        # SYSTEM_APPEND size before launching the agent. Used to measure
+        # token-cut wins; not on by default.
+        if [ "${MOE_DEBUG_PROMPT_SIZE:-}" = "1" ]; then
+            PROMPT_BYTES=$(printf '%s' "$SYSTEM_APPEND" | wc -c | tr -d ' ')
+            echo -e "${BLUE}[prompt-size]${NC} SYSTEM_APPEND = ${PROMPT_BYTES} bytes ($((PROMPT_BYTES / 4)) tokens approx)"
+        fi
+
+        # Only the `claude` CLI honors --model; codex/gemini pick their own.
+        MODEL_ARGS=()
+        if [ "$CLI_TYPE" = "claude" ] && [ -n "$RESOLVED_MODEL" ]; then
+            MODEL_ARGS=(--model "$RESOLVED_MODEL")
+        fi
+
         if [ "$AUTO_CLAIM" = true ]; then
             echo "Starting ${CLI_TYPE} with auto-claim..."
             echo ""
-            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max "$PROMPT") || true
+            set +e
+
+            (cd "$PROJECT" && "$COMMAND" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max "$PROMPT")
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         else
-            (cd "$PROJECT" && "$COMMAND" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max) || true
+            set +e
+
+            (cd "$PROJECT" && "$COMMAND" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" --effort max)
+
+            CLI_EXIT_CODE=$?
+
+            set -e
         fi
     fi
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
-    # Save session summary and announce completion in #general. Best-effort -- any
+    # Save session summary and announce session end in #general. Best-effort -- any
     # RPC failure does not block loop continuation.
-    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
-        echo -e "${BLUE}Post-flight: saving session summary, announcing outcome...${NC}"
+    post_flight || true
 
+    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         # Check task's final status and reopenCount (agent may have completed,
         # paused, or bailed; reopenCount drives commit-message wording below).
         POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' 2>/dev/null || echo "")
@@ -1726,30 +1874,6 @@ except Exception:
             } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
             FINAL_STATUS="${FINAL_STATUS:-}"
             FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
-        fi
-
-        # Save session summary -- captures what this session accomplished, even if aborted.
-        # If the daemon already has a summary from the agent's own moe.save_session_summary,
-        # this is a best-effort no-op thanks to dedup.
-        moe_rpc save_session_summary \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'taskId':sys.argv[2],'summary':sys.argv[3]}))" \
-                "$WORKER_ID" "$PREFLIGHT_TASK_ID" "wrapper post-flight: session ended with task status=${FINAL_STATUS:-unknown}" 2>/dev/null)" \
-            > /dev/null 2>&1 || true
-
-        # Announce outcome in #general
-        if [ -n "$GENERAL_CHANNEL_ID" ] && [ -n "$FINAL_STATUS" ]; then
-            case "$FINAL_STATUS" in
-                DONE|REVIEW)
-                    ANNOUNCE_TEXT="$ROLE completed $PREFLIGHT_TASK_ID (now $FINAL_STATUS)" ;;
-                WORKING|AWAITING_APPROVAL)
-                    ANNOUNCE_TEXT="$ROLE paused $PREFLIGHT_TASK_ID (still $FINAL_STATUS)" ;;
-                *)
-                    ANNOUNCE_TEXT="$ROLE exited $PREFLIGHT_TASK_ID (status: $FINAL_STATUS)" ;;
-            esac
-            moe_rpc chat_send \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                    "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ANNOUNCE_TEXT" 2>/dev/null)" \
-                > /dev/null 2>&1 || true
         fi
 
         # Auto-commit + push on worker completion. Runs when:
@@ -1828,16 +1952,21 @@ Completed via Moe worker session."
                     # current branch has no upstream yet (fresh moe/work-* branch),
                     # set it on first push so subsequent `git push` succeeds.
                     if git -C "$PROJECT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
-                        PUSH_OUT=$(git -C "$PROJECT" push 2>&1)
+                        if PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
+                            echo "$PUSH_OUT" | tail -5
+                            echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
+                        else
+                            echo "$PUSH_OUT" | tail -5
+                            echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                        fi
                     else
-                        PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1)
-                    fi
-                    if [ $? -eq 0 ]; then
-                        echo "$PUSH_OUT" | tail -5
-                        echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
-                    else
-                        echo "$PUSH_OUT" | tail -5
-                        echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                        if PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
+                            echo "$PUSH_OUT" | tail -5
+                            echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
+                        else
+                            echo "$PUSH_OUT" | tail -5
+                            echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                        fi
                     fi
                 else
                     echo -e "${YELLOW}[info]${NC} $PROJECT is not a git repo -- skipping auto-commit+push."
