@@ -1,0 +1,139 @@
+{
+  "id": "task-76121d08",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Make VS Code disconnect and reconnect behavior explicit",
+  "description": "Deep sweep finding: moe-vscode/src/services/MoeDaemonClient.ts has no manual-disconnect guard. `disconnect()` closes the socket, and the existing `close` handler can immediately call scheduleReconnect when `moe.autoConnect` is true. Also reconnect timer callbacks swallow `connect()` failures that happen before a WebSocket close event, so a failed reconnect can stop after one attempt instead of exhausting retries.",
+  "definitionOfDone": [
+    "Manual `moe.disconnect` does not auto-reconnect until the user runs connect/restart or auto-connect is deliberately re-enabled.",
+    "Daemon shutdown/restart flows still reconnect only when intended.",
+    "Reconnect attempts continue/back off when connect fails before a WebSocket is created or before a close event fires.",
+    "ws.send/close races are handled without throwing from the extension host.",
+    "VS Code TypeScript compile passes and tests/manual test notes cover disconnect and reconnect failure paths."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add explicit manual-disconnect state to MoeDaemonClient so `moe.disconnect` suppresses close-triggered auto reconnect, while `connect`/restart clears it intentionally.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "Added manualDisconnect state to MoeDaemonClient. Public disconnect() defaults to manual=true and suppresses close-triggered reconnect; connect() clears the flag before reconnecting; internal project-mismatch and daemon-shutdown disconnects use manual:false. scheduleReconnect now returns early after a manual disconnect. Updated daemon status quick-pick text from Restart Daemon to Reconnect to Daemon so UI no longer promises an actual restart. Verification: `npm run compile` in moe-vscode exited 0 (tsc -p ./).",
+      "startedAt": "2026-04-30T14:42:18.077Z",
+      "completedAt": "2026-04-30T14:43:49.842Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Refactor reconnect timer error handling so failed connect attempts before WebSocket creation still schedule the next attempt until maxReconnectAttempts; guard against stacked timers.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Refactored scheduleReconnect to avoid stacked timers and continue retrying when connect() rejects before a WebSocket close event. It now returns if a reconnect timeout already exists, clears the timeout slot before attempting reconnect, logs failures, resets state to disconnected, and reschedules until maxReconnectAttempts. Manual action from the max-retry dialog logs failure instead of swallowing it. Verification: `npm run compile` in moe-vscode exited 0 (tsc -p ./).",
+      "startedAt": "2026-04-30T14:43:55.986Z",
+      "completedAt": "2026-04-30T14:44:51.787Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wrap ws.send/close paths with defensive error handling and connection-state updates so UI operations during disconnect/reconnect do not throw from extension host.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Hardened WebSocket send/close races. connect() now captures a local socket, ignores stale socket close/message events, rejects connection attempts that close before open, and clears this.ws only for the current socket. disconnect() clears this.ws before close and catches close errors. sendMessage() now checks WebSocket.OPEN, catches send errors, logs/fires onError, sets disconnected, and schedules reconnect instead of throwing from extension host. Verification: `npm run compile` in moe-vscode exited 0 (tsc -p ./).",
+      "startedAt": "2026-04-30T14:44:58.457Z",
+      "completedAt": "2026-04-30T14:46:01.455Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add/update tests if the VS Code test harness exists; otherwise add manual validation notes and run `npm run compile` as the required test/build gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json",
+        "moe-vscode/MANUAL_TESTS.md"
+      ],
+      "note": "No VS Code automated test harness exists in moe-vscode (only compile/lint/package scripts; no project tests outside node_modules). Added moe-vscode/MANUAL_TESTS.md covering manual disconnect staying disconnected, user reconnect clearing manual disconnect, failed reconnect retrying before close events, and send/close race handling. Renamed contributed command title to `Moe: Reconnect to Daemon` to match behavior. Adversarial diff review checked stale sockets, manual disconnect vs internal disconnect, stacked timers, and send errors; no further code changes needed beyond shell-safe error handling already added. Verification: `npm run compile` in moe-vscode exited 0 (tsc -p ./); `git diff --check` on affected tracked files exited 0 with line-ending warnings only; task-scope status shows only moe-vscode/package.json, src/extension.ts, src/services/MoeDaemonClient.ts, and new MANUAL_TESTS.md.",
+      "startedAt": "2026-04-30T14:46:14.395Z",
+      "completedAt": "2026-04-30T14:47:36.671Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "Non-manual/internal disconnect paths no longer reconnect because disconnect({manual:false}) clears the active socket before closing it, and the close handler now ignores that close as stale. This leaves the STATE_SNAPSHOT project-mismatch recovery path disconnected after deleting daemon.json instead of auto-healing to the correct daemon.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 5,
+  "comments": [
+    {
+      "id": "comment-d007b882",
+      "author": "architect-2992",
+      "content": "Additional deep-sweep finding for this VS Code reconnect task: the contributed command `moe.restartDaemon` in `moe-vscode/src/extension.ts` currently calls `daemonClient.disconnect()` followed by `connect()`. Because `ensureDaemonRunning()` no-ops when the existing daemon is alive, this is a reconnect, not a daemon restart. Please include this in the fix: either implement an actual stop/kill + fresh start flow with clear error handling and tests, or rename/change UI text so users are not promised a restart.",
+      "timestamp": "2026-04-28T08:03:16.442Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.252Z",
+  "updatedAt": "2026-05-01T16:29:34.988Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.414Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: add a manualDisconnect flag and a single reconnect scheduling helper that is invoked both from close and failed connect attempts. Rejected: disabling autoConnect globally after any disconnect.",
+    "codebaseInsights": "MoeDaemonClient has daemonShuttingDown but no manualDisconnect flag. scheduleReconnect only runs from close/error paths and reconnect timer swallows connect failures that occur before a socket close event.",
+    "risks": "Avoid breaking autoConnect on startup and intentional daemon restart. Add error handling around ws.send/close races because webviews may request operations while reconnecting.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.417Z",
+  "contextFetchedBy": [
+    "architect-2992",
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T14:42:18.077Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T20:36:22.503Z",
+  "reviewStartedAt": "2026-04-30T20:36:22.503Z",
+  "reviewCompletedAt": "2026-05-01T16:29:34.987Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Daemon shutdown/restart flows still reconnect only when intended.",
+      "VS Code TypeScript compile passes and tests/manual test notes cover disconnect and reconnect failure paths."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "moe-vscode/src/services/MoeDaemonClient.ts",
+        "line": 632,
+        "description": "STATE_SNAPSHOT project mismatch calls disconnect({ manual:false }) after deleting daemon.json, but disconnect() clears this.ws before close. The close handler then treats the close as stale and never calls scheduleReconnect(); disconnect() also does not schedule for manual:false. Fix non-manual disconnects to reconnect when autoConnect allows it (except daemonShuttingDown/manual) and add coverage/manual notes for this path."
+      }
+    ]
+  }
+}

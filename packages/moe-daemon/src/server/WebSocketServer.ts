@@ -12,11 +12,16 @@ import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import {
+  ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
+  normalizeActivityLogParams,
+  queryActivityLog,
+} from '../tools/getActivityLog.js';
 
 export type PluginMessage =
   | { type: 'PING' }
   | { type: 'GET_STATE' }
-  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number } }
+  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
   | { type: 'UPDATE_TASK'; payload: { taskId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_TASK'; payload: { taskId: string } }
@@ -92,26 +97,46 @@ export class MoeWebSocketServer {
     }
   }
 
+  /**
+   * Execute a state-mutating operation under the StateManager mutex.
+   * Prevents races between plugin WS handlers and MCP tool handlers.
+   */
+  private async withMutex<T>(fn: () => Promise<T>): Promise<T> {
+    return this.state.runExclusive(fn);
+  }
+
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
       this.mcpClients.add(ws);
-      ws.on('message', (data: WebSocket.RawData) => this.handleMcpMessage(ws, data.toString()));
+      ws.on('message', (data: WebSocket.RawData) => {
+        this.handleMcpMessage(ws, data.toString()).catch((err) => {
+          logger.error({ error: err, endpoint: 'mcp' }, 'Unhandled error in MCP message handler');
+        });
+      });
       ws.on('close', () => {
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup');
+        });
       });
       ws.on('error', (error) => {
         logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
+        });
       });
       return;
     }
 
     this.pluginClients.add(ws);
     this.sendStateSnapshot(ws);
-    ws.on('message', (data: WebSocket.RawData) => this.handlePluginMessage(ws, data.toString()));
+    ws.on('message', (data: WebSocket.RawData) => {
+      this.handlePluginMessage(ws, data.toString()).catch((err) => {
+        logger.error({ error: err, endpoint: 'plugin' }, 'Unhandled error in plugin message handler');
+      });
+    });
     ws.on('close', () => this.pluginClients.delete(ws));
     ws.on('error', (error) => {
       logger.error({ error, endpoint: 'plugin' }, 'Plugin client WebSocket error');
@@ -155,8 +180,13 @@ export class MoeWebSocketServer {
           this.sendStateSnapshot(ws);
           return;
         case 'GET_ACTIVITY_LOG': {
-          const limit = (message.payload as { limit?: number })?.limit ?? 100;
-          const events = this.state.getActivityLog(limit);
+          const params = normalizeActivityLogParams(message.payload || {});
+          // Plugin clients must always get a bounded payload; keep maxPayloadChars=0 as
+          // an MCP-only full-content opt-in for backwards compatibility.
+          if (params.maxPayloadChars === 0) {
+            params.maxPayloadChars = ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS;
+          }
+          const { events } = queryActivityLog(this.state, params);
           this.safeSend(ws, JSON.stringify({ type: 'ACTIVITY_LOG', payload: events }));
           return;
         }
@@ -165,7 +195,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const task = await this.state.createTask(message.payload as Record<string, unknown>);
+          const task = await this.withMutex(() => this.state.createTask(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_CREATED', payload: task }));
           return;
         }
@@ -179,48 +209,39 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          // Validate status transitions when status is being changed
-          if (updates && typeof updates === 'object' && 'status' in updates) {
-            const existing = this.state.getTask(taskId);
-            if (existing) {
-              const VALID_TRANSITIONS: Record<string, string[]> = {
-                BACKLOG: ['PLANNING', 'WORKING'],
-                PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
-                AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
-                DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
-                ARCHIVED: ['BACKLOG', 'WORKING']
-              };
-              const newStatus = (updates as { status: string }).status;
-              if (newStatus !== existing.status) {
-                const allowed = VALID_TRANSITIONS[existing.status];
-                if (!allowed || !allowed.includes(newStatus)) {
-                  this.safeSend(ws, JSON.stringify({
-                    type: 'ERROR',
-                    message: `Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`,
-                    operation: 'UPDATE_TASK'
-                  }));
-                  return;
-                }
-                // Enforce WIP column limits
-                const columnLimits = this.state.project?.settings?.columnLimits;
-                if (columnLimits && typeof columnLimits[newStatus] === 'number') {
-                  const limit = columnLimits[newStatus];
-                  const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
-                  if (currentCount >= limit) {
-                    this.safeSend(ws, JSON.stringify({
-                      type: 'ERROR',
-                      message: `Column ${newStatus} is at its WIP limit of ${limit}`,
-                      operation: 'UPDATE_TASK'
-                    }));
-                    return;
+          // Validation + update inside mutex to prevent TOCTOU race
+          const task = await this.withMutex(async () => {
+            if (updates && typeof updates === 'object' && 'status' in updates) {
+              const existing = this.state.getTask(taskId);
+              if (existing) {
+                const VALID_TRANSITIONS: Record<string, string[]> = {
+                  BACKLOG: ['PLANNING', 'WORKING'],
+                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+                  AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
+                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG'],
+                  DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
+                  ARCHIVED: ['BACKLOG', 'WORKING']
+                };
+                const newStatus = (updates as { status: string }).status;
+                if (newStatus !== existing.status) {
+                  const allowed = VALID_TRANSITIONS[existing.status];
+                  if (!allowed || !allowed.includes(newStatus)) {
+                    throw new Error(`Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`);
+                  }
+                  const columnLimits = this.state.project?.settings?.columnLimits;
+                  if (columnLimits && typeof columnLimits[newStatus] === 'number') {
+                    const limit = columnLimits[newStatus];
+                    const currentCount = Array.from(this.state.tasks.values()).filter(t => t.status === newStatus).length;
+                    if (currentCount >= limit) {
+                      throw new Error(`Column ${newStatus} is at its WIP limit of ${limit}`);
+                    }
                   }
                 }
               }
             }
-          }
-          const task = await this.state.updateTask(taskId, updates as Record<string, unknown>);
+            return this.state.updateTask(taskId, updates as Record<string, unknown>);
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -234,7 +255,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.deleteTask(taskId);
+          const task = await this.withMutex(() => this.state.deleteTask(taskId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_DELETED', payload: task }));
           return;
         }
@@ -243,7 +264,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const epic = await this.state.createEpic(message.payload as Record<string, unknown>);
+          const epic = await this.withMutex(() => this.state.createEpic(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_CREATED', payload: epic }));
           return;
         }
@@ -257,7 +278,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.updateEpic(epicId, updates as Record<string, unknown>);
+          const epic = await this.withMutex(() => this.state.updateEpic(epicId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_UPDATED', payload: epic }));
           return;
         }
@@ -271,7 +292,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing epicId' }));
             return;
           }
-          const epic = await this.state.deleteEpic(epicId);
+          const epic = await this.withMutex(() => this.state.deleteEpic(epicId));
           this.safeSend(ws, JSON.stringify({ type: 'EPIC_DELETED', payload: epic }));
           return;
         }
@@ -285,7 +306,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.reorderTask(taskId, beforeId, afterId);
+          const task = await this.withMutex(() => this.state.reorderTask(taskId, beforeId, afterId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -294,7 +315,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.state.approveTask(message.payload.taskId);
+          const task = await this.withMutex(() => this.state.approveTask(message.payload.taskId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -308,7 +329,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.rejectTask(message.payload.taskId, reason);
+          const task = await this.withMutex(() => this.state.rejectTask(message.payload.taskId, reason));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -322,7 +343,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing or empty reason' }));
             return;
           }
-          const task = await this.state.reopenTask(message.payload.taskId, reopenReason);
+          const task = await this.withMutex(() => this.state.reopenTask(message.payload.taskId, reopenReason));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -331,7 +352,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.approveProposal(message.payload.proposalId);
+          const proposal = await this.withMutex(() => this.state.approveProposal(message.payload.proposalId));
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -340,7 +361,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing proposalId' }));
             return;
           }
-          const proposal = await this.state.rejectProposal(message.payload.proposalId);
+          const proposal = await this.withMutex(() => this.state.rejectProposal(message.payload.proposalId));
           this.safeSend(ws, JSON.stringify({ type: 'PROPOSAL_UPDATED', payload: proposal }));
           return;
         }
@@ -349,7 +370,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const project = await this.state.updateSettings(message.payload as Record<string, unknown>);
+          const project = await this.withMutex(() => this.state.updateSettings(message.payload as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'SETTINGS_UPDATED', payload: project }));
           return;
         }
@@ -358,12 +379,12 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const { name, role, maxSize } = message.payload as { name: string; role: string; maxSize?: number };
-          if (!name || !role) {
+          const payload = message.payload as Record<string, unknown>;
+          if (typeof payload.name !== 'string' || payload.name.trim().length === 0 || typeof payload.role !== 'string' || payload.role.trim().length === 0) {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
             return;
           }
-          const team = await this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize });
+          const team = await this.withMutex(() => this.state.createTeam(payload as { name: string; role: 'architect' | 'worker' | 'qa'; maxSize?: number }));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
           return;
         }
@@ -377,7 +398,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.updateTeam(teamId, updates as Record<string, unknown>);
+          const team = await this.withMutex(() => this.state.updateTeam(teamId, updates as Record<string, unknown>));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -391,7 +412,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId' }));
             return;
           }
-          const team = await this.state.deleteTeam(teamId);
+          const team = await this.withMutex(() => this.state.deleteTeam(teamId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_DELETED', payload: team }));
           return;
         }
@@ -405,7 +426,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.addTeamMember(teamId, workerId);
+          const team = await this.withMutex(() => this.state.addTeamMember(teamId, workerId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
@@ -419,29 +440,28 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing teamId or workerId' }));
             return;
           }
-          const team = await this.state.removeTeamMember(teamId, workerId);
+          const team = await this.withMutex(() => this.state.removeTeamMember(teamId, workerId));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_UPDATED', payload: team }));
           return;
         }
         case 'ARCHIVE_DONE_TASKS': {
           const epicFilter = (message as { payload?: { epicId?: string } }).payload?.epicId;
-          const snapshot = this.state.getSnapshot();
-          const doneTasks = snapshot.tasks.filter(t =>
-            t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
-          );
-          if (doneTasks.length === 0) {
-            this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived: 0 } }));
-            return;
-          }
-          let archived = 0;
-          for (const task of doneTasks) {
-            try {
-              await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
-              archived++;
-            } catch (err) {
-              logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+          const archived = await this.withMutex(async () => {
+            const snapshot = this.state.getSnapshot();
+            const doneTasks = snapshot.tasks.filter(t =>
+              t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)
+            );
+            let count = 0;
+            for (const task of doneTasks) {
+              try {
+                await this.state.updateTask(task.id, { status: 'ARCHIVED' }, 'TASK_ARCHIVED');
+                count++;
+              } catch (err) {
+                logger.error({ taskId: task.id, error: err }, 'Failed to archive task');
+              }
             }
-          }
+            return count;
+          });
           this.safeSend(ws, JSON.stringify({ type: 'ARCHIVE_DONE_RESULT', payload: { archived } }));
           return;
         }
@@ -472,27 +492,28 @@ export class MoeWebSocketServer {
             }));
             return;
           }
-          const existing = this.state.getTask(taskId);
-          if (!existing) {
-            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: `Task not found: ${taskId}` }));
-            return;
-          }
-          const comment = {
-            id: generateId('comment'),
-            author: author || 'human',
-            content: trimmedContent,
-            timestamp: new Date().toISOString()
-          };
-          const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
-          const comments = [...existingComments, comment];
-          const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
-            ? comments.slice(-MAX_COMMENTS_PER_TASK)
-            : comments;
-          const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
-          if (comment.author === 'human') {
-            updates.hasPendingQuestion = true;
-          }
-          const task = await this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+          const task = await this.withMutex(async () => {
+            const existing = this.state.getTask(taskId);
+            if (!existing) {
+              throw new Error(`Task not found: ${taskId}`);
+            }
+            const comment = {
+              id: generateId('comment'),
+              author: author || 'human',
+              content: trimmedContent,
+              timestamp: new Date().toISOString()
+            };
+            const existingComments = Array.isArray(existing.comments) ? existing.comments : [];
+            const comments = [...existingComments, comment];
+            const boundedComments = comments.length > MAX_COMMENTS_PER_TASK
+              ? comments.slice(-MAX_COMMENTS_PER_TASK)
+              : comments;
+            const updates: Partial<import('../types/schema.js').Task> = { comments: boundedComments };
+            if (comment.author === 'human') {
+              updates.hasPendingQuestion = true;
+            }
+            return this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -612,7 +633,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const approved = await this.state.approveDecision(approveDecId, 'human');
+          const approved = await this.withMutex(() => this.state.approveDecision(approveDecId, 'human'));
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: approved }));
           return;
         }
@@ -626,7 +647,7 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing decisionId' }));
             return;
           }
-          const rejected = await this.state.rejectDecision(rejectDecId);
+          const rejected = await this.withMutex(() => this.state.rejectDecision(rejectDecId));
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: rejected }));
           return;
         }
@@ -657,7 +678,9 @@ export class MoeWebSocketServer {
     try {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
-      const response = await this.mcpAdapter.handle(request);
+      const response = await this.mcpAdapter.handle(request, {
+        shouldContinue: () => this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
+      });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));
       }
@@ -678,10 +701,22 @@ export class MoeWebSocketServer {
    * Track which MCP WebSocket connection owns which worker IDs.
    * Extracts workerId from tools/call request arguments.
    */
-  private trackMcpWorker(ws: WebSocket, request: Record<string, unknown>): void {
-    if (request.method !== 'tools/call') return;
-    const params = request.params as { arguments?: Record<string, unknown> } | undefined;
-    const workerId = params?.arguments?.workerId;
+  private trackMcpWorker(ws: WebSocket, request: unknown): void {
+    const requests = Array.isArray(request) ? request : [request];
+    for (const item of requests) {
+      this.trackSingleMcpWorker(ws, item);
+    }
+  }
+
+  private trackSingleMcpWorker(ws: WebSocket, request: unknown): void {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) return;
+    const record = request as Record<string, unknown>;
+    if (record.method !== 'tools/call') return;
+    const params = record.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const args = (params as { arguments?: unknown }).arguments;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return;
+    const workerId = (args as Record<string, unknown>).workerId;
     if (typeof workerId !== 'string') return;
 
     let workerIds = this.mcpWorkerMap.get(ws);
@@ -693,7 +728,19 @@ export class MoeWebSocketServer {
   }
 
   /**
-   * Clean up workers owned by a disconnected MCP connection.
+   * Clean up per-connection state for a disconnected MCP WebSocket.
+   *
+   * We deliberately do NOT delete the worker entity here. The proxy (moe-proxy)
+   * is a stdio bridge that opens one WebSocket per RPC invocation for short-lived
+   * callers (wrapper pre-flight, moe-call.sh, external scripts). Deleting the
+   * worker on every disconnect would evaporate the worker — and its claim, via
+   * deleteWorker's task cascade — milliseconds after it was created, causing
+   * subsequent RPCs to fail with "Unknown sender" and clearing claims the
+   * wrapper was about to hand off to a long-running agent.
+   *
+   * Stale workers from truly-disconnected agents should be cleaned up by a
+   * presence/heartbeat mechanism (lastActivityAt timeout) rather than by
+   * TCP close events, since TCP close no longer implies agent death.
    */
   private async cleanupMcpWorkers(ws: WebSocket): Promise<void> {
     const workerIds = this.mcpWorkerMap.get(ws);
@@ -702,9 +749,8 @@ export class MoeWebSocketServer {
       return;
     }
 
-    let deletedCount = 0;
     for (const workerId of workerIds) {
-      // Cancel any active wait_for_task waiter before deleting the worker
+      // Cancel any active wait_for_task waiter registered on this WS
       const waiter = activeWaiters.get(workerId);
       if (waiter) {
         clearTimeout(waiter.timer);
@@ -727,21 +773,9 @@ export class MoeWebSocketServer {
       } catch (err) {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
       }
-
-      const worker = this.state.getWorker(workerId);
-      if (worker) {
-        logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
-        await this.state.deleteWorker(workerId);
-        deletedCount++;
-      }
     }
 
     this.mcpWorkerMap.delete(ws);
-
-    if (deletedCount > 0) {
-      const snap = this.state.getSnapshot();
-      this.broadcast({ type: 'STATE_SNAPSHOT', payload: { ...snap, tasks: snap.tasks.filter(t => t.status !== 'ARCHIVED') } });
-    }
   }
 
   /**

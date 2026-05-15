@@ -1,8 +1,14 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
-import { missingRequired } from '../util/errors.js';
+import { invalidInput, missingRequired } from '../util/errors.js';
 import { logger } from '../util/logger.js';
+import {
+  countTruncatedMessages,
+  DEFAULT_CHAT_CONTENT_CHARS,
+  MAX_CHAT_CONTENT_CHARS,
+  truncateChatMessages,
+} from '../util/chatPayload.js';
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -44,7 +50,11 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       properties: {
         workerId: { type: 'string', description: 'Your worker ID (messages mentioning you will trigger)' },
         channels: { type: 'array', items: { type: 'string' }, description: 'Optional channel filter' },
-        timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' }
+        timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' },
+        maxContentChars: {
+          type: 'number',
+          description: 'Max chars per message content in the response (default 1000, 0 = full content)'
+        }
       },
       required: ['workerId'],
       additionalProperties: false
@@ -54,9 +64,16 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         workerId?: string;
         channels?: string[];
         timeoutMs?: number;
+        maxContentChars?: number;
       };
 
       if (!params.workerId) throw missingRequired('workerId');
+      if (
+        params.maxContentChars !== undefined &&
+        (typeof params.maxContentChars !== 'number' || !Number.isFinite(params.maxContentChars) || params.maxContentChars < 0)
+      ) {
+        throw invalidInput('maxContentChars', 'must be a non-negative finite number');
+      }
 
       // Cancel any existing chat waiter for this worker
       const existing = activeChatWaiters.get(params.workerId);
@@ -71,6 +88,9 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         Math.max(params.timeoutMs || DEFAULT_TIMEOUT_MS, 1000),
         MAX_TIMEOUT_MS
       );
+      const maxContentChars = params.maxContentChars !== undefined
+        ? Math.min(Math.floor(params.maxContentChars), MAX_CHAT_CONTENT_CHARS)
+        : DEFAULT_CHAT_CONTENT_CHARS;
 
       const channelSet = params.channels ? new Set(params.channels) : null;
       const workerId = params.workerId;
@@ -112,7 +132,16 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
 
           cleanup();
           logger.info({ workerId, messageId: message.id, sender: message.sender }, 'Chat message received, waking worker');
-          resolve({ hasMessage: true, messages: [message] });
+          const messages = truncateChatMessages([message], maxContentChars);
+          const truncated = countTruncatedMessages(messages);
+          resolve({
+            hasMessage: true,
+            messages,
+            truncated,
+            ...(truncated > 0
+              ? { hint: 'Long chat messages are truncated by default. Use moe.chat_read with maxContentChars: 0 for full content.' }
+              : {})
+          });
         });
 
         activeChatWaiters.set(workerId, { resolve, unsubscribe, timer, channels: channelSet });

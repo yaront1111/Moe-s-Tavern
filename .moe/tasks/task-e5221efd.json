@@ -1,0 +1,340 @@
+{
+  "id": "task-e5221efd",
+  "epicId": "epic-21c5b951",
+  "title": "Implement token-budgeted memory and lean claim responses",
+  "description": "Make memory surfacing in get_context budgeted/summary-first and add settings to control it. Keep full content available through moe.recall. Reduce low-value automatic memory creation so only good/high-signal learnings are saved automatically. Ensure claim_next_task remains lean and add tests for memory modes.",
+  "definitionOfDone": [
+    "get_context supports memory modes off, summary, and full with summary as the low-token default.",
+    "Project settings expose memory controls with sensible defaults and backward compatibility.",
+    "Auto-memory creation only stores high-value events by default: QA rejection, reopened approvals, and explicit moe.remember; generic task completion/first-pass approvals are skipped unless configured.",
+    "claim_next_task response remains free of memory payloads and full context bloat.",
+    "Tests cover memory modes, auto-memory gating, and lean claim behavior."
+  ],
+  "taskRails": [
+    "Do not edit .moe files directly.",
+    "Preserve full moe.recall behavior for explicit memory fetches.",
+    "Run relevant vitest tests after changes."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase 0/1 — Reopen triage and baseline audit. Read the task context, reopenReason ('test'), activity log, and relevant memories; inspect the current working tree because previous attempts may have left partial implementations. Do not edit .moe files. Run a baseline targeted test command in packages/moe-daemon (at minimum `npx vitest run src/tools/tools.test.ts`) to discover whether the reopened task is failing because behavior, docs/tests, or existing uncommitted code is incomplete. Record failures in the step note before editing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "Reopen triage completed. ReopenReason is 'test'; rejectionDetails is null. Activity log shows reopenCount=3, task reopened to BACKLOG on 2026-04-30T09:51:27Z, replanned/auto-approved on 2026-04-30T12:50:13Z, then claimed by worker-0ead. Task role channel had no messages. Reflected helpful memories mem-a035a814 and mem-cae34931. Working tree already contains substantial partial implementation/docs/test changes for memory settings, get_context, claim responses, auto-memory gating, and generated docs/util files, so treat as previous-attempt code to verify rather than assume. Baseline targeted test: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed: 1 file, 150 tests.",
+      "startedAt": "2026-04-30T12:51:19.469Z",
+      "completedAt": "2026-04-30T12:51:49.266Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Phase 2/3 — Write or repair failing tests before production changes for get_context memory modes. Cover default summary mode returning compact memory IDs/type/confidence/preview only; `memoryMode: 'off'` returning no auto memories/session payload; explicit `memoryMode: 'full'` returning budget-capped full content; memoryLimit/memoryMaxChars zero and clamping behavior; invalid memoryMode errors; and a regression proving `moe.recall` still returns full memory content without preview-only truncation. Use mutation-resistant assertions that would fail if full memory content leaked in summary mode.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/recall.ts",
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Added/strengthened get_context memory-mode regression tests: memoryMode off now verifies lastSession suppression when a session exists; summary mode clamps memoryLimit to 10, enforces total preview budget, and asserts full-content tail does not leak; zero memoryLimit suppresses relevant memories/session, zero memoryMaxChars returns empty truncated full content; invalid memoryMode rejects with INVALID_INPUT; explicit moe.recall still returns full content while get_context summary remains compact. Red/green: first targeted run failed 1/154 due a duplicate-heavy test fixture expecting 10 results; repaired fixture to create distinct memories. Final targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/154 tests.",
+      "startedAt": "2026-04-30T12:51:58.433Z",
+      "completedAt": "2026-04-30T12:55:15.680Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Phase 3 — Write or repair tests for settings/backward compatibility. Prove new projects created by both CLI init paths expose `settings.memory` defaults (summary, 1 result, 500 chars, autoSave completedTask/firstPassApproval false and qaRejection/reopenedApproval true); prove an old project with no `settings.memory` loads with those defaults via StateManager sanitization; prove custom memory settings are preserved and invalid numeric values are clamped. Add tests in the narrowest existing suites rather than creating broad fixtures.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/migrations/migrations.test.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "Added settings/backward-compatibility regression coverage. `moe.init_project` tool test verifies new project memory defaults. StateManager schema tests verify old projects with no settings.memory load with defaults and custom memory settings preserve booleans while clamping numeric values (maxAutoResults 999=>10, maxAutoChars -5=>0). CLI init helper test verifies direct CLI init path writes memory defaults; red run failed with `initProject is not a function`, fixed by exporting initProject from index.ts. Final targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts src/state/schema.test.ts src/index.test.ts` passed 3 files/168 tests.",
+      "startedAt": "2026-04-30T12:55:23.272Z",
+      "completedAt": "2026-04-30T12:57:51.711Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Phase 3 — Write or repair tests for auto-memory gating. Assert default generic `complete_task` summaries do not create memories; enabling `settings.memory.autoSave.completedTask` restores completion memory creation; first-pass `qa_approve` is skipped by default but can be enabled; reopened `qa_approve` is saved by default; `qa_reject` is saved by default and can be disabled; explicit `moe.remember` remains unaffected. Include assertions that these paths do not throw when memory writing fails (best-effort error handling).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/remember.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Added auto-memory gating regression tests. Coverage now includes complete_task non-fatal behavior when enabled completion memory write fails; first-pass qa_approve remains skipped by default and can be enabled; reopened qa_approve remains saved by default and handles memory write failure non-fatally; qa_reject remains saved by default, can be disabled, and handles memory write failure non-fatally; explicit moe.remember persists even when all autoSave settings are disabled. Targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/161 tests.",
+      "startedAt": "2026-04-30T12:58:01.449Z",
+      "completedAt": "2026-04-30T13:00:00.794Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Phase 3/4 — Write or repair lean claim response tests. `moe.claim_next_task` must return only hasNext, a compact task summary (id, epicId, title, status, priority, assignedWorkerId, reopen metadata, channel IDs), optional reopenWarning/chatHint, and nextAction; it must not include project, epic, allRails, memory, task.description, definitionOfDone, taskRails, or implementationPlan. Preserve existing priority/order, worker assignment, team/solo concurrency, and reopened-task behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Strengthened lean claim_next_task response tests. The main claim test now asserts exact top-level response keys and exact compact task keys, including allowed channel/reopen metadata, and explicitly excludes description, DoD, taskRails, implementationPlan, project, epic, allRails, and memory. The no-match test now asserts exact hasNext:false shape and wait_for_task nextAction args. Existing tests continue covering priority/order, worker assignment, multi-status claims, and reopened metadata. Targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/161 tests.",
+      "startedAt": "2026-04-30T13:00:10.631Z",
+      "completedAt": "2026-04-30T13:01:05.793Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Phase 4 — Implement or repair the memory settings model and defaults. Add/verify `MemoryAutoInjectMode`, `MemorySettings`, and `MemoryAutoSaveSettings` in schema types; centralize defaults and clamping in a helper such as `resolveMemorySettings`; call it from project initialization, CLI init, StateManager project sanitization, and any setting consumers. Preserve backward compatibility by treating missing or partial settings.memory as defaults and preserving configured fields instead of overwriting unrelated settings.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Verified memory settings model/types already exist in schema.ts and resolveMemorySettings handles defaults/clamping/partial compatibility. StateManager already sanitizes project settings through resolveMemorySettings. Repaired duplicated init defaults by using resolveMemorySettings() in both moe.init_project and CLI initProject, preserving backward-compatible defaults and centralizing values. Added/kept tests from step 3 covering both init paths, old projects, and clamping. Targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts src/state/schema.test.ts src/index.test.ts` passed 3 files/174 tests.",
+      "startedAt": "2026-04-30T13:01:11.844Z",
+      "completedAt": "2026-04-30T13:02:07.232Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Phase 4 — Implement or repair get_context memory surfacing. Add/verify `memoryMode`, `memoryLimit`, and `memoryMaxChars` inputs; default to project settings (`summary`); in summary mode return compact previews only and a hint to call moe.recall; in full mode return full content capped by the total budget; in off mode skip auto memory/session payloads. Keep the existing relevance query bounded, include reopen/rails signals, catch memory-system errors so get_context still succeeds, and make sure full explicit recall behavior in `moe.recall`/`MemoryManager` is unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/recall.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Repaired get_context memory budgeting for lastSession. Added red regression proving memoryMode:'full' with memoryMaxChars must cap lastSession.summary; initial targeted run failed because full-mode session summary was unbounded (72 > 18 chars). Implementation now tracks remaining memory budget across relevant memories and lastSession, truncates full-mode session summary, adds a truncated flag, and uses remaining budget for summary-mode session previews. Existing tests cover off/summary/full modes, invalid mode, zero limits, recall full-content preservation, and compact hints. Final targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/162 tests.",
+      "startedAt": "2026-04-30T13:02:12.041Z",
+      "completedAt": "2026-04-30T13:03:16.666Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "Phase 4 — Implement or repair high-signal auto-memory gating. In `completeTaskTool`, gate generic completion memory behind `settings.memory.autoSave.completedTask` default false. In `qaApproveTool`, gate first-pass approvals behind default false and reopened approvals behind default true. In `qaRejectTool`, gate rejection memories behind default true. Keep explicit `moe.remember` unchanged, cap generated memory content to existing MemoryManager limits, include useful file/task/epic source metadata, and handle memory write errors with non-fatal logging only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/remember.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/remember.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Verified high-signal auto-memory gating implementation: completeTask uses autoSave.completedTask (default false), qaApprove chooses firstPassApproval vs reopenedApproval defaults, qaReject uses qaRejection default, explicit remember remains unchanged, and generated content is bounded before MemoryManager's own cap. Repaired non-fatal memory-write logging to use compact logger.warn message strings instead of console.warn with Error stack dumps in completeTask/qaApprove/qaReject. Existing/new tests cover enabled/disabled gating, explicit remember unaffected, and non-throwing memory failures. Targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/162 tests.",
+      "startedAt": "2026-04-30T13:03:23.015Z",
+      "completedAt": "2026-04-30T13:04:06.139Z"
+    },
+    {
+      "stepId": "step-9",
+      "description": "Phase 4 — Implement or repair lean claim_next_task response shaping. Trim the response to the compact fields covered by tests while preserving `hasNext:false` wait_for_task nextAction, assignment side effects, concurrency protections, reopened task metadata, chat hints, and role-appropriate nextAction. Do not pull memory, project rails, full task descriptions, DoD, implementationPlan, or full epic context into claim responses; workers must use get_context for that.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Repaired lean claim_next_task response shaping. Added red assertion that response.task.assignedWorkerId must reflect the worker that just claimed the task; initial targeted run failed because response kept the pre-update null value. claimNextTask now uses the updated Task returned by state.updateTask for response shaping, preserving side effects/concurrency behavior while keeping the compact response fields. Existing lean tests verify no project/epic/rails/memory/full task payloads and exact hasNext:false shape. Final targeted validation: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/162 tests.",
+      "startedAt": "2026-04-30T13:04:16.536Z",
+      "completedAt": "2026-04-30T13:05:01.789Z"
+    },
+    {
+      "stepId": "step-10",
+      "description": "Phase 6 — Update public contracts and generated/static docs. Bring `docs/MCP_SERVER.md` claim_next_task return shape in line with the lean response; document get_context memory modes and settings defaults in `docs/MCP_SERVER.md` and `docs/SCHEMA.md`; update agent-facing notes only if needed so agents know get_context memory previews are compact and recall is opt-in. If generated init/role files derive from docs, run the repository’s generation script instead of hand-editing generated copies; still avoid direct .moe edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/agent-context.md",
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/agent-context.md",
+        "packages/moe-daemon/src/util/initFiles.ts"
+      ],
+      "note": "Updated public MCP contract docs. docs/MCP_SERVER.md now documents the lean claim_next_task response (compact task summary, reopen/chat hints, nextAction) and explicitly states it omits project/epic/rails/descriptions/DoD/plans/chat/memory and requires get_context for full context. get_context docs now clarify memoryMode off suppresses auto memory/session payloads and full mode is capped by memoryMaxChars. Existing docs/SCHEMA.md and agent-context already reflected memory defaults/compact recall guidance; no generated files needed from this docs-only edit. Validation after docs/source changes: packages/moe-daemon `npx vitest run src/tools/tools.test.ts` passed 1 file/162 tests.",
+      "startedAt": "2026-04-30T13:05:05.467Z",
+      "completedAt": "2026-04-30T13:05:59.930Z"
+    },
+    {
+      "stepId": "step-11",
+      "description": "Phase 5 — Regression verification. Re-run the focused tests that prove this task (`npx vitest run src/tools/tools.test.ts`, plus any new/changed suites such as `src/state/schema.test.ts` and `src/migrations/migrations.test.ts`) and then run the daemon-wide checks from packages/moe-daemon: `npm test` and `npm run build`. Capture the exact commands and pass/fail counts in the complete_step notes so QA can verify without re-deriving evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/migrations/migrations.test.ts",
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Final validation passed: focused suite `npx vitest run src/tools/tools.test.ts src/state/schema.test.ts src/index.test.ts src/migrations/migrations.test.ts` passed 4 files / 182 tests; daemon `npm test` passed 25 files / 427 tests; `npm run build` completed successfully after regenerating init/skill files and running `tsc`.",
+      "startedAt": "2026-04-30T13:06:12.686Z",
+      "completedAt": "2026-04-30T13:08:12.389Z"
+    },
+    {
+      "stepId": "step-12",
+      "description": "Phase 7/8 — Adversarial review and handoff. Before `moe.complete_task`, inspect git status and ensure no .moe files are included in intended source changes. Review edge cases: concurrent claim calls, missing/partial project settings, huge/empty memory content, memoryMaxChars 0, memoryLimit 0, invalid mode, memory manager failure, no task/worker, reopened tasks, and explicit recall/remember behavior. Summarize rollback as reverting the touched daemon source/docs/tests and leaving .moe state alone.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/util/memorySettings.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/memorySettings.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/state/schema.test.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "docs/agent-context.md",
+        "packages/moe-daemon/src/util/initFiles.ts",
+        "packages/moe-daemon/src/util/skillFiles.ts"
+      ],
+      "note": "Adversarial review completed. Checked git status: .moe files are runtime Moe state only and are not intended source changes. Reviewed concurrency (claim_next_task remains under StateManager mutex and response uses the updated task), partial/missing settings (resolveMemorySettings applies defaults and clamps), huge/empty memory content (summary/full budgets capped, lastSession shares remaining budget), memoryMaxChars 0 and memoryLimit 0, invalid modes/non-finite numeric overrides (now invalid-input), memory manager failure paths (non-fatal), no task/worker, reopened tasks, and explicit recall/remember (full recall unaffected). Added a small hardening test/fix for empty memoryMode and NaN/Infinity memory overrides found during review. Verification after review: `npx vitest run src/tools/tools.test.ts` passed 1 file / 162 tests; `npm run build` passed; full daemon `npm test` passed 25 files / 427 tests. Rollback: revert the listed daemon source/docs/tests/generated files and leave .moe runtime state alone.",
+      "startedAt": "2026-04-30T13:08:33.284Z",
+      "completedAt": "2026-04-30T13:11:40.803Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 3,
+  "reopenReason": "test",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T06:39:19.073Z",
+  "updatedAt": "2026-04-30T17:36:22.602Z",
+  "contextFetchedBy": [
+    "architect-2992",
+    "architect-028d",
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "completedAt": "2026-04-30T13:12:31.666Z",
+  "reviewStartedAt": "2026-04-30T13:12:31.666Z",
+  "planSubmittedAt": "2026-04-30T12:50:13.122Z",
+  "planningNotes": {
+    "approachesConsidered": "Plan assumes the current working tree may already contain partial/previous implementations from earlier reopens, but the worker must treat them as untrusted until tests prove them. Rejected a broad memory subsystem rewrite: the right implementation is localized to daemon MCP response shaping, project settings defaults/sanitization, and existing auto-memory hooks. Rejected adding another schema version solely for memory defaults unless inspection shows migration is strictly required; backward compatibility can be satisfied by runtime default resolution/sanitization for old projects with no settings.memory.",
+    "codebaseInsights": "Verified symbols/files exist: get_context is implemented in packages/moe-daemon/src/tools/getContext.ts; explicit recall stays in packages/moe-daemon/src/tools/recall.ts and MemoryManager.search returns full entry content; claim_next_task is packages/moe-daemon/src/tools/claimNextTask.ts; auto-memory hooks currently live in completeTask.ts, qaApprove.ts, and qaReject.ts; project defaults are created in src/index.ts and tools/initProject.ts; StateManager.sanitizeProject already normalizes settings. Tests for these tools are primarily in packages/moe-daemon/src/tools/tools.test.ts. Keep .moe as daemon-owned state only; do not edit .moe files directly even if git status shows runtime changes.",
+    "risks": "High risk is silently reintroducing token bloat: claim_next_task must not include project/epic/full task/memory, and get_context summary mode must not emit full memory content. Guard weird inputs: memoryMode invalid, memoryLimit/memoryMaxChars zero/huge/non-integer, old project settings without memory, memory manager failures, no task, no worker, and reopened tasks. Auto-save must be best-effort and never block completion/QA paths. Ensure explicit moe.recall and explicit moe.remember retain full behavior. Keep logs free of giant memory content or stack dumps, avoid forbidden patterns, and verify source/docs/tests only—not .moe runtime files—are part of worker changes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/recall.ts",
+      "packages/moe-daemon/src/knowledge/MemoryManager.ts",
+      "packages/moe-daemon/src/util/memorySettings.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/initProject.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "docs/MCP_SERVER.md",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "planApprovedAt": "2026-04-30T12:50:13.125Z",
+  "workStartedAt": "2026-04-30T12:51:19.469Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8",
+    "step-9",
+    "step-10",
+    "step-11",
+    "step-12"
+  ],
+  "reviewCompletedAt": "2026-04-30T17:36:22.602Z"
+}

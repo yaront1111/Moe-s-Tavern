@@ -24,8 +24,10 @@ import { deleteTaskTool } from './deleteTask.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { initProjectTool } from './initProject.js';
-import { getActivityLogTool } from './getActivityLog.js';
 import { unblockWorkerTool } from './unblockWorker.js';
+import { releaseTaskTool } from './releaseTask.js';
+import { enterGovernanceTool } from './enterGovernance.js';
+import { listWorkersTool } from './listWorkers.js';
 import { createTeamTool } from './createTeam.js';
 import { joinTeamTool } from './joinTeam.js';
 import { leaveTeamTool } from './leaveTeam.js';
@@ -37,13 +39,11 @@ import { chatSendTool } from './chatSend.js';
 import { chatReadTool } from './chatRead.js';
 import { chatChannelsTool } from './chatChannels.js';
 import { chatJoinTool } from './chatJoin.js';
-import { chatWhoTool } from './chatWho.js';
 import { chatWaitTool } from './chatWait.js';
-import { chatResyncTool } from './chatResync.js';
-import { chatPinTool } from './chatPin.js';
-import { chatUnpinTool } from './chatUnpin.js';
-import { chatDecisionTool } from './chatDecision.js';
-import { chatCreateChannelTool } from './chatCreateChannel.js';
+import { rememberTool } from './remember.js';
+import { recallTool } from './recall.js';
+import { reflectTool } from './reflect.js';
+import { saveSessionSummaryTool } from './saveSessionSummary.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -77,8 +77,10 @@ export function getTools(state: StateManager): ToolDefinition[] {
     qaApproveTool(state),
     qaRejectTool(state),
     initProjectTool(state),
-    getActivityLogTool(state),
     unblockWorkerTool(state),
+    releaseTaskTool(state),
+    enterGovernanceTool(state),
+    listWorkersTool(state),
     createTeamTool(state),
     joinTeamTool(state),
     leaveTeamTool(state),
@@ -90,12 +92,10 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatReadTool(state),
     chatChannelsTool(state),
     chatJoinTool(state),
-    chatWhoTool(state),
     chatWaitTool(state),
-    chatResyncTool(state),
-    chatPinTool(state),
-    chatUnpinTool(state),
-    chatDecisionTool(state),
-    chatCreateChannelTool(state)
+    rememberTool(state),
+    recallTool(state),
+    reflectTool(state),
+    saveSessionSummaryTool(state),
   ];
 }

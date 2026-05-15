@@ -28,6 +28,15 @@ import { getActivityLogTool } from './getActivityLog.js';
 import { unblockWorkerTool } from './unblockWorker.js';
 import { addCommentTool } from './addComment.js';
 import { getPendingQuestionsTool } from './getPendingQuestions.js';
+import { chatReadTool } from './chatRead.js';
+import { chatResyncTool } from './chatResync.js';
+import { chatWaitTool } from './chatWait.js';
+import { waitForTaskTool } from './waitForTask.js';
+import { initProjectTool } from './initProject.js';
+import { saveSessionSummaryTool } from './saveSessionSummary.js';
+import { recallTool } from './recall.js';
+import { rememberTool } from './remember.js';
+import { MoeErrorCode } from '../util/errors.js';
 import type { Task, Epic, Worker, Project, RailProposal } from '../types/schema.js';
 
 describe('MCP Tools', () => {
@@ -142,6 +151,7 @@ describe('MCP Tools', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -176,12 +186,26 @@ describe('MCP Tools', () => {
     it('returns worker when task has assignedWorkerId', async () => {
       setupMoeFolder();
       createEpic();
-      createWorker({ id: 'worker-ctx', status: 'CODING', lastError: 'prev error', errorCount: 2 });
+      createWorker({
+        id: 'worker-ctx',
+        status: 'CODING',
+        lastError: 'prev error',
+        errorCount: 2,
+        chatCursors: { 'chan-heavy': 'msg-heavy' },
+      });
       createTask({ assignedWorkerId: 'worker-ctx' });
       await state.load();
       const tool = getContextTool(state);
       const result = await tool.handler({ taskId: 'task-1' }, state) as {
-        worker: { id: string; status: string; lastError: string | null; errorCount: number } | null;
+        worker: {
+          id: string;
+          status: string;
+          lastError: string | null;
+          errorCount: number;
+          chatCursors?: unknown;
+          branch?: unknown;
+          modifiedFiles?: unknown;
+        } | null;
       };
 
       expect(result.worker).not.toBeNull();
@@ -189,6 +213,9 @@ describe('MCP Tools', () => {
       expect(result.worker!.status).toBe('CODING');
       expect(result.worker!.lastError).toBe('prev error');
       expect(result.worker!.errorCount).toBe(2);
+      expect(result.worker!.chatCursors).toBeUndefined();
+      expect(result.worker!.branch).toBeUndefined();
+      expect(result.worker!.modifiedFiles).toBeUndefined();
     });
 
     it('returns null worker when task has no assignedWorkerId', async () => {
@@ -211,6 +238,42 @@ describe('MCP Tools', () => {
       expect(result.worker).toBeNull();
     });
 
+    it('records contextFetchedBy when workerId provided and task is claimed', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ assignedWorkerId: 'worker-ctx' });
+      await state.load();
+      const tool = getContextTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-ctx' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx']);
+
+      // Duplicate call does not produce duplicate entries
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-ctx' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx']);
+
+      // Different worker is appended
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-qa' }, state);
+      expect(state.getTask('task-1')?.contextFetchedBy).toEqual(['worker-ctx', 'worker-qa']);
+    });
+
+    it('does not record contextFetchedBy when workerId is missing', async () => {
+      const prev = process.env.MOE_WORKER_ID;
+      delete process.env.MOE_WORKER_ID;
+      try {
+        setupMoeFolder();
+        createEpic();
+        createTask({ assignedWorkerId: 'worker-ctx' });
+        await state.load();
+        const tool = getContextTool(state);
+        await tool.handler({ taskId: 'task-1' }, state);
+        expect(state.getTask('task-1')?.contextFetchedBy).toBeUndefined();
+      } finally {
+        if (prev === undefined) delete process.env.MOE_WORKER_ID;
+        else process.env.MOE_WORKER_ID = prev;
+      }
+    });
+
     it('returns step notes in implementationPlan', async () => {
       setupMoeFolder();
       createEpic();
@@ -229,6 +292,464 @@ describe('MCP Tools', () => {
       const step1 = result.task.implementationPlan.find(s => s.stepId === 'step-1');
       expect(step1?.note).toBe('Design decision: used factory pattern');
       expect(step1?.modifiedFiles).toEqual(['a.ts', 'b.ts']);
+    });
+
+    it('auto-surfaces memory as compact previews when memoryMode=summary', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      await state.getMemoryManager().addEntry({
+        workerId: 'worker-memory',
+        type: 'gotcha',
+        content: 'Auth token validation failed because expired tokens were accepted without checking exp. Add explicit expiry tests.',
+        tags: ['auth'],
+      });
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1', memoryMode: 'summary' }, state) as {
+        memory: {
+          mode: string;
+          relevant: Array<{ preview?: string; content?: string; truncated?: boolean }>;
+        };
+      };
+
+      expect(result.memory.mode).toBe('summary');
+      expect(result.memory.relevant).toHaveLength(1);
+      expect(result.memory.relevant[0].preview).toContain('Auth token validation');
+      expect(result.memory.relevant[0].content).toBeUndefined();
+    });
+
+    it('supports disabling memory auto-injection per get_context call', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      await state.getMemoryManager().addEntry({
+        workerId: 'worker-memory',
+        type: 'gotcha',
+        content: 'Auth token validation failed because expired tokens were accepted without checking exp.',
+      });
+      await state.getMemoryManager().saveSessionSummary({
+        workerId: 'worker-memory',
+        taskId: 'task-1',
+        role: 'worker',
+        summary: 'Session summary that should not appear when memory auto-injection is off.',
+      });
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1', memoryMode: 'off' }, state) as {
+        memory: { mode: string; relevant: unknown[]; lastSession: unknown };
+      };
+
+      expect(result.memory.mode).toBe('off');
+      expect(result.memory.relevant).toEqual([]);
+      expect(result.memory.lastSession).toBeNull();
+    });
+
+    it('supports full memory auto-injection when explicitly requested', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      await state.getMemoryManager().addEntry({
+        workerId: 'worker-memory',
+        type: 'gotcha',
+        content: 'Auth token validation failed because expired tokens were accepted without checking exp.',
+      });
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        memoryMode: 'full',
+        memoryLimit: 1,
+        memoryMaxChars: 1000,
+      }, state) as {
+        memory: { mode: string; relevant: Array<{ preview?: string; content?: string }> };
+      };
+
+      expect(result.memory.mode).toBe('full');
+      expect(result.memory.relevant).toHaveLength(1);
+      expect(result.memory.relevant[0].content).toContain('expired tokens were accepted');
+      expect(result.memory.relevant[0].preview).toBeUndefined();
+    });
+
+    it('clamps memoryLimit and keeps summary previews within the total budget', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      const hiddenTail = 'NEVER_LEAK_FULL_MEMORY_BODY';
+      const uniqueWords = [
+        'albatross brook cedar dune ember frost grove harbor',
+        'iris juniper kelp lagoon meadow nectar onyx prairie',
+        'quartz river spruce tundra umber violet willow xenon',
+        'yarrow zephyr amber basalt copper drift elm fern',
+        'garnet heather indigo jasper kiwi lilac maple north',
+        'opal pebble quince ridge saffron thistle upland valley',
+        'walnut xylem yucca zircon acorn briar clover daisy',
+        'eagle flint ginger hazel ivory jade koala larch',
+        'marble nickel olive pearl ruby slate topaz ultramarine',
+        'velvet wheat orchid pine coral delta birch canyon',
+        'desert echo forest glacier hibiscus island jungle karma',
+        'lotus magma nebula ocean pollen quarry rainstorm savanna',
+      ];
+      for (let i = 0; i < 12; i++) {
+        await state.getMemoryManager().addEntry({
+          workerId: `worker-memory-${i}`,
+          type: 'gotcha',
+          content: [
+            `Auth token validation memory ${i} visible prefix.`,
+            uniqueWords[i],
+            `${hiddenTail}-${i}`,
+          ].join(' '),
+          tags: ['auth'],
+        });
+      }
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        memoryMode: 'summary',
+        memoryLimit: 99,
+        memoryMaxChars: 25,
+      }, state) as {
+        memory: { relevant: Array<{ preview?: string; content?: string; truncated?: boolean }> };
+      };
+
+      expect(result.memory.relevant).toHaveLength(10);
+      const serialized = JSON.stringify(result.memory.relevant);
+      expect(serialized).not.toContain(hiddenTail);
+      expect(result.memory.relevant.every(memory => memory.content === undefined)).toBe(true);
+      expect(result.memory.relevant.reduce((sum, memory) => sum + (memory.preview?.length ?? 0), 0)).toBeLessThanOrEqual(25);
+      expect(result.memory.relevant.some(memory => memory.truncated)).toBe(true);
+    });
+
+    it('supports zero memory limits and zero content budget without leaking content', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      await state.getMemoryManager().addEntry({
+        workerId: 'worker-memory',
+        type: 'gotcha',
+        content: 'Auth token validation full memory body should be hidden with zero budgets.',
+      });
+      await state.getMemoryManager().saveSessionSummary({
+        workerId: 'worker-memory',
+        taskId: 'task-1',
+        role: 'worker',
+        summary: 'Session summary should be skipped when memoryLimit is zero.',
+      });
+
+      const tool = getContextTool(state);
+      const noMemories = await tool.handler({
+        taskId: 'task-1',
+        memoryLimit: 0,
+      }, state) as { memory: { relevant: unknown[]; lastSession: unknown } };
+
+      expect(noMemories.memory.relevant).toEqual([]);
+      expect(noMemories.memory.lastSession).toBeNull();
+
+      const zeroContentBudget = await tool.handler({
+        taskId: 'task-1',
+        memoryMode: 'full',
+        memoryLimit: 1,
+        memoryMaxChars: 0,
+      }, state) as { memory: { relevant: Array<{ content?: string; truncated?: boolean }> } };
+
+      expect(zeroContentBudget.memory.relevant).toHaveLength(1);
+      expect(zeroContentBudget.memory.relevant[0].content).toBe('');
+      expect(zeroContentBudget.memory.relevant[0].truncated).toBe(true);
+    });
+
+    it('caps full-mode lastSession summary with memoryMaxChars', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      await state.getMemoryManager().saveSessionSummary({
+        workerId: 'worker-memory',
+        taskId: 'task-1',
+        role: 'worker',
+        summary: 'Long session summary should be truncated by the full-mode memory budget.',
+      });
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        memoryMode: 'full',
+        memoryMaxChars: 18,
+      }, state) as { memory: { lastSession: { summary: string; truncated?: boolean } } };
+
+      expect(result.memory.lastSession.summary.length).toBeLessThanOrEqual(18);
+      expect(result.memory.lastSession.summary).not.toContain('full-mode memory budget');
+      expect(result.memory.lastSession.truncated).toBe(true);
+    });
+
+    it('rejects invalid memoryMode values', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask();
+      await state.load();
+      const tool = getContextTool(state);
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        memoryMode: 'verbose',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        memoryMode: '',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        memoryLimit: Number.NaN,
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        memoryMaxChars: Number.POSITIVE_INFINITY,
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+    });
+
+    it('keeps explicit recall full-content even when get_context summaries are compact', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ title: 'Auth token task', description: 'Fix auth token validation' });
+      await state.load();
+      const fullContent = 'Auth token validation full memory body with exact remediation details and hidden tail.';
+      await state.getMemoryManager().addEntry({
+        workerId: 'worker-memory',
+        type: 'gotcha',
+        content: fullContent,
+        tags: ['auth'],
+      });
+
+      const contextTool = getContextTool(state);
+      const context = await contextTool.handler({
+        taskId: 'task-1',
+        memoryMode: 'summary',
+        memoryMaxChars: 20,
+      }, state) as { memory: { relevant: Array<{ preview?: string; content?: string }> } };
+      expect(context.memory.relevant[0].content).toBeUndefined();
+      expect(context.memory.relevant[0].preview).not.toContain('hidden tail');
+
+      const recall = await recallTool(state).handler({
+        query: 'Auth token validation',
+        limit: 1,
+        minConfidence: 0,
+      }, state) as { memories: Array<{ content: string }> };
+
+      expect(recall.memories).toHaveLength(1);
+      expect(recall.memories[0].content).toBe(fullContent);
+    });
+
+    it('does not auto-inject recent chat by default', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask();
+      await state.load();
+      const general = state.getChannels().find((channel) => channel.name === 'general');
+      expect(general).toBeDefined();
+      await state.sendMessage({
+        channel: general!.id,
+        sender: 'human',
+        content: 'Long general chat message '.repeat(80),
+      });
+
+      const tool = getContextTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+        chat?: { recentMessages: unknown[] };
+      };
+
+      expect(result.chat?.recentMessages ?? []).toEqual([]);
+    });
+
+    it('keeps task comments compact in get_context and exposes summary metadata', async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({
+        comments: [
+          { id: 'c1', author: 'human', content: 'old comment', timestamp: '2024-01-01T00:00:00Z' },
+          { id: 'c2', author: 'human', content: 'A'.repeat(1200), timestamp: '2024-01-01T00:01:00Z' },
+          { id: 'c3', author: 'worker-1', content: 'latest comment', timestamp: '2024-01-01T00:02:00Z' },
+        ],
+      });
+      await state.load();
+      const tool = getContextTool(state);
+
+      const compact = await tool.handler({
+        taskId: 'task-1',
+        commentsLimit: 2,
+        commentsMaxChars: 100,
+      }, state) as {
+        task: {
+          comments: Array<{
+            id: string;
+            content: string;
+            contentTruncated?: boolean;
+            contentOriginalLength?: number;
+          }>;
+          commentSummary: { total: number; returned: number; omitted: number; truncated: number };
+        };
+      };
+
+      expect(compact.task.comments.map(comment => comment.id)).toEqual(['c2', 'c3']);
+      expect(compact.task.comments[0].content.length).toBeLessThanOrEqual(100);
+      expect(compact.task.comments[0].contentTruncated).toBe(true);
+      expect(compact.task.comments[0].contentOriginalLength).toBe(1200);
+      expect(compact.task.commentSummary).toMatchObject({
+        total: 3,
+        returned: 2,
+        omitted: 1,
+        truncated: 1,
+      });
+
+      const fullComment = await tool.handler({
+        taskId: 'task-1',
+        commentsLimit: 1,
+        commentsMaxChars: 0,
+      }, state) as { task: { comments: Array<{ content: string; contentTruncated?: boolean }> } };
+      expect(fullComment.task.comments[0].content).toBe('latest comment');
+      expect(fullComment.task.comments[0].contentTruncated).toBeUndefined();
+    });
+  });
+
+  describe('moe.init_project', () => {
+    it('writes memory defaults for newly initialized projects', async () => {
+      const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-init-tool-'));
+      try {
+        const tool = initProjectTool(state);
+        await tool.handler({ projectPath, name: 'Init Tool Project' }, state);
+
+        const project = JSON.parse(fs.readFileSync(path.join(projectPath, '.moe', 'project.json'), 'utf-8')) as Project;
+        expect(project.settings.memory).toEqual({
+          autoInject: 'off',
+          maxAutoResults: 1,
+          maxAutoChars: 500,
+          autoSave: {
+            completedTask: false,
+            firstPassApproval: false,
+            qaRejection: true,
+            reopenedApproval: true,
+          },
+        });
+      } finally {
+        fs.rmSync(projectPath, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('moe.save_session_summary', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1' });
+      createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1' });
+      await state.load();
+    });
+
+    it('saves valid summaries only under the sessions directory', async () => {
+      const tool = saveSessionSummaryTool(state);
+
+      const result = await tool.handler({
+        workerId: 'worker-1',
+        taskId: 'task-1',
+        summary: 'Finished the implementation.',
+      }, state) as { sessionId: string; nextAction: { args: { workerId: string } } };
+
+      expect(result.sessionId).toMatch(/^sess-/);
+      expect(result.nextAction.args.workerId).toBe('worker-1');
+
+      const sessionsDir = path.join(moePath, 'memory', 'sessions');
+      const files = fs.readdirSync(sessionsDir);
+      expect(files).toEqual(['worker-1_task-1.json']);
+
+      const saved = JSON.parse(fs.readFileSync(path.join(sessionsDir, files[0]), 'utf-8')) as {
+        workerId: string;
+        taskId: string;
+        summary: string;
+      };
+      expect(saved).toMatchObject({
+        workerId: 'worker-1',
+        taskId: 'task-1',
+        summary: 'Finished the implementation.',
+      });
+    });
+
+    it('rejects traversal-shaped session IDs without writing outside sessions', async () => {
+      const tool = saveSessionSummaryTool(state);
+      const sessionsDir = path.join(moePath, 'memory', 'sessions');
+      const outsideViaWorkerId = path.join(moePath, 'memory', 'evil_task-1.json');
+
+      await expect(tool.handler({
+        workerId: '../evil',
+        taskId: 'task-1',
+        summary: 'malicious',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      await expect(tool.handler({
+        workerId: 'worker-1',
+        taskId: 'task/../evil',
+        summary: 'malicious',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      await expect(state.getMemoryManager().saveSessionSummary({
+        workerId: '../evil',
+        taskId: 'task-1',
+        role: 'worker',
+        summary: 'malicious',
+      })).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+
+      expect(fs.existsSync(outsideViaWorkerId)).toBe(false);
+      expect(fs.readdirSync(sessionsDir)).toEqual([]);
+    });
+
+    it('rejects syntactically valid but nonexistent worker and task IDs', async () => {
+      const tool = saveSessionSummaryTool(state);
+
+      await expect(tool.handler({
+        workerId: 'worker-missing',
+        taskId: 'task-1',
+        summary: 'no worker',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.NOT_FOUND });
+
+      await expect(tool.handler({
+        workerId: 'worker-1',
+        taskId: 'task-missing',
+        summary: 'no task',
+      }, state)).rejects.toMatchObject({ code: MoeErrorCode.NOT_FOUND });
+
+      expect(fs.readdirSync(path.join(moePath, 'memory', 'sessions'))).toEqual([]);
+    });
+
+    it('matches last sessions by parsed taskId exactly and skips malformed files', () => {
+      const sessionsDir = path.join(moePath, 'memory', 'sessions');
+      fs.writeFileSync(path.join(sessionsDir, 'worker-1_task-1.json'), JSON.stringify({
+        id: 'sess-task1',
+        workerId: 'worker-1',
+        taskId: 'task-1',
+        role: 'worker',
+        summary: 'correct task',
+        memoriesCreated: [],
+        createdAt: '2026-04-30T00:00:00.000Z',
+      }));
+      fs.writeFileSync(path.join(sessionsDir, 'worker-1_task-10.json'), JSON.stringify({
+        id: 'sess-task10',
+        workerId: 'worker-1',
+        taskId: 'task-10',
+        role: 'worker',
+        summary: 'wrong task for task-1',
+        memoriesCreated: [],
+        createdAt: '2026-04-30T00:01:00.000Z',
+      }));
+      fs.writeFileSync(path.join(sessionsDir, 'worker-2_task-1.json'), '{not valid json');
+
+      expect(state.getMemoryManager().getLastSession('task-1')?.id).toBe('sess-task1');
+      expect(state.getMemoryManager().getLastSession('task-10')?.id).toBe('sess-task10');
     });
   });
 
@@ -326,6 +847,27 @@ describe('MCP Tools', () => {
       const tool = checkApprovalTool(state);
       await expect(tool.handler({ taskId: 'nonexistent' }, state)).rejects.toThrow('Task not found');
     });
+
+    it('refreshes worker lastActivityAt when checking approval', async () => {
+      createTask({ id: 'task-heartbeat-approval', status: 'AWAITING_APPROVAL' });
+      await state.load();
+      await state.createWorker({
+        id: 'worker-approval',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: 'task-heartbeat-approval',
+        status: 'AWAITING_APPROVAL',
+      });
+      const before = state.getWorker('worker-approval')!.lastActivityAt;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const tool = checkApprovalTool(state);
+      await tool.handler({ taskId: 'task-heartbeat-approval', workerId: 'worker-approval' }, state);
+
+      expect(new Date(state.getWorker('worker-approval')!.lastActivityAt).getTime())
+        .toBeGreaterThan(new Date(before).getTime());
+    });
   });
 
   describe('moe.start_step', () => {
@@ -391,6 +933,32 @@ describe('MCP Tools', () => {
       expect(result.nextStep?.stepId).toBe('step-2');
     });
 
+    it('rejects completing a PENDING step before start_step', async () => {
+      const tool = completeStepTool(state);
+
+      await expect(
+        tool.handler({ taskId: 'task-1', stepId: 'step-2' }, state)
+      ).rejects.toMatchObject({
+        code: MoeErrorCode.INVALID_STATE,
+        context: { entity: 'Step', currentState: 'PENDING', expectedState: 'IN_PROGRESS' },
+      });
+      await expect(
+        tool.handler({ taskId: 'task-1', stepId: 'step-2' }, state)
+      ).rejects.toThrow('moe.start_step');
+
+      expect(state.getTask('task-1')?.implementationPlan[1].status).toBe('PENDING');
+      expect(state.getTask('task-1')?.stepsCompleted).toBeUndefined();
+    });
+
+    it('requires claimed workers to fetch context before complete_step', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'worker-step', contextFetchedBy: [] });
+      const tool = completeStepTool(state);
+
+      await expect(
+        tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-step' }, state)
+      ).rejects.toThrow('before moe.complete_step');
+    });
+
     it('returns null nextStep when all steps done', async () => {
       await state.updateTask('task-1', {
         implementationPlan: [
@@ -425,6 +993,28 @@ describe('MCP Tools', () => {
       const step = task?.implementationPlan.find(s => s.stepId === 'step-1');
       expect(step?.note).toBeUndefined();
       expect(step?.modifiedFiles).toBeUndefined();
+    });
+
+    it('refreshes worker lastActivityAt when completing a step', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'worker-step', contextFetchedBy: ['worker-step'] });
+      await state.createWorker({
+        id: 'worker-step',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: 'task-1',
+        status: 'CODING',
+      });
+      const before = state.getWorker('worker-step')!.lastActivityAt;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const tool = completeStepTool(state);
+      await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-step' }, state);
+
+      const worker = state.getWorker('worker-step')!;
+      expect(new Date(worker.lastActivityAt).getTime()).toBeGreaterThan(new Date(before).getTime());
+      expect(worker.status).toBe('CODING');
+      expect(worker.currentTaskId).toBe('task-1');
     });
   });
 
@@ -495,6 +1085,49 @@ describe('MCP Tools', () => {
       expect(result.stats.filesModified).not.toContain('old.ts');
       // Step 2 should fall back to affectedFiles
       expect(result.stats.filesModified).toContain('fallback.ts');
+    });
+
+    it('does not auto-save generic completion memory by default', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'worker-1' });
+      const tool = completeTaskTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-1', summary: 'Routine task completed' }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(0);
+    });
+
+    it('can auto-save generic completion memory when project setting enables it', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'worker-1' });
+      state.project!.settings.memory = {
+        autoSave: {
+          completedTask: true,
+          firstPassApproval: false,
+          qaRejection: true,
+          reopenedApproval: true,
+        },
+      };
+      const tool = completeTaskTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-1', summary: 'Reusable completion note' }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(1);
+    });
+
+    it('does not fail completion when enabled memory auto-save throws', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'worker-1' });
+      state.project!.settings.memory = {
+        autoSave: { completedTask: true },
+      };
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(state.getMemoryManager(), 'addEntry').mockRejectedValueOnce(new Error('memory disk full'));
+      const tool = completeTaskTool(state);
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-1',
+        summary: 'Memory write will fail',
+      }, state)).resolves.toMatchObject({ success: true, status: 'REVIEW' });
+      expect(state.getTask('task-1')?.status).toBe('REVIEW');
     });
   });
 
@@ -570,6 +1203,29 @@ describe('MCP Tools', () => {
       expect(result.counts.inProgress).toBe(1);
       expect(result.counts.done).toBe(1);
     });
+
+    it('paginates task summaries for large task lists', async () => {
+      createTask({ id: 'task-4', epicId: 'epic-1', status: 'BACKLOG', order: 4, description: 'full description should not be listed' });
+      await state.load();
+
+      const tool = listTasksTool(state);
+      const result = await tool.handler({ epicId: 'epic-1', limit: 2, offset: 1 }, state) as {
+        tasks: Array<{ id: string; description?: string; definitionOfDone?: string[]; planStepCount: number }>;
+        pagination: { limit: number; offset: number; returned: number; total: number; hasMore: boolean };
+      };
+
+      expect(result.tasks.map(task => task.id)).toEqual(['task-2', 'task-4']);
+      expect(result.tasks[0].description).toBeUndefined();
+      expect(result.tasks[0].definitionOfDone).toBeUndefined();
+      expect(result.tasks[0].planStepCount).toBeGreaterThanOrEqual(0);
+      expect(result.pagination).toEqual({
+        limit: 2,
+        offset: 1,
+        returned: 2,
+        total: 3,
+        hasMore: false,
+      });
+    });
   });
 
   describe('moe.create_team', () => {
@@ -606,6 +1262,27 @@ describe('MCP Tools', () => {
 
       expect(second.created).toBe(false);
       expect(second.team.id).toBe(first.team.id);
+
+      await expect(tool.handler({ name: 'Moe Team', maxSize: 0 }, state)).rejects.toThrow('maxSize');
+    });
+
+    it('rejects invalid team payloads without creating a team', async () => {
+      const tool = createTeamTool(state);
+
+      await expect(tool.handler({ name: 'Bad Team', role: 'worker', maxSize: 0 }, state)).rejects.toThrow('maxSize');
+      await expect(tool.handler({ name: 'Bad Team', role: 'manager' }, state)).rejects.toThrow('role');
+
+      expect(Array.from(state.teams.values()).some(team => team.name === 'Bad Team')).toBe(false);
+    });
+
+    it('ignores proxy-injected workerId field', async () => {
+      const tool = createTeamTool(state);
+      const result = await tool.handler({ name: 'InjectTest', workerId: 'worker' }, state) as {
+        team: { id: string; name: string };
+        created: boolean;
+      };
+      expect(result.team.name).toBe('InjectTest');
+      expect(result.created).toBe(true);
     });
   });
 
@@ -621,9 +1298,32 @@ describe('MCP Tools', () => {
 
     it('returns next backlog task sorted by order', async () => {
       const tool = getNextTaskTool(state);
-      const result = await tool.handler({}, state) as { hasNext: boolean; task: { id: string } };
+      const result = await tool.handler({}, state) as {
+        hasNext: boolean;
+        detail: string;
+        task: { id: string; description?: string; definitionOfDone?: string[]; descriptionPreview?: string };
+      };
       expect(result.hasNext).toBe(true);
       expect(result.task.id).toBe('task-2'); // order 1 comes first
+      expect(result.detail).toBe('summary');
+      expect(result.task.description).toBeUndefined();
+      expect(result.task.definitionOfDone).toBeUndefined();
+      expect(result.task.descriptionPreview).toBeDefined();
+    });
+
+    it('supports full next-task detail when explicitly requested', async () => {
+      const tool = getNextTaskTool(state);
+      const result = await tool.handler({ detail: 'full' }, state) as {
+        hasNext: boolean;
+        detail: string;
+        task: { id: string; description: string; definitionOfDone: string[]; descriptionPreview?: string };
+      };
+      expect(result.hasNext).toBe(true);
+      expect(result.detail).toBe('full');
+      expect(result.task.id).toBe('task-2');
+      expect(result.task.description).toBe('Task description');
+      expect(result.task.definitionOfDone).toEqual(['Tests pass', 'Code reviewed']);
+      expect(result.task.descriptionPreview).toBeUndefined();
     });
 
     it('filters by epicId', async () => {
@@ -769,15 +1469,127 @@ describe('MCP Tools', () => {
       expect(result.task.id).toBe('task-2'); // lowest order
     });
 
+    it('keeps claim response lean and defers full context to get_context', async () => {
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        workerId: 'worker-lean',
+      }, state) as {
+        hasNext: boolean;
+        task: Record<string, unknown>;
+        chatHint?: string;
+        nextAction?: unknown;
+        project?: unknown;
+        epic?: unknown;
+        allRails?: unknown;
+        memory?: unknown;
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(Object.keys(result).sort()).toEqual(['chatHint', 'hasNext', 'nextAction', 'task'].sort());
+      expect(Object.keys(result.task).sort()).toEqual([
+        'assignedWorkerId',
+        'epicId',
+        'generalChannelId',
+        'id',
+        'priority',
+        'rejectionDetails',
+        'reopenCount',
+        'reopenReason',
+        'roleChannelId',
+        'status',
+        'title',
+      ].sort());
+      expect(result.task.id).toBe('task-2');
+      expect(result.task.description).toBeUndefined();
+      expect(result.task.definitionOfDone).toBeUndefined();
+      expect(result.task.taskRails).toBeUndefined();
+      expect(result.task.implementationPlan).toBeUndefined();
+      expect(result.project).toBeUndefined();
+      expect(result.epic).toBeUndefined();
+      expect(result.allRails).toBeUndefined();
+      expect(result.memory).toBeUndefined();
+    });
+
     it('assigns workerId to claimed task', async () => {
       const tool = claimNextTaskTool(state);
-      await tool.handler({
+      const result = await tool.handler({
         statuses: ['BACKLOG'],
         workerId: 'worker-1',
-      }, state);
+      }, state) as { task: { assignedWorkerId: string | null } };
 
       const task = state.getTask('task-2');
       expect(task?.assignedWorkerId).toBe('worker-1');
+      expect(result.task.assignedWorkerId).toBe('worker-1');
+    });
+
+    it('returns current assignment data when replacing an existing worker', async () => {
+      createTask({
+        id: 'task-active-worker',
+        status: 'BACKLOG',
+        assignedWorkerId: 'worker-other',
+        order: 99,
+      });
+      createWorker({
+        id: 'worker-other',
+        status: 'READING_CONTEXT',
+        currentTaskId: 'task-active-worker',
+      });
+      await state.load();
+
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        workerId: 'worker-replacement',
+        replaceExisting: true,
+      }, state) as { task: { id: string; assignedWorkerId: string | null } };
+
+      expect(result.task.id).toBe('task-2');
+      expect(result.task.assignedWorkerId).toBe('worker-replacement');
+      expect(state.getTask('task-2')?.assignedWorkerId).toBe('worker-replacement');
+      expect(state.getTask('task-active-worker')?.assignedWorkerId).toBeNull();
+    });
+
+    it('repairs and claims a task assigned to a missing worker', async () => {
+      createTask({
+        id: 'task-orphan-worker',
+        status: 'WORKING',
+        assignedWorkerId: 'worker-missing',
+        order: 0,
+      });
+      await state.load();
+
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['WORKING'],
+        workerId: 'worker-reclaimer',
+      }, state) as { hasNext: boolean; task: { id: string; assignedWorkerId: string | null } };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-orphan-worker');
+      expect(result.task.assignedWorkerId).toBe('worker-reclaimer');
+      expect(state.getTask('task-orphan-worker')?.assignedWorkerId).toBe('worker-reclaimer');
+    });
+
+    it('wait_for_task treats a task assigned to a missing worker as available', async () => {
+      createTask({
+        id: 'task-wait-orphan',
+        status: 'REVIEW',
+        assignedWorkerId: 'worker-missing',
+        order: 0,
+      });
+      await state.load();
+
+      const tool = waitForTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['REVIEW'],
+        workerId: 'worker-waiter',
+        timeoutMs: 1000,
+      }, state) as { hasNext: boolean; task: { id: string }; nextAction: { tool: string } };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-wait-orphan');
+      expect(result.nextAction.tool).toBe('moe.claim_next_task');
     });
 
     it('claims from multiple statuses', async () => {
@@ -797,8 +1609,15 @@ describe('MCP Tools', () => {
 
     it('returns hasNext=false when no matching tasks', async () => {
       const tool = claimNextTaskTool(state);
-      const result = await tool.handler({ statuses: ['DONE'] }, state) as { hasNext: boolean };
+      const result = await tool.handler({ statuses: ['DONE'], workerId: 'worker-none' }, state) as {
+        hasNext: boolean;
+        nextAction: { tool: string; args: { statuses: string[]; workerId: string } };
+      };
       expect(result.hasNext).toBe(false);
+      expect(Object.keys(result).sort()).toEqual(['hasNext', 'nextAction'].sort());
+      expect(result.nextAction.tool).toBe('moe.wait_for_task');
+      expect(result.nextAction.args.statuses).toEqual(['DONE']);
+      expect(result.nextAction.args.workerId).toBe('worker-none');
     });
 
     it('includes rejection fields when task was reopened', async () => {
@@ -852,6 +1671,52 @@ describe('MCP Tools', () => {
       expect(result.task.reopenReason).toBeNull();
       expect(result.task.rejectionDetails).toBeNull();
       expect(result.reopenWarning).toBeUndefined();
+    });
+
+    it('claims a specific task when taskId is provided, bypassing priority order', async () => {
+      // task-2 has lower order so default claim picks it; with taskId we want task-1 instead.
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-1',
+        workerId: 'worker-direct',
+      }, state) as { hasNext: boolean; task: { id: string; assignedWorkerId: string } };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-1');
+      expect(result.task.assignedWorkerId).toBe('worker-direct');
+      expect(state.getTask('task-1')?.assignedWorkerId).toBe('worker-direct');
+      // task-2 should still be free
+      expect(state.getTask('task-2')?.assignedWorkerId).toBeNull();
+    });
+
+    it('rejects taskId when task is not in any of the requested statuses', async () => {
+      const tool = claimNextTaskTool(state);
+      // task-3 is PLANNING; we ask for BACKLOG only
+      await expect(tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-3',
+      }, state)).rejects.toThrow(/PLANNING/);
+    });
+
+    it('rejects taskId for unknown task', async () => {
+      const tool = claimNextTaskTool(state);
+      await expect(tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-nope',
+      }, state)).rejects.toThrow(/not found|NOT_FOUND/i);
+    });
+
+    it('rejects taskId already assigned to someone else without replaceExisting', async () => {
+      createTask({ id: 'task-locked', status: 'BACKLOG', assignedWorkerId: 'worker-other', order: 99 });
+      createWorker({ id: 'worker-other', status: 'READING_CONTEXT', currentTaskId: 'task-locked' });
+      await state.load();
+      const tool = claimNextTaskTool(state);
+      await expect(tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-locked',
+        workerId: 'worker-thief',
+      }, state)).rejects.toThrow(/already assigned/);
     });
   });
 
@@ -975,6 +1840,31 @@ describe('MCP Tools', () => {
       const tool = updateEpicTool(state);
       await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: epicId');
     });
+
+    it('rejects invalid updates without mutating the epic', async () => {
+      const tool = updateEpicTool(state);
+
+      await expect(tool.handler({
+        epicId: 'epic-1',
+        status: 'BROKEN',
+        title: 'Should Not Persist',
+      }, state)).rejects.toThrow('status');
+
+      expect(state.getEpic('epic-1')?.title).toBe('Original Title');
+    });
+
+    it('rejects unknown epic update fields before applying allowed fields', async () => {
+      const tool = updateEpicTool(state);
+
+      await expect(tool.handler({
+        epicId: 'epic-1',
+        id: 'epic-evil',
+        title: 'Should Not Persist',
+      }, state)).rejects.toThrow('id');
+
+      expect(state.getEpic('epic-1')?.id).toBe('epic-1');
+      expect(state.getEpic('epic-1')?.title).toBe('Original Title');
+    });
   });
 
   describe('moe.delete_epic', () => {
@@ -1076,6 +1966,45 @@ describe('MCP Tools', () => {
       expect(result.tasks.length).toBe(1);
     });
 
+    it('returns compact summaries by default and full tasks only on opt-in', async () => {
+      await state.updateTask('task-1', {
+        description: 'Long login bug description '.repeat(30),
+        implementationPlan: [
+          { stepId: 'step-1', description: 'Fix it', status: 'PENDING', affectedFiles: [] },
+        ],
+      });
+
+      const tool = searchTasksTool(state);
+      const compact = await tool.handler({
+        query: 'login',
+        maxDescriptionChars: 60,
+      }, state) as {
+        detail: string;
+        tasks: Array<{
+          id: string;
+          description?: string;
+          descriptionPreview?: string;
+          descriptionTruncated?: boolean;
+          implementationPlan?: unknown;
+          planStepCount: number;
+        }>;
+      };
+      expect(compact.detail).toBe('summary');
+      expect(compact.tasks[0].description).toBeUndefined();
+      expect(compact.tasks[0].implementationPlan).toBeUndefined();
+      expect(compact.tasks[0].descriptionPreview!.length).toBeLessThanOrEqual(60);
+      expect(compact.tasks[0].descriptionTruncated).toBe(true);
+      expect(compact.tasks[0].planStepCount).toBe(1);
+
+      const full = await tool.handler({ query: 'login', detail: 'full', limit: 1 }, state) as {
+        detail: string;
+        tasks: Task[];
+      };
+      expect(full.detail).toBe('full');
+      expect(full.tasks[0].description).toContain('Long login bug description');
+      expect(full.tasks[0].implementationPlan).toHaveLength(1);
+    });
+
     it('returns empty array when no matches', async () => {
       const tool = searchTasksTool(state);
       const result = await tool.handler({ query: 'nonexistent' }, state) as { tasks: Task[] };
@@ -1124,6 +2053,56 @@ describe('MCP Tools', () => {
         tool.handler({ taskId: 'nonexistent' }, state)
       ).rejects.toThrow('Task not found');
     });
+
+    it('does not auto-save first-pass approval memory by default', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'qa-1' });
+      const tool = qaApproveTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'Looks good' }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(0);
+    });
+
+    it('can auto-save first-pass approval memory when project setting enables it', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'qa-1' });
+      state.project!.settings.memory = {
+        autoSave: { firstPassApproval: true },
+      };
+      const tool = qaApproveTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'First pass approval worth saving' }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(1);
+    });
+
+    it('auto-saves reopened approval memory by default', async () => {
+      await state.updateTask('task-1', {
+        assignedWorkerId: 'qa-1',
+        reopenCount: 1,
+        implementationPlan: [
+          { stepId: 'step-1', description: 'Fix', status: 'COMPLETED', affectedFiles: ['fix.ts'] },
+        ],
+      });
+      const tool = qaApproveTool(state);
+
+      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'Rejected issue verified fixed' }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(1);
+    });
+
+    it('does not fail approval when enabled memory auto-save throws', async () => {
+      await state.updateTask('task-1', { assignedWorkerId: 'qa-1', reopenCount: 1 });
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(state.getMemoryManager(), 'addEntry').mockRejectedValueOnce(new Error('memory disk full'));
+      const tool = qaApproveTool(state);
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        workerId: 'qa-1',
+        summary: 'Memory write will fail',
+      }, state)).resolves.toMatchObject({ success: true, status: 'DONE' });
+      expect(state.getTask('task-1')?.status).toBe('DONE');
+    });
   });
 
   describe('moe.qa_reject', () => {
@@ -1148,6 +2127,71 @@ describe('MCP Tools', () => {
       const task = state.getTask('task-1');
       expect(task?.status).toBe('WORKING');
       expect(task?.reopenReason).toBe('Tests are failing');
+    });
+
+    it('auto-saves QA rejection memory by default', async () => {
+      const tool = qaRejectTool(state);
+
+      await tool.handler({
+        taskId: 'task-1',
+        reason: 'Tests are failing',
+        workerId: 'qa-1',
+        issues: [{ type: 'test_failure', description: 'Auth test fails', file: 'auth.test.ts' }],
+      }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(1);
+    });
+
+    it('can disable QA rejection auto-memory', async () => {
+      state.project!.settings.memory = {
+        autoSave: { qaRejection: false },
+      };
+      const tool = qaRejectTool(state);
+
+      await tool.handler({
+        taskId: 'task-1',
+        reason: 'Tests are failing',
+        workerId: 'qa-1',
+        issues: [{ type: 'test_failure', description: 'Auth test fails', file: 'auth.test.ts' }],
+      }, state);
+
+      expect(state.getMemoryManager().getEntryCount()).toBe(0);
+    });
+
+    it('does not fail rejection when enabled memory auto-save throws', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(state.getMemoryManager(), 'addEntry').mockRejectedValueOnce(new Error('memory disk full'));
+      const tool = qaRejectTool(state);
+
+      await expect(tool.handler({
+        taskId: 'task-1',
+        reason: 'Tests are failing',
+        workerId: 'qa-1',
+        issues: [{ type: 'test_failure', description: 'Auth test fails', file: 'auth.test.ts' }],
+      }, state)).resolves.toMatchObject({ success: true, status: 'WORKING', reopenCount: 1 });
+      expect(state.getTask('task-1')?.status).toBe('WORKING');
+    });
+
+    it('keeps explicit remember unaffected when all auto-save settings are disabled', async () => {
+      state.project!.settings.memory = {
+        autoSave: {
+          completedTask: false,
+          firstPassApproval: false,
+          qaRejection: false,
+          reopenedApproval: false,
+        },
+      };
+      const tool = rememberTool(state);
+
+      const result = await tool.handler({
+        workerId: 'qa-1',
+        type: 'gotcha',
+        content: 'Explicit memory should still persist when auto-save is disabled.',
+        taskId: 'task-1',
+      }, state) as { wasDuplicate: boolean };
+
+      expect(result.wasDuplicate).toBe(false);
+      expect(state.getMemoryManager().getEntryCount()).toBe(1);
     });
 
     it('increments reopenCount on multiple rejections', async () => {
@@ -1241,6 +2285,52 @@ describe('MCP Tools', () => {
       expect(result.rejectionDetails).toBeNull();
     });
 
+    it('clears stale rejectionDetails after structured details are followed by reason-only rejection', async () => {
+      const rejectTool = qaRejectTool(state);
+
+      await rejectTool.handler({
+        taskId: 'task-1',
+        reason: 'Initial structured rejection',
+        failedDodItems: ['Tests pass'],
+        issues: [{ type: 'test_failure', description: 'Old failure details', file: 'old.test.ts' }],
+      }, state);
+      expect(state.getTask('task-1')?.rejectionDetails).toEqual({
+        failedDodItems: ['Tests pass'],
+        issues: [{ type: 'test_failure', description: 'Old failure details', file: 'old.test.ts' }],
+      });
+
+      await state.updateTask('task-1', { status: 'REVIEW' });
+      await rejectTool.handler({
+        taskId: 'task-1',
+        reason: 'Replacement structured rejection',
+        failedDodItems: ['New DoD item only'],
+      }, state);
+      expect(state.getTask('task-1')?.rejectionDetails).toEqual({
+        failedDodItems: ['New DoD item only'],
+      });
+
+      await state.updateTask('task-1', { status: 'REVIEW' });
+      const reasonOnlyResult = await rejectTool.handler({
+        taskId: 'task-1',
+        reason: 'Reason-only rejection',
+      }, state) as { rejectionDetails: null };
+      expect(reasonOnlyResult.rejectionDetails).toBeNull();
+      expect(state.getTask('task-1')?.rejectionDetails).toBeNull();
+
+      const context = await getContextTool(state).handler({ taskId: 'task-1' }, state) as {
+        task: { rejectionDetails: null };
+      };
+      expect(context.task.rejectionDetails).toBeNull();
+
+      const claim = await claimNextTaskTool(state).handler({
+        statuses: ['WORKING'],
+        workerId: 'worker-after-reason-only',
+      }, state) as { hasNext: boolean; task: { id: string; rejectionDetails: null } };
+      expect(claim.hasNext).toBe(true);
+      expect(claim.task.id).toBe('task-1');
+      expect(claim.task.rejectionDetails).toBeNull();
+    });
+
     it('throws for invalid issue type', async () => {
       await state.updateTask('task-1', { status: 'REVIEW' });
 
@@ -1311,6 +2401,27 @@ describe('MCP Tools', () => {
       expect(result.events.length).toBeGreaterThan(0);
     });
 
+    it('returns epic lifecycle events newest-first when filtered by epicId', async () => {
+      const epic = await state.createEpic({ title: 'Logged Epic', status: 'ACTIVE', order: 5 });
+      await state.updateEpic(epic.id, { title: 'Logged Epic Updated', order: 6 });
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({
+        epicId: epic.id,
+        eventTypes: ['EPIC_CREATED', 'EPIC_UPDATED'],
+        limit: 10,
+        maxPayloadChars: 0,
+      }, state) as {
+        events: Array<{ event: string; epicId?: string; payload: Record<string, unknown> }>;
+      };
+
+      expect(result.events.map((event) => event.event)).toEqual(['EPIC_UPDATED', 'EPIC_CREATED']);
+      expect(result.events.every((event) => event.epicId === epic.id)).toBe(true);
+      expect(result.events[0].payload.title).toBe('Logged Epic Updated');
+      expect(result.events[1].payload.status).toBe('ACTIVE');
+    });
+
     it('filters by taskId', async () => {
       createTask({ id: 'task-a', status: 'BACKLOG' });
       createTask({ id: 'task-b', status: 'BACKLOG' });
@@ -1363,6 +2474,32 @@ describe('MCP Tools', () => {
 
       expect(result.events.length).toBeLessThanOrEqual(2);
       expect(result.count).toBeLessThanOrEqual(2);
+    });
+
+    it('rejects invalid activity log numeric parameters', async () => {
+      const tool = getActivityLogTool(state);
+
+      await expect(tool.handler({ limit: Number.POSITIVE_INFINITY }, state)).rejects.toThrow('Invalid limit');
+      await expect(tool.handler({ offset: -1 }, state)).rejects.toThrow('Invalid offset');
+      await expect(tool.handler({ maxPayloadChars: Number.NaN }, state)).rejects.toThrow('Invalid maxPayloadChars');
+    });
+
+    it('caps default limit at 10 when none specified', async () => {
+      // Create 15 status transitions to exceed the new default
+      for (let i = 1; i <= 15; i++) {
+        createTask({ id: `task-d${i}`, status: 'BACKLOG' });
+      }
+      await state.load();
+      for (let i = 1; i <= 15; i++) {
+        await state.updateTask(`task-d${i}`, { status: 'PLANNING' });
+      }
+      await state.flushActivityLog();
+
+      const tool = getActivityLogTool(state);
+      const result = await tool.handler({}, state) as { events: unknown[]; count: number };
+
+      expect(result.events.length).toBeLessThanOrEqual(10);
+      expect(result.count).toBeLessThanOrEqual(10);
     });
 
     it('throws if project not loaded', async () => {
@@ -1971,6 +3108,241 @@ describe('MCP Tools', () => {
       };
       expect(result.count).toBe(1);
       expect(result.tasks[0].taskId).toBe('task-1');
+    });
+
+    it('limits and truncates pending-question payloads by default with full-content opt-in', async () => {
+      setupMoeFolder();
+      createEpic({ id: 'epic-1' });
+      createTask({
+        id: 'task-1',
+        order: 1,
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c1', author: 'human', content: 'A'.repeat(1200), timestamp: '2024-01-01T00:00:00Z' },
+          { id: 'c2', author: 'human', content: 'B'.repeat(1200), timestamp: '2024-01-01T00:01:00Z' },
+        ],
+      });
+      createTask({
+        id: 'task-2',
+        order: 2,
+        hasPendingQuestion: true,
+        comments: [
+          { id: 'c3', author: 'human', content: 'C'.repeat(1200), timestamp: '2024-01-01T00:02:00Z' },
+        ],
+      });
+      await state.load();
+
+      const tool = getPendingQuestionsTool(state);
+      const compact = await tool.handler({
+        limit: 1,
+        maxQuestionsPerTask: 1,
+        maxContentChars: 100,
+      }, state) as {
+        count: number;
+        totalMatches: number;
+        tasks: Array<{
+          taskId: string;
+          questions: Array<{ content: string; contentTruncated?: boolean; contentOriginalLength?: number }>;
+          totalQuestions: number;
+          omittedQuestions: number;
+        }>;
+        pagination: { hasMore: boolean };
+        truncatedQuestions: number;
+        hint?: string;
+      };
+
+      expect(compact.count).toBe(1);
+      expect(compact.totalMatches).toBe(2);
+      expect(compact.tasks[0].taskId).toBe('task-1');
+      expect(compact.tasks[0].questions).toHaveLength(1);
+      expect(compact.tasks[0].questions[0].content.length).toBeLessThanOrEqual(100);
+      expect(compact.tasks[0].questions[0].contentTruncated).toBe(true);
+      expect(compact.tasks[0].questions[0].contentOriginalLength).toBe(1200);
+      expect(compact.tasks[0].totalQuestions).toBe(2);
+      expect(compact.tasks[0].omittedQuestions).toBe(1);
+      expect(compact.pagination.hasMore).toBe(true);
+      expect(compact.truncatedQuestions).toBe(1);
+      expect(compact.hint).toContain('compact');
+
+      const fullQuestion = await tool.handler({
+        limit: 1,
+        maxQuestionsPerTask: 1,
+        maxContentChars: 0,
+      }, state) as { tasks: Array<{ questions: Array<{ content: string; contentTruncated?: boolean }> }> };
+      expect(fullQuestion.tasks[0].questions[0].content).toHaveLength(1200);
+      expect(fullQuestion.tasks[0].questions[0].contentTruncated).toBeUndefined();
+    });
+  });
+
+  describe('chat token budgets', () => {
+    async function setupChat(): Promise<string> {
+      setupMoeFolder();
+      createWorker({ id: 'worker-chat' });
+      await state.load();
+      const general = state.getChannels().find((channel) => channel.name === 'general');
+      expect(general).toBeDefined();
+      return general!.id;
+    }
+
+    it('truncates chat_read message content by default and supports full content opt-in', async () => {
+      const channel = await setupChat();
+      const content = 'A'.repeat(1200);
+      await state.sendMessage({ channel, sender: 'human', content });
+
+      const tool = chatReadTool(state);
+      const compact = await tool.handler({ channel }, state) as {
+        messages: Array<{ content: string; contentTruncated?: boolean; contentOriginalLength?: number }>;
+        truncated: number;
+      };
+      expect(compact.messages[0].content.length).toBeLessThanOrEqual(1000);
+      expect(compact.messages[0].contentTruncated).toBe(true);
+      expect(compact.messages[0].contentOriginalLength).toBe(1200);
+      expect(compact.truncated).toBe(1);
+
+      const full = await tool.handler({ channel, maxContentChars: 0 }, state) as {
+        messages: Array<{ content: string; contentTruncated?: boolean }>;
+        truncated: number;
+      };
+      expect(full.messages[0].content).toBe(content);
+      expect(full.messages[0].contentTruncated).toBeUndefined();
+      expect(full.truncated).toBe(0);
+    });
+
+    it('does not advance cursors or clear unread for all-channel messages omitted by the global limit', async () => {
+      const general = await setupChat();
+      const other = await state.createChannel({ name: 'handoff', type: 'custom' });
+      const oldMessage = await state.sendMessage({
+        channel: general,
+        sender: 'human',
+        content: '@worker-chat old general handoff',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const returnedMessage = await state.sendMessage({
+        channel: other.id,
+        sender: 'human',
+        content: '@worker-chat newest handoff',
+      });
+      expect(state.getUnreadSummary('worker-chat')?.channels[general]).toBe(1);
+      expect(state.getUnreadSummary('worker-chat')?.channels[other.id]).toBe(1);
+
+      const tool = chatReadTool(state);
+      const result = await tool.handler({ workerId: 'worker-chat', limit: 1 }, state) as {
+        messages: Array<{ id: string; channel: string }>;
+      };
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].id).toBe(returnedMessage.message.id);
+      expect(result.messages[0].channel).toBe(other.id);
+
+      const worker = state.getWorker('worker-chat')!;
+      expect(worker.chatCursors?.[other.id]).toBe(returnedMessage.message.id);
+      expect(worker.chatCursors?.[general]).toBeUndefined();
+      expect(worker.chatCursors?.[general]).not.toBe(oldMessage.message.id);
+
+      const unread = state.getUnreadSummary('worker-chat');
+      expect(unread?.channels[general]).toBe(1);
+      expect(unread?.channels[other.id]).toBeUndefined();
+      expect(unread?.total).toBe(1);
+
+      const laterRead = await tool.handler({ workerId: 'worker-chat', limit: 1 }, state) as {
+        messages: Array<{ id: string; channel: string }>;
+      };
+      expect(laterRead.messages).toHaveLength(1);
+      expect(laterRead.messages[0].id).toBe(oldMessage.message.id);
+      expect(laterRead.messages[0].channel).toBe(general);
+      expect(state.getWorker('worker-chat')?.chatCursors?.[general]).toBe(oldMessage.message.id);
+      expect(state.getUnreadSummary('worker-chat')).toBeNull();
+    });
+
+    it('does not advance a returned channel cursor past earlier fetched messages omitted by the global limit', async () => {
+      const general = await setupChat();
+      const other = await state.createChannel({ name: 'handoff', type: 'custom' });
+      const oldGeneral = await state.sendMessage({
+        channel: general,
+        sender: 'human',
+        content: '@worker-chat old general note',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const returnedGeneral = await state.sendMessage({
+        channel: general,
+        sender: 'human',
+        content: '@worker-chat newer general note',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      const returnedOther = await state.sendMessage({
+        channel: other.id,
+        sender: 'human',
+        content: '@worker-chat newest other note',
+      });
+
+      const tool = chatReadTool(state);
+      const result = await tool.handler({ workerId: 'worker-chat', limit: 2 }, state) as {
+        messages: Array<{ id: string; channel: string }>;
+      };
+
+      expect(result.messages.map((message) => message.id)).toEqual([
+        returnedGeneral.message.id,
+        returnedOther.message.id,
+      ]);
+      expect(state.getWorker('worker-chat')?.chatCursors?.[other.id]).toBe(returnedOther.message.id);
+      expect(state.getWorker('worker-chat')?.chatCursors?.[general]).toBeUndefined();
+      expect(state.getUnreadSummary('worker-chat')?.channels[general]).toBe(2);
+      expect(state.getUnreadSummary('worker-chat')?.channels[other.id]).toBeUndefined();
+
+      const laterRead = await tool.handler({ workerId: 'worker-chat', limit: 2 }, state) as {
+        messages: Array<{ id: string; channel: string }>;
+      };
+      expect(laterRead.messages.map((message) => message.id)).toEqual([
+        oldGeneral.message.id,
+        returnedGeneral.message.id,
+      ]);
+      expect(state.getWorker('worker-chat')?.chatCursors?.[general]).toBe(returnedGeneral.message.id);
+      expect(state.getUnreadSummary('worker-chat')).toBeNull();
+    });
+
+    it('keeps chat_resync default payload smaller', async () => {
+      const channel = await setupChat();
+      for (let i = 0; i < 25; i++) {
+        await state.sendMessage({ channel, sender: 'human', content: `${i}: ${'B'.repeat(1200)}` });
+      }
+
+      const tool = chatResyncTool(state);
+      const result = await tool.handler({ workerId: 'worker-chat', channel }, state) as {
+        messagesCount: number;
+        messages: Array<{ content: string; contentTruncated?: boolean }>;
+        truncated: number;
+      };
+
+      expect(result.messagesCount).toBe(20);
+      expect(result.messages).toHaveLength(20);
+      expect(result.messages[0].content.length).toBeLessThanOrEqual(1000);
+      expect(result.messages[0].contentTruncated).toBe(true);
+      expect(result.truncated).toBe(20);
+    });
+
+    it('truncates chat_wait wake messages by default', async () => {
+      const channel = await setupChat();
+      const tool = chatWaitTool(state);
+      const waitPromise = tool.handler({
+        workerId: 'worker-chat',
+        channels: [channel],
+        timeoutMs: 1000,
+        maxContentChars: 25,
+      }, state) as Promise<{
+        hasMessage: boolean;
+        messages: Array<{ content: string; contentTruncated?: boolean; contentOriginalLength?: number }>;
+        truncated: number;
+      }>;
+
+      const content = 'Human unblock details '.repeat(20);
+      await state.sendMessage({ channel, sender: 'human', content });
+      const result = await waitPromise;
+
+      expect(result.hasMessage).toBe(true);
+      expect(result.messages[0].content.length).toBeLessThanOrEqual(25);
+      expect(result.messages[0].contentTruncated).toBe(true);
+      expect(result.messages[0].contentOriginalLength).toBe(content.length);
+      expect(result.truncated).toBe(1);
     });
   });
 });
