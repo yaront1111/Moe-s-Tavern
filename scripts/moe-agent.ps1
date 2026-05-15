@@ -34,6 +34,16 @@
     # Use gemini headless mode (non-interactive, --yolo) instead of interactive
     [switch]$GeminiExec,
 
+    # Force claude into interactive TUI mode (no --print, no stream-json parser).
+    # Use when you want to drive the agent yourself — typing into the REPL after
+    # the pre-flight has claimed a task and loaded the role/MCP context.
+    # The polling loop is unaffected: each loop iteration spawns a fresh CLI
+    # invocation, so per-task cache replay is the same as --print mode (no
+    # multi-turn replay cost compounding). Architect defaults to interactive
+    # because planning benefits from clarifying questions; worker and qa stay
+    # opt-in (JetBrains opts the worker in for hands-on coding sessions).
+    [switch]$Interactive,
+
     # Explicit model override (e.g. "claude-opus-4-7", "claude-sonnet-4-6").
     # When empty, the launcher picks a per-role default — architect → Opus,
     # worker/qa → Sonnet. Per-project overrides via .moe/project.json
@@ -45,6 +55,13 @@
 if ($Loop -and $NoLoop) {
     Write-Error "Conflicting switches: -Loop and -NoLoop cannot be used together. Choose -Loop for polling mode or -NoLoop for single-shot mode."
     exit 2
+}
+
+# Architect defaults to interactive TUI because planning is a conversation.
+# Worker and QA stay opt-in. Explicit -Interactive:$false on the command line
+# wins over this default.
+if ($Role -eq "architect" -and -not $PSBoundParameters.ContainsKey('Interactive')) {
+    $Interactive = $true
 }
 
 function Load-Registry {
@@ -446,6 +463,8 @@ elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
 # Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
 $geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)
+# Claude defaults to --print (one-shot stream); -Interactive flips it to TUI.
+$claudeInteractive = ($cliType -eq "claude") -and $Interactive
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 if ($cliType -eq "codex") {
@@ -734,10 +753,16 @@ if ($cliType -eq "gemini") {
 }
 $loopEnabled = (($AutoClaim -or $Loop) -and (-not $NoLoop) -and ($PollInterval -gt 0))
 if ($codexInteractive -or $geminiInteractive) {
+    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+    # would just respawn the same TUI on top of the previous one. Claude's
+    # interactive mode is fine to loop: each iteration spawns a fresh CLI
+    # invocation, so per-task cache replay matches --print mode.
     $loopEnabled = $false
     if (-not $NoLoop) {
         Write-Host "Interactive mode: polling disabled"
     }
+} elseif ($claudeInteractive -and $loopEnabled) {
+    Write-Host "Claude interactive mode: polling enabled (each task spawns a fresh TUI)"
 }
 if ($loopEnabled) {
     Write-Host "Polling mode: will check for new tasks every ${PollInterval}s after completion (Ctrl+C to stop)"
@@ -1287,9 +1312,12 @@ $mentionsJson
             # is silent during tool-call phases (sometimes minutes), which is
             # indistinguishable from a hang.
             #
-            # Opt-out: set MOE_NO_PRINT_MODE=1 to keep the legacy interactive TUI
-            # (use only when actively debugging — costs ~20-50x more per task).
-            $usePrintMode = ($env:MOE_NO_PRINT_MODE -ne "1")
+            # Opt-out: -Interactive switches to the full TUI so the operator can
+            # drive the agent (clarifying questions, follow-ups, etc.). Because
+            # each polling-loop iteration spawns a fresh CLI invocation, the
+            # cached prefix is paid once per task in either mode — there is no
+            # multi-turn replay penalty for interactive mode.
+            $usePrintMode = -not $Interactive
             $printArgs = @()
             if ($usePrintMode) {
                 $printArgs = @(

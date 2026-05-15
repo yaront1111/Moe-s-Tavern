@@ -17,7 +17,7 @@ import path from 'path';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=a7b918e76e42 -->
+  'architect.md': `<!-- moe-generated: sha=5865ef301c12 -->
 
 # Architect
 
@@ -31,6 +31,14 @@ You turn a task description, rails, and Definition of Done into an ordered imple
 
 ## Plan-mode heuristics
 Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs.
+
+## Conversational planning
+
+You run in an interactive TUI by default. The human is at the keyboard — use them. For any task that is non-trivial (2+ subsystems, ambiguous DoD, unfamiliar APIs, or a previous rejection), \`Skill(skill="superpowers:brainstorming")\` on PLANNING claim and let it guide a short clarifying exchange before you draft steps. Ask the user — in the REPL, not via \`moe.chat_send\` — about anything that would otherwise force you to guess: missing acceptance criteria, conflicting rails, framework/library choices, naming, scope boundaries. One or two well-chosen questions beat a plan that has to be reopened.
+
+Do not interrogate the user on trivial tasks (single file, obvious change, DoD already says exactly what to do). And do not turn this into a back-and-forth design session — the goal is to remove the specific ambiguities blocking a clean plan, then submit it.
+
+Only call \`moe.submit_plan\` once the user has confirmed the approach (a "yes / go ahead / that's right" in the REPL is enough). If the user is unreachable or unresponsive and the task is genuinely ambiguous, fall back to \`moe.report_blocked\` rather than speculating.
 
 ## Runtime-driven workflow
 Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool.
@@ -52,7 +60,7 @@ Duties while governing:
 Releasing a task that an agent is hung on: call \`moe.release_task {taskId}\`. Status is preserved; another worker can claim it next.
 
 Identifying stale agents: \`moe.list_workers {onlyStale: true}\` shows agents whose \`lastActivityAt\` exceeds the liveness threshold, including any task assignments they still hold.`,
-  'architect.reference.md': `<!-- moe-generated: sha=b94904ea606a -->
+  'architect.reference.md': `<!-- moe-generated: sha=7b4121a06413 -->
 
 # Architect — Reference
 
@@ -105,7 +113,7 @@ When you discover a non-obvious constraint, gotcha, or pattern during exploratio
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'qa.md': `<!-- moe-generated: sha=33353d0a6b31 -->
+  'qa.md': `<!-- moe-generated: sha=6d8b66d696f4 -->
 
 # QA
 
@@ -127,7 +135,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=2165e20c17b9 -->
+  'qa.reference.md': `<!-- moe-generated: sha=3f5bdfe565a3 -->
 
 # QA — Reference
 
@@ -166,7 +174,7 @@ When you find a recurring pattern or a subtle gap the tests didn't catch, call \
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=53d0feedcec3 -->
+  'worker.md': `<!-- moe-generated: sha=bc0e0b05234d -->
 
 # Worker
 
@@ -187,7 +195,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 If you hit a non-obvious gotcha or convention worth keeping, save it with \`moe.remember\`. Use \`moe.recall\` when you need prior knowledge for the current task. (Memory auto-injection is off by default.)
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.`,
-  'worker.reference.md': `<!-- moe-generated: sha=4818eaa4d242 -->
+  'worker.reference.md': `<!-- moe-generated: sha=88fe77791f32 -->
 
 # Worker — Reference
 
@@ -252,7 +260,7 @@ When you discover a gotcha, anti-pattern, or subtle invariant during implementat
  * Same sha-marker convention as ROLE_DOCS.
  */
 export const SUBAGENT_DOCS: Record<string, string> = {
-  'moe-code-reviewer.md': `<!-- moe-generated: sha=2b55fb5f669e -->
+  'moe-code-reviewer.md': `<!-- moe-generated: sha=6f353202d8c0 -->
 
 ---
 name: moe-code-reviewer
@@ -289,7 +297,7 @@ notes: <anything else worth raising>
 \`\`\`
 
 A single critical issue is enough to fail. Do not approve to "be nice" — your job is to catch what the worker missed.`,
-  'moe-explorer.md': `<!-- moe-generated: sha=ead3e9a3f4ca -->
+  'moe-explorer.md': `<!-- moe-generated: sha=6604209fa819 -->
 
 ---
 name: moe-explorer
@@ -316,7 +324,7 @@ A short report (under ~400 words) with:
 4. Open questions the architect should resolve before drafting the plan.
 
 Do NOT propose implementation. The architect plans; you map.`,
-  'moe-test-runner.md': `<!-- moe-generated: sha=4420dba09b1a -->
+  'moe-test-runner.md': `<!-- moe-generated: sha=498987613995 -->
 
 ---
 name: moe-test-runner

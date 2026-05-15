@@ -270,10 +270,50 @@ object TerminalAgentLauncher {
                 else -> " -CodexExec"
             }
         } else ""
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg"
+        val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " -Interactive" else ""
+        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg$interactiveArg"
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }
+
+    /**
+     * Gate: when does JetBrains opt a role into Claude's interactive TUI?
+     *
+     * - Architect: always (planning benefits from clarifying questions in the REPL).
+     * - Worker: always — hands-on coding sessions want the TUI.
+     * - QA: never — verification is mechanical, --print stream-json is preferable.
+     *
+     * Codex / Gemini providers ignore this gate: they have their own native TUI vs
+     * headless toggles (`-CodexExec`, `-GeminiExec`). codexExec=true also forces
+     * a non-interactive run regardless of role.
+     */
+    internal fun shouldLaunchClaudeInteractive(
+        role: String,
+        agentCommand: String,
+        codexExec: Boolean
+    ): Boolean =
+        (role == "architect" || role == "worker") &&
+            !codexExec &&
+            AgentProvider.fromCommand(agentCommand) == AgentProvider.CLAUDE
+
+    internal fun buildPowerShellCommandForTest(
+        basePath: String,
+        role: String,
+        scriptPath: String,
+        envOverrides: Map<String, String>,
+        agentCommand: String,
+        teamName: String? = null,
+        codexExec: Boolean = false
+    ): String =
+        buildPowerShellCommand(
+            basePath,
+            role,
+            File(scriptPath),
+            envOverrides,
+            agentCommand,
+            teamName,
+            codexExec
+        )
 
     private fun buildBashCommand(
         basePath: String,
@@ -304,7 +344,8 @@ object TerminalAgentLauncher {
                 else -> " --codex-exec"
             }
         } else ""
-        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg"
+        val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " --interactive" else ""
+        return "${envPrefix}bash $scriptArg --role $role --project $projectArg --worker-id $workerIdArg --command $commandArg$teamArg$execArg$interactiveArg"
     }
 
     private fun psQuote(value: String): String {

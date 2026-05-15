@@ -133,6 +133,7 @@ LOOP_REQUESTED=false
 TEAM=""
 CODEX_EXEC=false
 GEMINI_EXEC=false
+INTERACTIVE_REQUESTED=""
 MODEL=""
 
 # Parse arguments
@@ -194,6 +195,14 @@ while [[ $# -gt 0 ]]; do
             GEMINI_EXEC=true
             shift
             ;;
+        --interactive)
+            INTERACTIVE_REQUESTED=true
+            shift
+            ;;
+        --no-interactive)
+            INTERACTIVE_REQUESTED=false
+            shift
+            ;;
         --model)
             MODEL="$2"
             shift 2
@@ -218,6 +227,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
+            echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
+            echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
             echo "  --model MODEL            Claude model override (defaults: architect=opus-4-7, worker/qa=sonnet-4-6)"
             echo "  --help, -h               Show this help"
             echo ""
@@ -263,6 +274,24 @@ fi
 GEMINI_INTERACTIVE=false
 if [ "$CLI_TYPE" = "gemini" ] && [ "$GEMINI_EXEC" = false ]; then
     GEMINI_INTERACTIVE=true
+fi
+
+# Resolve final INTERACTIVE: explicit --interactive / --no-interactive wins,
+# otherwise architect defaults to true (planning is a conversation), worker
+# and qa default to false. Note: the bash sibling does not yet implement a
+# --print stream-json fallback the way moe-agent.ps1 does, so on bash today
+# Claude always runs in TUI regardless of this flag. The flag is wired up for
+# forward parity and to keep the loop-decoupling logic symmetric.
+if [ -n "$INTERACTIVE_REQUESTED" ]; then
+    INTERACTIVE="$INTERACTIVE_REQUESTED"
+elif [ "$ROLE" = "architect" ]; then
+    INTERACTIVE=true
+else
+    INTERACTIVE=false
+fi
+CLAUDE_INTERACTIVE=false
+if [ "$CLI_TYPE" = "claude" ] && [ "$INTERACTIVE" = true ]; then
+    CLAUDE_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -1052,10 +1081,16 @@ if [ "$NO_LOOP" = true ]; then
 fi
 
 if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ]; then
+    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+    # would just respawn the same TUI on top of the previous one. Claude's
+    # interactive mode is fine to loop: each iteration spawns a fresh CLI
+    # invocation, so per-task cache replay matches --print mode.
     LOOP_ENABLED=false
     if [ "$NO_LOOP" = false ]; then
         echo "Interactive mode: polling disabled"
     fi
+elif [ "$CLAUDE_INTERACTIVE" = true ] && [ "$LOOP_ENABLED" = true ]; then
+    echo "Claude interactive mode: polling enabled (each task spawns a fresh TUI)"
 fi
 
 if [ "$LOOP_ENABLED" = true ]; then
