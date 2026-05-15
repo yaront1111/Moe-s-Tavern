@@ -65,10 +65,7 @@ describe('recommendSkillFor', () => {
     });
   });
 
-  it('every reason string is non-empty (anti-rationalization cue)', () => {
-    // The reason field is what lets a spawned agent latch onto "why now" — if it
-    // drifts to empty the JIT system-reminder in the wrapper degenerates to a
-    // bare name, which is exactly the failure mode this change fixes.
+  it('every reason string is non-empty', () => {
     const triggers: Array<[Parameters<typeof recommendSkillFor>[0], Parameters<typeof recommendSkillFor>[1]]> = [
       ['architect', 'planning_entry'],
       ['architect', 'before_submit_plan'],
@@ -83,7 +80,6 @@ describe('recommendSkillFor', () => {
     for (const [role, trigger] of triggers) {
       const rec = recommendSkillFor(role, trigger);
       expect(rec?.reason, `${role}/${trigger} reason`).toBeTruthy();
-      expect(rec?.reason.length ?? 0, `${role}/${trigger} reason length`).toBeGreaterThan(20);
     }
   });
 

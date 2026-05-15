@@ -5,6 +5,11 @@ import { logger } from './logger.js';
 // Deprecation warning dedupe: we log at most once per (task, tool) pair per daemon
 // lifetime so a misbehaving client doesn't flood the log.
 const deprecationWarned = new Set<string>();
+function displayToolName(toolName: string): string {
+  if (!toolName || toolName === 'unknown') return 'this tool';
+  return toolName.startsWith('moe.') ? toolName : `moe.${toolName}`;
+}
+
 function warnMissingWorkerId(taskId: string, tool: string): void {
   const key = `${taskId}:${tool}`;
   if (deprecationWarned.has(key)) return;
@@ -30,7 +35,8 @@ export function assertWorkerOwns(task: Task, workerId: string | undefined, toolN
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
     `Task ${task.id} is claimed by ${task.assignedWorkerId}, not ${workerId}`,
-    { taskId: task.id, owner: task.assignedWorkerId, caller: workerId }
+    { taskId: task.id, owner: task.assignedWorkerId, caller: workerId },
+    'NOT_ALLOWED'
   );
 }
 
@@ -48,8 +54,9 @@ export function assertContextFetched(task: Task, workerId: string | undefined, t
   if (fetched.includes(workerId)) return;
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
-    `Call moe.get_context for task ${task.id} before moe.start_step`,
-    { taskId: task.id, workerId }
+    `Call moe.get_context for task ${task.id} before ${displayToolName(toolName)}`,
+    { taskId: task.id, workerId },
+    'NOT_ALLOWED'
   );
 }
 
@@ -63,6 +70,7 @@ export function assertAllStepsCompleted(task: Task): void {
   throw new MoeError(
     MoeErrorCode.NOT_ALLOWED,
     `Cannot complete task ${task.id}: ${remaining} step(s) still incomplete`,
-    { taskId: task.id, remaining, totalSteps: plan.length }
+    { taskId: task.id, remaining, totalSteps: plan.length },
+    'NOT_ALLOWED'
   );
 }

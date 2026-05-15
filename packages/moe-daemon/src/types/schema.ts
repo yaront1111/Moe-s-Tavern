@@ -78,7 +78,7 @@ export interface MemoryAutoSaveSettings {
 }
 
 export interface MemorySettings {
-  autoInject?: MemoryAutoInjectMode;   // default: summary
+  autoInject?: MemoryAutoInjectMode;   // default: off
   maxAutoResults?: number;             // default: 1
   maxAutoChars?: number;               // default: 500 total chars
   autoSave?: MemoryAutoSaveSettings;

@@ -6,7 +6,7 @@ import { StateManager } from '../state/StateManager.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
-import type { Task, Epic, Project } from '../types/schema.js';
+import type { Task, Epic, Project, WorkerStatus } from '../types/schema.js';
 
 describe('qa_approve / qa_reject ownership enforcement', () => {
   let testDir: string;
@@ -55,6 +55,17 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     return task;
   }
 
+  async function createWorker(id: string, status: WorkerStatus = 'CODING', currentTaskId: string | null = 'task-1') {
+    return state.createWorker({
+      id,
+      type: 'CLAUDE',
+      projectId: 'proj-test',
+      epicId: 'epic-1',
+      currentTaskId,
+      status,
+    });
+  }
+
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-qa-own-'));
     moePath = path.join(testDir, '.moe');
@@ -94,6 +105,32 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     expect(result.status).toBe('DONE');
   });
 
+  it('qa_approve releases the assigned QA worker after approval', async () => {
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-a' });
+    await state.load();
+    await createWorker('qa-a', 'CODING', 'task-1');
+
+    const tool = qaApproveTool(state);
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-a' }, state) as { status: string };
+
+    expect(result.status).toBe('DONE');
+    expect(state.getTask('task-1')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('qa-a')?.status).toBe('IDLE');
+    expect(state.getWorker('qa-a')?.currentTaskId).toBeNull();
+  });
+
+  it('qa_approve does not block when the assigned QA worker record is missing', async () => {
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-missing' });
+    await state.load();
+
+    const tool = qaApproveTool(state);
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-missing' }, state) as { status: string };
+
+    expect(result.status).toBe('DONE');
+    expect(state.getTask('task-1')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('qa-missing')).toBeNull();
+  });
+
   it('qa_reject rejects when a different QA agent attempts to reject', async () => {
     setupMoe(); writeEpic(); writeTask();
     await state.load();
@@ -113,6 +150,20 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     const tool = qaRejectTool(state);
     const result = await tool.handler({ taskId: 'task-1', reason: 'needs fixes', workerId: 'qa-a' }, state) as { status: string };
     expect(result.status).toBe('WORKING');
+  });
+
+  it('qa_reject releases the assigned QA worker after rejection', async () => {
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-a' });
+    await state.load();
+    await createWorker('qa-a', 'CODING', 'task-1');
+
+    const tool = qaRejectTool(state);
+    const result = await tool.handler({ taskId: 'task-1', reason: 'needs fixes', workerId: 'qa-a' }, state) as { status: string };
+
+    expect(result.status).toBe('WORKING');
+    expect(state.getTask('task-1')?.assignedWorkerId).toBeNull();
+    expect(state.getWorker('qa-a')?.status).toBe('IDLE');
+    expect(state.getWorker('qa-a')?.currentTaskId).toBeNull();
   });
 
   it('qa_reject allows human-driven path (assignedWorkerId=null)', async () => {

@@ -3,7 +3,7 @@ import org.jetbrains.intellij.tasks.PrepareSandboxTask
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.3.10"
+    id("org.jetbrains.kotlin.jvm") version "2.3.21"
     id("org.jetbrains.intellij") version "1.17.4"
 }
 
@@ -55,7 +55,7 @@ fun requireBundledAssets() {
 }
 
 dependencies {
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
     testImplementation("junit:junit:4.13.2")
 }

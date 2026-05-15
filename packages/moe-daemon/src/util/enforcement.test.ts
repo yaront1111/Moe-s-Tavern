@@ -4,7 +4,7 @@ import {
   assertContextFetched,
   assertAllStepsCompleted,
 } from './enforcement.js';
-import { MoeError, MoeErrorCode } from './errors.js';
+import { missingRequired, MoeError, MoeErrorCode, notAllowed, notFound } from './errors.js';
 import type { Task, ImplementationStep } from '../types/schema.js';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -59,6 +59,14 @@ describe('assertWorkerOwns', () => {
       expect(err).toBeInstanceOf(MoeError);
       expect((err as MoeError).code).toBe(MoeErrorCode.NOT_ALLOWED);
     }
+  });
+});
+
+describe('MoeError formatting', () => {
+  it('uses explicit names for duplicate JSON-RPC code values', () => {
+    expect(missingRequired('taskId').message).toMatch(/^\[MISSING_REQUIRED\]/);
+    expect(notFound('Task', 'task-1').message).toMatch(/^\[TASK_NOT_FOUND\]/);
+    expect(notAllowed('complete_task', 'owned by another worker').message).toMatch(/^\[NOT_ALLOWED\]/);
   });
 });
 

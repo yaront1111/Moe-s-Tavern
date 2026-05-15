@@ -2,6 +2,8 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertAllStepsCompleted } from '../util/enforcement.js';
+import { resolveMemorySettings } from '../util/memorySettings.js';
+import { logger } from '../util/logger.js';
 
 export function completeTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -29,10 +31,8 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       assertWorkerOwns(task, params.workerId);
       assertAllStepsCompleted(task);
 
-      // Update worker to IDLE before status change (which clears assignedWorkerId)
-      if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {
-        await state.updateWorker(task.assignedWorkerId, { status: 'IDLE', currentTaskId: null });
-      }
+      // Update worker to IDLE before status change (which clears assignedWorkerId).
+      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'IDLE', currentTaskId: null });
 
       const now = new Date().toISOString();
       const updated = await state.updateTask(
@@ -55,10 +55,12 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       const completedSteps = implementationPlan.filter((s) => s.status === 'COMPLETED');
       const modified = completedSteps.flatMap((s) => s.modifiedFiles || s.affectedFiles || []);
 
-      // Auto-extract memory: turn this completion into a gotcha/pattern entry
-      // so the next worker on a related task benefits from what was just done.
-      // Best-effort; dedupe is handled by MemoryManager.
-      if (params.workerId) {
+      // Auto-extract memory only when explicitly enabled. Generic completion
+      // summaries tend to be low-signal and burn tokens when surfaced later;
+      // keep the default knowledge base focused on "good stuff" (manual
+      // remembers, QA rejections, and reopened fixes).
+      const memorySettings = resolveMemorySettings(state.project?.settings);
+      if (params.workerId && memorySettings.autoSave.completedTask) {
         try {
           const mm = state.getMemoryManager();
           // Cap summary to 5000 chars BEFORE composing the content — avoids
@@ -81,7 +83,10 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           });
         } catch (err) {
           // Never block task completion on memory write.
-          console.warn(`[completeTask] memory auto-extract failed for ${updated.id}:`, err);
+          logger.warn({
+            taskId: updated.id,
+            error: err instanceof Error ? err.message : String(err),
+          }, 'completeTask memory auto-extract failed');
         }
       }
 

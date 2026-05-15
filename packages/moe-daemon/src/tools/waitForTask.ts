@@ -80,7 +80,7 @@ function findMatchingTask(
   const tasks = Array.from(state.tasks.values())
     .filter((t) => statuses.includes(t.status))
     .filter((t) => (epicId ? t.epicId === epicId : true))
-    .filter((t) => !t.assignedWorkerId)
+    .filter((t) => state.isTaskClaimable(t))
     .sort((a, b) => {
       const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
       const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
@@ -118,6 +118,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       if (!workerId) {
         throw missingRequired('workerId');
       }
+      await state.touchWorker(workerId);
 
       // Cancel any existing waiter for this worker
       const existing = activeWaiters.get(workerId);
@@ -187,15 +188,19 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
         timer = setTimeout(() => {
           cleanup();
           logger.info({ workerId }, 'Wait for task timed out');
-          resolve({
-            hasNext: false,
-            timedOut: true,
-            nextAction: {
-              tool: 'moe.wait_for_task',
-              args: { statuses, workerId, epicId: params.epicId, timeoutMs },
-              reason: 'Timeout elapsed; re-enter wait to keep listening.'
-            }
-          });
+          void state.touchWorker(workerId)
+            .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on wait_for_task timeout'))
+            .finally(() => {
+              resolve({
+                hasNext: false,
+                timedOut: true,
+                nextAction: {
+                  tool: 'moe.wait_for_task',
+                  args: { statuses, workerId, epicId: params.epicId, timeoutMs },
+                  reason: 'Timeout elapsed; re-enter wait to keep listening.'
+                }
+              });
+            });
         }, timeoutMs);
 
         // Don't prevent process exit

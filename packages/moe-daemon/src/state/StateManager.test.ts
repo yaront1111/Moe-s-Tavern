@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from './StateManager.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
-import type { Task, Epic, Project, RailProposal, ChatChannel } from '../types/schema.js';
+import type { Task, Epic, Project, RailProposal, ChatChannel, Team, Worker } from '../types/schema.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 
 vi.mock('../tools/submitPlan.js', () => ({
@@ -116,6 +116,27 @@ describe('StateManager', () => {
       createdAt: new Date().toISOString(),
       ...overrides,
     };
+  }
+
+  function createTestWorker(overrides: Partial<Worker> = {}): Worker {
+    const worker: Worker = {
+      id: 'worker-test123',
+      type: 'CLAUDE',
+      projectId: 'proj-test123',
+      epicId: 'epic-test123',
+      currentTaskId: null,
+      status: 'IDLE',
+      branch: '',
+      modifiedFiles: [],
+      startedAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+      lastError: null,
+      errorCount: 0,
+      teamId: null,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'workers', `${worker.id}.json`), JSON.stringify(worker, null, 2));
+    return worker;
   }
 
   beforeEach(() => {
@@ -465,6 +486,56 @@ describe('StateManager', () => {
       await expect(stateManager.updateSettings({ agentCommand: 'codex' })).rejects.toThrow('settings write failed');
       expect(stateManager.project).toEqual(originalProject);
     });
+
+    it('rejects invalid settings without partially updating project.json', async () => {
+      const originalProject = JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf8')) as Project;
+
+      await expect(stateManager.updateSettings({
+        approvalMode: 'CHAOS',
+        speedModeDelayMs: 5000,
+        agentCommand: 'codex',
+      } as never)).rejects.toThrow('approvalMode');
+
+      expect(stateManager.project?.settings).toEqual(originalProject.settings);
+      expect(JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf8')).settings).toEqual(originalProject.settings);
+    });
+
+    it('rejects invalid numeric and string settings', async () => {
+      await expect(stateManager.updateSettings({ speedModeDelayMs: -1 } as never)).rejects.toThrow('speedModeDelayMs');
+      await expect(stateManager.updateSettings({ agentCommand: '' } as never)).rejects.toThrow('agentCommand');
+      await expect(stateManager.updateSettings({ unexpected: true } as never)).rejects.toThrow('unexpected');
+    });
+
+    it('accepts valid partial settings and preserves unspecified settings', async () => {
+      const updated = await stateManager.updateSettings({
+        approvalMode: 'TURBO',
+        speedModeDelayMs: 1000,
+        agentCommand: 'codex',
+        columnLimits: { WORKING: 2 },
+        memory: {
+          autoInject: 'off',
+          maxAutoResults: 2,
+          autoSave: { qaRejection: false },
+        },
+      });
+
+      expect(updated.settings.approvalMode).toBe('TURBO');
+      expect(updated.settings.speedModeDelayMs).toBe(1000);
+      expect(updated.settings.agentCommand).toBe('codex');
+      expect(updated.settings.autoCreateBranch).toBe(true);
+      expect(updated.settings.columnLimits).toEqual({ WORKING: 2 });
+      expect(updated.settings.memory).toEqual({
+        autoInject: 'off',
+        maxAutoResults: 2,
+        maxAutoChars: 500,
+        autoSave: {
+          completedTask: false,
+          firstPassApproval: false,
+          qaRejection: false,
+          reopenedApproval: true,
+        },
+      });
+    });
   });
 
   describe('deleteEpic rollback semantics', () => {
@@ -505,6 +576,33 @@ describe('StateManager', () => {
       await stateManager.createEpic({ title: 'New Epic' });
       expect(events).toContain('EPIC_CREATED');
     });
+
+    it('logs EPIC_CREATED activity with epic context and bounded payload', async () => {
+      const longTitle = 'Created Epic '.repeat(80);
+      const epic = await stateManager.createEpic({
+        title: longTitle,
+        status: 'ACTIVE',
+        order: 42,
+        description: 'do-not-log-description '.repeat(100),
+        architectureNotes: 'do-not-log-architecture '.repeat(100),
+        epicRails: ['do-not-log-rail'],
+      });
+
+      await stateManager.flushActivityLog();
+
+      const event = stateManager.getActivityLog(10)
+        .find((entry) => entry.event === 'EPIC_CREATED' && entry.epicId === epic.id);
+      expect(event).toBeDefined();
+      expect(event!.projectId).toBe('proj-test123');
+      expect(event!.taskId).toBeUndefined();
+      expect(event!.payload.status).toBe('ACTIVE');
+      expect(event!.payload.order).toBe(42);
+      expect(typeof event!.payload.title).toBe('string');
+      expect((event!.payload.title as string).length).toBeLessThanOrEqual(220);
+      expect(event!.payload).not.toHaveProperty('description');
+      expect(event!.payload).not.toHaveProperty('architectureNotes');
+      expect(event!.payload).not.toHaveProperty('epicRails');
+    });
   });
 
   describe('updateEpic', () => {
@@ -525,6 +623,113 @@ describe('StateManager', () => {
       });
       expect(updated.title).toBe('Updated Epic');
       expect(updated.status).toBe('COMPLETED');
+    });
+
+    it('rejects immutable or invalid epic updates without partial writes', async () => {
+      const originalEpic = stateManager.getEpic('epic-test123')!;
+      const originalFile = fs.readFileSync(path.join(moePath, 'epics', 'epic-test123.json'), 'utf8');
+
+      await expect(stateManager.updateEpic('epic-test123', {
+        id: 'epic-evil',
+        title: 'Should Not Persist',
+      } as never)).rejects.toThrow('id');
+
+      await expect(stateManager.updateEpic('epic-test123', { status: 'BROKEN' } as never)).rejects.toThrow('status');
+      await expect(stateManager.updateEpic('epic-test123', { order: -1 } as never)).rejects.toThrow('order');
+
+      expect(stateManager.getEpic('epic-test123')).toEqual(originalEpic);
+      expect(fs.readFileSync(path.join(moePath, 'epics', 'epic-test123.json'), 'utf8')).toBe(originalFile);
+    });
+
+    it('emits and logs EPIC_UPDATED activity with bounded changed fields', async () => {
+      const events: string[] = [];
+      stateManager.setEmitter((e) => events.push(e.type));
+      const longTitle = 'Updated Epic '.repeat(80);
+      const longDescription = 'description-preview-source '.repeat(200);
+      const longArchitectureNotes = 'architecture-notes-must-not-appear '.repeat(200);
+
+      const updated = await stateManager.updateEpic('epic-test123', {
+        title: longTitle,
+        description: longDescription,
+        architectureNotes: longArchitectureNotes,
+        epicRails: ['rail-one', 'rail-two'],
+        status: 'COMPLETED',
+        order: 7,
+      });
+
+      await stateManager.flushActivityLog();
+
+      expect(events).toContain('EPIC_UPDATED');
+      const event = stateManager.getActivityLog(10)
+        .find((entry) => entry.event === 'EPIC_UPDATED' && entry.epicId === 'epic-test123');
+      expect(event).toBeDefined();
+      expect(event!.taskId).toBeUndefined();
+
+      const payload = event!.payload;
+      expect(payload.epicId).toBe('epic-test123');
+      expect(payload.changedFields).toEqual(expect.arrayContaining([
+        'title',
+        'description',
+        'architectureNotes',
+        'epicRails',
+        'status',
+        'order',
+      ]));
+      expect(typeof payload.title).toBe('string');
+      expect((payload.title as string).length).toBeLessThanOrEqual(220);
+      expect(payload.status).toBe('COMPLETED');
+      expect(payload.order).toBe(7);
+      expect(payload.descriptionLength).toBe(updated.description.length);
+      expect(typeof payload.descriptionPreview).toBe('string');
+      expect((payload.descriptionPreview as string).length).toBeLessThanOrEqual(220);
+      expect(payload.architectureNotesLength).toBe(updated.architectureNotes.length);
+      expect(payload.epicRailsCount).toBe(updated.epicRails.length);
+      expect(payload).not.toHaveProperty('description');
+      expect(payload).not.toHaveProperty('architectureNotes');
+      expect(payload).not.toHaveProperty('epicRails');
+      expect(JSON.stringify(payload)).not.toContain(longArchitectureNotes.slice(0, 100));
+    });
+  });
+
+  describe('team validation', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      await stateManager.load();
+    });
+
+    it('validates createTeam inputs', async () => {
+      await expect(stateManager.createTeam({ name: '', role: 'worker' })).rejects.toThrow('name');
+      await expect(stateManager.createTeam({ name: 'Bad Role', role: 'manager' as never })).rejects.toThrow('role');
+      await expect(stateManager.createTeam({ name: 'Bad Size', maxSize: 0 })).rejects.toThrow('maxSize');
+    });
+
+    it('validates updateTeam inputs without partial writes', async () => {
+      const team = await stateManager.createTeam({ name: 'Ops Team', role: 'worker', maxSize: 3 });
+      const originalTeam = stateManager.getTeam(team.id)!;
+      const originalFile = fs.readFileSync(path.join(moePath, 'teams', `${team.id}.json`), 'utf8');
+
+      await expect(stateManager.updateTeam(team.id, { id: 'team-evil', name: 'Changed' } as never)).rejects.toThrow('id');
+      await expect(stateManager.updateTeam(team.id, { memberIds: ['worker-1', 'worker-1'] } as never)).rejects.toThrow('memberIds');
+      await expect(stateManager.updateTeam(team.id, { maxSize: Number.POSITIVE_INFINITY } as never)).rejects.toThrow('maxSize');
+
+      expect(stateManager.getTeam(team.id)).toEqual(originalTeam);
+      expect(fs.readFileSync(path.join(moePath, 'teams', `${team.id}.json`), 'utf8')).toBe(originalFile);
+    });
+
+    it('accepts valid team updates', async () => {
+      const team = await stateManager.createTeam({ name: 'Ops Team', role: 'worker', maxSize: 3 });
+      const updated = await stateManager.updateTeam(team.id, {
+        name: 'QA Team',
+        role: 'qa',
+        memberIds: ['worker-1', 'worker-2'],
+        maxSize: 5,
+      } as Partial<Team>);
+
+      expect(updated.name).toBe('QA Team');
+      expect(updated.role).toBe('qa');
+      expect(updated.memberIds).toEqual(['worker-1', 'worker-2']);
+      expect(updated.maxSize).toBe(5);
+      expect(updated.id).toBe(team.id);
     });
   });
 
@@ -868,6 +1073,30 @@ describe('StateManager', () => {
       expect(evt!.payload.small).toBe('ok');
     });
 
+    it('clamps overlarge limits and maxPayloadChars to safe bounds', async () => {
+      await setupLogEnv(150);
+      const bigValue = 'x'.repeat(5000);
+      writeActivityEvents(1, { payload: { bigField: bigValue } });
+
+      const { getActivityLogTool } = await import('../tools/getActivityLog.js');
+      const tool = getActivityLogTool(stateManager);
+      const result = await tool.handler({
+        limit: 999999,
+        maxPayloadChars: 999999,
+      }, stateManager) as {
+        events: Array<{ payload: Record<string, unknown> }>;
+        filters: { limit: number; maxPayloadChars: number };
+      };
+
+      expect(result.events.length).toBeLessThanOrEqual(100);
+      expect(result.filters.limit).toBe(100);
+      expect(result.filters.maxPayloadChars).toBe(2000);
+      const evt = result.events.find(e => typeof e.payload.bigField === 'string');
+      expect(evt).toBeDefined();
+      expect((evt!.payload.bigField as string).length).toBeLessThanOrEqual(2020);
+      expect(evt!.payload.bigField).toContain('[truncated]');
+    });
+
     it('does not truncate when maxPayloadChars=0', async () => {
       await setupLogEnv(0);
       const bigValue = 'y'.repeat(5000);
@@ -919,6 +1148,33 @@ describe('StateManager', () => {
       const tool = getActivityLogTool(stateManager);
 
       const result = await tool.handler({ limit: 50, offset: 0, maxPayloadChars: 0 }, stateManager) as { hasMore: boolean };
+      expect(result.hasMore).toBe(false);
+    });
+
+    it('finds filtered matches older than the first 1000 tail entries', async () => {
+      await setupLogEnv(0);
+      writeActivityEvents(1, { taskId: 'task-old-match', payload: { marker: 'target' } });
+      writeActivityEvents(1200, { taskId: 'task-noise', payload: { marker: 'noise' } });
+
+      const { getActivityLogTool } = await import('../tools/getActivityLog.js');
+      const tool = getActivityLogTool(stateManager);
+
+      const result = await tool.handler({
+        taskId: 'task-old-match',
+        limit: 1,
+        maxPayloadChars: 0,
+      }, stateManager) as {
+        events: Array<{ taskId?: string; payload: Record<string, unknown> }>;
+        hasMore: boolean;
+        search: { scanLimit: number; scannedLines: number; complete: boolean };
+      };
+
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0].taskId).toBe('task-old-match');
+      expect(result.events[0].payload.marker).toBe('target');
+      expect(result.search.scanLimit).toBeGreaterThan(1000);
+      expect(result.search.scannedLines).toBeGreaterThan(1000);
+      expect(result.search.complete).toBe(true);
       expect(result.hasMore).toBe(false);
     });
 
@@ -1041,6 +1297,73 @@ describe('StateManager', () => {
       expect(result.hasNext).toBe(true);
       const task = result.task as Record<string, unknown>;
       expect(task.generalChannelId).toBeNull();
+    });
+  });
+
+  describe('worker stale assignment recovery', () => {
+    it('does not delete a stale CODING worker that owns an active task assignment', async () => {
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 1,
+        blockedTimeoutMs: 60 * 60 * 1000,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-active' });
+      createTestWorker({
+        id: 'worker-active',
+        currentTaskId: 'task-test123',
+        status: 'CODING',
+        lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      expect(stateManager.getWorker('worker-active')).not.toBeNull();
+      expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBe('worker-active');
+    });
+
+    it('deletes a stale IDLE worker without an active task assignment', async () => {
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 1,
+        blockedTimeoutMs: 60 * 60 * 1000,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: null });
+      createTestWorker({
+        id: 'worker-idle',
+        currentTaskId: null,
+        status: 'IDLE',
+        lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      expect(stateManager.getWorker('worker-idle')).toBeNull();
+      expect(fs.existsSync(path.join(moePath, 'workers', 'worker-idle.json'))).toBe(false);
+    });
+
+    it('purgeAllWorkers clears assignments whose worker file is missing', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-missing' });
+      await stateManager.load();
+      expect(stateManager.isTaskClaimable(stateManager.getTask('task-test123')!)).toBe(true);
+
+      await stateManager.purgeAllWorkers();
+      await stateManager.flushActivityLog();
+
+      expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBeNull();
+      const events = stateManager.getActivityLog(10);
+      expect(events.some((event) =>
+        event.event === 'WORKER_DISCONNECTED' &&
+        event.taskId === 'task-test123' &&
+        event.payload.workerId === 'worker-missing'
+      )).toBe(true);
     });
   });
 

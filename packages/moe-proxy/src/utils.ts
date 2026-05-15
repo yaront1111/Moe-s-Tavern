@@ -8,15 +8,74 @@ export interface DaemonInfo {
   projectPath: string;
 }
 
-export function readDaemonInfo(projectPath: string): DaemonInfo | null {
+export interface DaemonInfoReadResult {
+  info: DaemonInfo | null;
+  error?: string;
+  retryable: boolean;
+}
+
+function canonicalProjectPath(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+function isSameProjectPath(a: string, b: string): boolean {
+  const left = canonicalProjectPath(a);
+  const right = canonicalProjectPath(b);
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function isValidPort(port: unknown): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function isValidPid(pid: unknown): pid is number {
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 0;
+}
+
+function isDaemonInfoShape(value: unknown): value is DaemonInfo {
+  const info = value as Partial<DaemonInfo> | null;
+  return !!info
+    && isValidPort(info.port)
+    && isValidPid(info.pid)
+    && typeof info.projectPath === 'string'
+    && info.projectPath.trim().length > 0
+    && typeof info.startedAt === 'string';
+}
+
+export function readDaemonInfoResult(projectPath: string): DaemonInfoReadResult {
   const filePath = path.join(projectPath, '.moe', 'daemon.json');
-  if (!fs.existsSync(filePath)) return null;
+  if (!fs.existsSync(filePath)) return { info: null, retryable: true };
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as DaemonInfo;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isDaemonInfoShape(parsed)) {
+      return {
+        info: null,
+        retryable: false,
+        error: 'daemon.json contains invalid daemon connection details',
+      };
+    }
+    if (!isSameProjectPath(parsed.projectPath, projectPath)) {
+      return {
+        info: null,
+        retryable: false,
+        error: 'daemon.json belongs to a different project',
+      };
+    }
+    return { info: parsed, retryable: false };
   } catch {
-    return null;
+    return {
+      info: null,
+      retryable: false,
+      error: 'daemon.json contains invalid daemon connection details',
+    };
   }
+}
+
+export function readDaemonInfo(projectPath: string): DaemonInfo | null {
+  return readDaemonInfoResult(projectPath).info;
 }
 
 export function getProjectPath(): string {
