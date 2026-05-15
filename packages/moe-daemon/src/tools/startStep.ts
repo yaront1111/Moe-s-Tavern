@@ -1,6 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
+import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -10,19 +12,23 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         taskId: { type: 'string' },
-        stepId: { type: 'string' }
+        stepId: { type: 'string' },
+        workerId: { type: 'string' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as { taskId: string; stepId: string };
+      const params = args as { taskId: string; stepId: string; workerId?: string };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
       if (task.status !== 'WORKING') {
         throw invalidState('Task', task.status, 'WORKING');
       }
+
+      assertWorkerOwns(task, params.workerId, 'moe.start_step');
+      assertContextFetched(task, params.workerId, 'moe.start_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no-plan', 'has-plan');
@@ -49,17 +55,33 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       }
       await state.updateTask(task.id, updates, 'STEP_STARTED');
 
-      // Update worker status to CODING
-      if (task.assignedWorkerId && state.getWorker(task.assignedWorkerId)) {
-        await state.updateWorker(task.assignedWorkerId, { status: 'CODING', currentTaskId: task.id });
-      }
+      // Update worker liveness/status to CODING without requiring a worker record to exist.
+      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
+
+      // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
+      // on the final step. Both are advisory.
+      const desc = (step.description || '').toLowerCase();
+      const files = (step.affectedFiles || []).join(' ').toLowerCase();
+      const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
+      const isFinalStep = stepIndex === steps.length - 1;
+      const recommendedSkill = isFinalStep
+        ? recommendSkillFor('worker', 'final_step')
+        : isTestStep
+          ? recommendSkillFor('worker', 'test_step')
+          : undefined;
 
       return {
         success: true,
         taskId: task.id,
         stepId: params.stepId,
         stepNumber: stepIndex + 1,
-        totalSteps: steps.length
+        totalSteps: steps.length,
+        nextAction: {
+          tool: 'moe.complete_step',
+          args: { taskId: task.id, stepId: params.stepId, workerId: params.workerId },
+          reason: 'Implement the step, run tests, then mark it complete.',
+          recommendedSkill
+        }
       };
     }
   };

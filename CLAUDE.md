@@ -1,118 +1,49 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repo.
 
-## Project Overview
+## Project
 
-Moe is an AI Workforce Command Center - a JetBrains IDE plugin + daemon system for managing AI task execution with human oversight. The daemon manages `.moe/` state files, and clients (plugin, CLI) interact via WebSocket.
+Moe is an AI Workforce Command Center — a JetBrains/VS Code plugin + Node daemon that orchestrates AI agents through a task lifecycle. The daemon owns `.moe/` state files; clients (plugin, agents) talk to it via WebSocket. JetBrains is the primary IDE — implement and test JetBrains changes first.
 
-## Build Commands
+```
+JetBrains Plugin ── /ws ──▶ Moe Daemon ◀── /mcp ── moe-proxy ◀── agent CLI (MCP stdio)
+                              │
+                              ▼
+                           .moe/  (source of truth — daemon is sole writer)
+```
 
-### Daemon & Proxy (Node/TypeScript)
+## Build
+
 ```bash
-# Build daemon
 cd packages/moe-daemon && npm install && npm run build
-
-# Build proxy
-cd packages/moe-proxy && npm install && npm run build
-
-# Development with hot reload
-cd packages/moe-daemon && npm run dev
+cd packages/moe-proxy  && npm install && npm run build
+cd moe-jetbrains       && ./gradlew runIde     # JetBrains sandbox
 ```
 
-### JetBrains Plugin (Kotlin)
-```bash
-cd moe-jetbrains
-./gradlew runIde        # Launch sandbox IDE with plugin
-./gradlew buildPlugin   # Build distributable zip
-```
+Windows full install: `.\scripts\install-all.ps1`
 
-### Windows Full Install
-```powershell
-.\scripts\install-all.ps1
-```
-
-## Running the System
+## Run
 
 ```bash
-# Start daemon
-node packages/moe-daemon/dist/index.js start --project <path>
-
-# Check daemon status
+node packages/moe-daemon/dist/index.js start  --project <path>
 node packages/moe-daemon/dist/index.js status --project <path>
-
-# Stop daemon
-node packages/moe-daemon/dist/index.js stop --project <path>
-
-# Run proxy (for MCP/CLI usage)
-node packages/moe-proxy/dist/index.js
+node packages/moe-daemon/dist/index.js stop   --project <path>
+node packages/moe-proxy/dist/index.js          # MCP stdio bridge
 ```
 
-## Architecture
+## Working in this repo
 
-```
-JetBrains Plugin ── WS (/ws) ──▶ Moe Daemon ◀── WS (/mcp) ── moe-proxy ◀── CLI (MCP stdio)
-                                     │
-                                     ▼
-                                  .moe/  (source of truth)
-```
+- Daemon is the sole writer of `.moe/`. Never edit those files by hand — go through MCP tools.
+- Run `npm test` in `packages/moe-daemon` after touching daemon code.
+- Workers tend to over-index on VS Code; push back and prioritize JetBrains parity.
 
-**Key principle**: The daemon is the **sole writer** of `.moe/` files. All clients send actions to the daemon; they never write files directly.
+## Reference
 
-### Component Locations
-
-| Component | Location | Language |
-|-----------|----------|----------|
-| Daemon | `packages/moe-daemon/src/` | TypeScript |
-| Proxy | `packages/moe-proxy/src/` | TypeScript |
-| Plugin | `moe-jetbrains/src/main/kotlin/com/moe/` | Kotlin |
-
-### Daemon Internal Structure
-
-- `src/index.ts` - CLI entry point (start/stop/status commands)
-- `src/server/WebSocketServer.ts` - Serves `/ws` (plugin) and `/mcp` (proxy) endpoints
-- `src/server/McpAdapter.ts` - JSON-RPC handler for MCP protocol
-- `src/state/StateManager.ts` - Loads/writes `.moe/` files, maintains in-memory state
-- `src/state/FileWatcher.ts` - chokidar-based file watching with debounce
-- `src/tools/*.ts` - Individual MCP tool implementations
-- `src/types/schema.ts` - Canonical TypeScript types matching SCHEMA.md
-
-### Plugin Internal Structure
-
-- `services/MoeProjectService.kt` - WebSocket connection, state management
-- `toolwindow/MoeToolWindowPanel.kt` - Main board UI with 6 columns
-- `toolwindow/board/TaskCard.kt` & `TaskColumn.kt` - Kanban components
-- `toolwindow/TaskDetailDialog.kt` - Task detail with approve/reject/reopen
-- `util/MoeProjectInitializer.kt` - Creates `.moe/` folder structure
-- `listeners/MoeProjectOpenListener.kt` - Auto-connects on project open
-
-## WebSocket Protocols
-
-### Plugin ↔ Daemon (`/ws`)
-- **Server → Plugin**: `STATE_SNAPSHOT`, `TASK_UPDATED`, `TASK_CREATED`, `EPIC_UPDATED`, `EPIC_CREATED`
-- **Plugin → Server**: `PING`, `GET_STATE`, `CREATE_TASK`, `UPDATE_TASK`, `REORDER_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `REOPEN_TASK`
-
-### MCP (`/mcp`)
-MCP JSON-RPC 2.0. Tools: `moe.get_context`, `moe.submit_plan`, `moe.check_approval`, `moe.start_step`, `moe.complete_step`, `moe.complete_task`, `moe.report_blocked`, `moe.propose_rail`, `moe.list_tasks`, `moe.get_next_task`, `moe.claim_next_task`, `moe.create_task`, `moe.create_epic`, `moe.update_epic`, `moe.delete_epic`, `moe.delete_task`, `moe.set_task_status`, `moe.search_tasks`, `moe.qa_approve`, `moe.qa_reject`, `moe.init_project`, `moe.get_activity_log`, `moe.unblock_worker`, `moe.create_team`, `moe.join_team`, `moe.leave_team`, `moe.list_teams`
-
-## Data Files
-
-```
-.moe/
-├── project.json     # Project metadata
-├── daemon.json      # Runtime: { port, pid, startedAt, projectPath }
-├── epics/*.json     # Epic definitions
-├── tasks/*.json     # Task definitions with status, plan, steps
-├── workers/*.json   # Worker registrations
-├── proposals/*.json # Pending proposals
-└── activity.log     # Append-only event log
-```
-
-## Key Documentation
-
-| Document | Purpose |
-|----------|---------|
-| `docs/SCHEMA.md` | Data schema (matches daemon types) |
-| `docs/MCP_SERVER.md` | MCP tool contracts |
-| `docs/ARCHITECTURE.md` | Full system architecture |
+| Doc | Purpose |
+|---|---|
+| `docs/SCHEMA.md` | Canonical data shapes |
+| `docs/MCP_SERVER.md` | Full MCP tool contracts (the authoritative tool list) |
+| `docs/ARCHITECTURE.md` | System architecture |
 | `docs/DEVELOPMENT.md` | Extended build/run guide |
+| `docs/roles/architect.md`, `worker.md`, `qa.md` | Agent role guides |

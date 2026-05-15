@@ -10,8 +10,58 @@
     "Existing tests pass"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "P0: Wrap createChannel (line 705), deleteChannel (line 933), and createDecision (line 1073) in this.mutex.runExclusive(). Each method performs read-check-write without holding the mutex. The duplicate name check in createChannel and the file operations in deleteChannel must be atomic. Note: createDecision calls sendMessage (acquires channelMutex) — safe because lock order is mutex then channelMutex. Add explicit error handling in each wrapper to log and re-throw.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Wrapped all three methods in this.mutex.runExclusive(). createDecision includes lock ordering comment since it calls sendMessage (acquires channelMutex).",
+      "startedAt": "2026-03-20T23:15:19.586Z",
+      "completedAt": "2026-03-20T23:18:01.073Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "P1: Add lock ordering comment near mutex declarations in StateManager.ts documenting: this.mutex must be acquired before channelMutex. Methods like claimNextTask hold mutex and call sendMessage which acquires channelMutex — never reverse. This prevents deadlocks.\n\nValidate: npx tsc --noEmit",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-03-20T23:18:01.340Z",
+      "completedAt": "2026-03-20T23:19:11.857Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "P1: Add concurrency test for createChannel. Two concurrent createChannel calls with same name via Promise.allSettled — exactly one should succeed, the other should throw 'already exists'. Test verifies no duplicate channels created and error handling works correctly.\n\nValidate: npm run test",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/__tests__/channel-mutex.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added concurrency test to existing StateManager.test.ts. Test fires two concurrent createChannel with same name, verifies exactly one succeeds and one throws 'already exists'.",
+      "startedAt": "2026-03-20T23:19:17.247Z",
+      "completedAt": "2026-03-20T23:21:48.855Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "P2: Run full validation: npx tsc --noEmit && npm run test && npm run build",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-03-20T23:21:48.987Z",
+      "completedAt": "2026-03-20T23:22:35.283Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +74,11 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-03-03T23:23:12.239Z",
-  "updatedAt": "2026-03-03T23:23:12.239Z"
+  "updatedAt": "2026-03-20T23:34:34.229Z",
+  "planSubmittedAt": "2026-03-20T23:14:41.789Z",
+  "planApprovedAt": "2026-03-20T23:14:41.791Z",
+  "workStartedAt": "2026-03-20T23:15:19.586Z",
+  "completedAt": "2026-03-20T23:22:36.934Z",
+  "reviewStartedAt": "2026-03-20T23:22:36.934Z",
+  "reviewCompletedAt": "2026-03-20T23:34:34.229Z"
 }

@@ -26,9 +26,10 @@ object MoeProjectInitializer {
         File(moeDir, "proposals").mkdirs()
         File(moeDir, "roles").mkdirs()
 
-        // Always sync role docs and agent context from bundled plugin resources
+        // Always sync role docs, agent context, and skills from bundled plugin resources
         syncRoleDocs(moeDir)
         syncAgentContext(moeDir)
+        syncSkills(moeDir)
 
         val gitignore = File(moeDir, ".gitignore")
         if (!gitignore.exists()) {
@@ -108,6 +109,68 @@ object MoeProjectInitializer {
         if (content != null) {
             File(moeDir, "agent-context.md").writeText(content)
         }
+    }
+
+    /**
+     * Syncs the curated skill pack from bundled plugin resources to .moe/skills/.
+     * Mirrors the daemon's writeSkillFiles() — copies SKILL.md / SOURCE.md per
+     * skill directory, plus manifest.json and LICENSE-VENDORED.md.
+     *
+     * Skip-if-exists per file so user customizations survive.
+     */
+    fun syncSkills(moeDir: File) {
+        val skillsDir = File(moeDir, "skills")
+        if (!skillsDir.exists()) skillsDir.mkdirs()
+
+        val bundled = locateBundledDir("docs/skills")
+        if (bundled == null) {
+            // The bundled daemon's writeSkillFiles() will still scaffold .moe/skills/
+            // from its embedded SKILL_FILES, so this is a soft warning, not a failure.
+            System.err.println("[Moe] docs/skills not bundled in plugin jar — skipping syncSkills (daemon will scaffold instead)")
+            return
+        }
+
+        // Copy nested skill directories + their files (SKILL.md, SOURCE.md).
+        for (entry in bundled.listFiles().orEmpty()) {
+            if (entry.isDirectory) {
+                val targetDir = File(skillsDir, entry.name)
+                if (!targetDir.exists()) targetDir.mkdirs()
+                for (file in entry.listFiles().orEmpty()) {
+                    if (file.isFile) {
+                        val target = File(targetDir, file.name)
+                        if (!target.exists()) target.writeText(file.readText())
+                    }
+                }
+            } else if (entry.isFile && (entry.name == "manifest.json" || entry.name == "LICENSE-VENDORED.md")) {
+                val target = File(skillsDir, entry.name)
+                if (!target.exists()) target.writeText(entry.readText())
+            }
+        }
+    }
+
+    /**
+     * Locate a bundled directory inside the plugin distribution.
+     * Mirrors loadBundledFile()'s lookup chain (pluginPath, then code-source jar).
+     */
+    private fun locateBundledDir(relativePath: String): File? {
+        try {
+            val plugin = PluginManagerCore.getPlugin(PluginId.getId("com.moe.jetbrains"))
+            val pluginRoot = plugin?.pluginPath?.toFile()
+            if (pluginRoot != null) {
+                val bundled = File(pluginRoot, relativePath)
+                if (bundled.exists() && bundled.isDirectory) return bundled
+            }
+            val codeSource = MoeProjectInitializer::class.java.protectionDomain?.codeSource?.location?.toURI()
+            val jarFile = codeSource?.let { File(it) }
+            val inferredRoot = jarFile?.parentFile?.parentFile
+            if (inferredRoot != null) {
+                val fromJar = File(inferredRoot, relativePath)
+                if (fromJar.exists() && fromJar.isDirectory) return fromJar
+            }
+        } catch (_: Exception) {
+            // Fall through
+        }
+        return null
     }
 
     /**

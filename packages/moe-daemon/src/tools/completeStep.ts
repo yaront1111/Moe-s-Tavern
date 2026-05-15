@@ -1,6 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState } from '../util/errors.js';
+import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
+import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -12,7 +14,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string' },
         stepId: { type: 'string' },
         modifiedFiles: { type: 'array', items: { type: 'string' } },
-        note: { type: 'string' }
+        note: { type: 'string' },
+        workerId: { type: 'string' }
       },
       required: ['taskId', 'stepId'],
       additionalProperties: false
@@ -23,6 +26,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         stepId: string;
         modifiedFiles?: string[];
         note?: string;
+        workerId?: string;
       };
 
       const task = state.getTask(params.taskId);
@@ -32,6 +36,9 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
 
+      assertWorkerOwns(task, params.workerId, 'moe.complete_step');
+      assertContextFetched(task, params.workerId, 'moe.complete_step');
+
       if (!task.implementationPlan || task.implementationPlan.length === 0) {
         throw invalidState('Task', 'no implementation plan', 'has implementation plan');
       }
@@ -39,8 +46,25 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       const existingStep = task.implementationPlan.find((s) => s.stepId === params.stepId);
       if (!existingStep) throw notFound('Step', params.stepId);
 
-      if (existingStep.status === 'COMPLETED') {
-        throw invalidState('Step', 'COMPLETED', 'PENDING or IN_PROGRESS');
+      if (existingStep.status === 'PENDING') {
+        throw new MoeError(
+          MoeErrorCode.INVALID_STATE,
+          'Step is in PENDING state, expected IN_PROGRESS; call moe.start_step before moe.complete_step',
+          {
+            entity: 'Step',
+            currentState: 'PENDING',
+            expectedState: 'IN_PROGRESS',
+            nextAction: {
+              tool: 'moe.start_step',
+              args: { taskId: task.id, stepId: params.stepId, workerId: params.workerId },
+            },
+          },
+          'INVALID_STATE'
+        );
+      }
+
+      if (existingStep.status !== 'IN_PROGRESS') {
+        throw invalidState('Step', existingStep.status, 'IN_PROGRESS');
       }
 
       const steps = task.implementationPlan.map((step) =>
@@ -55,7 +79,17 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           : step
       );
 
-      await state.updateTask(task.id, { implementationPlan: steps }, 'STEP_COMPLETED');
+      const prevCompleted = Array.isArray(task.stepsCompleted) ? task.stepsCompleted : [];
+      const stepsCompleted = prevCompleted.includes(params.stepId)
+        ? prevCompleted
+        : [...prevCompleted, params.stepId];
+
+      await state.updateTask(
+        task.id,
+        { implementationPlan: steps, stepsCompleted },
+        'STEP_COMPLETED'
+      );
+      await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
 
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
@@ -78,6 +112,30 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      const nextAction = nextStep
+        ? (() => {
+            const desc = (nextStep.description || '').toLowerCase();
+            const files = (nextStep.affectedFiles || []).join(' ').toLowerCase();
+            const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
+            const isFinal = steps.indexOf(nextStep) === steps.length - 1;
+            return {
+              tool: 'moe.start_step',
+              args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
+              reason: `Advance to step ${stepNum + 1}: ${nextStep.description.slice(0, 80)}`,
+              recommendedSkill: isFinal
+                ? recommendSkillFor('worker', 'final_step')
+                : isTestStep
+                  ? recommendSkillFor('worker', 'test_step')
+                  : undefined
+            };
+          })()
+        : {
+            tool: 'moe.complete_task',
+            args: { taskId: task.id, workerId: params.workerId },
+            reason: 'All steps complete; hand task off to QA via moe.complete_task.',
+            recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
+          };
+
       return {
         success: true,
         taskId: task.id,
@@ -88,7 +146,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           percentage: steps.length > 0 ? Math.round((completed / steps.length) * 100) : 0
         },
         nextStep: nextStep ? { stepId: nextStep.stepId, description: nextStep.description } : null,
-        ...(chatHint ? { chatHint } : {})
+        ...(chatHint ? { chatHint } : {}),
+        nextAction
       };
     }
   };

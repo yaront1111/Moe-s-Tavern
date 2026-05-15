@@ -3,12 +3,12 @@ import org.jetbrains.intellij.tasks.PrepareSandboxTask
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.3.10"
+    id("org.jetbrains.kotlin.jvm") version "2.3.21"
     id("org.jetbrains.intellij") version "1.17.4"
 }
 
 group = "com.moe"
-version = "0.1.0"
+version = "0.6.0"
 
 repositories {
     mavenCentral()
@@ -27,6 +27,7 @@ val bundledAgentScript = repoRoot.resolve("scripts/moe-agent.ps1")
 val bundledAgentScriptSh = repoRoot.resolve("scripts/moe-agent.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
+val bundledSkillsDir = repoRoot.resolve("docs/skills")
 
 fun requireBundledAssets() {
     check(bundledDaemonMain.exists()) {
@@ -54,8 +55,9 @@ fun requireBundledAssets() {
 }
 
 dependencies {
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
+    testImplementation("junit:junit:4.13.2")
 }
 
 intellij {
@@ -87,6 +89,21 @@ tasks {
     named("buildSearchableOptions") {
         enabled = false
     }
+
+    test {
+        useJUnit()
+        jvmArgs("--add-opens=java.base/sun.nio.fs=ALL-UNNAMED")
+        doFirst {
+            jvmArgumentProviders.removeAll {
+                it.javaClass.name.contains("IntelliJPlatformArgumentProvider")
+            }
+            systemProperties.remove("java.system.class.loader")
+            val filteredJvmArgs = (jvmArgs ?: emptyList()).filterNot {
+                it.contains("java.system.class.loader")
+            }
+            setJvmArgs(filteredJvmArgs)
+        }
+    }
 }
 
 tasks.named<PrepareSandboxTask>("prepareSandbox") {
@@ -117,6 +134,9 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundledAgentContext) {
         into("docs")
     }
+    from(bundledSkillsDir) {
+        into("docs/skills")
+    }
 }
 
 tasks.named<BuildPluginTask>("buildPlugin") {
@@ -146,6 +166,9 @@ tasks.named<BuildPluginTask>("buildPlugin") {
     }
     from(bundledAgentContext) {
         into("docs")
+    }
+    from(bundledSkillsDir) {
+        into("docs/skills")
     }
 }
 

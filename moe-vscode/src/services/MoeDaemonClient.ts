@@ -45,6 +45,14 @@ function log(message: string): void {
     getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
+function pathsMatch(a: string, b: string): boolean {
+    const na = path.resolve(a);
+    const nb = path.resolve(b);
+    return process.platform === 'win32'
+        ? na.toLowerCase() === nb.toLowerCase()
+        : na === nb;
+}
+
 export class MoeDaemonClient implements vscode.Disposable {
     private readonly extensionPath: string;
     private ws: WebSocket | undefined;
@@ -113,6 +121,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     public readonly onError = this._onError.event;
 
     private daemonShuttingDown = false;
+    private manualDisconnect = false;
 
     private state: StateSnapshot | undefined;
 
@@ -145,6 +154,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     async connect(): Promise<void> {
+        this.manualDisconnect = false;
         if (this._connectionState !== 'disconnected') {
             return;
         }
@@ -163,23 +173,55 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.setConnectionState('connecting');
 
         return new Promise((resolve, reject) => {
-            try {
-                this.ws = new WebSocket(url);
+            let settled = false;
+            let opened = false;
+            const resolveOnce = () => {
+                if (!settled) {
+                    settled = true;
+                    resolve();
+                }
+            };
+            const rejectOnce = (err: Error) => {
+                if (!settled) {
+                    settled = true;
+                    reject(err);
+                }
+            };
 
-                this.ws.on('open', () => {
+            try {
+                const ws = new WebSocket(url);
+                this.ws = ws;
+
+                ws.on('open', () => {
+                    if (this.ws !== ws) {
+                        try { ws.close(); } catch { /* ignore stale socket close errors */ }
+                        rejectOnce(new Error('WebSocket was replaced before it opened'));
+                        return;
+                    }
+                    opened = true;
                     log('Connected to Moe daemon');
                     this.reconnectAttempts = 0;
                     this.setConnectionState('connected');
                     this.startPingInterval();
                     this.requestState();
-                    resolve();
+                    resolveOnce();
                 });
 
-                this.ws.on('message', (data) => {
-                    this.handleMessage(data.toString());
+                ws.on('message', (data) => {
+                    if (this.ws === ws) {
+                        this.handleMessage(data.toString());
+                    }
                 });
 
-                this.ws.on('close', () => {
+                ws.on('close', () => {
+                    if (this.ws !== ws) {
+                        log('Ignoring close from stale Moe daemon socket');
+                        if (!opened) {
+                            rejectOnce(new Error('WebSocket closed before connection opened'));
+                        }
+                        return;
+                    }
+                    this.ws = undefined;
                     log('Disconnected from Moe daemon');
                     this.setConnectionState('disconnected');
                     this.stopPingInterval();
@@ -188,35 +230,59 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this.stateReadyPromise = new Promise<void>((resolve) => {
                         this.stateReadyResolve = resolve;
                     });
+                    if (!opened) {
+                        rejectOnce(new Error('WebSocket closed before connection opened'));
+                    }
                     this.scheduleReconnect();
                 });
 
-                this.ws.on('error', (err) => {
+                ws.on('error', (err) => {
                     log(`WebSocket error: ${err.message}`);
-                    if (this._connectionState === 'connecting') {
-                        reject(err);
+                    if (this.ws === ws && this._connectionState === 'connecting') {
+                        rejectOnce(err);
                     }
                 });
             } catch (err) {
                 this.setConnectionState('disconnected');
-                reject(err);
+                rejectOnce(err instanceof Error ? err : new Error(String(err)));
             }
         });
     }
 
-    disconnect(): void {
+    disconnect(options: { manual?: boolean } = {}): void {
+        const manual = options.manual ?? true;
+        this.manualDisconnect = manual;
         this.cancelReconnect();
         this.stopPingInterval();
         if (this.ws) {
-            this.ws.close();
+            const ws = this.ws;
             this.ws = undefined;
+            if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+                try {
+                    ws.close();
+                } catch (err) {
+                    log(`Failed to close WebSocket: ${err instanceof Error ? err.message : String(err)}`);
+                }
+            }
         }
         this.setConnectionState('disconnected');
+        if (!manual) {
+            this.scheduleReconnect();
+        }
     }
 
     sendMessage(type: string, payload: unknown = {}): void {
-        if (this.ws && this._connectionState === 'connected') {
+        if (!this.ws || this._connectionState !== 'connected' || this.ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        try {
             this.ws.send(JSON.stringify({ type, payload }));
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            log(`Failed to send ${type}: ${message}`);
+            this._onError.fire({ operation: type, message });
+            this.setConnectionState('disconnected');
+            this.scheduleReconnect();
         }
     }
 
@@ -378,6 +444,13 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = fs.readFileSync(daemonJsonPath, 'utf-8');
             const daemonInfo = JSON.parse(content);
+            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+                log(
+                    `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
+                );
+                try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                return undefined;
+            }
             return { host: configHost, port: daemonInfo.port };
         } catch {
             return undefined;
@@ -446,6 +519,14 @@ export class MoeDaemonClient implements vscode.Disposable {
         try {
             const content = fs.readFileSync(daemonInfoPath, 'utf-8');
             const daemonInfo = JSON.parse(content);
+            if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
+                log(
+                    `Stale daemon.json: expected project ${projectPath}, found ${daemonInfo.projectPath}`
+                );
+                try { fs.unlinkSync(daemonInfoPath); } catch { /* ignore */ }
+                await this.startDaemon('start', projectPath);
+                return;
+            }
             const host = config.get<string>('daemon.host', '127.0.0.1');
             const port = Number(daemonInfo.port);
             if (!Number.isNaN(port)) {
@@ -540,7 +621,18 @@ export class MoeDaemonClient implements vscode.Disposable {
             const { type, payload } = message;
 
             switch (type) {
-                case 'STATE_SNAPSHOT':
+                case 'STATE_SNAPSHOT': {
+                    const expectedPath = this.getWorkspacePath();
+                    if (expectedPath && payload?.project?.rootPath &&
+                        !pathsMatch(payload.project.rootPath, expectedPath)) {
+                        log(
+                            `STATE_SNAPSHOT project mismatch: expected ${expectedPath}, got ${payload.project.rootPath}. Disconnecting.`
+                        );
+                        const daemonJsonPath = path.join(expectedPath, '.moe', 'daemon.json');
+                        try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
+                        this.disconnect({ manual: false });
+                        break;
+                    }
                     this.state = payload;
                     if (!this.stateReady) {
                         this.stateReady = true;
@@ -548,6 +640,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                     }
                     this._onStateChanged.fire(payload);
                     break;
+                }
 
                 case 'TASK_UPDATED':
                 case 'TASK_CREATED':
@@ -738,7 +831,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 case 'DAEMON_SHUTTING_DOWN':
                     log('Daemon is shutting down');
                     this.daemonShuttingDown = true;
-                    this.disconnect();
+                    this.disconnect({ manual: false });
                     break;
 
                 case 'PONG':
@@ -778,6 +871,14 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this.daemonShuttingDown) {
             return;
         }
+        if (this.manualDisconnect) {
+            log('Reconnect suppressed after manual disconnect');
+            return;
+        }
+        if (this.reconnectTimeout) {
+            log('Reconnect already scheduled');
+            return;
+        }
 
         const config = vscode.workspace.getConfiguration('moe');
         if (!config.get<boolean>('autoConnect', true)) {
@@ -794,15 +895,22 @@ export class MoeDaemonClient implements vscode.Disposable {
             ).then((action) => {
                 if (action === 'Reconnect') {
                     this.reconnectAttempts = 0;
-                    this.connect().catch(() => {});
+                    this.connect().catch((err) => {
+                        log(`Manual reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
+                        this.setConnectionState('disconnected');
+                    });
                 }
             });
             return;
         }
 
+        const attempt = this.reconnectAttempts;
         this.reconnectTimeout = setTimeout(() => {
-            this.connect().catch(() => {
-                // Will retry via scheduleReconnect on close
+            this.reconnectTimeout = undefined;
+            this.connect().catch((err) => {
+                log(`Reconnect attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`);
+                this.setConnectionState('disconnected');
+                this.scheduleReconnect();
             });
         }, 5000);
     }
