@@ -607,7 +607,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
                     "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
                 }
-                val fingerprint = "$taskFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}"
+                val fingerprint = "$taskFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
 
                 if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
                     return

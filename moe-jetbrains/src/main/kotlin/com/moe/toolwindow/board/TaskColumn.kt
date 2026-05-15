@@ -257,7 +257,22 @@ class TaskColumn(
             })
         }
 
-        if (epic != null) {
+        if (epicId != null) {
+            panel.transferHandler = EpicTransferHandler(epicId)
+            val combinedAdapter = object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (e.clickCount == 2 && SwingUtilities.isLeftMouseButton(e) && epic != null && e.source !== collapseLabel) {
+                        onOpenEpic(epic)
+                    }
+                }
+                override fun mouseDragged(e: MouseEvent) {
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        panel.transferHandler.exportAsDrag(panel, e, TransferHandler.MOVE)
+                    }
+                }
+            }
+            installDragHandlers(panel, combinedAdapter)
+        } else if (epic != null) {
             panel.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (e.clickCount == 2) {
@@ -265,18 +280,6 @@ class TaskColumn(
                     }
                 }
             })
-        }
-
-        if (epicId != null) {
-            panel.transferHandler = EpicTransferHandler(epicId)
-            val dragAdapter = object : MouseAdapter() {
-                override fun mouseDragged(e: MouseEvent) {
-                    if (SwingUtilities.isLeftMouseButton(e)) {
-                        panel.transferHandler.exportAsDrag(panel, e, TransferHandler.MOVE)
-                    }
-                }
-            }
-            installDragHandlers(panel, dragAdapter)
         }
 
         return panel

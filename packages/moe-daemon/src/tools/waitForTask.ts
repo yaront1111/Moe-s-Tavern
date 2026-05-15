@@ -80,7 +80,7 @@ function findMatchingTask(
   const tasks = Array.from(state.tasks.values())
     .filter((t) => statuses.includes(t.status))
     .filter((t) => (epicId ? t.epicId === epicId : true))
-    .filter((t) => !t.assignedWorkerId)
+    .filter((t) => state.isTaskClaimable(t))
     .sort((a, b) => {
       const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
       const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
@@ -118,6 +118,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       if (!workerId) {
         throw missingRequired('workerId');
       }
+      await state.touchWorker(workerId);
 
       // Cancel any existing waiter for this worker
       const existing = activeWaiters.get(workerId);
@@ -131,13 +132,30 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       // Check if a matching task already exists
       const immediate = findMatchingTask(state, statuses, params.epicId);
       if (immediate) {
-        return { hasNext: true, task: immediate };
+        return {
+          hasNext: true,
+          task: immediate,
+          nextAction: {
+            tool: 'moe.claim_next_task',
+            args: { statuses, workerId, epicId: params.epicId },
+            reason: 'Task is available; claim it, then call moe.get_context.'
+          }
+        };
       }
 
       // Check if any task has a pending question
       const pendingQ = findPendingQuestion(state, params.epicId);
       if (pendingQ) {
-        return { hasNext: false, hasPendingQuestion: true, taskId: pendingQ.taskId };
+        return {
+          hasNext: false,
+          hasPendingQuestion: true,
+          taskId: pendingQ.taskId,
+          nextAction: {
+            tool: 'moe.get_pending_questions',
+            args: {},
+            reason: 'A task has an unanswered human question; read and answer with moe.add_comment before claiming.'
+          }
+        };
       }
 
       const timeoutMs = Math.min(
@@ -148,16 +166,41 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       logger.info({ workerId, statuses, epicId: params.epicId, timeoutMs }, 'Worker waiting for task');
 
       return new Promise<unknown>((resolve) => {
+        // Use let + nullable refs so cleanup() is safe whether called before or
+        // after state.subscribe assigns `unsubscribe`. Guards against the race
+        // where state.subscribe throws synchronously: without this, the timer
+        // would remain scheduled for up to timeoutMs and its callback would
+        // then ReferenceError trying to use an unassigned `unsubscribe`.
+        let cleanedUp = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let unsubscribe: (() => void) | null = null;
+
         const cleanup = () => {
-          clearTimeout(timer);
-          unsubscribe();
+          if (cleanedUp) return;
+          cleanedUp = true;
+          if (timer) clearTimeout(timer);
+          if (unsubscribe) {
+            try { unsubscribe(); } catch { /* already torn down */ }
+          }
           activeWaiters.delete(workerId);
         };
 
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           cleanup();
           logger.info({ workerId }, 'Wait for task timed out');
-          resolve({ hasNext: false, timedOut: true });
+          void state.touchWorker(workerId)
+            .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on wait_for_task timeout'))
+            .finally(() => {
+              resolve({
+                hasNext: false,
+                timedOut: true,
+                nextAction: {
+                  tool: 'moe.wait_for_task',
+                  args: { statuses, workerId, epicId: params.epicId, timeoutMs },
+                  reason: 'Timeout elapsed; re-enter wait to keep listening.'
+                }
+              });
+            });
         }, timeoutMs);
 
         // Don't prevent process exit
@@ -165,7 +208,8 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           timer.unref();
         }
 
-        const unsubscribe = state.subscribe((event) => {
+        try {
+          unsubscribe = state.subscribe((event) => {
           // Wake on chat messages targeting this worker
           if (event.type === 'MESSAGE_CREATED') {
             const message = event.payload as ChatMessage;
@@ -180,6 +224,11 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
                   channel: message.channel,
                   sender: message.sender,
                   preview: message.content.substring(0, 200)
+                },
+                nextAction: {
+                  tool: 'moe.chat_read',
+                  args: { channel: message.channel, workerId },
+                  reason: 'Incoming chat mention; read and respond, then call moe.wait_for_task again.'
                 }
               });
             }
@@ -193,7 +242,15 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           if (match) {
             cleanup();
             logger.info({ workerId, taskId: match.id }, 'Task available, waking worker');
-            resolve({ hasNext: true, task: match });
+            resolve({
+              hasNext: true,
+              task: match,
+              nextAction: {
+                tool: 'moe.claim_next_task',
+                args: { statuses, workerId, epicId: params.epicId },
+                reason: 'Matching task appeared; claim it, then call moe.get_context.'
+              }
+            });
             return;
           }
 
@@ -203,12 +260,33 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
             if (pq) {
               cleanup();
               logger.info({ workerId, taskId: pq.taskId }, 'Pending question detected, waking worker');
-              resolve({ hasNext: false, hasPendingQuestion: true, taskId: pq.taskId });
+              resolve({
+                hasNext: false,
+                hasPendingQuestion: true,
+                taskId: pq.taskId,
+                nextAction: {
+                  tool: 'moe.get_pending_questions',
+                  args: {},
+                  reason: 'A task has an unanswered human question; read and reply via moe.add_comment.'
+                }
+              });
             }
           }
-        });
+          });
+        } catch (err) {
+          cleanup();
+          logger.error({ workerId, err }, 'Failed to subscribe in wait_for_task');
+          resolve({ hasNext: false, error: 'subscribe_failed' });
+          return;
+        }
 
-        activeWaiters.set(workerId, { resolve, unsubscribe, timer });
+        // Register entry so cleanupMcpWorkers and the "cancel existing waiter" path
+        // at L122 can find and release it. unsubscribe is guaranteed non-null here.
+        activeWaiters.set(workerId, {
+          resolve,
+          unsubscribe: () => cleanup(),
+          timer: timer!
+        });
       });
     }
   };

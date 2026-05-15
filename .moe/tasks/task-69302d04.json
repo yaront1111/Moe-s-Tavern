@@ -1,0 +1,97 @@
+{
+  "id": "task-69302d04",
+  "epicId": "epic-0110ece1",
+  "title": "[LOW] Return the actual assigned worker in claim_next_task responses",
+  "description": "Deep sweep finding: claimNextTaskTool updates the selected task's assignedWorkerId, but the response is built from the pre-update candidate object. When workerId is supplied, result.task.assignedWorkerId can be null even though state.getTask(id).assignedWorkerId was set. This is misleading for clients and logs. Return the updated task or explicitly set the response field after assignment.",
+  "definitionOfDone": [
+    "claim_next_task response task.assignedWorkerId equals the workerId that successfully claimed the task.",
+    "replaceExisting and existing-worker claim paths also return current assignment data, not stale candidate data.",
+    "No-claim responses remain unchanged.",
+    "Regression tests assert both persisted task assignment and response assignment.",
+    "Daemon tests/build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In claimNextTaskTool, capture the Task returned by state.updateTask when assigning the worker and use that updated object for subsequent response fields and any post-claim logic. Preserve existing error handling for assignment conflicts and ensure the no-workerId path still returns the selected unassigned task as before.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "Verified claimNextTaskTool already follows the intended implementation: inside the candidate loop it assigns `task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId })`, so subsequent response construction uses the updated task object. No code change was needed for this step. Focused verification: `LOG_LEVEL=fatal npx vitest run src/tools/tools.test.ts -t \"assigns workerId to claimed task\" --reporter=dot` exited 0 with 1 test passed / 175 skipped, confirming response and persisted assignment for the normal workerId claim path.",
+      "startedAt": "2026-04-30T16:35:29.214Z",
+      "completedAt": "2026-04-30T16:35:49.083Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Review replaceExisting and existing-worker update paths to ensure local task data remains current after assignment and no stale assignedWorkerId is returned. Keep nextAction unchanged except for accurate args/fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "Reviewed replaceExisting and existing-worker paths in claimNextTaskTool. replaceExisting clears the competing worker's task before the candidate assignment, then the local `task` variable is set from `state.updateTask(candidate.id, ...)`, so response fields use current assignment data. Existing worker update uses the same candidate/task id and does not alter the claimed task after assignment. nextAction remains unchanged and response stays lean. No code change was needed in this step; replaceExisting regression coverage is added in step 3.",
+      "startedAt": "2026-04-30T16:35:55.479Z",
+      "completedAt": "2026-04-30T16:36:04.398Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests that claim with workerId and assert result.task.assignedWorkerId plus persisted state; include replaceExisting if existing tests can set it up. Run packages/moe-daemon npm test/build.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Added replaceExisting regression coverage in tools.test.ts: sets up an active same-epic/same-status task assigned to another real worker, claims the next task with `replaceExisting:true`, and asserts the response task assignedWorkerId equals the replacement worker, persisted claimed task assignment matches, and the previous task assignment is cleared. Existing normal and missing-worker tests already assert response+persisted assignment. Verification: focused new test exited 0 (1 passed / 176 skipped); `moe.claim_next_task` group exited 0 (11 passed / 166 skipped); full daemon `npm run test -- --reporter=dot` exited 0 with 28 files / 497 tests passed; `npm run build` exited 0; `git diff --check` on claimNextTask/tools.test exited 0 with only CRLF normalization warnings. Adversarial review: production code already uses the updated Task returned from state.updateTask under StateManager.runExclusive; no code change was needed, and response remains lean.",
+      "startedAt": "2026-04-30T16:36:20.068Z",
+      "completedAt": "2026-04-30T16:37:43.860Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 16,
+  "comments": [
+    {
+      "id": "comment-9fc03ee5",
+      "author": "architect-2992",
+      "content": "Token-budget check: while fixing claim_next_task worker reporting, keep the response lean. Return only assigned worker identifiers/summary fields; do not reintroduce full task context, rails, chat, or memory.",
+      "timestamp": "2026-04-28T08:04:08.938Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:02:47.650Z",
+  "updatedAt": "2026-04-30T18:32:52.613Z",
+  "planSubmittedAt": "2026-04-28T08:03:06.276Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected re-reading the entire snapshot for response construction; simply keep the updated task returned from updateTask or set task = state.getTask(candidate.id) after assignment.",
+    "codebaseInsights": "claimNextTask assigns via state.updateTask(candidate.id, { assignedWorkerId }) but keeps local task = candidate, so response uses stale assignedWorkerId. Tests currently assert persisted assignment but not response assignment.",
+    "risks": "Keep the response lean; do not add full task details. Include error handling and test coverage for replaceExisting path if practical.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:03:06.278Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T16:35:29.214Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T16:38:33.551Z",
+  "reviewStartedAt": "2026-04-30T16:38:33.551Z",
+  "reviewCompletedAt": "2026-04-30T18:32:52.613Z"
+}

@@ -4,16 +4,8 @@
 // Moe Proxy - MCP stdio shim forwarding to daemon
 // =============================================================================
 
-import fs from 'fs';
-import path from 'path';
 import WebSocket from 'ws';
-
-interface DaemonInfo {
-  port: number;
-  pid: number;
-  startedAt: string;
-  projectPath: string;
-}
+import { getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
 
 // Reconnect configuration
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -45,26 +37,6 @@ function isSafeToSend(): boolean {
   return isConnected &&
          currentWebSocket !== null &&
          currentWebSocket.readyState === WebSocket.OPEN;
-}
-
-function readDaemonInfo(projectPath: string): DaemonInfo | null {
-  const filePath = path.join(projectPath, '.moe', 'daemon.json');
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const info = JSON.parse(raw) as DaemonInfo;
-    // Basic validation
-    if (typeof info.port !== 'number' || typeof info.pid !== 'number') {
-      return null;
-    }
-    return info;
-  } catch {
-    return null;
-  }
-}
-
-function getProjectPath(): string {
-  return process.env.MOE_PROJECT_PATH || process.cwd();
 }
 
 function writeError(message: string, code = -32000) {
@@ -244,9 +216,15 @@ function gracefulShutdown(): void {
 }
 
 function connect(projectPath: string): void {
-  const info = readDaemonInfo(projectPath);
+  const daemonInfo = readDaemonInfoResult(projectPath);
+  const info = daemonInfo.info;
 
   if (!info) {
+    if (daemonInfo.error && !daemonInfo.retryable) {
+      writeError(daemonInfo.error);
+      process.exit(1);
+      return;
+    }
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       const delay = calculateReconnectDelay();
       reconnectAttempts++;
@@ -406,16 +384,18 @@ function connect(projectPath: string): void {
         // Validate JSON before sending to daemon
         try {
           const parsed = JSON.parse(line);
+          const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
+          const payload = mutated ? JSON.stringify(parsed) : line;
           if (isSafeToSend()) {
             // Track request ID for proper pending count and timeout
             if (parsed.id !== undefined && parsed.id !== null) {
               pendingRequestIds.add(parsed.id);
               pendingRequestTimes.set(parsed.id, { sentAt: Date.now(), timeoutMs: getRequestTimeout(parsed) });
             }
-            safeSend(currentWebSocket!, line);
+            safeSend(currentWebSocket!, payload);
           } else {
             // Queue message for when connection is restored
-            pendingMessages.push(line);
+            pendingMessages.push(payload);
             if (pendingMessages.length > 100) {
               // Prevent unbounded queue growth - send error for dropped message
               const droppedMsg = pendingMessages.shift()!;

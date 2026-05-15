@@ -56,7 +56,7 @@ class TaskCard(
             }
         } else null
 
-        val meta = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+        val meta = JBPanel<JBPanel<*>>(WrapLayout(FlowLayout.LEFT, 6, 4)).apply {
             isOpaque = false
         }
 
@@ -106,7 +106,32 @@ class TaskCard(
             })
         }
 
+        // Pending question chip
+        if (task.hasPendingQuestion) {
+            val questionColor = JBColor(java.awt.Color(255, 152, 0), java.awt.Color(255, 183, 77))
+            meta.add(JBLabel("?").apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                foreground = java.awt.Color.WHITE
+                background = questionColor
+                toolTipText = "Pending question"
+            })
+        }
+
         meta.add(chip(task.id.takeLast(4).uppercase(), subtle = true))
+
+        // Worker badge (owner)
+        if (!task.assignedWorkerId.isNullOrBlank()) {
+            meta.add(JBLabel(task.assignedWorkerId).apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont()
+                foreground = BoardStyles.textPrimary
+                background = BoardStyles.columnHeaderBackground
+                toolTipText = "Assigned worker"
+            })
+        }
 
         val content = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false

@@ -12,11 +12,16 @@ import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import {
+  ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
+  normalizeActivityLogParams,
+  queryActivityLog,
+} from '../tools/getActivityLog.js';
 
 export type PluginMessage =
   | { type: 'PING' }
   | { type: 'GET_STATE' }
-  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number } }
+  | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
   | { type: 'UPDATE_TASK'; payload: { taskId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_TASK'; payload: { taskId: string } }
@@ -104,22 +109,34 @@ export class MoeWebSocketServer {
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
       this.mcpClients.add(ws);
-      ws.on('message', (data: WebSocket.RawData) => this.handleMcpMessage(ws, data.toString()));
+      ws.on('message', (data: WebSocket.RawData) => {
+        this.handleMcpMessage(ws, data.toString()).catch((err) => {
+          logger.error({ error: err, endpoint: 'mcp' }, 'Unhandled error in MCP message handler');
+        });
+      });
       ws.on('close', () => {
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup');
+        });
       });
       ws.on('error', (error) => {
         logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
         this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws);
+        this.cleanupMcpWorkers(ws).catch((err) => {
+          logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
+        });
       });
       return;
     }
 
     this.pluginClients.add(ws);
     this.sendStateSnapshot(ws);
-    ws.on('message', (data: WebSocket.RawData) => this.handlePluginMessage(ws, data.toString()));
+    ws.on('message', (data: WebSocket.RawData) => {
+      this.handlePluginMessage(ws, data.toString()).catch((err) => {
+        logger.error({ error: err, endpoint: 'plugin' }, 'Unhandled error in plugin message handler');
+      });
+    });
     ws.on('close', () => this.pluginClients.delete(ws));
     ws.on('error', (error) => {
       logger.error({ error, endpoint: 'plugin' }, 'Plugin client WebSocket error');
@@ -163,8 +180,13 @@ export class MoeWebSocketServer {
           this.sendStateSnapshot(ws);
           return;
         case 'GET_ACTIVITY_LOG': {
-          const limit = (message.payload as { limit?: number })?.limit ?? 100;
-          const events = this.state.getActivityLog(limit);
+          const params = normalizeActivityLogParams(message.payload || {});
+          // Plugin clients must always get a bounded payload; keep maxPayloadChars=0 as
+          // an MCP-only full-content opt-in for backwards compatibility.
+          if (params.maxPayloadChars === 0) {
+            params.maxPayloadChars = ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS;
+          }
+          const { events } = queryActivityLog(this.state, params);
           this.safeSend(ws, JSON.stringify({ type: 'ACTIVITY_LOG', payload: events }));
           return;
         }
@@ -357,12 +379,12 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const { name, role, maxSize } = message.payload as { name: string; role: string; maxSize?: number };
-          if (!name || !role) {
+          const payload = message.payload as Record<string, unknown>;
+          if (typeof payload.name !== 'string' || payload.name.trim().length === 0 || typeof payload.role !== 'string' || payload.role.trim().length === 0) {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing name or role' }));
             return;
           }
-          const team = await this.withMutex(() => this.state.createTeam({ name, role: role as 'architect' | 'worker' | 'qa', maxSize }));
+          const team = await this.withMutex(() => this.state.createTeam(payload as { name: string; role: 'architect' | 'worker' | 'qa'; maxSize?: number }));
           this.safeSend(ws, JSON.stringify({ type: 'TEAM_CREATED', payload: team }));
           return;
         }
@@ -656,7 +678,9 @@ export class MoeWebSocketServer {
     try {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
-      const response = await this.mcpAdapter.handle(request);
+      const response = await this.mcpAdapter.handle(request, {
+        shouldContinue: () => this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
+      });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));
       }
@@ -677,10 +701,22 @@ export class MoeWebSocketServer {
    * Track which MCP WebSocket connection owns which worker IDs.
    * Extracts workerId from tools/call request arguments.
    */
-  private trackMcpWorker(ws: WebSocket, request: Record<string, unknown>): void {
-    if (request.method !== 'tools/call') return;
-    const params = request.params as { arguments?: Record<string, unknown> } | undefined;
-    const workerId = params?.arguments?.workerId;
+  private trackMcpWorker(ws: WebSocket, request: unknown): void {
+    const requests = Array.isArray(request) ? request : [request];
+    for (const item of requests) {
+      this.trackSingleMcpWorker(ws, item);
+    }
+  }
+
+  private trackSingleMcpWorker(ws: WebSocket, request: unknown): void {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) return;
+    const record = request as Record<string, unknown>;
+    if (record.method !== 'tools/call') return;
+    const params = record.params;
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return;
+    const args = (params as { arguments?: unknown }).arguments;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return;
+    const workerId = (args as Record<string, unknown>).workerId;
     if (typeof workerId !== 'string') return;
 
     let workerIds = this.mcpWorkerMap.get(ws);
@@ -692,7 +728,19 @@ export class MoeWebSocketServer {
   }
 
   /**
-   * Clean up workers owned by a disconnected MCP connection.
+   * Clean up per-connection state for a disconnected MCP WebSocket.
+   *
+   * We deliberately do NOT delete the worker entity here. The proxy (moe-proxy)
+   * is a stdio bridge that opens one WebSocket per RPC invocation for short-lived
+   * callers (wrapper pre-flight, moe-call.sh, external scripts). Deleting the
+   * worker on every disconnect would evaporate the worker — and its claim, via
+   * deleteWorker's task cascade — milliseconds after it was created, causing
+   * subsequent RPCs to fail with "Unknown sender" and clearing claims the
+   * wrapper was about to hand off to a long-running agent.
+   *
+   * Stale workers from truly-disconnected agents should be cleaned up by a
+   * presence/heartbeat mechanism (lastActivityAt timeout) rather than by
+   * TCP close events, since TCP close no longer implies agent death.
    */
   private async cleanupMcpWorkers(ws: WebSocket): Promise<void> {
     const workerIds = this.mcpWorkerMap.get(ws);
@@ -701,9 +749,8 @@ export class MoeWebSocketServer {
       return;
     }
 
-    let deletedCount = 0;
     for (const workerId of workerIds) {
-      // Cancel any active wait_for_task waiter before deleting the worker
+      // Cancel any active wait_for_task waiter registered on this WS
       const waiter = activeWaiters.get(workerId);
       if (waiter) {
         clearTimeout(waiter.timer);
@@ -726,21 +773,9 @@ export class MoeWebSocketServer {
       } catch (err) {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
       }
-
-      const worker = this.state.getWorker(workerId);
-      if (worker) {
-        logger.info({ workerId }, 'Cleaning up worker from disconnected MCP client');
-        await this.state.deleteWorker(workerId);
-        deletedCount++;
-      }
     }
 
     this.mcpWorkerMap.delete(ws);
-
-    if (deletedCount > 0) {
-      const snap = this.state.getSnapshot();
-      this.broadcast({ type: 'STATE_SNAPSHOT', payload: { ...snap, tasks: snap.tasks.filter(t => t.status !== 'ARCHIVED') } });
-    }
   }
 
   /**

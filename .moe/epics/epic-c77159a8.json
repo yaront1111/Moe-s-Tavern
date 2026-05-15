@@ -1,0 +1,17 @@
+{
+  "id": "epic-c77159a8",
+  "projectId": "proj-3830fac7",
+  "title": "Runtime-driven agent workflow",
+  "description": "Replace prompt-driven agent workflows with runtime enforcement. Problem: agents skip workflow steps (claim, chat_join, get_context, recall, save_session_summary, etc.) because the multi-step workflow is only suggested via the startup prompt. Solution: move rituals into wrapper pre-flight/post-flight, add nextAction hints on every MCP tool response, enforce ownership and ordering server-side, shrink role docs. Six phases, each independently revertable.",
+  "architectureNotes": "Phases: (1) wrapper pre-flight in moe-agent.sh/.ps1 — chat_join, chat_read, claim_next_task, get_context, recall all run BEFORE the CLI spawns, results baked into system prompt. (2) add nextAction field to every MCP tool response. (3) server-side state machine: verify workerId == task.assignedWorkerId, enforce order (get_context before start_step, all steps complete before complete_task). (4) wrapper post-flight: save_session_summary + announce after agent exits, optional --loop flag. (5) shrink docs/roles/*.md. (6) optional Claude-Code PreToolUse hook in init_project.",
+  "epicRails": [
+    "Each phase must be independently revertable and shippable",
+    "Backward compat: --no-auto-claim still bypasses pre-flight (interactive mode preserved)",
+    "All code paths must work on Windows, Mac, and Linux wrapper scripts",
+    "JetBrains plugin must not require changes — it invokes the wrappers"
+  ],
+  "status": "PLANNED",
+  "order": 18,
+  "createdAt": "2026-04-17T19:04:47.501Z",
+  "updatedAt": "2026-04-17T19:04:47.501Z"
+}

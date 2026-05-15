@@ -9,12 +9,16 @@ import path from 'path';
 import net from 'net';
 import http from 'http';
 import crypto from 'crypto';
+import { spawn, type ChildProcess } from 'child_process';
+import { pathToFileURL } from 'url';
 import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
+import { writeSkillFiles } from './util/skillFiles.js';
+import { resolveMemorySettings } from './util/memorySettings.js';
 import { clearAllSpeedModeTimeouts } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
@@ -28,8 +32,15 @@ const SOCKET_TIMEOUT_MS = parseInt(process.env.MOE_SOCKET_TIMEOUT_MS || '200', 1
 const PORT_CHECK_INTERVAL_MS = parseInt(process.env.MOE_PORT_CHECK_INTERVAL_MS || '100', 10);
 const PORT_READY_TIMEOUT_MS = parseInt(process.env.MOE_PORT_READY_TIMEOUT_MS || '5000', 10);
 const LOCK_RETRY_DELAY_MS = parseInt(process.env.MOE_LOCK_RETRY_DELAY_MS || '2000', 10);
+const LOCK_STALE_TIMEOUT_MS = parseInt(process.env.MOE_LOCK_STALE_TIMEOUT_MS || '15000', 10);
 const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.MOE_SHUTDOWN_TIMEOUT_MS || '10000', 10);
 const HTTP_CLOSE_TIMEOUT_MS = parseInt(process.env.MOE_HTTP_CLOSE_TIMEOUT_MS || '5000', 10);
+
+// Supervisor constants
+const SUPERVISOR_MAX_RESTARTS = 5;
+const SUPERVISOR_RESTART_WINDOW_MS = 60_000;
+const SUPERVISOR_MAX_BACKOFF_MS = 30_000;
+const SUPERVISOR_CHILD_KILL_TIMEOUT_MS = 10_000;
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -53,27 +64,107 @@ function lockFilePath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.lock');
 }
 
+function canonicalProjectPath(projectPath: string): string {
+  return path.resolve(projectPath);
+}
+
+function isSameProjectPath(a: string, b: string): boolean {
+  const left = canonicalProjectPath(a);
+  const right = canonicalProjectPath(b);
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function isValidPort(port: unknown): port is number {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function isValidPid(pid: unknown): pid is number {
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 0;
+}
+
+function isDaemonInfoShape(value: unknown): value is DaemonInfo {
+  const info = value as Partial<DaemonInfo> | null;
+  return !!info
+    && isValidPort(info.port)
+    && isValidPid(info.pid)
+    && typeof info.projectPath === 'string'
+    && info.projectPath.trim().length > 0
+    && typeof info.startedAt === 'string';
+}
+
+type DaemonValidationResult = {
+  valid: boolean;
+  reason?: string;
+  info?: DaemonInfo;
+};
+
+type LockInfo = {
+  pid: number | null;
+  projectPath: string | null;
+  createdAtMs: number;
+};
+
+function readLockInfo(projectPath: string): LockInfo | null {
+  const lockPath = lockFilePath(projectPath);
+  try {
+    const stat = fs.statSync(lockPath);
+    const raw = fs.readFileSync(lockPath, 'utf-8').trim();
+    if (!raw) return null;
+    if (/^\d+$/.test(raw)) {
+      return { pid: Number(raw), projectPath: null, createdAtMs: stat.mtimeMs };
+    }
+    const parsed = JSON.parse(raw) as { pid?: unknown; projectPath?: unknown; createdAt?: unknown };
+    return {
+      pid: isValidPid(parsed.pid) ? parsed.pid : null,
+      projectPath: typeof parsed.projectPath === 'string' ? parsed.projectPath : null,
+      createdAtMs: typeof parsed.createdAt === 'string'
+        ? new Date(parsed.createdAt).getTime()
+        : stat.mtimeMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function staleLockReason(projectPath: string): string | null {
+  const info = readLockInfo(projectPath);
+  if (!info || !info.pid || !Number.isFinite(info.createdAtMs)) return 'malformed lock';
+  if (info.projectPath && !isSameProjectPath(info.projectPath, projectPath)) return 'projectPath mismatch';
+  if (!isProcessAlive(info.pid)) return 'lock owner not alive';
+  if (Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS) return 'lock owner unverifiable after timeout';
+  return null;
+}
+
+function removeStaleLock(projectPath: string, context: string): boolean {
+  const reason = staleLockReason(projectPath);
+  if (!reason) return false;
+  try {
+    fs.unlinkSync(lockFilePath(projectPath));
+    logger.warn({ reason, context }, 'Removed stale daemon lock');
+    return true;
+  } catch (error) {
+    logger.debug({ error, reason, context }, 'Failed to remove stale daemon lock');
+    return false;
+  }
+}
+
 function acquireLock(projectPath: string): boolean {
   const lockPath = lockFilePath(projectPath);
   try {
     // O_EXCL ensures atomic creation - fails if file exists
     const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-    fs.writeSync(fd, String(process.pid));
+    fs.writeSync(fd, JSON.stringify({
+      pid: process.pid,
+      projectPath: canonicalProjectPath(projectPath),
+      createdAt: new Date().toISOString(),
+    }));
     fs.closeSync(fd);
     return true;
   } catch (err: any) {
     if (err.code === 'EEXIST') {
-      // Lock file exists, check if owning process is still alive
-      try {
-        const lockPid = parseInt(fs.readFileSync(lockPath, 'utf-8').trim(), 10);
-        if (!isProcessAlive(lockPid)) {
-          // Stale lock, remove and retry
-          fs.unlinkSync(lockPath);
-          return acquireLock(projectPath);
-        }
-      } catch {
-        // Can't read lock file, try to remove it
-        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+      if (removeStaleLock(projectPath, 'acquireLock')) {
         return acquireLock(projectPath);
       }
     }
@@ -120,6 +211,66 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
     };
     check();
   });
+}
+
+function probeDaemonHealth(info: DaemonInfo, expectedProjectPath: string, timeoutMs: number = SOCKET_TIMEOUT_MS): Promise<boolean> {
+  if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, expectedProjectPath)) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: info.port,
+      path: '/health',
+      method: 'GET',
+      timeout: timeoutMs,
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 64 * 1024) {
+          req.destroy();
+          resolve(false);
+        }
+      });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body) as { status?: string; projectPath?: string; pid?: unknown };
+          resolve(
+            res.statusCode === 200
+            && parsed.status === 'healthy'
+            && typeof parsed.projectPath === 'string'
+            && isSameProjectPath(parsed.projectPath, expectedProjectPath)
+            && isValidPid(parsed.pid)
+            && parsed.pid === info.pid
+          );
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+async function validateDaemonInfoForProject(
+  projectPath: string,
+  info: DaemonInfo | null
+): Promise<DaemonValidationResult> {
+  if (!info) return { valid: false, reason: 'missing' };
+  if (!isDaemonInfoShape(info)) return { valid: false, reason: 'malformed' };
+  if (!isSameProjectPath(info.projectPath, projectPath)) return { valid: false, reason: 'projectPath mismatch' };
+  if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
+  if (!await probeDaemonHealth(info, projectPath)) return { valid: false, reason: 'health check failed' };
+  return { valid: true, info };
 }
 
 async function closeHttpServer(server: http.Server, timeoutMs: number = HTTP_CLOSE_TIMEOUT_MS): Promise<void> {
@@ -212,9 +363,36 @@ function writeDaemonInfo(projectPath: string, info: DaemonInfo): void {
 
 function removeDaemonInfo(projectPath: string): void {
   const filePath = daemonInfoPath(projectPath);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (error) {
+    logger.debug({ error }, 'Failed to remove daemon.json');
   }
+}
+
+function cleanupStaleDaemonFiles(projectPath: string, reason: string): void {
+  logger.warn({ reason }, 'Cleaning up stale daemon lifecycle files');
+  removeDaemonInfo(projectPath);
+  removeStaleLock(projectPath, reason);
+}
+
+function stopSentinelPath(projectPath: string): string {
+  return path.join(projectPath, '.moe', 'daemon.stop');
+}
+
+function writeStopSentinel(projectPath: string): void {
+  try {
+    fs.writeFileSync(stopSentinelPath(projectPath), String(Date.now()));
+  } catch { /* best effort */ }
+}
+
+function consumeStopSentinel(projectPath: string): boolean {
+  const sentinelPath = stopSentinelPath(projectPath);
+  if (fs.existsSync(sentinelPath)) {
+    try { fs.unlinkSync(sentinelPath); } catch { /* ignore */ }
+    return true;
+  }
+  return false;
 }
 
 function writeGlobalConfig(): void {
@@ -256,10 +434,12 @@ function writeGlobalConfig(): void {
 
 async function startDaemon(projectPath: string, preferredPort?: number): Promise<void> {
   const existing = readDaemonInfo(projectPath);
-  if (existing && isProcessAlive(existing.pid)) {
-    logger.info({ port: existing.port, pid: existing.pid }, 'Moe daemon already running');
+  const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
+  if (existingValidation.valid && existingValidation.info) {
+    logger.info({ port: existingValidation.info.port, pid: existingValidation.info.pid }, 'Moe daemon already running');
     return;
   }
+  if (existing) cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
 
   // Acquire lock to prevent race conditions
   if (!acquireLock(projectPath)) {
@@ -267,10 +447,12 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     // Wait a bit and check if daemon is now running
     await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
     const info = readDaemonInfo(projectPath);
-    if (info && isProcessAlive(info.pid)) {
-      logger.info({ port: info.port, pid: info.pid }, 'Daemon started by another process');
+    const validation = await validateDaemonInfoForProject(projectPath, info);
+    if (validation.valid && validation.info) {
+      logger.info({ port: validation.info.port, pid: validation.info.pid }, 'Daemon started by another process');
       return;
     }
+    if (info) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
     logger.error('Failed to acquire lock and daemon not running');
     return;
   }
@@ -311,6 +493,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
       const response = {
         status: isHealthy ? 'healthy' : 'unhealthy',
         version: VERSION,
+        pid: process.pid,
         uptime: Math.floor((Date.now() - startTime) / 1000),
         projectPath,
         stats,
@@ -472,46 +655,152 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   logger.info({ endpoint: `ws://localhost:${port}/mcp` }, 'MCP bridge');
 }
 
-function stopDaemon(projectPath: string): void {
+async function superviseDaemon(projectPath: string, preferredPort?: number): Promise<void> {
+  // Check if daemon is already running
+  const existing = readDaemonInfo(projectPath);
+  const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
+  if (existingValidation.valid && existingValidation.info) {
+    logger.info({ port: existingValidation.info.port, pid: existingValidation.info.pid }, 'Moe daemon already running');
+    return;
+  }
+  if (existing) cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
+
+  // Clean up stale stop sentinel from previous runs
+  consumeStopSentinel(projectPath);
+
+  const scriptPath = process.argv[1];
+  const childArgs = ['_run', '--project', projectPath];
+  if (preferredPort !== undefined) {
+    childArgs.push('--port', String(preferredPort));
+  }
+
+  let restartTimestamps: number[] = [];
+  let child: ChildProcess | null = null;
+  let shuttingDown = false;
+
+  function spawnChild(): void {
+    child = spawn(process.execPath, [scriptPath, ...childArgs], {
+      stdio: 'inherit',
+      env: process.env,
+    });
+
+    const childPid = child.pid;
+    logger.info({ childPid }, 'Supervisor spawned daemon process');
+
+    child.on('exit', (code, signal) => {
+      child = null;
+
+      if (shuttingDown) {
+        process.exit(0);
+        return;
+      }
+
+      // Check if stop was requested via sentinel file
+      if (consumeStopSentinel(projectPath)) {
+        logger.info('Daemon stopped by stop command');
+        process.exit(0);
+        return;
+      }
+
+      if (code === 0) {
+        logger.info('Daemon exited cleanly');
+        process.exit(0);
+        return;
+      }
+
+      logger.warn({ code, signal }, 'Daemon crashed');
+
+      // Track restart timestamps within the window
+      const now = Date.now();
+      restartTimestamps.push(now);
+      restartTimestamps = restartTimestamps.filter(t => now - t < SUPERVISOR_RESTART_WINDOW_MS);
+
+      if (restartTimestamps.length > SUPERVISOR_MAX_RESTARTS) {
+        logger.error(
+          { restarts: restartTimestamps.length, windowMs: SUPERVISOR_RESTART_WINDOW_MS },
+          'Too many restarts, supervisor giving up'
+        );
+        process.exit(1);
+        return;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+      const backoffMs = Math.min(
+        SUPERVISOR_MAX_BACKOFF_MS,
+        1000 * Math.pow(2, restartTimestamps.length - 1)
+      );
+      logger.info(
+        { backoffMs, attempt: restartTimestamps.length, maxRestarts: SUPERVISOR_MAX_RESTARTS },
+        'Restarting daemon after backoff'
+      );
+      setTimeout(spawnChild, backoffMs);
+    });
+  }
+
+  // Forward signals to child for graceful shutdown
+  const forwardSignal = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (child && child.pid) {
+      try {
+        child.kill(signal);
+      } catch { /* child may have already exited */ }
+      // Force kill if child doesn't exit in time
+      const forceTimeout = setTimeout(() => {
+        if (child && child.pid) {
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        }
+        process.exit(1);
+      }, SUPERVISOR_CHILD_KILL_TIMEOUT_MS);
+      forceTimeout.unref();
+    } else {
+      process.exit(0);
+    }
+  };
+
+  process.on('SIGTERM', () => forwardSignal('SIGTERM'));
+  process.on('SIGINT', () => forwardSignal('SIGINT'));
+
+  logger.info({ projectPath }, 'Supervisor starting');
+  spawnChild();
+}
+
+async function stopDaemon(projectPath: string): Promise<void> {
   const info = readDaemonInfo(projectPath);
   if (!info) {
     logger.info('No daemon info found');
     return;
   }
 
-  // Validate daemon.json points to this project to prevent killing wrong process
-  const normalizedInfoPath = path.resolve(info.projectPath);
-  const normalizedRequestPath = path.resolve(projectPath);
-  if (normalizedInfoPath !== normalizedRequestPath) {
-    logger.warn({ expected: normalizedRequestPath, found: normalizedInfoPath },
-      'daemon.json projectPath mismatch, cleaning up stale file');
-    removeDaemonInfo(projectPath);
+  const validation = await validateDaemonInfoForProject(projectPath, info);
+  if (!validation.valid || !validation.info) {
+    cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
+    logger.info('Daemon not running or daemon.json is stale');
     return;
   }
 
-  if (isProcessAlive(info.pid)) {
-    process.kill(info.pid, 'SIGTERM');
-    logger.info({ pid: info.pid }, 'Sent SIGTERM to daemon');
-  } else {
-    logger.info('Daemon not running. Cleaning up daemon.json');
-    removeDaemonInfo(projectPath);
-  }
+  // Write stop sentinel so the supervisor doesn't restart the child
+  writeStopSentinel(projectPath);
+  process.kill(validation.info.pid, 'SIGTERM');
+  logger.info({ pid: validation.info.pid }, 'Sent SIGTERM to daemon');
 }
 
-function statusDaemon(projectPath: string): void {
+async function statusDaemon(projectPath: string): Promise<void> {
   const info = readDaemonInfo(projectPath);
   if (!info) {
     logger.info('Daemon not running');
     return;
   }
 
-  const alive = isProcessAlive(info.pid);
+  const validation = await validateDaemonInfoForProject(projectPath, info);
   logger.info({
-    status: alive ? 'running' : 'stopped',
-    port: info.port,
-    pid: info.pid,
-    projectPath: info.projectPath
+    status: validation.valid ? 'running' : 'stopped',
+    reason: validation.reason,
+    port: isDaemonInfoShape(info) ? info.port : undefined,
+    pid: isDaemonInfoShape(info) ? info.pid : undefined,
+    projectPath: isDaemonInfoShape(info) ? info.projectPath : undefined
   }, 'Daemon status');
+  if (!validation.valid) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
 }
 
 type InitResult = {
@@ -537,12 +826,16 @@ function initProject(projectPath: string, projectName?: string): InitResult {
         // Ignore invalid project.json
       }
     }
+    // Backfill role docs and skills onto existing .moe/ — safe (skip-if-exists).
+    // Log at warn so a partial-init repair is visible without crashing the daemon.
+    try { writeInitFiles(moePath); } catch (err) { logger.warn({ err }, 'writeInitFiles backfill failed'); }
+    try { writeSkillFiles(moePath); } catch (err) { logger.warn({ err }, 'writeSkillFiles backfill failed'); }
     logger.info({ projectPath, projectId, name }, 'Project already initialized (.moe folder exists)');
     return { alreadyInitialized: true, projectPath, projectId, name };
   }
 
   // Create directory structure
-  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles'];
+  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles', 'memory', 'memory/sessions'];
   fs.mkdirSync(moePath, { recursive: true });
   for (const dir of dirs) {
     fs.mkdirSync(path.join(moePath, dir), { recursive: true });
@@ -571,7 +864,11 @@ function initProject(projectPath: string, projectName?: string): InitResult {
       autoCreateBranch: true,
       branchPattern: 'moe/{epicId}/{taskId}',
       commitPattern: 'feat({epicId}): {taskTitle}',
-      agentCommand: 'claude'
+      agentCommand: 'claude',
+      enableAgentTeams: false,
+      chatEnabled: true,
+      chatMaxAgentHops: 4,
+      memory: resolveMemorySettings()
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -588,6 +885,9 @@ function initProject(projectPath: string, projectName?: string): InitResult {
   // Write role docs and .gitignore
   writeInitFiles(moePath);
 
+  // Write the curated skill pack (.moe/skills/<name>/SKILL.md + manifest)
+  writeSkillFiles(moePath);
+
   // Write global install config so other projects can find this installation
   writeGlobalConfig();
 
@@ -600,17 +900,21 @@ async function main() {
 
   switch (command) {
     case 'start':
+      await superviseDaemon(projectPath, port);
+      break;
+    case '_run':
+      // Internal: called by supervisor to run the actual daemon process
       await startDaemon(projectPath, port);
       break;
     case 'stop':
-      stopDaemon(projectPath);
+      await stopDaemon(projectPath);
       break;
     case 'status':
-      statusDaemon(projectPath);
+      await statusDaemon(projectPath);
       break;
     case 'init':
       initProject(projectPath, name);
-      await startDaemon(projectPath, port);
+      await superviseDaemon(projectPath, port);
       break;
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init] [--project <path>] [--port <port>] [--name <name>]');
@@ -618,7 +922,28 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  logger.fatal({ error: err }, 'Fatal error');
-  process.exit(1);
-});
+export {
+  canonicalProjectPath,
+  isSameProjectPath,
+  isDaemonInfoShape,
+  probeDaemonHealth,
+  validateDaemonInfoForProject,
+  readDaemonInfo,
+  removeDaemonInfo,
+  cleanupStaleDaemonFiles,
+  readLockInfo,
+  staleLockReason,
+  removeStaleLock,
+  acquireLock,
+  releaseLock,
+  initProject,
+  stopDaemon,
+  statusDaemon,
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    logger.fatal({ error: err }, 'Fatal error');
+    process.exit(1);
+  });
+}

@@ -1,0 +1,112 @@
+{
+  "id": "task-a0973700",
+  "epicId": "epic-0110ece1",
+  "title": "[HIGH] Fix chat_read all-channel cursor and unread loss",
+  "description": "Deep sweep finding: packages/moe-daemon/src/tools/chatRead.ts, when called without a channel, reads up to `limit` messages per channel, then returns only the last global `limit`, but advances worker cursors and clears unread counts for every fetched message/channel. Messages omitted from the response are silently marked read and may never be shown to the agent.",
+  "definitionOfDone": [
+    "All-channel chat_read only advances cursors for messages actually returned, or returns a response shape that includes every message whose cursor is advanced.",
+    "Unread counts are cleared only for channels/messages actually surfaced to the caller.",
+    "Behavior is documented for all-channel limit semantics.",
+    "Regression tests cover multiple channels with more fetched messages than returned and verify omitted messages are not skipped.",
+    "packages/moe-daemon npm test and build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Refactor all-channel chat_read so cursorUpdates are derived only from responseMessages/messages actually returned; keep explicit error handling for invalid channels/options.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Refactored all-channel chat_read cursor updates to derive per-channel cursorUpdates only from the globally returned messages, not every per-channel fetched message. Added a regression first: all-channel read with limit 1 across two channels failed on old behavior because the omitted channel cursor advanced and unread was cleared; after the fix the targeted regression passed. Verification: `npx vitest run src/tools/tools.test.ts -t \"does not advance cursors or clear unread\"` failed before the fix, then passed; full `npx vitest run src/tools/tools.test.ts` passed 1 file / 163 tests.",
+      "startedAt": "2026-04-30T13:13:33.638Z",
+      "completedAt": "2026-04-30T13:16:04.203Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Adjust unread clearing so all-channel reads clear only channels included in returned messages, not every unread channel; document exact all-channel limit semantics.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Adjusted all-channel unread clearing so only channels represented by returned messages are cleared instead of clearing every unread channel. Documented all-channel limit semantics: fetch up to limit per channel, merge by timestamp, return newest global limit, and only returned messages/channels advance cursors or clear unread; fetched-but-omitted messages remain readable. Verification after docs/update: targeted chat_read regression `npx vitest run src/tools/tools.test.ts -t \"does not advance cursors or clear unread\"` passed 1/1 (162 skipped); full tools suite previously passed 163/163 after the code change.",
+      "startedAt": "2026-04-30T13:16:12.502Z",
+      "completedAt": "2026-04-30T13:16:40.589Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests with two or more channels where fetched messages exceed global limit; verify omitted messages remain readable and unread counts/cursors are not skipped.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatRead.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added regression coverage for two-channel all-channel reads where per-channel fetched messages exceed the global limit. The first regression was verified red before the fix (old code advanced the omitted channel cursor and cleared its unread count), then green after the fix; it also verifies a later read can still surface the omitted message. During adversarial review I found the same-channel variant (a returned newer message from a channel with an older fetched-but-omitted message) could still skip the older message; hardened chatRead to suppress cursor/unread advancement for any channel with fetched-but-omitted messages, added a second regression for that case, and documented the semantics. Verification: targeted regressions passed; latest full `npx vitest run src/tools/tools.test.ts` passed 1 file / 164 tests. `git diff --check` on affected files exited 0 (CRLF warnings only).",
+      "startedAt": "2026-04-30T13:16:53.237Z",
+      "completedAt": "2026-04-30T13:20:15.840Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [
+    {
+      "id": "comment-eee254c7",
+      "author": "architect-2992",
+      "content": "Token-budget check: preserve chat_read truncation defaults and maxContentChars:0 opt-in while fixing cursor semantics. Correctness must not reintroduce full-history default reads.",
+      "timestamp": "2026-04-28T08:03:57.958Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.154Z",
+  "updatedAt": "2026-04-30T17:40:16.574Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.279Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: only advance cursors/unread counts for returned messages. Alternative: return per-channel groups for all fetched messages; rejected as larger API change.",
+    "codebaseInsights": "state.getMessages returns a tail window per channel. chat_read all-channel mode currently fetches per-channel windows, globally slices for response, but advances cursors for pre-slice messages.",
+    "risks": "Cursor changes can cause message loss. Preserve token-budget defaults while making read semantics correct. Error handling should still reject invalid limit/maxContentChars.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/tools/chatResync.ts",
+      "packages/moe-daemon/src/util/chatPayload.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.281Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T13:13:33.638Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T13:20:55.251Z",
+  "reviewStartedAt": "2026-04-30T13:20:55.251Z",
+  "reviewCompletedAt": "2026-04-30T17:40:16.574Z"
+}

@@ -90,6 +90,15 @@ async function main() {
   if (await exists(agentContextSrc)) {
     await cp(agentContextSrc, path.join(outputRoot, 'docs', 'agent-context.md'));
   }
+
+  // Copy the curated skill pack (manifest + per-skill SKILL.md/SOURCE.md).
+  // The daemon embeds these in skillFiles.ts at build time, so .moe/skills/
+  // gets scaffolded from the bundled daemon. The bundled copy here is only
+  // for users who want to inspect or hand-edit them outside .moe/.
+  const skillsSrc = path.join(repoRoot, 'docs', 'skills');
+  if (await exists(skillsSrc)) {
+    await cp(skillsSrc, path.join(outputRoot, 'docs', 'skills'), { recursive: true });
+  }
 }
 
 main().catch((err) => {

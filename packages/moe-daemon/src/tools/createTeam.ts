@@ -20,7 +20,18 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { name?: string; role?: string; maxSize?: number };
+      const raw = (args || {}) as Record<string, unknown>;
+      // Proxy auto-injects workerId from MOE_WORKER_ID env into every tools/call;
+      // create_team doesn't use it, so drop it before strict-field validation.
+      delete raw.workerId;
+      const allowedFields = new Set(['name', 'role', 'maxSize']);
+      for (const field of Object.keys(raw)) {
+        if (!allowedFields.has(field)) {
+          throw invalidInput(field, 'is not a supported team field');
+        }
+      }
+
+      const params = raw as { name?: string; role?: string; maxSize?: number };
 
       if (!params.name) throw missingRequired('name');
       let role: TeamRole | null = null;
@@ -29,6 +40,11 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
           throw invalidInput('role', `must be one of: ${VALID_ROLES.join(', ')}`);
         }
         role = params.role as TeamRole;
+      }
+      if (params.maxSize !== undefined) {
+        if (typeof params.maxSize !== 'number' || !Number.isFinite(params.maxSize) || !Number.isInteger(params.maxSize) || params.maxSize < 1 || params.maxSize > 1000) {
+          throw invalidInput('maxSize', 'must be an integer between 1 and 1000');
+        }
       }
 
       // Idempotent: return existing team if name+role matches

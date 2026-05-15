@@ -1,0 +1,133 @@
+{
+  "id": "task-6e9e075a",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Record epic creation and update activity events",
+  "description": "Deep sweep finding: docs/SCHEMA.md and activity types include EPIC_CREATED and EPIC_UPDATED, and the UI has an ActivityLogPanel for them, but StateManager.createEpic and updateEpic only emit WebSocket events; they do not append EPIC_CREATED/EPIC_UPDATED to activity.log. Epic deletion is logged. This leaves audit history incomplete for epic lifecycle changes. Add activity logging for create/update with bounded payloads and tests.",
+  "definitionOfDone": [
+    "StateManager.createEpic appends an EPIC_CREATED activity event with epicId/projectId and a bounded payload including title/status/order.",
+    "StateManager.updateEpic appends an EPIC_UPDATED activity event with bounded changed fields and epic context.",
+    "Activity logging errors remain non-blocking and follow existing error handling conventions.",
+    "get_activity_log and WebSocket activity log show epic create/update events in reverse chronological order like other events.",
+    "Regression tests cover create/update activity entries and ensure existing EPIC_CREATED/EPIC_UPDATED WebSocket broadcasts still occur."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Extend StateManager activity append support so epic-only events can include epicId. Either add an optional epic parameter to appendActivity/appendActivityAsync or construct the ActivityEvent with an explicit epicId while preserving existing task/worker/proposal behavior and error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Extended appendActivity/appendActivityAsync to accept optional Epic context and set top-level epicId for epic-only events while preserving existing task/worker/proposal behavior. schema.ts already had ActivityEvent.epicId and EPIC_CREATED/EPIC_UPDATED types, so no schema edit was needed. Added failing regression tests first and confirmed they failed before the fix; focused green check: 3 files / 4 tests passed for epic lifecycle activity.",
+      "startedAt": "2026-04-30T15:37:20.595Z",
+      "completedAt": "2026-04-30T15:43:13.930Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Call activity logging from createEpic and updateEpic. Payloads should be bounded: include title/status/order on create and only changed safe fields on update, with long text truncated or summarized. Do not log full unbounded architectureNotes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "createEpic now logs EPIC_CREATED with top-level epicId and bounded payload {epicId,title,status,order}; updateEpic logs EPIC_UPDATED with top-level epicId, changedFields, safe scalar values, description preview/length, architectureNotes length only, and epicRails count only. Activity logging remains fire-and-forget/non-blocking through existing appendActivity error handling. Focused check: StateManager epic activity tests passed (1 file / 2 tests).",
+      "startedAt": "2026-04-30T15:43:17.583Z",
+      "completedAt": "2026-04-30T15:43:30.337Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests that create/update an epic, flush activity if needed, read getActivityLog, and assert EPIC_CREATED/EPIC_UPDATED include epicId and bounded payloads. Preserve existing WebSocket/StateManager emit tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added regression tests that failed before implementation: StateManager create/update epic activity entries with epicId and bounded payloads; get_activity_log epicId/eventType filtering with newest-first EPIC_UPDATED then EPIC_CREATED; WebSocket GET_ACTIVITY_LOG returning the same epic lifecycle ordering. Existing EPIC_CREATED/EPIC_UPDATED emit assertions remain in place. Green check: StateManager/tools/WebSocketServer targeted suites passed (3 files / 291 tests).",
+      "startedAt": "2026-04-30T15:43:43.469Z",
+      "completedAt": "2026-04-30T15:44:02.069Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run packages/moe-daemon npm test and npm run build; verify activity log parsing validation still accepts epic-only events and handles malformed log lines gracefully.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.ts",
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Final validation complete. npm run build passed (tsc ok). Full daemon test suite passed: 25 files / 478 tests. git diff --check on task-relevant files returned only CRLF normalization warnings. Adversarial review: activity writes remain non-blocking via existing appendActivity catch/finally, task/proposal/worker behavior preserved by appending optional Epic as the last parameter, epic-only events have top-level epicId and no taskId, bounded payloads avoid full architectureNotes/descriptions/rails, and existing validateActivityEvent already treats epicId/taskId/workerId as optional so epic-only parsing is accepted while malformed JSON remains skipped via existing catch/log path.",
+      "startedAt": "2026-04-30T15:44:12.184Z",
+      "completedAt": "2026-04-30T15:45:58.938Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 15,
+  "comments": [
+    {
+      "id": "comment-9517afad",
+      "author": "architect-2992",
+      "content": "Token-budget check: epic activity events should log bounded fields/previews/counts only. Do not log full architectureNotes, descriptions, rails arrays, or unbounded update payloads.",
+      "timestamp": "2026-04-28T08:03:57.915Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:02:27.670Z",
+  "updatedAt": "2026-04-30T18:21:16.764Z",
+  "planSubmittedAt": "2026-04-28T08:02:39.370Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected logging full architectureNotes/epicRails on every update because payloads can be large. Prefer bounded changed fields or counts/previews for audit usefulness without log bloat.",
+    "codebaseInsights": "Task create/update/delete and epic delete append activity. Epic create/update currently only emit WebSocket events. ActivityEvent supports optional epicId without taskId.",
+    "risks": "appendActivity accepts an optional task but not an epic object, so worker may need to extend it or manually pass epicId. Ensure validationActivityEvent accepts epicId-only events. Include error handling and tests.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:02:39.374Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T15:37:20.595Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T15:46:17.766Z",
+  "reviewStartedAt": "2026-04-30T15:46:17.766Z",
+  "reviewCompletedAt": "2026-04-30T18:21:16.764Z"
+}

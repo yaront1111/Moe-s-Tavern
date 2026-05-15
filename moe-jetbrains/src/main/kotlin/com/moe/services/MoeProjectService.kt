@@ -18,6 +18,7 @@ import com.moe.model.Task
 import com.moe.model.Worker
 import com.moe.util.MoeJson
 import com.moe.util.MoeProjectInitializer
+import com.moe.util.MoeDaemonRegistrationTracker
 import com.moe.util.MoeProjectRegistry
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
@@ -44,7 +45,10 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 @Service(Service.Level.PROJECT)
-class MoeProjectService(private val project: IdeaProject) : Disposable {
+class MoeProjectService @JvmOverloads constructor(
+    private val project: IdeaProject,
+    private val invokeLaterForTests: ((() -> Unit) -> Unit)? = null
+) : Disposable {
     private val log = Logger.getInstance(MoeProjectService::class.java)
     private val gson = Gson()
 
@@ -62,8 +66,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     private val disposed = AtomicBoolean(false)
     @Volatile private var isManualDisconnect = false
     @Volatile private var reconnectAttempts = 0
+    @Volatile private var daemonSpawnAttempts = 0
+    private val maxDaemonSpawnAttempts = 3
     @Volatile private var spawnedDaemonProcess: Process? = null
-    @Volatile private var connectedDaemonPid: Int? = null
+    private val daemonRegistration = MoeDaemonRegistrationTracker(
+        register = { pid -> MoeProjectRegistry.registerDaemon(pid) },
+        unregister = { pid -> MoeProjectRegistry.unregisterDaemon(pid) },
+        logError = { message, ex -> log.warn(message, ex) }
+    )
+    private val connectedDaemonPid: Int?
+        get() = daemonRegistration.currentPid
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Moe-Refresh").apply { isDaemon = true }
     }
@@ -75,8 +87,18 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     private val maxReconnectAttempts = 10
     private val daemonStartCooldownMs = 10_000L
 
+    private fun invokeLater(action: () -> Unit) {
+        val testDispatcher = invokeLaterForTests
+        if (testDispatcher != null) {
+            testDispatcher(action)
+        } else {
+            ApplicationManager.getApplication().invokeLater(action)
+        }
+    }
+
     fun connect() {
         if (disposed.get() || connecting || connected) return
+        isManualDisconnect = false
         connecting = true
         if (!ensureMoeInitialized()) {
             connecting = false
@@ -87,7 +109,6 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
 
         // If daemon was just started, poll for readiness with backoff
         if (startAttempted) {
-            reconnectAttempts = 0  // Reset counter for fresh spawn
             publishStatus(false, "Starting daemon...")
             scheduleRetryAttempt(maxAttempts = 10, delayMs = 500, attempt = 1)
             return
@@ -188,10 +209,10 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                         connecting = false
                         connected = true
                         reconnectAttempts = 0
+                        daemonSpawnAttempts = 0
                         isManualDisconnect = false
-                        connectedDaemonPid = daemonInfo.pid
+                        daemonRegistration.register(daemonInfo.pid)
                     }
-                    MoeProjectRegistry.registerDaemon(daemonInfo.pid)
                     publishStatus(true, "Connected")
                     // Drain any messages queued during reconnect
                     while (true) {
@@ -268,18 +289,43 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     fun disconnect() {
+        disconnect(notifyStatus = true)
+    }
+
+    private fun disconnect(notifyStatus: Boolean) {
         isManualDisconnect = true
         reconnectAttempts = 0
         stopAutoRefresh()
-        reconnectFuture?.cancel(false)
-        reconnectFuture = null
-        retryFuture?.cancel(false)
-        retryFuture = null
-        val currentClient = wsClient
-        wsClient = null
+        cancelConnectionTimers()
+        val currentClient = wsLock.withLock {
+            val client = wsClient
+            wsClient = null
+            connected = false
+            connecting = false
+            client
+        }
         closeQuietly(currentClient)
-        connected = false
-        connecting = false
+        if (notifyStatus) {
+            publishStatus(false, "Disconnected")
+        }
+    }
+
+    private fun cancelConnectionTimers() {
+        try {
+            reconnectFuture?.cancel(false)
+        } catch (ex: Exception) {
+            log.debug("Failed to cancel reconnect future: ${ex.message}", ex)
+        } finally {
+            reconnectFuture = null
+        }
+
+        try {
+            retryFuture?.cancel(false)
+        } catch (ex: Exception) {
+            log.debug("Failed to cancel retry future: ${ex.message}", ex)
+        } finally {
+            retryFuture = null
+        }
     }
 
     fun addListener(listener: MoeStateListener) {
@@ -304,7 +350,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     fun getListenerCount(): Int = listeners.size
 
     private fun applyMessageOnEdt(messageType: String, action: () -> Unit) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             try {
                 if (disposed.get()) {
                     log.debug("Ignoring $messageType because service is disposed")
@@ -326,6 +372,24 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             "STATE_SNAPSHOT" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val newState = MoeJson.parseState(payload)
+                val basePath = project.basePath
+                if (basePath != null && newState.project.rootPath.isNotEmpty()) {
+                    try {
+                        val daemonPath = File(newState.project.rootPath).canonicalPath
+                        val expectedPath = File(basePath).canonicalPath
+                        if (daemonPath != expectedPath) {
+                            log.warn("STATE_SNAPSHOT project mismatch: expected $expectedPath, got $daemonPath. Disconnecting.")
+                            val daemonJson = File(basePath, ".moe/daemon.json")
+                            try { daemonJson.delete() } catch (_: Exception) {}
+                            disconnect()
+                            wsLock.withLock { isManualDisconnect = false }
+                            scheduleReconnect()
+                            return
+                        }
+                    } catch (_: java.io.IOException) {
+                        log.debug("Could not resolve canonical paths for project mismatch check, skipping")
+                    }
+                }
                 applyMessageOnEdt(type) {
                     state = newState
                     publishState(newState)
@@ -933,79 +997,79 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
     }
 
     private fun publishState(state: MoeState) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onState(state) }
         }
     }
 
     private fun publishStatus(isConnected: Boolean, message: String) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onStatus(isConnected, message) }
         }
     }
 
     private fun publishError(operation: String, message: String) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onError(operation, message) }
         }
     }
 
     private fun publishChatMessage(message: ChatMessage) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onChatMessage(message) }
         }
     }
 
     private fun publishChatMessages(channel: String, messages: List<ChatMessage>) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onChatMessages(channel, messages) }
         }
     }
 
     private fun publishPins(channel: String, pins: List<PinEntry>) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onPins(channel, pins) }
         }
     }
 
     private fun publishPinCreated(channel: String, pin: PinEntry) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onPinCreated(channel, pin) }
         }
     }
 
     private fun publishPinRemoved(channel: String, messageId: String) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onPinRemoved(channel, messageId) }
         }
     }
 
     private fun publishPinToggled(channel: String, pin: PinEntry) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onPinToggled(channel, pin) }
         }
     }
 
     private fun publishDecisions(decisions: List<Decision>) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onDecisions(decisions) }
         }
     }
 
     private fun publishDecisionProposed(decision: Decision) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onDecisionProposed(decision) }
         }
     }
 
     private fun publishDecisionResolved(decision: Decision) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onDecisionResolved(decision) }
         }
     }
 
     private fun publishActivityLog(events: List<ActivityEvent>) {
-        ApplicationManager.getApplication().invokeLater {
+        invokeLater {
             listeners.forEach { it.onActivityLog(events) }
         }
     }
@@ -1033,7 +1097,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         val file = File(base, ".moe/daemon.json")
         if (!file.exists()) return null
         return try {
-            gson.fromJson(file.readText(), DaemonInfo::class.java)
+            val info = gson.fromJson(file.readText(), DaemonInfo::class.java)
+            if (info.projectPath.isNotEmpty()) {
+                val daemonPath = File(info.projectPath).canonicalPath
+                val expectedPath = File(base).canonicalPath
+                if (daemonPath != expectedPath) {
+                    log.warn("Stale daemon.json: expected project $expectedPath, found $daemonPath")
+                    file.delete()
+                    return null
+                }
+            }
+            info
         } catch (ex: Exception) {
             log.debug("Failed to read daemon.json: ${ex.message}")
             null
@@ -1063,11 +1137,17 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
         }
 
+        if (daemonSpawnAttempts >= maxDaemonSpawnAttempts) {
+            log.info("Max daemon spawn attempts ($maxDaemonSpawnAttempts) reached, not retrying")
+            return false
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastDaemonStartAttemptAt < daemonStartCooldownMs) {
             return false
         }
         lastDaemonStartAttemptAt = now
+        daemonSpawnAttempts++
 
         val basePath = project.basePath ?: return false
         val direct = buildDirectDaemonCommand(basePath)
@@ -1106,9 +1186,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
             }
             spawnedDaemonProcess = process
             // Drain stdout/stderr to prevent Windows pipe deadlock (buffer is ~4KB)
+            // Log the first few lines for diagnostics if daemon fails to start
             Thread({
                 try {
-                    process.inputStream.bufferedReader().forEachLine { /* discard */ }
+                    var lineCount = 0
+                    process.inputStream.bufferedReader().forEachLine { line ->
+                        if (lineCount < 20) {
+                            log.info("Daemon output: $line")
+                        }
+                        lineCount++
+                    }
                 } catch (_: Exception) { }
             }, "Moe-DaemonDrain").apply { isDaemon = true }.start()
             log.info("Started Moe daemon for $basePath using ${direct?.joinToString(" ") ?: "shell command"} (pid tracking enabled)")
@@ -1133,11 +1220,16 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
                 false
             }
         }
-        // Always sync role docs to ensure agents get latest production-ready versions
+        // Always sync role docs and skills to ensure agents get latest production-ready versions
         try {
             MoeProjectInitializer.syncRoleDocs(moeDir)
         } catch (ex: Exception) {
             log.debug("Failed to sync role docs: ${ex.message}")
+        }
+        try {
+            MoeProjectInitializer.syncSkills(moeDir)
+        } catch (ex: Exception) {
+            log.debug("Failed to sync skills: ${ex.message}")
         }
         return true
     }
@@ -1369,16 +1461,13 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         log.info("Disposing MoeProjectService")
 
         // Cancel any pending reconnect
-        reconnectFuture?.cancel(true)
-        reconnectFuture = null
-        retryFuture?.cancel(false)
-        retryFuture = null
+        cancelConnectionTimers()
 
         // Stop auto-refresh
         stopAutoRefresh()
 
         // Disconnect WebSocket (disconnect uses closeQuietly for safe cleanup)
-        disconnect()
+        disconnect(notifyStatus = false)
 
         // Clear all listeners to prevent memory leaks
         listeners.clear()
@@ -1400,14 +1489,13 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         // Only kill daemon if this was the last project using it
         val pid = connectedDaemonPid
         if (pid != null) {
-            val isLastUser = MoeProjectRegistry.unregisterDaemon(pid)
+            val isLastUser = daemonRegistration.unregisterCurrent()
             if (isLastUser) {
                 killSpawnedDaemon()
             } else {
                 log.info("Daemon PID $pid still in use by other projects, not killing")
                 spawnedDaemonProcess = null // Don't hold the process reference
             }
-            connectedDaemonPid = null
         } else {
             killSpawnedDaemon()
         }
@@ -1507,6 +1595,7 @@ class MoeProjectService(private val project: IdeaProject) : Disposable {
         }
         lastDaemonStartAttemptAt = 0  // Reset cooldown
         reconnectAttempts = 0
+        daemonSpawnAttempts = 0
         connect()
     }
 

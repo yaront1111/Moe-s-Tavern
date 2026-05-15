@@ -1,0 +1,106 @@
+{
+  "id": "task-d1c616ea",
+  "epicId": "epic-0110ece1",
+  "title": "[CRITICAL] Repair JetBrains Gradle wrapper build path",
+  "description": "Deep sweep finding: `cd moe-jetbrains && .\\gradlew.bat test` fails with `no main manifest attribute ... gradle-wrapper.jar`. The Windows wrapper invokes the jar with `-jar`, but this wrapper jar has no Main-Class. POSIX `./gradlew` also fails under bash with `/bin/sh^M: bad interpreter`, indicating CRLF line endings. This blocks plugin test/build commands documented in AGENTS.md.",
+  "definitionOfDone": [
+    "gradlew.bat invokes GradleWrapperMain correctly on Windows, or the wrapper jar/scripts are regenerated to a valid Gradle wrapper set.",
+    "POSIX gradlew has LF line endings and runs under bash/sh.",
+    "Wrapper jar/properties are valid for Gradle 8.10.2 and no unverified ad-hoc jar is introduced.",
+    "Validation includes `./gradlew.bat test` on Windows; if POSIX shell is available, `bash -lc 'cd moe-jetbrains && ./gradlew --version'` also passes.",
+    "Any wrapper regeneration steps are documented for future maintainers."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Inspect wrapper jar contents/properties and repair the Windows wrapper launch command or regenerate the full Gradle wrapper set so GradleWrapperMain is invokable with correct error handling.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/gradlew.bat",
+        "moe-jetbrains/gradle/wrapper/gradle-wrapper.jar",
+        "moe-jetbrains/gradle/wrapper/gradle-wrapper.properties"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/gradlew.bat"
+      ],
+      "note": "Inspected gradle-wrapper.jar via .NET ZipFile: it contains org/gradle/wrapper/GradleWrapperMain.class and no Main-Class manifest. Verified pre-fix `.\\gradlew.bat --version` failed with `no main manifest attribute`. Patched gradlew.bat to set CLASSPATH to the wrapper jar and launch `org.gradle.wrapper.GradleWrapperMain` instead of `-jar`. Post-fix `.\\gradlew.bat --version` succeeds and reports Gradle 8.10.2.",
+      "startedAt": "2026-04-30T10:54:08.323Z",
+      "completedAt": "2026-04-30T11:43:59.669Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Normalize POSIX gradlew to LF line endings and executable semantics without breaking Windows checkout behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/gradlew",
+        ".gitattributes"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/gradlew",
+        ".gitattributes"
+      ],
+      "note": "Converted moe-jetbrains/gradlew from CRLF to LF and added .gitattributes to keep POSIX wrapper LF, Windows wrapper CRLF, and wrapper jars binary. Verified CRLF count in gradlew is 0, git index preserves executable mode 100755, and `bash -lc 'cd moe-jetbrains && ./gradlew --version'` succeeds with Gradle 8.10.2.",
+      "startedAt": "2026-04-30T11:44:03.266Z",
+      "completedAt": "2026-04-30T11:44:42.449Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run wrapper validation tests: `.\\gradlew.bat test` on Windows and, where bash is available, `bash -lc 'cd moe-jetbrains && ./gradlew --version'`; document any remaining environment prerequisites.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md",
+        "AGENTS.md"
+      ],
+      "modifiedFiles": [
+        "AGENTS.md",
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "Documented Gradle wrapper maintenance/regeneration guidance in AGENTS.md and docs/DEVELOPMENT.md, including Gradle 8.10.2, LF/CRLF expectations, trusted wrapper regeneration, and validation commands. Fresh validation after final edits: `.\\gradlew.bat test` => BUILD SUCCESSFUL, 9 actionable tasks (2 executed, 7 up-to-date), test NO-SOURCE; `bash -lc 'cd moe-jetbrains && ./gradlew --version'` => Gradle 8.10.2. Also verified `git ls-files --eol` reports gradlew w/lf and gradlew.bat w/crlf, with gradlew CRLF count 0. Adversarial review noted existing Gradle IntelliJ Plugin warnings are pre-existing configuration warnings, not wrapper launch failures.",
+      "startedAt": "2026-04-30T11:44:47.943Z",
+      "completedAt": "2026-04-30T11:46:55.773Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.226Z",
+  "updatedAt": "2026-04-30T13:06:42.260Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.364Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: regenerate wrapper scripts/jar from a trusted Gradle distribution or patch gradlew.bat to use `-classpath ... org.gradle.wrapper.GradleWrapperMain` if jar contents are otherwise valid. Rejected: relying on a globally installed gradle command because contributors may not have it.",
+    "codebaseInsights": "The current Windows wrapper uses `-jar gradle-wrapper.jar`, but the jar manifest has no Main-Class. POSIX wrapper has CRLF line endings in this checkout, causing `/bin/sh^M` under bash.",
+    "risks": "Wrapper jar provenance matters. Do not hand-edit binary blindly if regeneration is available. Preserve Gradle 8.10.2 and Java/Kotlin plugin settings. Include error handling/fallback documentation if validation depends on local Java availability.",
+    "keyFiles": [
+      "moe-jetbrains/gradlew.bat",
+      "moe-jetbrains/gradlew",
+      "moe-jetbrains/gradle/wrapper/gradle-wrapper.jar",
+      "moe-jetbrains/gradle/wrapper/gradle-wrapper.properties",
+      "moe-jetbrains/build.gradle.kts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.366Z",
+  "contextFetchedBy": [
+    "architect-2992",
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T10:54:08.323Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T11:47:07.889Z",
+  "reviewStartedAt": "2026-04-30T11:47:07.889Z",
+  "reviewCompletedAt": "2026-04-30T13:06:42.260Z"
+}
