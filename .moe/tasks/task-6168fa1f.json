@@ -1,0 +1,135 @@
+{
+  "id": "task-6168fa1f",
+  "epicId": "epic-0110ece1",
+  "title": "[MEDIUM] Enforce start_step before complete_step",
+  "description": "Deep sweep finding: completeStepTool allows a PENDING step to be marked COMPLETED directly; it only rejects already COMPLETED steps. That bypasses start_step, workStartedAt initialization, context-fetched enforcement, worker CODING status updates, and the intended task lifecycle. Fix complete_step so workers cannot complete a step that was never started, unless an explicit legacy/human path is intentionally documented and tested.",
+  "definitionOfDone": [
+    "complete_step rejects PENDING steps with a clear invalid-state error and only accepts IN_PROGRESS steps by default.",
+    "The start_step -> complete_step happy path still works and records startedAt/completedAt, stepsCompleted, modifiedFiles, and notes.",
+    "Context/ownership enforcement cannot be bypassed by calling complete_step first on a claimed task.",
+    "Any intentionally supported human/legacy bypass is explicit in code, documented, and covered by tests; otherwise no bypass remains.",
+    "Regression tests cover direct PENDING complete rejection, normal completion success, and claimed-task context/ownership behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Change completeStepTool validation so PENDING steps are rejected with invalidState('Step','PENDING','IN_PROGRESS') or equivalent clear error. Keep already COMPLETED rejection. Ensure ownership is checked before exposing step state, and consider adding assertContextFetched to complete_step to match start_step for claimed tasks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Enforced complete_step ordering: claimed-worker calls now run assertWorkerOwns and assertContextFetched before plan/step state checks, and only IN_PROGRESS steps can complete; PENDING now returns INVALID_STATE expected IN_PROGRESS. Updated assertContextFetched error text to name the current tool and passed explicit tool names from start_step/complete_step. Regression tests added for direct PENDING complete and claimed-worker missing-context bypass; red check against old completeStep behavior failed 4 tests as expected. Targeted green: 3 files, 20 passed/166 skipped.",
+      "startedAt": "2026-04-30T15:09:28.496Z",
+      "completedAt": "2026-04-30T15:13:28.651Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update nextAction/error guidance if needed so callers are directed to moe.start_step when they attempt to complete a PENDING step. Preserve modifiedFiles/note handling for the valid IN_PROGRESS completion path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Added explicit PENDING-step guidance: complete_step now throws INVALID_STATE with message telling callers to call moe.start_step before moe.complete_step, while keeping context.expectedState as IN_PROGRESS and including a nextAction hint in error context. Confirmed modifiedFiles/note valid path still passes via start_step -> complete_step lifecycle test. Targeted green: 3 files, 20 passed/166 skipped.",
+      "startedAt": "2026-04-30T15:13:35.418Z",
+      "completedAt": "2026-04-30T15:14:33.669Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add/update tests: direct PENDING completion rejects; start_step then complete_step succeeds; completing with wrong worker still rejects; completing without get_context on a claimed task cannot bypass ordering if assertContextFetched is added. Include checks for workStartedAt/startedAt/completedAt behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "note": "Added regression coverage for the required lifecycle: direct PENDING complete rejects with INVALID_STATE and moe.start_step guidance; start_step -> complete_step succeeds preserving startedAt/completedAt/workStartedAt/stepsCompleted/modifiedFiles/note; wrong-worker rejection remains covered; claimed worker without get_context cannot complete an already-started step. Also updated existing worker-lastActivity test to include contextFetchedBy for the claimed worker. Red evidence: with old completeStep behavior restored, 4 new tests failed because PENDING/missing-context complete resolved instead of rejecting. Green evidence: targeted vitest = 3 files, 20 passed/166 skipped.",
+      "startedAt": "2026-04-30T15:14:43.278Z",
+      "completedAt": "2026-04-30T15:15:10.915Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run packages/moe-daemon npm test and npm run build. Verify error handling text remains stable enough for existing tests or update expectations intentionally.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "note": "Ran final validation and adversarial review. Verified diff for complete_step ordering/context enforcement and test coverage; no new file/socket side effects on error paths, ownership check still precedes step-state exposure, and legacy no-worker/no-assignment paths remain preserved by enforcement helpers. Fresh validation: npm run build exited 0; npm test -- --reporter=dot passed 25 files / 463 tests; git diff --check clean except CRLF warnings.",
+      "startedAt": "2026-04-30T15:15:21.017Z",
+      "completedAt": "2026-04-30T15:16:19.454Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 12,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T08:00:47.664Z",
+  "updatedAt": "2026-04-30T18:11:36.050Z",
+  "planSubmittedAt": "2026-04-28T08:01:04.996Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected silently auto-starting inside complete_step because it hides ordering mistakes and skips start-step nextAction recommendations. Prefer explicit rejection and clear nextAction guidance to call start_step first.",
+    "codebaseInsights": "startStep is the only tool that records startedAt, workStartedAt, context-fetched ordering, and worker CODING status. completeStep currently accepts every non-COMPLETED status, making startStep optional in practice.",
+    "risks": "Some tests or legacy scripts may rely on direct complete_step. If kept, it must be an explicit human-only path, not available to claimed worker calls. Include error handling and test updates.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/startStep.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/tools/completeStep.test.ts",
+      "packages/moe-daemon/src/tools/startStep.test.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T08:01:04.997Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T15:09:28.496Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T15:17:05.255Z",
+  "reviewStartedAt": "2026-04-30T15:17:05.255Z",
+  "reviewCompletedAt": "2026-04-30T18:11:36.050Z"
+}

@@ -1,0 +1,128 @@
+{
+  "id": "task-3d5d47b7",
+  "epicId": "epic-0110ece1",
+  "title": "[HIGH] Restore JetBrains settings and runtime-field parsing",
+  "description": "Deep sweep finding: MoeJson.parseState constructs Project(id/name/rootPath) and drops payload.project.settings, so the JetBrains settings dialog opens with defaults and saving can overwrite real settings. TerminalAgentLauncher also falls back to 'claude' because project.settings.agentCommand is never parsed. The parser also ignores task runtime fields already present in Models.kt (reopenCount, taskRails, contextFetchedBy, stepsCompleted, modifiedFiles, note, startedAt/completedAt), limiting UI visibility and diagnostics. Fix JetBrains JSON parsing so state mirrors daemon schema for supported fields.",
+  "definitionOfDone": [
+    "MoeJson.parseState parses project.settings into ProjectSettings, including approvalMode, speedModeDelayMs, autoCreateBranch, branchPattern, commitPattern, agentCommand, enableAgentTeams, and columnLimits.",
+    "Task parsing preserves reopenCount, taskRails, contextFetchedBy, stepsCompleted, and implementation step modifiedFiles/note/startedAt/completedAt when present.",
+    "Settings dialog and TerminalAgentLauncher use parsed settings instead of defaults when daemon state provides them.",
+    "Malformed/missing optional fields fall back safely without crashing the IDE.",
+    "JetBrains unit tests or parser tests cover settings round-trip/default fallback and task runtime fields."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Extend MoeJson with safe parsers for booleans, ints, string arrays, string maps/column limits, and ProjectSettings. Parse payload.project.settings inside parseState and attach it to Project while keeping current defaults for missing/malformed fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Extended MoeJson with safe parsers for strings, ints, booleans, string arrays, column limits, and ProjectSettings. parseState now attaches parsed ProjectSettings with defaults for missing/malformed optional fields. Added a minimal JUnit4 parser test harness. RED: MoeJsonTest failed before the parser fix because settings were null and malformed settings were not safe. GREEN: .\\gradlew.bat test --tests com.moe.util.MoeJsonTest --no-daemon passed.",
+      "startedAt": "2026-04-30T13:46:32.440Z",
+      "completedAt": "2026-04-30T13:53:33.003Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Update task and implementation-step parsing to populate existing runtime fields: reopenCount, taskRails, contextFetchedBy, stepsCompleted, modifiedFiles, note, startedAt, and completedAt. Ensure malformed optional arrays fall back to empty/null without throwing; this is the error handling path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Updated task parsing and implementation-step parsing to populate existing runtime fields: reopenCount, taskRails, contextFetchedBy, stepsCompleted, modifiedFiles, note, startedAt, and completedAt. Optional arrays now use safe helpers that return null/empty on malformed input rather than throwing. Verification: .\\gradlew.bat test --tests com.moe.util.MoeJsonTest --no-daemon passed.",
+      "startedAt": "2026-04-30T13:53:37.021Z",
+      "completedAt": "2026-04-30T13:54:01.877Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Review settings consumers (MoeSettingsDialog, MoeToolWindowPanel column limits, TerminalAgentLauncher agentCommand) and adjust only if needed so they use parsed state without overwriting real settings with defaults. Add/update parser tests for settings and runtime fields; if the project has no Kotlin test harness, add a minimal one consistent with the Gradle setup.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Reviewed settings consumers: MoeSettingsDialog already receives service.getState()?.project?.settings, MoeToolWindowPanel reads project.settings?.columnLimits, and TerminalAgentLauncher reads project.settings?.agentCommand. With parseState now always supplying parsed/default ProjectSettings, these consumers use daemon-provided values without direct changes. Added parser tests with a minimal JUnit4 harness; configured test task with JUnit4 and a JVM add-opens workaround for the IntelliJ test classloader on JDK 21. Verification: .\\gradlew.bat test --tests com.moe.util.MoeJsonTest --no-daemon passed.",
+      "startedAt": "2026-04-30T13:54:13.379Z",
+      "completedAt": "2026-04-30T13:54:47.845Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run JetBrains parser/unit tests and build verification after the Gradle wrapper task lands. Until then, run the available wrapper/Gradle command and record the known wrapper failure rather than claiming full build success.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/gradle/wrapper/gradle-wrapper.jar"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Ran final JetBrains verification. Gradle wrapper works; parser/unit tests and plugin packaging both succeed. Verification: .\\gradlew.bat test --no-daemon passed (3 MoeJson tests; Gradle reported BUILD SUCCESSFUL with existing IntelliJ plugin 1.x warnings); .\\gradlew.bat buildPlugin --no-daemon passed; git diff --check affected files exited 0 with CRLF warnings only. Adversarial review noted no consumer code changes needed because parsed ProjectSettings now feeds MoeSettingsDialog, MoeToolWindowPanel column limits, and TerminalAgentLauncher agentCommand.",
+      "startedAt": "2026-04-30T13:54:57.462Z",
+      "completedAt": "2026-04-30T13:56:15.899Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:59:07.012Z",
+  "updatedAt": "2026-04-30T17:50:13.568Z",
+  "planSubmittedAt": "2026-04-28T07:59:22.230Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected changing the settings dialog to read .moe/project.json directly because the daemon WebSocket snapshot is the source of truth for clients. Rejected hard-failing on missing fields because older daemon states and partial test payloads should remain parseable.",
+    "codebaseInsights": "Models.kt already defines ProjectSettings and runtime fields, but MoeJson does not populate them. Existing parser helpers use safe defaults and should be extended rather than replacing parser behavior wholesale.",
+    "risks": "The Gradle wrapper is currently broken under a separate task, so use parser-level tests where possible and document any verification blocked by wrapper. Keep error handling defensive around JsonNull/type mismatches.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:59:22.233Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T13:46:32.440Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "completedAt": "2026-04-30T13:57:07.461Z",
+  "reviewStartedAt": "2026-04-30T13:57:07.461Z",
+  "reviewCompletedAt": "2026-04-30T17:50:13.568Z"
+}

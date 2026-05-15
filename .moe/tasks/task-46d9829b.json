@@ -1,0 +1,111 @@
+{
+  "id": "task-46d9829b",
+  "epicId": "epic-0110ece1",
+  "title": "[CRITICAL] Harden save_session_summary against path traversal",
+  "description": "Deep sweep finding: packages/moe-daemon/src/knowledge/MemoryManager.ts writes session summaries to `${workerId}_${taskId}.json` without validating either value, and saveSessionSummaryTool does not require worker/task existence. A malicious MCP caller can use path separators in workerId/taskId to write outside `.moe/memory/sessions`. Also getLastSession matches filenames by substring, so task IDs like task-1 can read task-10 summaries.",
+  "definitionOfDone": [
+    "save_session_summary validates workerId/taskId with safe ID rules and rejects traversal/invalid IDs.",
+    "Session summary writes are guaranteed to stay under `.moe/memory/sessions` using resolved path checks or sanitized filenames.",
+    "getLastSession only matches exact task IDs rather than substring collisions.",
+    "Regression tests cover invalid IDs/path traversal and task-1 vs task-10 lookup.",
+    "packages/moe-daemon npm test and build pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add explicit workerId/taskId validation and path containment checks in save_session_summary/MemoryManager session file helpers; return clear MoeError invalid-input error handling for bad IDs instead of writing files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/saveSessionSummary.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts",
+        "packages/moe-daemon/src/util/sanitize.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/saveSessionSummary.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts",
+        "packages/moe-daemon/src/util/sanitize.ts"
+      ],
+      "note": "Added safe entity ID validation for session summary workerId/taskId, required existing worker/task in moe.save_session_summary, and resolved-path containment checks before writing under .moe/memory/sessions. Targeted tools.test passed (146 tests).",
+      "startedAt": "2026-04-30T09:51:27.591Z",
+      "completedAt": "2026-04-30T09:55:25.892Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Change getLastSession lookup to parse session summary files and match exact taskId rather than filename substring; keep malformed-file error handling fail-safe.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "note": "Changed getLastSession to scan JSON files, parse each fail-safe, and return only summaries whose parsed session.taskId exactly matches the requested taskId; malformed files and invalid dates are skipped. Targeted tools.test passed (146 tests).",
+      "startedAt": "2026-04-30T09:55:30.138Z",
+      "completedAt": "2026-04-30T09:56:26.116Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add regression tests for path traversal IDs, nonexistent/invalid IDs, and task-1 vs task-10 exact matching; run daemon test/build validation.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/knowledge/MemoryManager.ts"
+      ],
+      "note": "Added regressions for valid saves staying under memory/sessions, traversal-shaped worker/task IDs rejected without outside writes, syntactically valid nonexistent worker/task IDs rejected, MemoryManager direct traversal rejected, and exact task-1 vs task-10 getLastSession matching with malformed JSON skipped. Validation: npx vitest run src/tools/tools.test.ts (150 passed), npm test (24 files/406 tests passed), npm run build (tsc passed). Adversarial review considered path traversal, invalid input, nonexistent entities, malformed files, and write failure paths.",
+      "startedAt": "2026-04-30T09:56:43.050Z",
+      "completedAt": "2026-04-30T09:59:14.664Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "CRITICAL",
+  "order": 1,
+  "comments": [
+    {
+      "id": "comment-80c93233",
+      "author": "architect-2992",
+      "content": "Token-budget check: while fixing session summaries, keep saved summaries bounded/explicit; do not auto-save generic noise, and make invalid-ID errors compact (no echoed paths/payload dumps).",
+      "timestamp": "2026-04-28T08:03:57.673Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-04-28T07:40:51.130Z",
+  "updatedAt": "2026-04-30T12:50:28.201Z",
+  "planSubmittedAt": "2026-04-28T07:42:20.252Z",
+  "planningNotes": {
+    "approachesConsidered": "Preferred: validate workerId/taskId with validateEntityId and use an exact manifest/filename convention. Rejected: silently sanitizing IDs, because it can make summaries unreadable and hide malicious input.",
+    "codebaseInsights": "Entity JSON writes go through StateManager.writeEntity, which already calls validateEntityId and resolved-path checks. MemoryManager session summaries bypass that helper and therefore need equivalent ID/path validation.",
+    "risks": "Do not break existing session summary lookup for valid generated worker/task IDs. Include error handling for invalid IDs and filesystem write failures; tests should not depend on the wrapper's MOE_WORKER_ID env leak.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/saveSessionSummary.ts",
+      "packages/moe-daemon/src/knowledge/MemoryManager.ts",
+      "packages/moe-daemon/src/util/sanitize.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-04-28T07:42:20.254Z",
+  "contextFetchedBy": [
+    "worker-0ead",
+    "qa-5f78"
+  ],
+  "workStartedAt": "2026-04-30T09:51:27.591Z",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "completedAt": "2026-04-30T09:59:28.924Z",
+  "reviewStartedAt": "2026-04-30T09:59:28.924Z",
+  "reviewCompletedAt": "2026-04-30T12:50:28.201Z"
+}

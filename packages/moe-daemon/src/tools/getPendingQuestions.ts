@@ -1,5 +1,37 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import {
+  DEFAULT_COMMENT_CONTENT_CHARS,
+  DEFAULT_PENDING_QUESTION_LIMIT,
+  DEFAULT_PENDING_QUESTIONS_PER_TASK,
+  MAX_COMMENT_CONTENT_CHARS,
+  MAX_PENDING_QUESTION_LIMIT,
+  MAX_PENDING_QUESTIONS_PER_TASK,
+  normalizeIntegerOption,
+} from '../util/taskPayload.js';
+import { truncateForBudget } from '../util/memorySettings.js';
+
+function compactQuestion(
+  question: { commentId: string; content: string; timestamp: string },
+  maxContentChars: number
+): {
+  commentId: string;
+  content: string;
+  timestamp: string;
+  contentTruncated?: boolean;
+  contentOriginalLength?: number;
+} {
+  if (maxContentChars <= 0 || question.content.length <= maxContentChars) {
+    return question;
+  }
+  const content = truncateForBudget(question.content, maxContentChars);
+  return {
+    ...question,
+    content: content.text,
+    contentTruncated: content.truncated,
+    contentOriginalLength: question.content.length,
+  };
+}
 
 export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
   return {
@@ -8,12 +40,53 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        epicId: { type: 'string', description: 'Optional epic ID filter' }
+        epicId: { type: 'string', description: 'Optional epic ID filter' },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of task entries to return (default: 10, max: 50)',
+          default: DEFAULT_PENDING_QUESTION_LIMIT
+        },
+        maxQuestionsPerTask: {
+          type: 'number',
+          description: 'Maximum unanswered human comments per task (default: 3, max: 20)',
+          default: DEFAULT_PENDING_QUESTIONS_PER_TASK
+        },
+        maxContentChars: {
+          type: 'number',
+          description: 'Maximum question content length (default: 1000, max: 10000; 0 returns full content)',
+          default: DEFAULT_COMMENT_CONTENT_CHARS
+        }
       },
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { epicId?: string };
+      const params = (args || {}) as {
+        epicId?: string;
+        limit?: number;
+        maxQuestionsPerTask?: number;
+        maxContentChars?: number;
+      };
+      const limit = normalizeIntegerOption(
+        params.limit,
+        'limit',
+        DEFAULT_PENDING_QUESTION_LIMIT,
+        1,
+        MAX_PENDING_QUESTION_LIMIT
+      );
+      const maxQuestionsPerTask = normalizeIntegerOption(
+        params.maxQuestionsPerTask,
+        'maxQuestionsPerTask',
+        DEFAULT_PENDING_QUESTIONS_PER_TASK,
+        1,
+        MAX_PENDING_QUESTIONS_PER_TASK
+      );
+      const maxContentChars = normalizeIntegerOption(
+        params.maxContentChars,
+        'maxContentChars',
+        DEFAULT_COMMENT_CONTENT_CHARS,
+        0,
+        MAX_COMMENT_CONTENT_CHARS
+      );
 
       const results: Array<{
         taskId: string;
@@ -21,10 +94,21 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
         status: string;
         epicId: string;
         assignedWorkerId: string | null;
-        questions: Array<{ commentId: string; content: string; timestamp: string }>;
+        questions: Array<{
+          commentId: string;
+          content: string;
+          timestamp: string;
+          contentTruncated?: boolean;
+          contentOriginalLength?: number;
+        }>;
+        totalQuestions: number;
+        omittedQuestions: number;
       }> = [];
 
-      for (const task of state.tasks.values()) {
+      const tasks = Array.from(state.tasks.values())
+        .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+
+      for (const task of tasks) {
         if (!task.hasPendingQuestion) continue;
         if (params.epicId && task.epicId !== params.epicId) continue;
 
@@ -46,18 +130,42 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
           .map((c) => ({ commentId: c.id, content: c.content, timestamp: c.timestamp }));
 
         if (questions.length > 0) {
+          const visibleQuestions = questions
+            .slice(0, maxQuestionsPerTask)
+            .map((question) => compactQuestion(question, maxContentChars));
           results.push({
             taskId: task.id,
             title: task.title,
             status: task.status,
             epicId: task.epicId,
             assignedWorkerId: task.assignedWorkerId,
-            questions
+            questions: visibleQuestions,
+            totalQuestions: questions.length,
+            omittedQuestions: Math.max(0, questions.length - visibleQuestions.length)
           });
         }
       }
 
-      return { count: results.length, tasks: results };
+      const pagedResults = results.slice(0, limit);
+      const truncatedQuestions = pagedResults
+        .flatMap(task => task.questions)
+        .filter(question => question.contentTruncated).length;
+
+      return {
+        count: pagedResults.length,
+        totalMatches: results.length,
+        tasks: pagedResults,
+        pagination: {
+          limit,
+          returned: pagedResults.length,
+          total: results.length,
+          hasMore: pagedResults.length < results.length,
+        },
+        truncatedQuestions,
+        hint: truncatedQuestions > 0 || pagedResults.some(task => task.omittedQuestions > 0)
+          ? 'Pending-question payload is compact. Increase maxQuestionsPerTask or set maxContentChars: 0 when full text is needed.'
+          : undefined,
+      };
     }
   };
 }

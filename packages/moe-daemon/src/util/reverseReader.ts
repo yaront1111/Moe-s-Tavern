@@ -2,11 +2,9 @@ import fs from 'fs';
 
 const DEFAULT_CHUNK_SIZE = 8 * 1024;
 
-function normalizeLines(content: string, maxLines: number): string[] {
-  const lines = content
-    .split(/\r?\n/)
-    .filter((line) => line.length > 0);
-  return lines.slice(-maxLines);
+export interface ReadLastLinesResult {
+  lines: string[];
+  hasMoreOlderLines: boolean;
 }
 
 /**
@@ -14,25 +12,39 @@ function normalizeLines(content: string, maxLines: number): string[] {
  * Returns lines in chronological order (oldest -> newest within the returned window).
  */
 export function readLastLines(filePath: string, maxLines: number): string[] {
+  return readLastLinesWithMetadata(filePath, maxLines).lines;
+}
+
+/**
+ * Read the last N lines and report whether older lines were omitted.
+ * Returns lines in chronological order (oldest -> newest within the returned window).
+ */
+export function readLastLinesWithMetadata(filePath: string, maxLines: number): ReadLastLinesResult {
   if (maxLines <= 0) {
-    return [];
+    return { lines: [], hasMoreOlderLines: false };
   }
 
   if (!fs.existsSync(filePath)) {
-    return [];
+    return { lines: [], hasMoreOlderLines: false };
   }
 
   let fd: number | undefined;
   try {
     const stat = fs.statSync(filePath);
     if (stat.size <= 0) {
-      return [];
+      return { lines: [], hasMoreOlderLines: false };
     }
 
     // Small-file fast path (and avoids reverse-reader overhead for tiny logs).
     if (stat.size <= DEFAULT_CHUNK_SIZE) {
       const content = fs.readFileSync(filePath, 'utf-8');
-      return normalizeLines(content, maxLines);
+      const lines = content
+        .split(/\r?\n/)
+        .filter((line) => line.length > 0);
+      return {
+        lines: lines.slice(-maxLines),
+        hasMoreOlderLines: lines.length > maxLines,
+      };
     }
 
     fd = fs.openSync(filePath, 'r');
@@ -60,13 +72,18 @@ export function readLastLines(filePath: string, maxLines: number): string[] {
       }
     }
 
+    const hasUnreadOlderContent = position > 0 || (reverseLines.length >= maxLines && remainder.length > 0);
+
     if (reverseLines.length < maxLines && remainder.length > 0) {
       reverseLines.push(remainder);
     }
 
-    return reverseLines.reverse();
+    return {
+      lines: reverseLines.reverse(),
+      hasMoreOlderLines: hasUnreadOlderContent,
+    };
   } catch {
-    return [];
+    return { lines: [], hasMoreOlderLines: false };
   } finally {
     if (fd !== undefined) {
       try {

@@ -23,7 +23,8 @@ export type WorkerStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'CODING'
-  | 'BLOCKED';
+  | 'BLOCKED'
+  | 'GOVERNING';
 
 export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED';
 
@@ -47,6 +48,40 @@ export interface ProjectSettings {
   columnLimits?: Record<string, number>;
   chatEnabled?: boolean;              // default: true
   chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
+  /**
+   * Auto-commit + push on worker `complete_task`. When true (default), the
+   * agent wrapper runs `git add -A && git commit && git push` on the current
+   * branch after a worker moves a task to REVIEW (first pass OR retry after
+   * qa_reject). Commits use the user's configured git identity — no
+   * Claude/Codex attribution. Set false to disable.
+   */
+  autoCommit?: boolean;               // default: true
+  /**
+   * Token-budget controls for the project knowledge base. `summary` is the
+   * default: get_context returns memory IDs + short previews, while full memory
+   * content stays available through explicit moe.recall.
+   */
+  memory?: MemorySettings;
+}
+
+export type MemoryAutoInjectMode = 'off' | 'summary' | 'full';
+
+export interface MemoryAutoSaveSettings {
+  /** Generic task-completion summaries. Default false because they are noisy. */
+  completedTask?: boolean;
+  /** First-pass QA approvals. Default false because they rarely add reusable knowledge. */
+  firstPassApproval?: boolean;
+  /** QA rejections. Default true because they encode concrete failure patterns. */
+  qaRejection?: boolean;
+  /** QA approvals after reopens. Default true because they capture proven fixes. */
+  reopenedApproval?: boolean;
+}
+
+export interface MemorySettings {
+  autoInject?: MemoryAutoInjectMode;   // default: off
+  maxAutoResults?: number;             // default: 1
+  maxAutoChars?: number;               // default: 500 total chars
+  autoSave?: MemoryAutoSaveSettings;
 }
 
 export interface Project {
@@ -120,6 +155,40 @@ export interface RejectionDetails {
   issues?: QAIssue[];
 }
 
+/**
+ * Runtime-driven workflow hint attached to tool responses. Tells the agent
+ * which MCP tool to call next and why — so the agent follows a server-authored
+ * state machine instead of a prompt-authored workflow. Purely advisory; the
+ * enforcement layer in util/enforcement.ts is what actually blocks out-of-order
+ * calls. But a well-populated nextAction means the agent rarely hits enforcement
+ * in the first place.
+ */
+/**
+ * Skill the daemon recommends the agent load before invoking `NextAction.tool`.
+ *
+ * `name` matches a directory under `.moe/skills/<name>/SKILL.md`. `reason` is
+ * a short "why now" the agent can latch onto to resist rationalizing past the
+ * recommendation ("I'm blocking, not planning"). See
+ * `packages/moe-daemon/src/util/recommendSkill.ts` for the phase→skill table.
+ */
+export interface SkillRecommendation {
+  name: string;
+  reason: string;
+}
+
+export interface NextAction {
+  tool: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+  /**
+   * Optional skill (e.g. 'verification-before-completion') the agent should
+   * invoke via the host's Skill tool before performing the next action.
+   * Advisory — agents can ignore — but the agent-wrapper emits a JIT
+   * system-reminder naming this skill when it is set.
+   */
+  recommendedSkill?: SkillRecommendation;
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -149,6 +218,8 @@ export interface Task {
   reviewCompletedAt?: string;
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
+  contextFetchedBy?: string[];
+  stepsCompleted?: string[];
 }
 
 export interface Worker {
@@ -216,7 +287,9 @@ export const ACTIVITY_EVENT_TYPES = [
   'WORKER_ERROR',
   'WORKER_BLOCKED',
   'WORKER_REPLACED',
+  'WORKER_RELEASED',
   'WORKER_UNBLOCKED',
+  'WORKER_GOVERNING',
   'WORKER_TIMEOUT',
   'TASK_BLOCKED',
   'PROPOSAL_CREATED',
@@ -315,4 +388,68 @@ export interface DaemonInfo {
   pid: number;
   startedAt: string;
   projectPath: string;
+}
+
+// =============================================================================
+// Memory System
+// =============================================================================
+
+export type MemoryType = 'convention' | 'gotcha' | 'pattern' | 'decision' | 'procedure' | 'insight';
+
+export const MEMORY_TYPES: MemoryType[] = ['convention', 'gotcha', 'pattern', 'decision', 'procedure', 'insight'];
+
+export interface MemorySource {
+  files: string[];
+  taskId: string | null;
+  epicId: string | null;
+  workerId: string | null;
+}
+
+export interface MemoryEntry {
+  id: string;
+  type: MemoryType;
+  content: string;
+  tags: string[];
+  source: MemorySource;
+  confidence: number;
+  accessCount: number;
+  helpfulCount: number;
+  unhelpfulCount: number;
+  createdAt: string;
+  lastAccessedAt: string;
+  supersededBy: string | null;
+  contentHash: string;
+}
+
+export interface SessionSummary {
+  id: string;
+  workerId: string;
+  taskId: string;
+  role: string;
+  summary: string;
+  memoriesCreated: string[];
+  completedSteps?: string[];
+  createdAt: string;
+}
+
+export interface PlanningNotes {
+  approachesConsidered?: string;
+  codebaseInsights?: string;
+  risks?: string;
+  keyFiles?: string[];
+}
+
+export interface MemoryQuery {
+  query?: string;
+  types?: MemoryType[];
+  tags?: string[];
+  epicId?: string;
+  files?: string[];
+  limit?: number;
+  minConfidence?: number;
+}
+
+export interface MemorySearchResult {
+  entry: MemoryEntry;
+  score: number;
 }

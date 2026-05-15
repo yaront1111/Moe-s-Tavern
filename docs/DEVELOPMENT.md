@@ -148,6 +148,7 @@ The plugin:
 Notes:
 - For local development in this repo, open the repo root (the folder containing `packages/`) so the plugin can auto-start the local daemon.
 - If you install the plugin ZIP manually, extract it so the plugin folder contains `lib/` at the top level (e.g., `.../plugins/moe-jetbrains/lib`). If you end up with `.../plugins/moe-jetbrains/moe-jetbrains/lib`, PyCharm will not load the plugin.
+- Gradle wrapper maintenance: the committed wrapper targets Gradle 8.10.2. Keep `moe-jetbrains/gradlew` with LF endings and `moe-jetbrains/gradlew.bat` with CRLF endings; `.gitattributes` enforces this. If the wrapper is regenerated, use Gradle's `wrapper --gradle-version 8.10.2 --distribution-type bin` flow from a trusted Gradle install/distribution, do not hand-edit the binary jar, and validate with `.\gradlew.bat test` on Windows plus `bash -lc 'cd moe-jetbrains && ./gradlew --version'` when bash is available.
 
 ---
 
@@ -188,6 +189,28 @@ Key flags:
 - `-ListProjects` / `--list-projects`: Show registered projects
 - `-AutoClaim:$false` / `--no-auto-claim`: Don't auto-claim a task on start
 - `-Team <name>` / `--team <name>`: Auto-create/join a team for parallel agent work
+
+### Wrapper post-flight
+
+`moe-agent.sh` and `moe-agent.ps1` run a best-effort post-flight block after each normal agent CLI exit. The block is intentionally short: it calls `moe.save_session_summary` with a one-line session-ended summary and then `moe.chat_send` to announce the same outcome in `#general`. Post-flight RPC failures are logged as warnings and never block the next wrapper iteration. Ctrl+C / forced interrupt paths may skip post-flight.
+
+Loop flags are now explicit on both platforms:
+- Bash: `--loop` explicitly opts into polling loop mode; `--no-loop` forces one run and exit.
+- PowerShell: `-Loop` explicitly opts into polling loop mode; `-NoLoop` forces one run and exit.
+- Default behavior is preserved for back-compat: auto-claiming agents poll for new tasks when the poll interval is positive; interactive/no-loop modes stay single-shot. Passing both loop and no-loop flags is a usage error (exit 2).
+
+Smoke tests:
+```bash
+# Mac / Linux / WSL bash path
+bash scripts/tests/postflight.sh
+```
+
+```powershell
+# Windows PowerShell path
+pwsh -NoProfile -File scripts\tests\postflight.ps1
+```
+
+Both smoke tests verify the same contract: the wrapper creates a session summary under `.moe/memory/sessions/` and appends the post-flight message to the `#general` messages jsonl. They are self-contained and skip with exit 0 when an integration prerequisite such as a runnable Node.js is unavailable.
 
 ### Running a Team (Parallel Agents)
 

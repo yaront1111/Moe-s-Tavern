@@ -54,6 +54,9 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         content: params.content,
         replyTo: params.replyTo
       });
+      if (sender !== 'human' && sender !== 'system') {
+        await state.touchWorker(sender);
+      }
 
       return {
         success: true,

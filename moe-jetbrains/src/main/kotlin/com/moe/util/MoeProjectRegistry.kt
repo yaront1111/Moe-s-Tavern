@@ -87,6 +87,12 @@ object MoeProjectRegistry {
         return false
     }
 
+    internal fun daemonRefCountForTest(pid: Int): Int = daemonRefCount[pid]?.get() ?: 0
+
+    internal fun clearDaemonRefCountsForTest() {
+        daemonRefCount.clear()
+    }
+
     /**
      * Reads ~/.moe/config.json and returns the installPath if it exists and
      * the canary file (packages/moe-daemon/dist/index.js) is present.
@@ -109,6 +115,51 @@ object MoeProjectRegistry {
         } catch (ex: Exception) {
             log.debug("Failed to read global config: ${ex.message}")
             null
+        }
+    }
+}
+
+internal class MoeDaemonRegistrationTracker(
+    private val register: (Int) -> Unit,
+    private val unregister: (Int) -> Boolean,
+    private val logError: (String, Exception) -> Unit = { _, _ -> }
+) {
+    @Volatile
+    var currentPid: Int? = null
+        private set
+
+    @Synchronized
+    fun register(pid: Int) {
+        val previousPid = currentPid
+        if (previousPid == pid) return
+
+        if (previousPid != null) {
+            unregisterSafely(previousPid)
+            currentPid = null
+        }
+
+        try {
+            register.invoke(pid)
+            currentPid = pid
+        } catch (ex: Exception) {
+            logError("Failed to register daemon PID $pid", ex)
+            currentPid = null
+        }
+    }
+
+    @Synchronized
+    fun unregisterCurrent(): Boolean {
+        val pid = currentPid ?: return true
+        currentPid = null
+        return unregisterSafely(pid)
+    }
+
+    private fun unregisterSafely(pid: Int): Boolean {
+        return try {
+            unregister.invoke(pid)
+        } catch (ex: Exception) {
+            logError("Failed to unregister daemon PID $pid", ex)
+            true
         }
     }
 }
