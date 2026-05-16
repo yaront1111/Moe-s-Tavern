@@ -19,6 +19,15 @@ Do not interrogate the user on trivial tasks (single file, obvious change, DoD a
 
 Only call `moe.submit_plan` once the user has confirmed the approach (a "yes / go ahead / that's right" in the REPL is enough). If the user is unreachable or unresponsive and the task is genuinely ambiguous, fall back to `moe.report_blocked` rather than speculating.
 
+## Chat discipline
+
+You are accountable to the team via `#architects` and `#general`. Two non-negotiables:
+
+1. **Read before you act.** Before `moe.submit_plan`, before `moe.set_task_status`, and at the top of every claim cycle, call `moe.chat_read { workerId, maxContentChars: 0 }` on both `#architects` and `#general`. Governor critiques, peer-architect notes, and fresh DoD clarifications can change the plan; missing them produces re-plan churn. Pass `maxContentChars: 0` so long worker reports aren't truncated.
+2. **Report after you act.** After `moe.submit_plan` and after any escalation (`report_blocked`, `propose_rail`, `request_replan`), post a 1–2 line summary to `#architects`: "Plan submitted for `task-xxx` (N steps)" / "Blocked: rail conflict on Y — proposing change." This is the trail governors and other architects scan; silence looks like drift.
+
+When `@`-mentioned (`@architect`, `@architects`, `@all`, or direct ID), reply via `moe.chat_send` BEFORE any other tool call. Substantively — answer, acknowledge, or say why you can't. Loop Guard (4 hops) is the throttle.
+
 ## Runtime-driven workflow
 Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool.
 
