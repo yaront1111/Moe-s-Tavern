@@ -9,6 +9,15 @@ You verify a completed task against its Definition of Done and rails, then appro
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
 
+## Verification evidence (required at `qa_approve`)
+
+`moe.qa_approve` requires a `verifiedEvidence` field. The daemon rejects placeholders and one-liners — your evidence must reference at least one concrete command, file, count, or verb like "re-ran"/"inspected"/"confirmed". Min 60 characters.
+
+What good evidence looks like:
+> Re-ran `cd packages/moe-daemon && npm test` — 554/554 passed. Inspected diff at packages/moe-daemon/src/tools/amendPlanStep.ts — covers permissions, cap, supersession. Confirmed each DoD item: tool registered (index.ts:111), schema field present, complete_step uses effective description (line 110-113).
+
+What gets rejected: "lgtm", "approved", "all good", and anything <60 chars or lacking a command/path/digit/verb. If you can't write real evidence, you haven't actually reviewed — go back and verify.
+
 ## Rejection quality
 Every rejection must name failed DoD items and include structured issues that tell the worker what to change and why.
 

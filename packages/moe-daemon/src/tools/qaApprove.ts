@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { resolveMemorySettings } from '../util/memorySettings.js';
+import { validateVerificationEvidence } from '../util/verificationEvidence.js';
 import { logger } from '../util/logger.js';
 
 export function qaApproveTool(_state: StateManager): ToolDefinition {
@@ -13,14 +14,18 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The task ID to approve' },
-        summary: { type: 'string', description: 'Summary of QA review (what was verified)' },
+        summary: { type: 'string', description: 'Deprecated alias for verifiedEvidence. Prefer the explicit field.' },
+        verifiedEvidence: {
+          type: 'string',
+          description: 'Required. What you actually verified — commands re-run, files inspected, DoD items confirmed. Min 60 chars; placeholders rejected.'
+        },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { taskId?: string; summary?: string; workerId?: string };
+      const params = (args || {}) as { taskId?: string; summary?: string; verifiedEvidence?: string; workerId?: string };
 
       if (!params.taskId) {
         throw missingRequired('taskId');
@@ -38,6 +43,16 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       assertWorkerOwns(task, params.workerId);
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
+      // QA must prove they actually reviewed — not just "lgtm". Daemon refuses
+      // placeholders and forces a description of what was re-run / inspected.
+      // Stops the "QA approved task that doesn't work" pattern that drives the
+      // most user-babysitting cycles.
+      const verifiedEvidence = validateVerificationEvidence(
+        params.verifiedEvidence,
+        'qa_approve',
+        params.summary,
+      );
+
       // Capture metrics: doneAt + wallClockMs (first claim → DONE). If no
       // firstClaimAt was recorded (legacy task), wallClockMs stays undefined.
       const nowIso = new Date().toISOString();
@@ -53,7 +68,16 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
 
       const updated = await state.updateTask(
         params.taskId,
-        { status: 'DONE', reviewCompletedAt: nowIso, metrics: nextMetrics },
+        {
+          status: 'DONE',
+          reviewCompletedAt: nowIso,
+          metrics: nextMetrics,
+          qaApprovalEvidence: {
+            evidence: verifiedEvidence,
+            providedBy: params.workerId || 'unknown',
+            providedAt: nowIso,
+          },
+        },
         'QA_APPROVED'
       );
 

@@ -9,6 +9,15 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - Do not claim success without fresh verification output.
 
+## Verification evidence (required at `complete_task`)
+
+`moe.complete_task` requires a `verificationEvidence` field. The daemon rejects placeholders and one-liners — your evidence must reference at least one concrete command, file, count, or verb like "ran"/"tested"/"verified". Min 80 characters.
+
+What good evidence looks like:
+> Ran `cd packages/moe-daemon && npm test` — 554/554 passed in 10.5s. Ran `npm run build` — clean. Manually exercised the new tool: amend_plan_step succeeds when caller is governor, rejects worker role with NOT_ALLOWED, hits cap at 10 amendments and refuses the 11th.
+
+What gets rejected: "all good", "tests pass", "lgtm", "verified", and anything <80 chars or lacking a command/path/digit/verb. Don't fight this gate — fix the work so you can write real evidence.
+
 ## Chat discipline
 
 The team coordinates in chat. Two non-negotiables:

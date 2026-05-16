@@ -1033,7 +1033,10 @@ describe('MCP Tools', () => {
 
     it('moves task to REVIEW', async () => {
       const tool = completeTaskTool(state);
-      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+      const result = await tool.handler({
+        taskId: 'task-1',
+        verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.',
+      }, state) as {
         success: boolean;
         status: string;
         stats: { stepsCompleted: number; filesModified: string[] };
@@ -1047,7 +1050,11 @@ describe('MCP Tools', () => {
 
     it('sets prLink if provided', async () => {
       const tool = completeTaskTool(state);
-      await tool.handler({ taskId: 'task-1', prLink: 'https://github.com/pr/123' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        prLink: 'https://github.com/pr/123',
+        verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.',
+      }, state);
       const task = state.getTask('task-1');
       expect(task?.prLink).toBe('https://github.com/pr/123');
     });
@@ -1073,7 +1080,10 @@ describe('MCP Tools', () => {
       });
 
       const tool = completeTaskTool(state);
-      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+      const result = await tool.handler({
+        taskId: 'task-1',
+        verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.',
+      }, state) as {
         stats: { filesModified: string[] };
       };
 
@@ -1091,7 +1101,11 @@ describe('MCP Tools', () => {
       await state.updateTask('task-1', { assignedWorkerId: 'worker-1' });
       const tool = completeTaskTool(state);
 
-      await tool.handler({ taskId: 'task-1', workerId: 'worker-1', summary: 'Routine task completed' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-1',
+        verificationEvidence: 'Routine task completed. Ran the daemon test suite — 554/554 passed. Verified each DoD item against the diff.',
+      }, state);
 
       expect(state.getMemoryManager().getEntryCount()).toBe(0);
     });
@@ -1108,7 +1122,11 @@ describe('MCP Tools', () => {
       };
       const tool = completeTaskTool(state);
 
-      await tool.handler({ taskId: 'task-1', workerId: 'worker-1', summary: 'Reusable completion note' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-1',
+        verificationEvidence: 'Reusable completion note. Ran the daemon test suite — 554/554 passed. Verified each DoD item against the diff.',
+      }, state);
 
       expect(state.getMemoryManager().getEntryCount()).toBe(1);
     });
@@ -1125,7 +1143,7 @@ describe('MCP Tools', () => {
       await expect(tool.handler({
         taskId: 'task-1',
         workerId: 'worker-1',
-        summary: 'Memory write will fail',
+        verificationEvidence: 'Memory write will fail but the task itself is verified. Ran the daemon test suite — 554/554 passed. Verified DoD against the diff.',
       }, state)).resolves.toMatchObject({ success: true, status: 'REVIEW' });
       expect(state.getTask('task-1')?.status).toBe('REVIEW');
     });
@@ -2025,7 +2043,7 @@ describe('MCP Tools', () => {
       const tool = qaApproveTool(state);
       const result = await tool.handler({
         taskId: 'task-1',
-        summary: 'All DoD items verified',
+        verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.',
       }, state) as { success: boolean; status: string };
 
       expect(result.success).toBe(true);
@@ -2059,7 +2077,11 @@ describe('MCP Tools', () => {
       await state.updateTask('task-1', { assignedWorkerId: 'qa-1' });
       const tool = qaApproveTool(state);
 
-      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'Looks good' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        workerId: 'qa-1',
+        verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.',
+      }, state);
 
       expect(state.getMemoryManager().getEntryCount()).toBe(0);
     });
@@ -2071,7 +2093,11 @@ describe('MCP Tools', () => {
       };
       const tool = qaApproveTool(state);
 
-      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'First pass approval worth saving' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        workerId: 'qa-1',
+        verifiedEvidence: 'First pass approval worth saving. Re-ran the test suite — 554/554 passed. Confirmed each DoD item satisfied.',
+      }, state);
 
       expect(state.getMemoryManager().getEntryCount()).toBe(1);
     });
@@ -2086,7 +2112,11 @@ describe('MCP Tools', () => {
       });
       const tool = qaApproveTool(state);
 
-      await tool.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'Rejected issue verified fixed' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        workerId: 'qa-1',
+        verifiedEvidence: 'Rejected issue verified fixed. Re-ran the test suite — 554/554 passed. Confirmed the previously-failing DoD item now satisfied.',
+      }, state);
 
       expect(state.getMemoryManager().getEntryCount()).toBe(1);
     });
@@ -2100,7 +2130,7 @@ describe('MCP Tools', () => {
       await expect(tool.handler({
         taskId: 'task-1',
         workerId: 'qa-1',
-        summary: 'Memory write will fail',
+        verifiedEvidence: 'Memory write will fail but the approval itself is verified. Re-ran the test suite — 554/554 passed. Confirmed DoD against the diff.',
       }, state)).resolves.toMatchObject({ success: true, status: 'DONE' });
       expect(state.getTask('task-1')?.status).toBe('DONE');
     });
@@ -2927,7 +2957,10 @@ describe('MCP Tools', () => {
       await state.load();
 
       const tool = completeTaskTool(state);
-      await tool.handler({ taskId: 'task-1' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.',
+      }, state);
 
       const task = state.getTask('task-1');
       expect(task?.completedAt).toBeDefined();
@@ -2940,7 +2973,10 @@ describe('MCP Tools', () => {
       await state.load();
 
       const tool = qaApproveTool(state);
-      await tool.handler({ taskId: 'task-1' }, state);
+      await tool.handler({
+        taskId: 'task-1',
+        verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.',
+      }, state);
 
       const task = state.getTask('task-1');
       expect(task?.reviewCompletedAt).toBeDefined();

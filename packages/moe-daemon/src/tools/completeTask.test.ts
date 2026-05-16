@@ -125,7 +125,11 @@ describe('moe.complete_task ownership + ordering enforcement', () => {
     writeTask();
     await state.load();
     const tool = completeTaskTool(state);
-    const result = await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state) as { status: string };
+    const result = await tool.handler({
+      taskId: 'task-1',
+      workerId: 'worker-a',
+      verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.',
+    }, state) as { status: string };
     expect(result.status).toBe('REVIEW');
     expect(state.getTask('task-1')?.status).toBe('REVIEW');
   });

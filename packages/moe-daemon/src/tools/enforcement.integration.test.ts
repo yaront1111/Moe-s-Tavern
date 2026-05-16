@@ -137,7 +137,7 @@ describe('Phase 3 enforcement integration flow', () => {
 
     // complete_task with a pending step is rejected.
     try {
-      await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1' }, state);
+      await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1', verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.' }, state);
       throw new Error('expected throw');
     } catch (err) {
       expectNotAllowed(err);
@@ -149,22 +149,22 @@ describe('Phase 3 enforcement integration flow', () => {
     await completeStep.handler({ taskId: 'task-1', stepId: 'step-2', workerId: 'worker-1' }, state);
 
     try {
-      await completeTask.handler({ taskId: 'task-1', workerId: 'worker-2' }, state);
+      await completeTask.handler({ taskId: 'task-1', workerId: 'worker-2', verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.' }, state);
       throw new Error('expected throw');
     } catch (err) { expectNotAllowed(err); }
 
     // Owner completes the task.
-    await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1' }, state);
+    await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1', verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.' }, state);
     expect(state.getTask('task-1')?.status).toBe('REVIEW');
 
     // Assign a QA worker and validate QA ownership.
     await state.updateTask('task-1', { assignedWorkerId: 'qa-1' });
     try {
-      await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-2' }, state);
+      await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-2', verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.' }, state);
       throw new Error('expected throw');
     } catch (err) { expectNotAllowed(err); }
 
-    await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
+    await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1', verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.' }, state);
     expect(state.getTask('task-1')?.status).toBe('DONE');
     expect(state.getTask('task-1')?.stepsCompleted).toEqual(['step-1', 'step-2']);
   });

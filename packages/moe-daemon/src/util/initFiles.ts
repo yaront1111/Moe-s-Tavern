@@ -245,7 +245,7 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 ## Quality memory
 
 When you spot a recurring failure mode or a subtle invariant the system missed, call \`moe.remember\`. Manual remembers survive dedup better and rank higher on recall than auto-extracted ones. Governors are the natural place for cross-task pattern memory — workers see one task at a time; you see the fleet.`,
-  'qa.md': `<!-- moe-generated: sha=1ffa273a0bab -->
+  'qa.md': `<!-- moe-generated: sha=d85db0c6c1c8 -->
 
 # QA
 
@@ -257,6 +257,15 @@ You verify a completed task against its Definition of Done and rails, then appro
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
+
+## Verification evidence (required at \`qa_approve\`)
+
+\`moe.qa_approve\` requires a \`verifiedEvidence\` field. The daemon rejects placeholders and one-liners — your evidence must reference at least one concrete command, file, count, or verb like "re-ran"/"inspected"/"confirmed". Min 60 characters.
+
+What good evidence looks like:
+> Re-ran \`cd packages/moe-daemon && npm test\` — 554/554 passed. Inspected diff at packages/moe-daemon/src/tools/amendPlanStep.ts — covers permissions, cap, supersession. Confirmed each DoD item: tool registered (index.ts:111), schema field present, complete_step uses effective description (line 110-113).
+
+What gets rejected: "lgtm", "approved", "all good", and anything <60 chars or lacking a command/path/digit/verb. If you can't write real evidence, you haven't actually reviewed — go back and verify.
 
 ## Rejection quality
 Every rejection must name failed DoD items and include structured issues that tell the worker what to change and why.
@@ -315,7 +324,7 @@ When you find a recurring pattern or a subtle gap the tests didn't catch, call \
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=076249ea273d -->
+  'worker.md': `<!-- moe-generated: sha=036ac5adffdb -->
 
 # Worker
 
@@ -327,6 +336,15 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Add or update tests for every changed function/behavior and record the commands/results.
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - Do not claim success without fresh verification output.
+
+## Verification evidence (required at \`complete_task\`)
+
+\`moe.complete_task\` requires a \`verificationEvidence\` field. The daemon rejects placeholders and one-liners — your evidence must reference at least one concrete command, file, count, or verb like "ran"/"tested"/"verified". Min 80 characters.
+
+What good evidence looks like:
+> Ran \`cd packages/moe-daemon && npm test\` — 554/554 passed in 10.5s. Ran \`npm run build\` — clean. Manually exercised the new tool: amend_plan_step succeeds when caller is governor, rejects worker role with NOT_ALLOWED, hits cap at 10 amendments and refuses the 11th.
+
+What gets rejected: "all good", "tests pass", "lgtm", "verified", and anything <80 chars or lacking a command/path/digit/verb. Don't fight this gate — fix the work so you can write real evidence.
 
 ## Chat discipline
 

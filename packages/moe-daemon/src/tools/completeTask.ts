@@ -4,6 +4,7 @@ import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.j
 import { assertWorkerOwns, assertAllStepsCompleted } from '../util/enforcement.js';
 import { resolveMemorySettings } from '../util/memorySettings.js';
 import { matchesAppendOnlyPattern } from '../util/affectedFiles.js';
+import { validateVerificationEvidence } from '../util/verificationEvidence.js';
 import { logger } from '../util/logger.js';
 
 export function completeTaskTool(_state: StateManager): ToolDefinition {
@@ -15,7 +16,11 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       properties: {
         taskId: { type: 'string' },
         prLink: { type: 'string' },
-        summary: { type: 'string' },
+        summary: { type: 'string', description: 'Deprecated alias for verificationEvidence. Prefer the explicit field.' },
+        verificationEvidence: {
+          type: 'string',
+          description: 'Required. Concrete proof of verification: command(s) you ran and what they returned, plus what you manually inspected. Min 80 chars; placeholders rejected.'
+        },
         workerId: { type: 'string' },
         currentBranch: {
           type: 'string',
@@ -26,7 +31,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as { taskId: string; prLink?: string; summary?: string; workerId?: string; currentBranch?: string };
+      const params = args as { taskId: string; prLink?: string; summary?: string; verificationEvidence?: string; workerId?: string; currentBranch?: string };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
@@ -35,6 +40,16 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       }
       assertWorkerOwns(task, params.workerId);
       assertAllStepsCompleted(task);
+
+      // Force the worker to prove verification before flipping to REVIEW.
+      // No placeholders, no one-liners — daemon refuses anything that doesn't
+      // reference a command, file, count, or verb. This is the single biggest
+      // lever against "agent says done; QA discovers it isn't."
+      const verificationEvidence = validateVerificationEvidence(
+        params.verificationEvidence,
+        'complete_task',
+        params.summary, // accept legacy `summary` as the evidence carrier
+      );
 
       // Branch policy gate. When the project sets a consolidation branch
       // pattern, the worker must declare currentBranch and it must match.
@@ -69,7 +84,17 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       const now = new Date().toISOString();
       const updated = await state.updateTask(
         task.id,
-        { status: 'REVIEW', prLink: params.prLink || task.prLink, completedAt: now, reviewStartedAt: now },
+        {
+          status: 'REVIEW',
+          prLink: params.prLink || task.prLink,
+          completedAt: now,
+          reviewStartedAt: now,
+          completionEvidence: {
+            evidence: verificationEvidence,
+            providedBy: task.assignedWorkerId || params.workerId || 'unknown',
+            providedAt: now,
+          },
+        },
         'TASK_COMPLETED'
       );
 

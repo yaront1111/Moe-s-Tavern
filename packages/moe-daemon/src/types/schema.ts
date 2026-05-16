@@ -443,6 +443,30 @@ export interface Task {
    * the global reopen cap hasn't been hit.
    */
   failedDodItems?: FailedDodItem[];
+  /**
+   * Worker's verification evidence captured at complete_task. Stores the
+   * literal text the worker submitted, who submitted it, and when. The
+   * daemon enforces shape (min length, no placeholders) at submission;
+   * QA reads this when deciding to approve.
+   */
+  completionEvidence?: EvidenceRecord;
+  /**
+   * QA's verification evidence captured at qa_approve. Same shape as
+   * completionEvidence; provides the audit trail for "what did QA actually
+   * verify before approving this task?"
+   */
+  qaApprovalEvidence?: EvidenceRecord;
+}
+
+/**
+ * Reusable shape for stored evidence (verification at complete_task or QA
+ * approval). The literal text is preserved for audit; providedBy + providedAt
+ * give the chain of custody.
+ */
+export interface EvidenceRecord {
+  evidence: string;
+  providedBy: string;
+  providedAt: string;
 }
 
 export interface Worker {

@@ -291,12 +291,12 @@ describe('governance control-plane features', () => {
         // Advance time, complete_task → REVIEW, qa_approve → DONE
         vi.setSystemTime(new Date('2026-05-15T01:00:00.000Z'));
         const completeTask = completeTaskTool(state);
-        await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a' }, state);
+        await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a', verificationEvidence: 'Ran the daemon test suite — 554/554 passed. Verified the diff against the DoD — all items satisfied. Inspected modified files for regressions.' }, state);
 
         // QA claim and approve
         await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-m' }, state);
         const qaApprove = qaApproveTool(state);
-        await qaApprove.handler({ taskId: 'task-m', workerId: 'qa-1' }, state);
+        await qaApprove.handler({ taskId: 'task-m', workerId: 'qa-1', verifiedEvidence: 'Re-ran the test suite — 554/554 passed. Inspected the diff and confirmed each DoD item satisfied.' }, state);
 
         const finalMetrics = state.getTask('task-m')!.metrics!;
         expect(finalMetrics.doneAt).toBe('2026-05-15T01:00:00.000Z');

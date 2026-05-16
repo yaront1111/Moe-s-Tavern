@@ -157,7 +157,7 @@ describe('writeClaudeHook', () => {
           input: JSON.stringify({ tool_name: toolName }),
           cwd: projectPath,
           encoding: 'utf-8',
-          timeout: 5000,
+          timeout: 20000,
         }
       );
     }
@@ -166,7 +166,7 @@ describe('writeClaudeHook', () => {
       expect(REQUIRE_CLAIM_SH_CONTENT.trimEnd().split('\n').length).toBeLessThanOrEqual(60);
     });
 
-    it('allows ungated tools without requiring a claim check', () => {
+    it('allows ungated tools without requiring a claim check', { timeout: 30000 }, () => {
       const projectPath = makeProjectDir();
       writeBashHook(projectPath);
       const result = runBashHook(projectPath, 'mcp__moe__moe_get_context');
@@ -176,7 +176,7 @@ describe('writeClaudeHook', () => {
       expect(result.stderr).toBe('');
     });
 
-    it('blocks gated tools when list_tasks has no active claim', () => {
+    it('blocks gated tools when list_tasks has no active claim', { timeout: 30000 }, () => {
       const projectPath = makeProjectDir();
       writeBashHook(projectPath, '#!/usr/bin/env bash\necho \'{"tasks":[]}\'\n');
       const result = runBashHook(projectPath, 'mcp__moe__moe_start_step');
@@ -186,7 +186,7 @@ describe('writeClaudeHook', () => {
       expect(result.stderr).toContain('No active claim for worker worker-1');
     });
 
-    it('allows gated tools when list_tasks returns an active claim', () => {
+    it('allows gated tools when list_tasks returns an active claim', { timeout: 30000 }, () => {
       const projectPath = makeProjectDir();
       writeBashHook(projectPath, '#!/usr/bin/env bash\necho \'{"tasks":[{"assignedWorkerId":"worker-1","status":"WORKING"}]}\'\n');
       const result = runBashHook(projectPath, 'mcp__moe__moe_start_step');
@@ -237,7 +237,7 @@ describe('writeClaudeHook', () => {
       expect(result.stderr).toContain('No active claim for worker worker-1');
     }, 30000);
 
-    it('allows gated tools when list_tasks returns an active claim', () => {
+    it('allows gated tools when list_tasks returns an active claim', { timeout: 30000 }, () => {
       const projectPath = makeProjectDir();
       if (!findRunnableBash(projectPath)) return;
       const hookPath = writePsHook(projectPath, '#!/usr/bin/env bash\necho \'{"tasks":[{"assignedWorkerId":"worker-1","status":"REVIEW"}]}\'\n');

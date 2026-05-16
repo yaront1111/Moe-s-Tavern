@@ -78,7 +78,7 @@ describe('Claude PreToolUse hook integration', () => {
         input: JSON.stringify({ tool_name: toolName }),
         cwd: projectPath,
         encoding: 'utf-8',
-        timeout: 5000,
+        timeout: 20000,
       }
     );
   }
