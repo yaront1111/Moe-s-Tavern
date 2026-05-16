@@ -12,7 +12,29 @@
 // complete_step) so the check runs naturally whenever workers touch a task.
 
 import type { StateManager } from '../state/StateManager.js';
-import type { Task } from '../types/schema.js';
+import type { ProjectSettings, Task } from '../types/schema.js';
+
+/**
+ * Default per-step wall-clock pace (15 min/step). When a plan is submitted
+ * without an explicit budget, the daemon seeds `budget.wallClockMs` to
+ * `steps.length * pacePerStepMs` so the warn/escalate path uses a calibrated
+ * cap instead of an arbitrary default.
+ */
+export const DEFAULT_PACE_PER_STEP_MS = 15 * 60 * 1000;
+
+/**
+ * Compute a default wall-clock budget for a plan with `stepCount` steps.
+ * Honors `ProjectSettings.pacePerStepMs` override; falls back to
+ * DEFAULT_PACE_PER_STEP_MS otherwise. Returns at least one pace unit so
+ * single-step plans don't get a zero budget.
+ */
+export function defaultBudgetForSteps(stepCount: number, settings?: ProjectSettings): number {
+  const pace = (settings?.pacePerStepMs && settings.pacePerStepMs > 0)
+    ? settings.pacePerStepMs
+    : DEFAULT_PACE_PER_STEP_MS;
+  const steps = Math.max(1, Math.floor(stepCount));
+  return steps * pace;
+}
 
 /**
  * Inspect a task's budget vs elapsed time. If thresholds are newly crossed,

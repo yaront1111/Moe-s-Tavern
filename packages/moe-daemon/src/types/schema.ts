@@ -62,6 +62,31 @@ export interface ProjectSettings {
    * content stays available through explicit moe.recall.
    */
   memory?: MemorySettings;
+  /**
+   * Files for which append-only writes are expected (e.g. CHANGELOG.md).
+   * computeFileCollisions ignores overlaps on these so the team isn't drowned
+   * in noise. Glob suffixes (`*`) supported. Defaults to ["CHANGELOG.md"] when
+   * unset; pass [] to disable.
+   */
+  appendOnlyFiles?: string[];
+  /**
+   * Default per-step wall-clock estimate (ms) used to seed task budgets when a
+   * plan is submitted without an explicit budget. Default: 15 * 60_000 (15 min).
+   */
+  pacePerStepMs?: number;
+  /**
+   * When true (default), three or more empty-progress refusals on the same
+   * task within 24h flips the task to BACKLOG so the scheduler stops thrashing
+   * on a poisoned task. Architect must explicitly re-prioritize.
+   */
+  refusalCascadeAutoBacklog?: boolean;
+  /**
+   * Consolidation branch policy for `moe.complete_task`. Either a literal
+   * branch name (e.g. `wip/2026-05-15-orphan-rescue`) or a glob with `*`
+   * (e.g. `wip/*`). When set, complete_task validates the supplied
+   * currentBranch matches and rejects with BRANCH-POLICY-FAIL on mismatch.
+   */
+  consolidationBranch?: string;
 }
 
 export type MemoryAutoInjectMode = 'off' | 'summary' | 'full';
@@ -135,10 +160,47 @@ export interface ImplementationStep {
   description: string;
   status: StepStatus;
   affectedFiles: string[];
+  /**
+   * Files this step intends to CREATE. Declared at plan time so the
+   * submit_plan path validator can distinguish "step references nonexistent
+   * file (defect)" from "step plans to create a new file (intentional)".
+   */
+  newFiles?: string[];
   startedAt?: string;
   completedAt?: string;
   note?: string;
   modifiedFiles?: string[];
+  /**
+   * Newest-first list of amendments to this step. Architects/governors file
+   * amendments via moe.amend_plan_step when the original step description
+   * needs to change after plan approval. Capped at MAX_AMENDMENTS_PER_STEP.
+   */
+  amendments?: StepAmendment[];
+  /**
+   * Pointer to the currently-active amendment in `amendments`. When set,
+   * downstream consumers (complete_step, getContext) use the amended
+   * description instead of the original `description`. Unset means the
+   * original description is active.
+   */
+  activeAmendmentId?: string;
+}
+
+export const MAX_AMENDMENTS_PER_STEP = 10;
+
+/**
+ * Structured amendment record for an implementation step. Filed via
+ * `moe.amend_plan_step`. Adds an effective-description trail without rewriting
+ * history — the original `step.description` is preserved, the amendment trail
+ * shows the why/who, and `activeAmendmentId` controls which text downstream
+ * tools (complete_step, getContext) echo.
+ */
+export interface StepAmendment {
+  amendmentId: string;
+  authorId: string;           // workerId of architect/governor who filed it
+  authoredAt: string;         // ISO
+  description: string;        // replacement step description
+  rationale?: string;         // optional why-amended note
+  supersededAmendmentId?: string;
 }
 
 export type QAIssueType = 'test_failure' | 'lint' | 'security' | 'missing_feature' | 'regression' | 'other';
@@ -200,6 +262,19 @@ export interface HandoffNote {
   releasedBy?: string;
   releasedAt: string;
   reason?: string;
+  /**
+   * Snapshot of the disk state when the worker released. Lets `claim_next_task`
+   * detect whether the prior refusal's stated reason ("280 uncommitted files
+   * from prior worker") still applies to current reality. signature is a short
+   * hash of `git status --short` output; dirtyFileCount is the line count.
+   */
+  diskState?: HandoffDiskState;
+}
+
+export interface HandoffDiskState {
+  dirtyFileCount?: number;
+  signature?: string;          // short hash of `git status --short` output
+  capturedAt?: string;         // ISO; redundant with releasedAt but lets clients verify
 }
 
 /**
@@ -450,6 +525,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'TEAM_MEMBER_REMOVED',
   'TASK_ARCHIVED',
   'TASK_COMMENT_ADDED',
+  'STEP_AMENDED',
   'PROPOSAL_PURGED',
   'MESSAGE_CREATED',
   'CHANNEL_CREATED',

@@ -105,7 +105,7 @@ describe('governance control-plane features', () => {
       // Backslash + leading ./ get normalized
       const ok = await tool.handler({
         taskId: 'task-norm',
-        steps: [{ description: 'Edit A', affectedFiles: ['.\\src\\foo.ts', 'src/foo.ts'] }],
+        steps: [{ description: 'Edit A', affectedFiles: ['.\\src\\foo.ts', 'src/foo.ts'], newFiles: ['src/foo.ts'] }],
       }, state) as { taskId: string };
       const stored = state.getTask(ok.taskId)!;
       expect(stored.implementationPlan[0].affectedFiles).toEqual(['src/foo.ts']);
@@ -264,8 +264,8 @@ describe('governance control-plane features', () => {
         await submit.handler({
           taskId: 'task-m',
           steps: [
-            { description: 'one', affectedFiles: ['a.ts'] },
-            { description: 'two', affectedFiles: ['b.ts'] },
+            { description: 'one', affectedFiles: ['a.ts'], newFiles: ['a.ts'] },
+            { description: 'two', affectedFiles: ['b.ts'], newFiles: ['b.ts'] },
           ],
         }, state);
         expect(state.getTask('task-m')!.metrics?.plannedStepCount).toBe(2);

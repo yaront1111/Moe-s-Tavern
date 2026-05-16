@@ -3,8 +3,9 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
-import { computeFileCollisions } from '../util/affectedFiles.js';
+import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
+import { captureDiskState, compareDiskState } from '../util/gitState.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -254,8 +255,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
 
       // Compute file-collision warnings against every OTHER WORKING task.
       // Advisory only — never blocks the claim. We post a heads-up to
-      // #workers if there's any overlap so peers can sync diffs.
-      const fileCollision = computeFileCollisions(task, state.tasks.values());
+      // #workers if there's any overlap so peers can sync diffs. Honors
+      // ProjectSettings.appendOnlyFiles so CHANGELOG.md doesn't drown the
+      // signal.
+      const appendOnly = state.project!.settings.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES;
+      const fileCollision = computeFileCollisions(task, state.tasks.values(), appendOnly);
       if (fileCollision.length > 0) {
         try {
           const summary = fileCollision
@@ -307,6 +311,28 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         ? `Previous worker(s) left ${task.priorHandoffs!.length} handoff note(s). Call moe.get_handoff_history { taskId: "${task.id}" } before starting.`
         : undefined;
 
+      // Disk-state freshness check — if the most recent handoff stored a
+      // diskState signature, recompute it and tell the claimer whether the
+      // prior worker's stated conditions still apply. Prevents refusal-cascade
+      // on stale assumptions ("280 uncommitted files from prior worker" when
+      // the disk is now clean).
+      let staleHandoffDiskState = false;
+      let diskStateNote: string | undefined;
+      if (hasHandoffs) {
+        const latestHandoff = task.priorHandoffs![0];
+        if (latestHandoff.diskState && state.project?.rootPath) {
+          const current = captureDiskState(state.project.rootPath);
+          const cmp = compareDiskState(current, latestHandoff.diskState);
+          if (cmp === 'changed') {
+            staleHandoffDiskState = true;
+            diskStateNote =
+              `Prior handoff cited ${latestHandoff.diskState.dirtyFileCount ?? '?'} dirty files; ` +
+              `current tree has ${current?.dirtyFileCount ?? '?'}. ` +
+              `Reassess before refusing — the previously-cited disk state no longer applies.`;
+          }
+        }
+      }
+
       return {
         hasNext: true,
         task: {
@@ -330,6 +356,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           : {}),
         ...(chatHint ? { chatHint } : {}),
         ...(handoffHint ? { handoffHint } : {}),
+        ...(staleHandoffDiskState ? { staleHandoffDiskState: true, diskStateNote } : {}),
         ...(fileCollision.length > 0 ? { fileCollision } : {}),
         nextAction: hasHandoffs
           ? {

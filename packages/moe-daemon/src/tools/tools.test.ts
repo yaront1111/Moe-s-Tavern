@@ -766,7 +766,7 @@ describe('MCP Tools', () => {
       const result = await tool.handler({
         taskId: 'task-1',
         steps: [
-          { description: 'Step 1', affectedFiles: ['file.ts'] },
+          { description: 'Step 1', affectedFiles: ['file.ts'], newFiles: ['file.ts'] },
           { description: 'Step 2', affectedFiles: [] },
         ],
       }, state) as { success: boolean; status: string; stepCount: number };

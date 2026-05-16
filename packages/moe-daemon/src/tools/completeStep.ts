@@ -101,10 +101,17 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // Best-effort budget check — never blocks step completion.
       await maybeApplyBudgetWarnings(state, updatedTask).catch(() => {});
 
-      // Post system message to task channel
+      // Post system message to task channel — echo the effective description.
+      // If an architect/governor filed an amendment, that's what's binding;
+      // showing the original description here would make the worker look like
+      // they drifted from the plan when they actually followed the amendment.
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
+      const effectiveDescription = existingStep.activeAmendmentId
+        ? existingStep.amendments?.find((a) => a.amendmentId === existingStep.activeAmendmentId)?.description
+          ?? existingStep.description
+        : existingStep.description;
       try {
-        await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${existingStep.description}`);
+        await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${effectiveDescription}`);
       } catch { /* never block tool */ }
 
       const completed = steps.filter((s) => s.status === 'COMPLETED').length;

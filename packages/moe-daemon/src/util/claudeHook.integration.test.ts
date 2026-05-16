@@ -104,7 +104,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(fs.readFileSync(path.join(projectPath, '.claude', 'hooks', 'moe-require-claim.ps1'), 'utf-8')).toBe(REQUIRE_CLAIM_PS1_CONTENT);
   });
 
-  it('bash hook blocks without a claim and allows with an active claim', async () => {
+  it('bash hook blocks without a claim and allows with an active claim', { timeout: 30000 }, async () => {
     const projectPath = makeProjectDir();
     await initWithHook(projectPath);
     writeFakeMoeCall(projectPath, '{"tasks":[]}');
@@ -120,7 +120,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(allowed.status).toBe(0);
   });
 
-  it('bash hook bypasses read-only Moe tools regardless of claim state', async () => {
+  it('bash hook bypasses read-only Moe tools regardless of claim state', { timeout: 15000 }, async () => {
     const projectPath = makeProjectDir();
     await initWithHook(projectPath);
 

@@ -4,6 +4,9 @@ import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { defaultBudgetForSteps } from '../util/budget.js';
+import { existsSync } from 'node:fs';
+import { join, isAbsolute } from 'node:path';
 
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
@@ -39,7 +42,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             type: 'object',
             properties: {
               description: { type: 'string' },
-              affectedFiles: { type: 'array', items: { type: 'string' } }
+              affectedFiles: { type: 'array', items: { type: 'string' } },
+              newFiles: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Files this step intends to CREATE. Skips the path-existence check for these entries.'
+              }
             },
             required: ['description'],
             additionalProperties: false
@@ -73,7 +81,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       const params = args as {
         taskId: string;
         workerId?: string;
-        steps: { description: string; affectedFiles?: string[] }[];
+        steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
         planningNotes?: {
           approachesConsidered?: string;
           codebaseInsights?: string;
@@ -106,7 +114,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       // Normalization happens up-front (before rails check) so the rail-text
       // built below sees canonical paths and the persisted plan matches what
       // the collision detector compares against.
-      const normalizedSteps: { description: string; affectedFiles: string[] }[] = [];
+      const normalizedSteps: { description: string; affectedFiles: string[]; newFiles: string[] }[] = [];
       for (let i = 0; i < params.steps.length; i++) {
         const step = params.steps[i];
         if (!step.description || typeof step.description !== 'string' || step.description.trim().length === 0) {
@@ -121,16 +129,65 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (step.affectedFiles && step.affectedFiles.length > 50) {
           throw invalidInput('steps', `Step ${i + 1} has too many affected files (max 50)`);
         }
+        if (step.newFiles !== undefined && !Array.isArray(step.newFiles)) {
+          throw invalidInput('steps', `Step ${i + 1} newFiles must be a string[]`);
+        }
+        if (step.newFiles && step.newFiles.length > 50) {
+          throw invalidInput('steps', `Step ${i + 1} has too many newFiles (max 50)`);
+        }
         const normalizedFiles = normalizeAffectedFiles(
           step.affectedFiles,
           `steps[${i}].affectedFiles`
         );
-        normalizedSteps.push({ description: step.description, affectedFiles: normalizedFiles });
+        const normalizedNew = normalizeAffectedFiles(
+          step.newFiles,
+          `steps[${i}].newFiles`
+        );
+        normalizedSteps.push({
+          description: step.description,
+          affectedFiles: normalizedFiles,
+          newFiles: normalizedNew,
+        });
       }
 
       const epic = state.getEpic(task.epicId);
       const project = state.project;
       if (!project) throw notFound('Project', 'current');
+
+      // Pre-commit path-validation gate: catch plans that cite imaginary files.
+      // Each affectedFiles entry must exist on disk under project.rootPath,
+      // unless the step declared it under newFiles (intent to create). Cheap
+      // syntactic check that catches the most common stale-CLAUDE.md defect.
+      const missingPaths: { step: number; path: string }[] = [];
+      const rootPath = project.rootPath;
+      if (rootPath && isAbsolute(rootPath)) {
+        for (let i = 0; i < normalizedSteps.length; i++) {
+          const s = normalizedSteps[i];
+          const newFileSet = new Set(s.newFiles);
+          for (const f of s.affectedFiles) {
+            if (newFileSet.has(f)) continue;
+            const resolved = join(rootPath, f);
+            if (!existsSync(resolved)) {
+              missingPaths.push({ step: i + 1, path: f });
+            }
+          }
+        }
+      }
+      if (missingPaths.length > 0) {
+        const list = missingPaths
+          .slice(0, 20)
+          .map((m) => `step ${m.step}: ${m.path}`)
+          .join('; ');
+        const more = missingPaths.length > 20 ? ` (+${missingPaths.length - 20} more)` : '';
+        throw new MoeError(
+          MoeErrorCode.CONSTRAINT_VIOLATION,
+          `Plan references ${missingPaths.length} nonexistent file(s) not declared as newFiles: ${list}${more}. ` +
+          `If these paths should be created by the plan, list them in the step's newFiles. ` +
+          `Otherwise fix the plan to cite real paths and resubmit.`,
+          { missingPaths },
+          'CONSTRAINT_VIOLATION'
+        );
+      }
 
       const planText = normalizedSteps
         .map((step) => `${step.description} ${step.affectedFiles.join(' ')}`)
@@ -167,7 +224,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         stepId: `step-${idx + 1}`,
         description: step.description,
         status: 'PENDING' as const,
-        affectedFiles: step.affectedFiles
+        affectedFiles: step.affectedFiles,
+        ...(step.newFiles.length > 0 ? { newFiles: step.newFiles } : {}),
       }));
 
       // Carry forward existing metrics (firstClaimAt populated by claim path)
@@ -197,6 +255,14 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         updatePayload.budget = {
           ...(task.budget ?? {}),
           wallClockMs: params.budget.wallClockMs,
+        };
+      } else if (!task.budget?.wallClockMs) {
+        // Seed a default budget from step count when neither the architect
+        // nor a previous plan set one. Avoids the "100% budget hit 29s after
+        // step-1" mis-calibration the governor flagged.
+        updatePayload.budget = {
+          ...(task.budget ?? {}),
+          wallClockMs: defaultBudgetForSteps(implementationPlan.length, project.settings),
         };
       }
 

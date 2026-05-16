@@ -49,6 +49,7 @@ import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
+import { amendPlanStepTool } from './amendPlanStep.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -107,5 +108,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     listMetricsTool(state),
     setTaskBudgetTool(state),
     submitPlanCritiqueTool(state),
+    amendPlanStepTool(state),
   ];
 }

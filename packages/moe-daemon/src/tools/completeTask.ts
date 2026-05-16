@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState } from '../util/errors.js';
+import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns, assertAllStepsCompleted } from '../util/enforcement.js';
 import { resolveMemorySettings } from '../util/memorySettings.js';
+import { matchesAppendOnlyPattern } from '../util/affectedFiles.js';
 import { logger } from '../util/logger.js';
 
 export function completeTaskTool(_state: StateManager): ToolDefinition {
@@ -15,13 +16,17 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string' },
         prLink: { type: 'string' },
         summary: { type: 'string' },
-        workerId: { type: 'string' }
+        workerId: { type: 'string' },
+        currentBranch: {
+          type: 'string',
+          description: 'Branch the worker is on (e.g. "wip/2026-05-15"). When ProjectSettings.consolidationBranch is set, complete_task validates currentBranch matches and rejects with BRANCH-POLICY-FAIL on mismatch.'
+        }
       },
       required: ['taskId'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as { taskId: string; prLink?: string; summary?: string; workerId?: string };
+      const params = args as { taskId: string; prLink?: string; summary?: string; workerId?: string; currentBranch?: string };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
@@ -30,6 +35,32 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       }
       assertWorkerOwns(task, params.workerId);
       assertAllStepsCompleted(task);
+
+      // Branch policy gate. When the project sets a consolidation branch
+      // pattern, the worker must declare currentBranch and it must match.
+      // Mismatch = hard reject (BRANCH-POLICY-FAIL); missing = warn-only so
+      // we don't break callers that haven't been updated yet.
+      const policy = state.project?.settings.consolidationBranch;
+      if (policy) {
+        if (params.currentBranch) {
+          if (!matchesAppendOnlyPattern(params.currentBranch, policy)) {
+            throw new MoeError(
+              MoeErrorCode.CONSTRAINT_VIOLATION,
+              `BRANCH-POLICY-FAIL: complete_task called on branch "${params.currentBranch}" but project policy requires "${policy}". ` +
+              `Move your commits onto the consolidation branch (or a branch matching the pattern) and re-call complete_task.`,
+              { currentBranch: params.currentBranch, consolidationBranch: policy },
+              'BRANCH-POLICY-FAIL'
+            );
+          }
+        } else {
+          try {
+            await state.postToRoleChannel(
+              'governors',
+              `⚠️ task ${task.id} completed without currentBranch arg; consolidation policy "${policy}" cannot be verified.`
+            );
+          } catch { /* never block tool */ }
+        }
+      }
 
       // Capture the worker to IDLE *after* the task update so a failed updateTask
       // doesn't leave the worker idle while the task is still WORKING (half-applied state).

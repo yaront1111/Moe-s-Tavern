@@ -5,6 +5,31 @@ import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 
 const MAX_REASON_LENGTH = 2000;
+const ARCHITECT_LIVENESS_MS = 2 * 60 * 1000; // 2 min — matches listWorkers default
+
+/**
+ * Find the architect with the most recent lastActivityAt within the liveness
+ * window. Returns null if no architect is awake. Used by reportBlocked so a
+ * stale planner doesn't swallow blockers — pings reach whoever is actually on.
+ */
+function findFreshestAwakeArchitect(state: StateManager): { workerId: string; lastActivityAt: string } | null {
+  const nowMs = Date.now();
+  let best: { workerId: string; lastActivityAt: string; ms: number } | null = null;
+  for (const team of state.teams.values()) {
+    if (team.role !== 'architect') continue;
+    for (const memberId of team.memberIds) {
+      const w = state.getWorker(memberId);
+      if (!w) continue;
+      const t = Date.parse(w.lastActivityAt);
+      if (!Number.isFinite(t)) continue;
+      if (nowMs - t > ARCHITECT_LIVENESS_MS) continue;
+      if (!best || t > best.ms) {
+        best = { workerId: w.id, lastActivityAt: w.lastActivityAt, ms: t };
+      }
+    }
+  }
+  return best ? { workerId: best.workerId, lastActivityAt: best.lastActivityAt } : null;
+}
 
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
@@ -50,7 +75,13 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
 
       // Cross-post blocked message to task channel, general, and #governors
       // so the on-call governor's chat_wait wakes on the block event.
-      const blockedMsg = `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
+      // Also direct-mention the freshest awake architect — the original
+      // planner may have deregistered, in which case @architects-group
+      // routing hits zero targets. Fall back to @governors when no
+      // architect is alive.
+      const freshArchitect = findFreshestAwakeArchitect(state);
+      const routedTo = freshArchitect ? `@${freshArchitect.workerId}` : '@governors';
+      const blockedMsg = `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason} (cc ${routedTo})`;
       try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
       try { await state.postToGeneral(blockedMsg); } catch { /* never block tool */ }
       try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
@@ -72,6 +103,9 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         taskStatus: task.status,
         workerStatus: 'BLOCKED',
         message: 'Worker marked as blocked. Human has been notified.',
+        routedTo: freshArchitect
+          ? { role: 'architect', workerId: freshArchitect.workerId, lastActivityAt: freshArchitect.lastActivityAt }
+          : { role: 'governors', workerId: null, lastActivityAt: null },
         ...(nextAction ? { nextAction } : {})
       };
     }

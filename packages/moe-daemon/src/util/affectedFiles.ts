@@ -19,6 +19,39 @@ import { invalidInput } from './errors.js';
 const MAX_PATH_LEN = 500;
 
 /**
+ * Default append-only files — every task touches these (CHANGELOG, etc.) so
+ * collision alerts on them are pure noise. Overridable via
+ * ProjectSettings.appendOnlyFiles (pass [] to disable, or a custom list to
+ * extend / replace).
+ */
+export const DEFAULT_APPEND_ONLY_FILES: readonly string[] = ['CHANGELOG.md'];
+
+/**
+ * Match a candidate file against an append-only pattern. Supports either a
+ * literal path or a glob with `*` (single segment) or `**` (any depth).
+ * Patterns are matched against canonical (normalized) paths.
+ */
+export function matchesAppendOnlyPattern(file: string, pattern: string): boolean {
+  if (pattern === file) return true;
+  if (!pattern.includes('*')) return false;
+  // Escape regex specials except *, then translate ** -> .* and * -> [^/]*
+  const re = '^' + pattern
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '[^/]*')
+    .replace(/__GLOBSTAR__/g, '.*') + '$';
+  return new RegExp(re).test(file);
+}
+
+/** True if the file matches any pattern in the append-only list. */
+export function isAppendOnlyFile(file: string, patterns: readonly string[]): boolean {
+  for (const p of patterns) {
+    if (matchesAppendOnlyPattern(file, p)) return true;
+  }
+  return false;
+}
+
+/**
  * Canonicalize a single affected-file path. Throws `invalidInput` on shapes
  * the daemon refuses to store:
  *   - empty / non-string
@@ -133,13 +166,19 @@ export interface FileCollision {
 
 /**
  * Compute per-task file collisions for a candidate. Each entry pairs another
- * WORKING task id with the overlapping file list (sorted).
+ * WORKING task id with the overlapping file list (sorted). Files matching the
+ * project's append-only list (CHANGELOG.md etc.) are filtered out before
+ * grouping so the team isn't drowned in CHANGELOG-overlap noise.
  */
 export function computeFileCollisions(
   candidate: Task,
-  tasks: Iterable<Task>
+  tasks: Iterable<Task>,
+  appendOnlyPatterns: readonly string[] = DEFAULT_APPEND_ONLY_FILES
 ): FileCollision[] {
-  const candidateFiles = new Set(collectTaskAffectedFiles(candidate));
+  const allCandidateFiles = collectTaskAffectedFiles(candidate);
+  const candidateFiles = new Set(
+    allCandidateFiles.filter((f) => !isAppendOnlyFile(f, appendOnlyPatterns))
+  );
   if (candidateFiles.size === 0) return [];
   const activeOwnership = collectActiveAffectedFiles(tasks, candidate.id);
   // Group hits by task

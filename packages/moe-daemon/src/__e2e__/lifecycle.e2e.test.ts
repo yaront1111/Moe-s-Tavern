@@ -122,8 +122,8 @@ describe('lifecycle E2E', () => {
     await submit.handler({
       taskId: 'task-e2e',
       steps: [
-        { description: 'first', affectedFiles: ['a.ts'] },
-        { description: 'second', affectedFiles: ['b.ts'] },
+        { description: 'first', affectedFiles: ['a.ts'], newFiles: ['a.ts'] },
+        { description: 'second', affectedFiles: ['b.ts'], newFiles: ['b.ts'] },
       ],
     }, state);
     expect(state.getTask('task-e2e')!.status).toBe('AWAITING_APPROVAL');
@@ -164,7 +164,7 @@ describe('lifecycle E2E', () => {
     const submit = submitPlanTool(state);
     await submit.handler({
       taskId: 'task-e2e',
-      steps: [{ description: 'only', affectedFiles: ['a.ts'] }],
+      steps: [{ description: 'only', affectedFiles: ['a.ts'], newFiles: ['a.ts'] }],
     }, state);
     await approveAndClaimWorker('task-e2e', 'worker-a');
     await workThroughSteps('task-e2e', 'worker-a');
@@ -208,7 +208,7 @@ describe('lifecycle E2E', () => {
     const submit = submitPlanTool(state);
     await submit.handler({
       taskId: 'task-e2e',
-      steps: [{ description: 'only', affectedFiles: ['a.ts'] }],
+      steps: [{ description: 'only', affectedFiles: ['a.ts'], newFiles: ['a.ts'] }],
     }, state);
     await approveAndClaimWorker('task-e2e', 'worker-a');
     await workThroughSteps('task-e2e', 'worker-a');
