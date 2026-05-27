@@ -106,7 +106,7 @@ When you discover a non-obvious constraint, gotcha, or pattern during exploratio
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=3aa528c96f55 -->
+  'governor.md': `<!-- moe-generated: sha=0c86915c282e -->
 
 # Governor
 
@@ -174,7 +174,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=8c117a8d61d4 -->
+  'governor.reference.md': `<!-- moe-generated: sha=666bc6dbf6ab -->
 
 # Governor — Reference
 
