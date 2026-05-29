@@ -21,7 +21,6 @@ import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
 import { writeSkillFiles } from './util/skillFiles.js';
-import { resolveMemorySettings } from './util/memorySettings.js';
 import { clearAllSpeedModeTimeouts } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
@@ -901,7 +900,7 @@ function initProject(projectPath: string, projectName?: string): InitResult {
   }
 
   // Create directory structure
-  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles', 'memory', 'memory/sessions'];
+  const dirs = ['epics', 'tasks', 'workers', 'proposals', 'roles'];
   fs.mkdirSync(moePath, { recursive: true });
   for (const dir of dirs) {
     fs.mkdirSync(path.join(moePath, dir), { recursive: true });
@@ -934,7 +933,6 @@ function initProject(projectPath: string, projectName?: string): InitResult {
       enableAgentTeams: false,
       chatEnabled: true,
       chatMaxAgentHops: 4,
-      memory: resolveMemorySettings()
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()

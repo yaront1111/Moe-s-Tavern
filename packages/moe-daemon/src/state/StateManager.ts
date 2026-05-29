@@ -14,7 +14,6 @@ import type {
   Epic,
   ImplementationStep,
   MoeStateSnapshot,
-  MemorySettings,
   PinEntry,
   Project,
   ProjectSettings,
@@ -51,8 +50,6 @@ import {
 } from '../util/sanitize.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
-import { MemoryManager } from '../knowledge/MemoryManager.js';
-import { resolveMemorySettings } from '../util/memorySettings.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -207,7 +204,6 @@ export class StateManager {
   private fileWatcher?: import('./FileWatcher.js').FileWatcher;
   /** In-memory per-worker per-channel unread message counts */
   private unreadCounts = new Map<string, Map<string, number>>();
-  private memoryManager: MemoryManager;
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -215,11 +211,6 @@ export class StateManager {
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
     this.mentionRouter = new MentionRouter(4);
-    this.memoryManager = new MemoryManager(this.moePath);
-  }
-
-  getMemoryManager(): MemoryManager {
-    return this.memoryManager;
   }
 
   setEmitter(fn: (event: StateChangeEvent) => void) {
@@ -745,40 +736,6 @@ export class StateManager {
     return pattern;
   }
 
-  private validateMemorySettingsUpdate(value: unknown, existing?: MemorySettings): MemorySettings {
-    const input = this.requirePlainObject(value, 'memory');
-    this.rejectUnknownFields(input, ['autoInject', 'maxAutoResults', 'maxAutoChars', 'autoSave'], 'memory setting');
-
-    const merged = resolveMemorySettings({ memory: existing });
-    const next: MemorySettings = { ...merged, autoSave: { ...merged.autoSave } };
-
-    if (input.autoInject !== undefined) {
-      next.autoInject = this.validateEnumValue(input.autoInject, 'memory.autoInject', ['off', 'summary', 'full'] as const);
-    }
-    if (input.maxAutoResults !== undefined) {
-      next.maxAutoResults = this.validateIntegerValue(input.maxAutoResults, 'memory.maxAutoResults', 0, 10);
-    }
-    if (input.maxAutoChars !== undefined) {
-      next.maxAutoChars = this.validateIntegerValue(input.maxAutoChars, 'memory.maxAutoChars', 0, 10000);
-    }
-    if (input.autoSave !== undefined) {
-      const autoSave = this.requirePlainObject(input.autoSave, 'memory.autoSave');
-      this.rejectUnknownFields(
-        autoSave,
-        ['completedTask', 'firstPassApproval', 'qaRejection', 'reopenedApproval'],
-        'memory auto-save setting'
-      );
-      next.autoSave = { ...(next.autoSave ?? {}) };
-      for (const field of ['completedTask', 'firstPassApproval', 'qaRejection', 'reopenedApproval'] as const) {
-        if (autoSave[field] !== undefined) {
-          next.autoSave[field] = this.validateBooleanValue(autoSave[field], `memory.autoSave.${field}`);
-        }
-      }
-    }
-
-    return next;
-  }
-
   private validateSettingsUpdate(settings: Partial<ProjectSettings>): ProjectSettings {
     if (!this.project) {
       throw new Error('Project not loaded');
@@ -796,7 +753,6 @@ export class StateManager {
       'chatEnabled',
       'chatMaxAgentHops',
       'autoCommit',
-      'memory',
     ], 'project setting');
 
     const next: ProjectSettings = { ...this.project.settings };
@@ -843,10 +799,6 @@ export class StateManager {
       }
       next.columnLimits = merged;
     }
-    if (input.memory !== undefined) {
-      next.memory = this.validateMemorySettingsUpdate(input.memory, next.memory);
-    }
-
     return next;
   }
 
@@ -1143,9 +1095,6 @@ export class StateManager {
 
       // Re-initialize MentionRouter with project-configured maxHops
       this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
-
-      // Load knowledge base
-      await this.memoryManager.load();
 
       // Start periodic blocked worker timeout check
       this.startBlockedTimeoutCheck();
@@ -3118,7 +3067,6 @@ export class StateManager {
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
         chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
         chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
-        memory: resolveMemorySettings(project.settings),
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now

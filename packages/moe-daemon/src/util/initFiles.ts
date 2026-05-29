@@ -53,7 +53,7 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
-  'architect.reference.md': `<!-- moe-generated: sha=7b4121a06413 -->
+  'architect.reference.md': `<!-- moe-generated: sha=e10dd93e8e3b -->
 
 # Architect — Reference
 
@@ -99,7 +99,7 @@ The proposal lands in \`.moe/proposals/\` for human Approve/Reject. Do NOT loop 
 
 ## Quality memory
 
-When you discover a non-obvious constraint, gotcha, or pattern during exploration, call \`moe.remember\`. Manual remembers survive dedup better and rank higher on recall than auto-extracted ones.
+Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, \`list_memories\` / \`read_memory\` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
 
@@ -174,7 +174,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=666bc6dbf6ab -->
+  'governor.reference.md': `<!-- moe-generated: sha=eefcd17a3853 -->
 
 # Governor — Reference
 
@@ -235,7 +235,7 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 
 ## Quality memory
 
-When you spot a recurring failure mode or a subtle invariant the system missed, call \`moe.remember\`. Manual remembers survive dedup better and rank higher on recall than auto-extracted ones. Governors are the natural place for cross-task pattern memory — workers see one task at a time; you see the fleet.`,
+Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
   'qa.md': `<!-- moe-generated: sha=6d8b66d696f4 -->
 
 # QA
@@ -258,7 +258,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=3f5bdfe565a3 -->
+  'qa.reference.md': `<!-- moe-generated: sha=f88efe01d7a7 -->
 
 # QA — Reference
 
@@ -290,14 +290,14 @@ Deep-dive material trimmed out of \`qa.md\`. Read this on demand; it is not load
 
 ## Quality memory
 
-When you find a recurring pattern or a subtle gap the tests didn't catch, call \`moe.remember\` with \`type: "gotcha"\`. The runtime auto-extracts memory from rejection \`issues\` (the issues become gotchas for the next agent), but human-authored entries rank higher.
+Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you find a recurring pattern or a subtle gap the tests didn't catch, \`write_memory\` a \`gotcha-<area>\` note (or \`edit_memory\` an existing one) so the next agent avoids it. Rejection \`issues\` you record on the task are already visible to the worker via \`get_handoff_history\`; use Serena memory for the broader, cross-task lesson.
 
 ## Mention reply examples
 
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=bc0e0b05234d -->
+  'worker.md': `<!-- moe-generated: sha=4968132d8811 -->
 
 # Worker
 
@@ -315,10 +315,10 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 
 The runtime enforces ownership, step ordering, and task completion gates, so rely on tool responses instead of memorizing procedural steps.
 
-If you hit a non-obvious gotcha or convention worth keeping, save it with \`moe.remember\`. Use \`moe.recall\` when you need prior knowledge for the current task. (Memory auto-injection is off by default.)
+Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.`,
-  'worker.reference.md': `<!-- moe-generated: sha=88fe77791f32 -->
+  'worker.reference.md': `<!-- moe-generated: sha=4a642e1bf717 -->
 
 # Worker — Reference
 
@@ -367,7 +367,14 @@ Don't use this to dodge inconvenient rails — adversarial-self-review and recei
 
 ## Quality memory
 
-When you discover a gotcha, anti-pattern, or subtle invariant during implementation, call \`moe.remember\`. Human-authored entries survive dedup better and rank higher on recall than auto-extracted ones.
+Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, \`.serena/memories/\`), not in Moe. On task start, \`list_memories\` and \`read_memory\` to pick up prior knowledge; before you finish, \`write_memory\` so the next agent benefits.
+
+Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic, one file):
+- \`convention-<area>\`, \`gotcha-<area>\`, \`pattern-<area>\`, \`decision-<area>\` for reusable knowledge
+- \`task-<taskId>-handoff\` for your end-of-session handoff (the next agent on the task reads it)
+- \`epic-<epicId>-notes\` for cross-task epic knowledge (governor-owned)
+
+Prefer \`edit_memory\` to append to an existing topic file over creating a near-duplicate. There is no BM25 ranking or auto-injection — this naming discipline is what replaces it, so be consistent.
 
 ## Mention reply examples
 

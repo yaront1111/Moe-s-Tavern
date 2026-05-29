@@ -28,7 +28,7 @@ Deep-dive material trimmed out of `qa.md`. Read this on demand; it is not loaded
 
 ## Quality memory
 
-When you find a recurring pattern or a subtle gap the tests didn't catch, call `moe.remember` with `type: "gotcha"`. The runtime auto-extracts memory from rejection `issues` (the issues become gotchas for the next agent), but human-authored entries rank higher.
+Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. When you find a recurring pattern or a subtle gap the tests didn't catch, `write_memory` a `gotcha-<area>` note (or `edit_memory` an existing one) so the next agent avoids it. Rejection `issues` you record on the task are already visible to the worker via `get_handoff_history`; use Serena memory for the broader, cross-task lesson.
 
 ## Mention reply examples
 

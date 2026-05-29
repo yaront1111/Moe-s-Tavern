@@ -45,7 +45,14 @@ Don't use this to dodge inconvenient rails — adversarial-self-review and recei
 
 ## Quality memory
 
-When you discover a gotcha, anti-pattern, or subtle invariant during implementation, call `moe.remember`. Human-authored entries survive dedup better and rank higher on recall than auto-extracted ones.
+Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, `.serena/memories/`), not in Moe. On task start, `list_memories` and `read_memory` to pick up prior knowledge; before you finish, `write_memory` so the next agent benefits.
+
+Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic, one file):
+- `convention-<area>`, `gotcha-<area>`, `pattern-<area>`, `decision-<area>` for reusable knowledge
+- `task-<taskId>-handoff` for your end-of-session handoff (the next agent on the task reads it)
+- `epic-<epicId>-notes` for cross-task epic knowledge (governor-owned)
+
+Prefer `edit_memory` to append to an existing topic file over creating a near-duplicate. There is no BM25 ranking or auto-injection — this naming discipline is what replaces it, so be consistent.
 
 ## Mention reply examples
 

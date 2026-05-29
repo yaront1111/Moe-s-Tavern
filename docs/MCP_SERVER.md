@@ -138,7 +138,7 @@ Initialize a Moe project and create the `.moe/` directory structure.
 
 The hook gates only ownership-sensitive Moe MCP tools:
 `mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)`.
-Read-only tools such as `get_context`, `list_tasks`, and `recall` bypass the hook.
+Read-only tools such as `get_context` and `list_tasks` bypass the hook.
 
 On each gated tool call, the hook invokes `scripts/moe-call.sh list_tasks` and verifies that
 `MOE_WORKER_ID` owns a task in `PLANNING`, `WORKING`, or `REVIEW`. Missing worker ID,
@@ -164,9 +164,6 @@ Get current project/epic/task context and rails.
 {
   taskId?: string,
   workerId?: string,
-  memoryMode?: 'off' | 'summary' | 'full', // default: project.settings.memory.autoInject
-  memoryLimit?: number,                    // default: project setting, max 10
-  memoryMaxChars?: number,                 // default: project setting
   commentsLimit?: number,                  // default: 10 recent comments, max 50; 0 omits comments
   commentsMaxChars?: number                // default: 1000 per comment; 0 returns full comment text
 }
@@ -203,22 +200,11 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     global: string[], // currently project.globalRails.requiredPatterns
     epic: string[],
     task: string[]
-  },
-  memory: {
-    mode: 'off' | 'summary' | 'full',
-    relevant: Array<{
-      id: string,
-      type: string,
-      confidence: number,
-      preview?: string, // summary mode
-      content?: string  // full mode, budget-capped
-    }>,
-    lastSession: object | null
   }
 }
 ```
 
-By default, `get_context` returns compact memory previews, compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. `memoryMode: 'off'` suppresses auto memories and the last-session payload; `memoryMode: 'full'` returns full memory/session content capped by `memoryMaxChars`. Call `moe.recall` for full memory content when a preview is useful; call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
+By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
 
 ---
 
@@ -895,7 +881,6 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   - `reopenCount ≥ maxReopens` (default 3 via `MAX_REOPENS_DEFAULT`; per-task override `task.maxReopens`), OR
   - the **same DoD item has failed ≥2 times** in `failedDodItems[]`.
 - On auto-flip, posts a heads-up to `#architects`; on every rejection, cross-posts `❌ QA rejected ...` to `#governors`.
-- When `settings.memory.autoSave.qaRejection` is true (default), the daemon auto-saves a `gotcha` memory entry summarizing the rejection.
 
 **Errors:**
 - `taskId is required`
@@ -1166,90 +1151,9 @@ Long-poll for chat messages mentioning this worker or from humans.
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
 
-## Memory Tools
+## Cross-Session Memory
 
-Persistent project knowledge base that grows smarter with every task. See [Memory System Guide](MEMORY.md) for architecture details.
-
-### moe.remember
-
-Save a learning to the project knowledge base.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `content` | string | Yes | The knowledge to save (max 2000 chars) |
-| `type` | string | Yes | `convention`, `gotcha`, `pattern`, `decision`, `procedure`, or `insight` |
-| `tags` | string[] | No | Searchable tags (auto-generated from content if omitted) |
-| `workerId` | string | Yes | Your worker ID |
-| `taskId` | string | No | Current task ID |
-| `files` | string[] | No | Related file paths |
-
-**Returns:** `{ memoryId, message, wasDuplicate, mergedWith?, tags }`
-
-**Notes:**
-- Automatically deduplicates: if similar content exists (>70% Jaccard similarity), merges instead of creating a new entry
-- Auto-generates tags from content using tokenization if none provided
-- Memories start with confidence 1.0
-
-### moe.recall
-
-Search the project knowledge base for relevant memories.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | Yes | Natural language search query |
-| `types` | string[] | No | Filter by memory type |
-| `tags` | string[] | No | Filter by tags |
-| `epicId` | string | No | Scope to memories from a specific epic |
-| `files` | string[] | No | Match by related file paths (boosts relevance) |
-| `limit` | number | No | Max results (default 10, max 30) |
-| `minConfidence` | number | No | Minimum confidence threshold (default 0.3) |
-
-**Returns:** `{ memories: [{ id, type, content, tags, confidence, score, source, createdAt }], totalCount }`
-
-**Notes:**
-- Uses BM25 ranking algorithm with composite scoring (text relevance + tags + file overlap + recency + quality)
-- Automatically updates access counts on returned memories
-- Memory previews can auto-surface in `moe.get_context`; full content remains available through explicit `moe.recall`
-
-### moe.reflect
-
-Rate a memory as helpful or unhelpful. Adjusts confidence for future relevance.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `memoryId` | string | Yes | The memory ID to rate |
-| `helpful` | boolean | Yes | `true` if useful, `false` if not |
-| `workerId` | string | Yes | Your worker ID |
-
-**Returns:** `{ memoryId, helpful, newConfidence, message }`
-
-**Notes:**
-- Helpful: confidence +0.15 (capped at 2.0)
-- Unhelpful: confidence -0.25 (floor at 0.0)
-- Memories below 0.3 confidence are excluded from search results
-- Over time, the best knowledge rises and bad knowledge fades
-
-### moe.save_session_summary
-
-Save a summary of your session before ending. The next agent on this task will see it.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `workerId` | string | Yes | Your worker ID |
-| `taskId` | string | Yes | The task ID you worked on |
-| `summary` | string | Yes | What you accomplished and key findings (max 5000 chars) |
-| `memoriesCreated` | string[] | No | IDs of memories saved this session |
-
-**Returns:** `{ sessionId, message }`
-
-**Notes:**
-- Stored in `.moe/memory/sessions/{workerId}_{taskId}.json`
-- Visible in `moe.get_context` response as `memory.lastSession`
-- Enables session continuity when agents are relaunched
+Moe has **no native memory tools**. Cross-session knowledge (conventions, gotchas, patterns, decisions, end-of-session handoffs) is provided by the **Serena MCP server**, which the agent launchers inject alongside the `moe` proxy. Use Serena's `list_memories` / `read_memory` / `write_memory` / `edit_memory` / `delete_memory`, backed by a flat per-name markdown store at `.serena/memories/*.md`. See [MEMORY.md](MEMORY.md) for the naming convention and pull-on-start / write-before-finish workflow.
 
 ## Governance Control-Plane Tools
 

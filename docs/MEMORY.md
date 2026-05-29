@@ -1,156 +1,101 @@
 # Moe Memory System
 
-Moe agents build a persistent knowledge base for each project. The more agents work on a project, the smarter they get.
+Moe agents keep cross-session memory in a per-project knowledge store. The more agents work on a project, the more shared context accumulates — conventions, gotchas, decisions, and end-of-session handoffs survive between agent runs.
+
+> **What changed:** Moe no longer ships a native knowledge base. The old `moe.remember` / `moe.recall` / `moe.reflect` / `moe.save_session_summary` tools, the `MemoryManager`, the `.moe/memory/` store, BM25 search, confidence scoring, and auto-injection into `moe.get_context` have all been **removed**. Cross-session memory is now delegated to the **Serena MCP server**.
 
 ## The Problem
 
 AI agents are stateless. Every session starts from zero. An architect spends minutes exploring the codebase, discovers critical patterns, creates a plan, then the session ends. All that exploration knowledge is lost. The next agent rediscovers the same patterns from scratch. Workers hit the same gotchas. Knowledge is discovered, used, and discarded, over and over.
 
-## The Solution: Three-Layer Memory
+## The Solution: Serena's Memory Tools
+
+Memory is provided by [Serena](https://github.com/oraios/serena), the same MCP server that gives agents LSP-backed symbol navigation. The agent launchers (`scripts/moe-agent.ps1` / `scripts/moe-agent.sh`) inject Serena — pinned to the project — for the `claude`, `codex`, and `gemini` CLIs. If Serena is not installed, the launchers **no-op** and agents simply run without cross-session memory (everything else still works).
+
+### Where memory lives
+
+A flat, per-name markdown store at:
 
 ```
- LONG-TERM   .moe/memory/knowledge.jsonl
-             Conventions, gotchas, patterns, decisions
-             BM25-indexed, confidence-scored, self-curating
-
- MEDIUM-TERM planningNotes on task + session summaries
-             Architect reasoning flows to workers and QA
-             Session summaries enable agent continuity
-
- SHORT-TERM  Auto-injected via moe.get_context
-             Top 5 relevant memories surface automatically
-             Last session summary for task continuity
+.serena/memories/<topic>.md
 ```
 
-## How It Works
+One topic per file. There is no index file, no JSONL, and no database — just markdown files you can read in a plain editor.
 
-### Agents Save Knowledge
+### The tools
 
-When an agent discovers something worth sharing:
+Serena exposes five memory tools (all callable by any role):
 
-```
-moe.remember {
-  content: "StateManager uses AsyncMutex.runExclusive() for all state mutations",
-  type: "convention",
-  workerId: "architect-1",
-  files: ["src/state/StateManager.ts"]
-}
-```
+| Tool | Purpose |
+|------|---------|
+| `list_memories` | List the names of all stored memory files. |
+| `read_memory` | Read one memory file by name. |
+| `write_memory` | Create or overwrite a memory file. |
+| `edit_memory` | Update part of an existing memory file in place. |
+| `delete_memory` | Remove a memory file. |
 
-### Knowledge Auto-Surfaces
+There is **no BM25 ranking and no auto-injection**. Nothing surfaces in `moe.get_context` automatically. Agents discover what exists by calling `list_memories` and pull the relevant file with `read_memory`. **Naming discipline replaces ranking** — see below.
 
-When any agent calls `moe.get_context`, the system automatically searches the knowledge base using the task title, description, and affected files. The top 5 relevant memories appear in the response:
+## Naming Convention
 
-```json
-{
-  "task": { ... },
-  "memory": {
-    "relevant": [
-      {
-        "id": "mem-abc123",
-        "type": "convention",
-        "content": "StateManager uses AsyncMutex.runExclusive() for all state mutations",
-        "confidence": 1.45
-      },
-      {
-        "id": "mem-def456",
-        "type": "gotcha",
-        "content": "FileWatcher debounce is 150ms, tests need 200ms wait after file changes",
-        "confidence": 1.15
-      }
-    ],
-    "lastSession": {
-      "summary": "Previous architect explored concurrency patterns. All mutations use mutex."
-    }
-  }
-}
-```
+Because there is no search ranking, the file name *is* the index. Agents follow these conventions so the right memory is obvious from `list_memories` alone:
 
-Agents don't have to remember to search, the system does it for them.
+| Pattern | Use For |
+|---------|---------|
+| `convention-<area>` | Code patterns and style rules (e.g. `convention-state-mutations`) |
+| `gotcha-<area>` | Surprising behavior and pitfalls (e.g. `gotcha-filewatcher-debounce`) |
+| `pattern-<area>` | Reusable implementation patterns (e.g. `pattern-mcp-tools`) |
+| `decision-<area>` | Why something was done a certain way (e.g. `decision-jsonl-over-sqlite`) |
+| `task-<taskId>-handoff` | End-of-session handoff for a specific task (replaces `save_session_summary`). |
+| `epic-<epicId>-notes` | Cross-task knowledge scoped to an epic. |
 
-### Knowledge Self-Curates
+Rules of thumb:
+- **One topic = one file.** Keep each memory focused on a single subject.
+- **Prefer `edit_memory` over near-duplicates.** If a memory on the topic already exists, update it instead of creating `gotcha-foo-2`.
+- Keep entries concise and high-signal. Don't record generic progress or obvious completion notes.
 
-Memories evolve based on agent feedback:
+## Workflow
 
-```
-moe.reflect { memoryId: "mem-abc123", helpful: true, workerId: "worker-1" }
-```
+### Pull on start
 
-- **Helpful** (+0.15 confidence, cap 2.0): Memory surfaces more prominently
-- **Unhelpful** (-0.25 confidence, floor 0.0): Memory fades from results
-- Memories below 0.3 confidence are excluded from search results
-- At 3000 entries, the lowest-value memories are archived automatically
+When picking up work, list and read the relevant memories before exploring or planning:
 
-Over time, the best knowledge rises and bad knowledge disappears. No manual curation needed.
+1. `list_memories` to see what knowledge exists.
+2. `read_memory` for entries matching your task area (`convention-*`, `gotcha-*`, `pattern-*`, `decision-*`).
+3. If you claimed a task that was previously worked on, `read_memory { name: "task-<taskId>-handoff" }` first so you don't redo finished work.
 
-## Memory Types
+### Write before finish
 
-| Type | Use For | Example |
-|------|---------|---------|
-| `convention` | Code patterns and style rules | "This project uses guard clauses, not nested if/else" |
-| `gotcha` | Surprising behavior and pitfalls | "fs.renameSync fails cross-device on Linux" |
-| `pattern` | Reusable implementation patterns | "All MCP tools follow the ToolDefinition pattern in tools/" |
-| `decision` | Why something was done a certain way | "Chose JSONL over SQLite for activity log for simplicity" |
-| `procedure` | Learned workflows and techniques | "Run tsc before lint, catches more issues faster" |
-| `insight` | Cross-task observations | "Tasks in this epic tend to touch StateManager + WebSocketServer together" |
+When you discover something reusable, or before you stop, persist it:
 
-## MCP Tools
+1. During work: `write_memory` (or `edit_memory`) a `convention-*` / `gotcha-*` / `pattern-*` / `decision-*` entry for anything the next agent should know.
+2. Before stopping: `write_memory { name: "task-<taskId>-handoff" }` summarizing what you accomplished, what remains, and key findings. **The next agent on this task reads it** — this is the direct replacement for `moe.save_session_summary`.
 
-### moe.remember
+### Handoff convention (replaces save_session_summary)
 
-Save knowledge to the project knowledge base.
+There is no longer a dedicated session-summary tool. Instead, end-of-session continuity is a plain memory file named `task-<taskId>-handoff`. Write it before you wait or shut down; the next agent reads it on pickup. Use `epic-<epicId>-notes` for knowledge that spans multiple tasks in an epic.
 
-```
-moe.remember {
-  content: "...",           // Max 2000 chars
-  type: "convention",       // convention | gotcha | pattern | decision | procedure | insight
-  workerId: "worker-1",
-  tags: ["optional"],       // Auto-generated if omitted
-  taskId: "task-xxx",       // Optional context
-  files: ["src/foo.ts"]     // Optional related files
-}
-```
+## Role-Specific Guidance
 
-Automatically deduplicates: if >70% similar content exists, merges instead of creating a new entry (confidence is boosted).
+### Architects
+- Before planning: `list_memories` + `read_memory` for relevant `convention-*` / `gotcha-*` / `pattern-*` / `decision-*` entries.
+- During exploration: `write_memory` conventions, gotchas, and patterns discovered.
+- On plan submission: include `planningNotes` with analysis and reasoning (see below).
+- Before waiting: `write_memory { name: "task-<taskId>-handoff" }`.
 
-### moe.recall
+### Workers
+- Before implementing: read relevant memories and the `task-<taskId>-handoff` if one exists, plus `planningNotes`.
+- During implementation: `write_memory`/`edit_memory` gotchas and patterns discovered.
+- Before completing or stopping: `write_memory { name: "task-<taskId>-handoff" }`.
 
-Search for specific knowledge beyond what auto-surfaces in `get_context`.
+### QA
+- Before reviewing: read relevant memories for known issues.
+- During review: `write_memory`/`edit_memory` recurring issue patterns as `gotcha-*` entries.
+- Before stopping: `write_memory { name: "task-<taskId>-handoff" }`.
 
-```
-moe.recall {
-  query: "mutex concurrency state management",
-  types: ["convention", "gotcha"],   // Optional type filter
-  files: ["src/state/StateManager.ts"],  // Boosts file-relevant results
-  limit: 10
-}
-```
+## Architect-to-Worker Handoff (planningNotes)
 
-Uses BM25 ranking with composite scoring: text relevance (45%) + tag match (15%) + file overlap (15%) + recency (10%) + quality (15%).
-
-### moe.reflect
-
-Rate a memory to adjust its future relevance.
-
-```
-moe.reflect { memoryId: "mem-xxx", helpful: true, workerId: "worker-1" }
-```
-
-### moe.save_session_summary
-
-Save a session wrap-up so the next agent on this task can resume with context.
-
-```
-moe.save_session_summary {
-  workerId: "worker-1",
-  taskId: "task-xxx",
-  summary: "Completed 4/6 steps. Key finding: FileWatcher needs 200ms delay in tests."
-}
-```
-
-## Architect-to-Worker Handoff
-
-When architects submit plans, they can include `planningNotes`:
+When architects submit plans, they can include `planningNotes` directly on the task — this is separate from Serena memory and rides on `moe.submit_plan`:
 
 ```
 moe.submit_plan {
@@ -167,44 +112,16 @@ moe.submit_plan {
 
 Workers see `planningNotes` in `moe.get_context` responses, giving them the architect's full reasoning, not just the plan steps.
 
-## Role-Specific Guidance
+## Migration from the old native KB
 
-### Architects
-- Before planning: check `memory.relevant` in `get_context`
-- During exploration: `moe.remember` conventions, gotchas, patterns discovered
-- On plan submission: include `planningNotes` with analysis and reasoning
-- Before waiting: `moe.save_session_summary`
+If a project still has a `.moe/memory/knowledge.jsonl` from the previous native memory system, it is simply **no longer read** — the daemon does not auto-delete it. To carry forward high-value knowledge:
 
-### Workers
-- Before implementing: check `memory.relevant` and `planningNotes`
-- Rate recalled memories: `moe.reflect { helpful: true/false }`
-- During implementation: `moe.remember` gotchas and procedures discovered
-- Before completing: `moe.save_session_summary`
+1. Open `.moe/memory/knowledge.jsonl` and pick the entries still worth keeping.
+2. For each, `write_memory` a corresponding `.serena/memories/<topic>.md` file using the naming convention above (one topic per file).
+3. Once migrated, you may delete `.moe/memory/` manually.
 
-### QA
-- Before reviewing: check `memory.relevant` for known issues
-- During review: `moe.remember` recurring issue patterns as gotchas
-- After review: `moe.save_session_summary`
+## Caveats
 
-## Technical Details
-
-### Search Algorithm
-
-The knowledge base uses **BM25** (Okapi) for text ranking, the same algorithm used by Elasticsearch and Apache Lucene. Key features:
-
-- **CamelCase-aware tokenizer**: "StateManager" splits into "state" + "manager"
-- **Minimal stemmer**: 10 suffix rules handle common English inflections
-- **Stop word removal**: ~100 common English words filtered
-- **Composite scoring**: BM25 text relevance + tag match + file path overlap + recency decay (30-day half-life) + confidence/helpfulness
-
-### Storage
-
-- **Format**: JSONL (one JSON object per line) at `.moe/memory/knowledge.jsonl`
-- **Index**: Fully in-memory inverted index built on daemon start
-- **Persistence**: Appends are immediate; updates debounced (5s) with atomic rename
-- **Pruning**: At 3000 entries, lowest-value entries are archived to `knowledge.archive.jsonl`
-- **Deduplication**: Content hash + Jaccard similarity (>70% threshold)
-
-### No External Dependencies
-
-The entire memory system is pure TypeScript with zero external dependencies. No vector database, no SQLite, no Redis. The in-memory index handles thousands of entries with sub-millisecond search performance.
+- **No auto-surfacing.** Memory never appears in `moe.get_context` automatically; agents must call `list_memories` / `read_memory`. Naming discipline is what makes the right file discoverable.
+- **No ranking, confidence, or dedup.** There is no relevance score and no automatic merging. Avoid near-duplicates by preferring `edit_memory`.
+- **No-op without Serena.** If Serena is not installed (`uv tool install -p 3.13 serena-agent`), the launchers skip injecting it and agents run without cross-session memory.

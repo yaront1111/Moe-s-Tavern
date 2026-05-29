@@ -41,10 +41,6 @@ import { chatReadTool } from './chatRead.js';
 import { chatChannelsTool } from './chatChannels.js';
 import { chatJoinTool } from './chatJoin.js';
 import { chatWaitTool } from './chatWait.js';
-import { rememberTool } from './remember.js';
-import { recallTool } from './recall.js';
-import { reflectTool } from './reflect.js';
-import { saveSessionSummaryTool } from './saveSessionSummary.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
@@ -99,10 +95,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatChannelsTool(state),
     chatJoinTool(state),
     chatWaitTool(state),
-    rememberTool(state),
-    recallTool(state),
-    reflectTool(state),
-    saveSessionSummaryTool(state),
     getHandoffHistoryTool(state),
     listMetricsTool(state),
     setTaskBudgetTool(state),

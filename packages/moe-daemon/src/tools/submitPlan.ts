@@ -293,17 +293,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         } catch { /* never block tool */ }
       }
 
-      // If plan is already active (TURBO), tell the architect the next move
-      // is session summary — they're done. Otherwise point them at check_approval.
+      // If plan is already active (TURBO), the architect is done — point them at
+      // the next PLANNING task. Otherwise point them at check_approval.
       const nextAction = finalStatus === 'WORKING'
         ? {
-            tool: 'moe.save_session_summary',
-            args: {
-              workerId: params.workerId,
-              taskId: task.id,
-              summary: `Plan submitted for "${task.title}" (${implementationPlan.length} steps); TURBO auto-approved to WORKING.`
-            },
-            reason: 'Plan auto-approved; record architect findings then wait_for_task.'
+            tool: 'moe.wait_for_task',
+            args: { statuses: ['PLANNING'], workerId: params.workerId },
+            reason: 'Plan auto-approved (TURBO). Record any reusable planning insight with Serena write_memory, then block until the next PLANNING task arrives.'
           }
         : {
             tool: 'moe.check_approval',

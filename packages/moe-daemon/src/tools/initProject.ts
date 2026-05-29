@@ -6,7 +6,6 @@ import crypto from 'crypto';
 import { writeInitFiles } from '../util/initFiles.js';
 import { writeSkillFiles } from '../util/skillFiles.js';
 import { writeClaudeHook } from '../util/claudeHook.js';
-import { resolveMemorySettings } from '../util/memorySettings.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
   return {
@@ -93,7 +92,6 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
           enableAgentTeams: false,
           chatEnabled: true,
           chatMaxAgentHops: 4,
-          memory: resolveMemorySettings(),
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()

@@ -48,7 +48,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 |---------|-------------|
 | **Kanban Board** | Visual task management in your IDE (JetBrains + VS Code) |
 | **Plan Approval** | Review AI implementation plans before execution |
-| **Persistent Memory** | Project knowledge base with BM25 search that grows with every task ([details](docs/MEMORY.md)) |
+| **Persistent Memory** | Cross-session memory via the Serena MCP server — agents read prior knowledge on task start and write handoff/learning notes before finishing ([details](docs/MEMORY.md)) |
 | **Skills System** | 11 vendored skills (planning, TDD, systematic-debugging, adversarial-self-review, regression-check, receiving-code-review, …) auto-loaded per role ([manifest](docs/skills/manifest.json)) |
 | **Dedicated Governor** | A fourth, always-on agent role that watches for stale workers, drift, QA rejection loops, and human escalations — separate from planning, so the architect stays focused |
 | **Branch Safety** | Wrapper post-flight refuses to commit on `main`/`master` and peels onto `moe/work-<date>` automatically |
@@ -56,7 +56,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Runtime-Driven Workflow** | Per-task agent respawn, streaming output, trimmed prompts — long sessions stay responsive |
 | **Agent Chat** | Real-time messaging with @mentions, channels, and a Mention Response Protocol that forces tagged agents to reply |
 | **Multi-Agent** | Architect, worker, QA, and governor roles across Claude, Codex, Gemini, and any MCP-compatible agent |
-| **MCP Protocol** | 50+ tools including `release_task`, `enter_governance`, `list_workers`, `propose_rail`, memory (`recall`/`remember`/`reflect`), chat, teams |
+| **MCP Protocol** | 40+ tools including `release_task`, `enter_governance`, `list_workers`, `propose_rail`, chat, teams (memory is provided by the Serena MCP server) |
 | **Real-time Sync** | Live updates via WebSocket |
 | **Activity Log** | Complete audit trail with log rotation |
 | **Rails System** | Forbidden / required patterns enforced on plans; architects can `propose_rail` for human review |
@@ -224,7 +224,6 @@ graph LR
     subgraph Backend
         Supervisor[Supervisor] --> Daemon[Moe Daemon]
         Daemon --> Files[".moe/ state"]
-        Daemon --> Memory["Knowledge Base"]
     end
 
     subgraph Agents
@@ -237,12 +236,15 @@ graph LR
     Claude <-->|MCP| Daemon
     Codex <-->|MCP| Daemon
     Gemini <-->|MCP| Daemon
+    Claude <-->|MCP| Serena["Serena MCP<br/>(code intel + memory)"]
+    Codex <-->|MCP| Serena
+    Gemini <-->|MCP| Serena
 ```
 
 **Key Principles:**
 - The `.moe/` folder is the source of truth. The daemon is the sole writer.
 - The **supervisor** auto-restarts the daemon on crash with exponential backoff.
-- The **knowledge base** persists agent learnings across sessions with BM25 search and confidence scoring.
+- **Cross-session memory** is delegated to the **Serena MCP server** (a flat `.serena/memories/` markdown store) — agents pull prior knowledge on task start and write handoff/learning notes before finishing.
 - The **skills system** mirrors `.moe/skills/` into each agent's tool path so vendored discipline (TDD, debugging, adversarial review) is always one `Skill` invocation away.
 - The agent wrapper (`scripts/moe-agent.*`) runs **pre-flight** (workspace + skill sync) and **post-flight** (branch-safety, commit hygiene) around every claimed task.
 
@@ -255,8 +257,7 @@ moe/
 ├── packages/
 │   ├── moe-daemon/      # Node.js daemon (TypeScript)
 │   │   └── src/
-│   │       ├── knowledge/   # Memory system (BM25, tokenizer, scoring)
-│   │       ├── tools/       # 50+ MCP tool implementations
+│   │       ├── tools/       # 40+ MCP tool implementations
 │   │       ├── state/       # State management + file watcher
 │   │       └── server/      # WebSocket + MCP adapter
 │   └── moe-proxy/       # MCP stdio proxy for agents
@@ -264,7 +265,7 @@ moe/
 ├── moe-vscode/          # VS Code / Antigravity extension
 ├── docs/
 │   ├── ARCHITECTURE.md  # System design
-│   ├── MCP_SERVER.md    # MCP tool reference (50+ tools)
+│   ├── MCP_SERVER.md    # MCP tool reference (40+ tools)
 │   ├── SCHEMA.md        # Data schema
 │   ├── MEMORY.md        # Memory system guide
 │   ├── DEVELOPMENT.md   # Dev guide
@@ -344,7 +345,7 @@ flowchart LR
 
 ### Cross-cutting
 
-- **Memory** — every role can `moe.recall` / `moe.remember` / `moe.reflect` / `moe.save_session_summary`. The knowledge base persists across sessions with BM25 search.
+- **Memory** — every role uses the Serena MCP server's memory tools (`list_memories` / `read_memory` / `write_memory` / `edit_memory`) to carry knowledge across sessions, organized by a topic naming convention (`gotcha-<area>`, `decision-<area>`, `task-<id>-handoff`, …). See [`docs/MEMORY.md`](docs/MEMORY.md).
 - **Chat** — agents talk via `moe.chat_send` with @mentions and channels; tagged agents must reply (Mention Response Protocol).
 - **Effort** — Claude-CLI agents launch with `--effort max` by default; the agent process respawns per task so prompts stay tight.
 
@@ -365,7 +366,7 @@ Configure in `.moe/project.json`:
 ## Documentation
 
 - [Architecture Overview](docs/ARCHITECTURE.md)
-- [MCP Server API](docs/MCP_SERVER.md) - 50+ tools (memory, chat, governance, teams, rails)
+- [MCP Server API](docs/MCP_SERVER.md) - 40+ tools (chat, governance, teams, rails; memory via Serena MCP)
 - [Memory System](docs/MEMORY.md) - How agent memory works
 - [Skills Manifest](docs/skills/manifest.json) - Per-role skill bindings
 - [Data Schema](docs/SCHEMA.md)

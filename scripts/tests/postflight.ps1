@@ -23,7 +23,6 @@ try {
     $projectDir = Join-Path $tempRoot 'project'
     $homeDir = Join-Path $tempRoot 'home'
     New-Item -ItemType Directory -Force -Path (Join-Path $projectDir '.moe\messages') | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $projectDir '.moe\memory\sessions') | Out-Null
     New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
     Set-Content -Path (Join-Path $projectDir '.moe\project.json') -Value '{"id":"proj-smoke","name":"postflight-smoke","settings":{"autoCommit":false}}' -Encoding UTF8
     Set-Content -Path (Join-Path $projectDir '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
@@ -54,15 +53,8 @@ switch (tool) {
   case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } }); break;
-  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, memory: { relevant: [] }, nextAction: { tool: 'moe.start_step' } }); break;
+  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
   case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
-  case 'save_session_summary': {
-    const dir = path.join(moe, 'memory', 'sessions');
-    ensureDir(dir);
-    fs.writeFileSync(path.join(dir, `${args.workerId}_${args.taskId}.json`), JSON.stringify(args, null, 2));
-    ok({ sessionId: 'sess-smoke', message: 'saved' });
-    break;
-  }
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -106,14 +98,8 @@ switch (tool) {
         throw "Wrapper exited with $wrapperCode"
     }
 
-    $sessionFile = Join-Path $projectDir '.moe\memory\sessions\worker-postflight_task-postflight.json'
-    if (-not (Test-Path $sessionFile)) { throw "Expected session summary file not found: $sessionFile" }
-    $session = Get-Content -Raw -Path $sessionFile | ConvertFrom-Json
-    if ($session.workerId -ne 'worker-postflight') { throw "Unexpected workerId: $($session.workerId)" }
-    if ($session.taskId -ne 'task-postflight') { throw "Unexpected taskId: $($session.taskId)" }
-    $expectedSummary = 'worker session ended (CLI exit=0). See task activity log for details.'
-    if ($session.summary -ne $expectedSummary) { throw "Unexpected summary: $($session.summary)" }
-
+    # Post-flight no longer writes a session-summary file (cross-session memory
+    # moved to Serena). The post-flight chat message remains the session signal.
     $messagesFile = Join-Path $projectDir '.moe\messages\chan-general.jsonl'
     $messages = Get-Content -Raw -Path $messagesFile
     if ($messages -notlike '*worker session ended: task=task-postflight (CLI exit=0)*') {

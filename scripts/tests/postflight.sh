@@ -46,7 +46,7 @@ fi
 
 PROJECT_DIR="$TMP_DIR/project"
 HOME_DIR="$TMP_DIR/home"
-mkdir -p "$PROJECT_DIR/.moe/messages" "$PROJECT_DIR/.moe/memory/sessions" "$HOME_DIR"
+mkdir -p "$PROJECT_DIR/.moe/messages" "$HOME_DIR"
 printf '{"id":"proj-smoke","name":"postflight-smoke","settings":{"autoCommit":false}}\n' > "$PROJECT_DIR/.moe/project.json"
 : > "$PROJECT_DIR/.moe/messages/chan-general.jsonl"
 
@@ -76,15 +76,8 @@ switch (tool) {
   case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } }); break;
-  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, memory: { relevant: [] }, nextAction: { tool: 'moe.start_step' } }); break;
+  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
   case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
-  case 'save_session_summary': {
-    const dir = path.join(moe, 'memory', 'sessions');
-    ensureDir(dir);
-    fs.writeFileSync(path.join(dir, `${args.workerId}_${args.taskId}.json`), JSON.stringify(args, null, 2));
-    ok({ sessionId: 'sess-smoke', message: 'saved' });
-    break;
-  }
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -116,21 +109,8 @@ if [ "$wrapper_code" -ne 0 ]; then
   exit 1
 fi
 
-SESSION_FILE="$PROJECT_DIR/.moe/memory/sessions/worker-postflight_task-postflight.json"
-if [ ! -f "$SESSION_FILE" ]; then
-  cat "$TMP_DIR/wrapper.out" >&2 || true
-  echo "Expected session summary file not found: $SESSION_FILE" >&2
-  exit 1
-fi
-python3 - "$SESSION_FILE" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding='utf-8') as f:
-    data = json.load(f)
-assert data['workerId'] == 'worker-postflight', data
-assert data['taskId'] == 'task-postflight', data
-assert data['summary'] == 'worker session ended (CLI exit=0). See task activity log for details.', data
-PY
-
+# Post-flight no longer writes a session-summary file (cross-session memory moved
+# to Serena). The post-flight chat message remains the session-ended signal.
 MESSAGES_FILE="$PROJECT_DIR/.moe/messages/chan-general.jsonl"
 if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=0)' "$MESSAGES_FILE"; then
   cat "$TMP_DIR/wrapper.out" >&2 || true

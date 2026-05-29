@@ -120,19 +120,6 @@ interface ProjectSettings {
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
   chatAutoCreateChannels?: boolean;   // default: true — auto-create channels for epics/tasks
-
-  // Memory/token-budget settings (all optional, defaults applied at runtime)
-  memory?: {
-    autoInject?: 'off' | 'summary' | 'full'; // default: summary
-    maxAutoResults?: number;                 // default: 1
-    maxAutoChars?: number;                   // default: 500 total chars
-    autoSave?: {
-      completedTask?: boolean;     // default: false
-      firstPassApproval?: boolean; // default: false
-      qaRejection?: boolean;       // default: true
-      reopenedApproval?: boolean;  // default: true
-    };
-  };
 }
 ```
 
@@ -1178,47 +1165,7 @@ function generateId(prefix: string): string {
 
 ---
 
-## Memory System
-
-### MemoryEntry
-
-Stored in `.moe/memory/knowledge.jsonl` (one JSON object per line).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | `"mem-{uuid8}"` |
-| `type` | MemoryType | `convention`, `gotcha`, `pattern`, `decision`, `procedure`, `insight` |
-| `content` | string | The knowledge text (max 2000 chars) |
-| `tags` | string[] | Searchable tags (max 10, auto-generated + manual) |
-| `source.files` | string[] | Related file paths |
-| `source.taskId` | string\|null | Originating task |
-| `source.epicId` | string\|null | Originating epic |
-| `source.workerId` | string\|null | Who created this memory |
-| `confidence` | number | 0.0-2.0, starts at 1.0. Rises when helpful, falls when unhelpful. |
-| `accessCount` | number | How many times this memory has been retrieved |
-| `helpfulCount` | number | Agent feedback: marked helpful |
-| `unhelpfulCount` | number | Agent feedback: marked unhelpful |
-| `createdAt` | string | ISO 8601 timestamp |
-| `lastAccessedAt` | string | ISO 8601 timestamp |
-| `supersededBy` | string\|null | ID of newer entry that replaces this |
-| `contentHash` | string | First 8 chars of SHA-256 (deduplication) |
-
-### SessionSummary
-
-Stored in `.moe/memory/sessions/{workerId}_{taskId}.json`.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | `"sess-{uuid8}"` |
-| `workerId` | string | Which agent wrote this |
-| `taskId` | string | Which task this covers |
-| `role` | string | architect, worker, or qa |
-| `summary` | string | What was accomplished and key findings |
-| `memoriesCreated` | string[] | IDs of memories saved during this session |
-| `completedSteps` | string[] | Step IDs completed (workers) |
-| `createdAt` | string | ISO 8601 timestamp |
-
-### PlanningNotes
+## PlanningNotes
 
 Stored on task as `task.planningNotes` when architect submits a plan.
 
@@ -1229,12 +1176,6 @@ Stored on task as `task.planningNotes` when architect submits a plan.
 | `risks` | string | Edge cases and potential issues |
 | `keyFiles` | string[] | Critical files the worker should understand |
 
-### Memory Data Files
+## Cross-Session Memory
 
-```
-.moe/memory/
-├── knowledge.jsonl           # Append-only knowledge base (JSONL)
-├── knowledge.archive.jsonl   # Archived entries after pruning
-└── sessions/                 # Session summaries
-    └── {workerId}_{taskId}.json
-```
+Moe stores no memory entities under `.moe/`. Cross-session knowledge is owned by the **Serena MCP server**, which persists a flat per-name markdown store at `.serena/memories/*.md` (outside `.moe/`, not part of this schema). See [MEMORY.md](MEMORY.md) for the tools and naming convention.
