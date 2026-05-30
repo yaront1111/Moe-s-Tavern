@@ -1754,7 +1754,7 @@ export class StateManager {
     return this.teams.get(teamId) || null;
   }
 
-  getTeamByNameAndRole(name: string, role: TeamRole): Team | null {
+  getTeamByNameAndRole(name: string, role: TeamRole | null): Team | null {
     for (const team of this.teams.values()) {
       if (team.name === name && team.role === role) return team;
     }

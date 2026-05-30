@@ -266,18 +266,54 @@ if (-not $serenaPath) {
         $serenaPath = (Get-Command serena).Source
     }
 }
+
+# Serena's project root is decoupled from the Moe project root: a multi-repo
+# workspace root (no single language root, e.g. no root go.mod) yields near-empty
+# symbol intelligence, so pin Serena at the actual code repo. Resolution order:
+#   1) "serenaProject" in <project>/.moe-agent.json  (per-project, lives with the workspace)
+#   2) $env:MOE_SERENA_PROJECT                        (ad-hoc / CI override)
+#   3) the Moe project root                           (correct for single-repo projects)
+$serenaProject = $projectPath.ToString()
+$serenaProjectSource = "project root"
+$serenaProjectCandidate = $null
+$moeAgentConfig = Join-Path $projectPath ".moe-agent.json"
+if (Test-Path $moeAgentConfig) {
+    try {
+        $cfg = Get-Content -Raw -Path $moeAgentConfig | ConvertFrom-Json
+        if ($cfg.serenaProject) {
+            $serenaProjectCandidate = $cfg.serenaProject
+            $serenaProjectSource = ".moe-agent.json"
+        }
+    } catch {
+        Write-Host "[WARN] Could not parse $moeAgentConfig; ignoring serenaProject override"
+    }
+}
+if ((-not $serenaProjectCandidate) -and $env:MOE_SERENA_PROJECT) {
+    $serenaProjectCandidate = $env:MOE_SERENA_PROJECT
+    $serenaProjectSource = "MOE_SERENA_PROJECT"
+}
+if ($serenaProjectCandidate) {
+    $serenaProjectResolved = Resolve-Path -Path $serenaProjectCandidate -ErrorAction SilentlyContinue
+    if ($serenaProjectResolved) {
+        $serenaProject = $serenaProjectResolved.ToString()
+    } else {
+        Write-Host "[WARN] Serena project '$serenaProjectCandidate' (from $serenaProjectSource) not found; using Moe project root"
+        $serenaProjectSource = "project root (override not found)"
+    }
+}
+
 if ($serenaPath -and (Test-Path $serenaPath)) {
     $mcpConfigObj.mcpServers.serena = @{
         command = $serenaPath
         args = @(
             "start-mcp-server",
             "--context", "claude-code",
-            "--project", $projectPath.ToString(),
+            "--project", $serenaProject,
             "--enable-web-dashboard", "false",
             "--enable-gui-log-window", "false"
         )
     }
-    Write-Host "[OK] Serena MCP enabled for project: $($projectPath.ToString())"
+    Write-Host "[OK] Serena MCP enabled for project: $serenaProject (source: $serenaProjectSource)"
 } else {
     Write-Host "[INFO] Serena not found; skipping Serena MCP (install: uv tool install -p 3.13 serena-agent)"
 }
@@ -544,11 +580,12 @@ MOE_PROJECT_PATH = "$projectPathForToml"
         $serenaTomlBlock = ""
         if ($serenaPath -and (Test-Path $serenaPath)) {
             $serenaPathForToml = $serenaPath.ToString().Replace('\', '/')
+            $serenaProjectForToml = $serenaProject.Replace('\', '/')
             $serenaTomlBlock = @"
 
 [mcp_servers.serena]
 command = "$serenaPathForToml"
-args = ["start-mcp-server", "--context", "codex", "--project", "$projectPathForToml", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]
+args = ["start-mcp-server", "--context", "codex", "--project", "$serenaProjectForToml", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]
 "@
         }
 
@@ -671,7 +708,7 @@ $serenaTomlBlock
                 args = @(
                     "start-mcp-server",
                     "--context", "agent",
-                    "--project", $projectPath.ToString(),
+                    "--project", $serenaProject,
                     "--enable-web-dashboard", "false",
                     "--enable-gui-log-window", "false"
                 )
@@ -742,9 +779,12 @@ if ($Team) {
     # Team creation is idempotent on (name, role). enter_governance strictly requires
     # team.role === 'governor', so the governor role gets a role-bound team. For
     # architect/worker/qa we omit role: a user-supplied $Team like "Cordum" should
-    # mean ONE shared team across those roles. The mention router falls back to a
-    # workerId-substring match for @architects/@workers/@qa when team.role isn't
-    # set, so role-based addressing still works.
+    # mean ONE shared team across those roles. create_team resolves a null-role
+    # request to the ROLELESS team of that name only — it will never adopt a
+    # governor team that merely shares the name (doing so would route the worker to
+    # enter_governance and it could never claim a task). The mention router falls
+    # back to a workerId-substring match for @architects/@workers/@qa when team.role
+    # isn't set, so role-based addressing still works.
     if ($Role -eq 'governor') {
         $createTeamHash = @{ name = $Team; role = 'governor' }
     } else {

@@ -572,16 +572,61 @@ ensure_mcp_config() {
         fi
     fi
 
+    # Resolve Serena's project root, DECOUPLED from the Moe project root. A
+    # multi-repo workspace root (no single language root, e.g. no root go.mod)
+    # yields near-empty symbol intelligence from gopls/Serena, so pin Serena at
+    # the actual code repo. Resolution order:
+    #   1) "serenaProject" in <project>/.moe-agent.json  (per-project, lives with the workspace)
+    #   2) $MOE_SERENA_PROJECT                            (ad-hoc / CI override)
+    #   3) the Moe project root                           (correct for single-repo projects)
+    # Computed ONCE here (where SERENA_CMD is resolved) and exported so the
+    # claude/codex/gemini config writers below all see the same value; they read
+    # it via argv (their heredocs are quoted, so bash does not interpolate inside).
+    SERENA_PROJECT=""
+    SERENA_PROJECT_SOURCE="project root"
+    local moe_agent_config="$PROJECT/.moe-agent.json"
+    if [ -f "$moe_agent_config" ]; then
+        SERENA_PROJECT=$($PYTHON_CMD -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    print(d.get('serenaProject', ''))
+except Exception:
+    print('')
+" "$moe_agent_config" 2>/dev/null)
+        if [ -n "$SERENA_PROJECT" ]; then
+            SERENA_PROJECT_SOURCE=".moe-agent.json"
+        fi
+    fi
+    if [ -z "$SERENA_PROJECT" ] && [ -n "${MOE_SERENA_PROJECT:-}" ]; then
+        SERENA_PROJECT="$MOE_SERENA_PROJECT"
+        SERENA_PROJECT_SOURCE="MOE_SERENA_PROJECT"
+    fi
+    if [ -n "$SERENA_PROJECT" ] && [ ! -d "$SERENA_PROJECT" ]; then
+        echo -e "${YELLOW}[WARN]${NC} Serena project '$SERENA_PROJECT' (from $SERENA_PROJECT_SOURCE) not found; using Moe project root" >&2
+        SERENA_PROJECT=""
+        SERENA_PROJECT_SOURCE="project root (override not found)"
+    fi
+    if [ -z "$SERENA_PROJECT" ]; then
+        SERENA_PROJECT="$PROJECT"
+    fi
+    export SERENA_PROJECT
+    if [ -n "$SERENA_CMD" ]; then
+        echo -e "${GREEN}[OK]${NC} Serena MCP project: $SERENA_PROJECT (source: $SERENA_PROJECT_SOURCE)"
+    fi
+
     # Create or update config
     if [ ! -f "$config_file" ]; then
         # Create new config using python for safe JSON generation
-        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" << 'EOF'
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'EOF'
 import json, sys
 config_file = sys.argv[1]
 project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
 serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 entry = {'command': proxy_cmd, 'env': {'MOE_PROJECT_PATH': project_path}}
 if proxy_args:
     entry['args'] = [proxy_args]
@@ -589,7 +634,7 @@ config = {'mcpServers': {'moe': entry}}
 if serena_cmd:
     config['mcpServers']['serena'] = {
         'command': serena_cmd,
-        'args': ['start-mcp-server', '--context', 'claude-code', '--project', project_path,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
                  '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
     }
 with open(config_file, 'w') as f:
@@ -598,7 +643,7 @@ EOF
         echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
     else
         # Update existing config using python3 (pass vars via argv to prevent injection)
-        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" << 'EOF'
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'EOF'
 import json
 import sys
 
@@ -607,6 +652,7 @@ project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
 serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 try:
     with open(config_file, 'r') as f:
@@ -630,7 +676,7 @@ config['mcpServers']['moe'] = entry
 if serena_cmd:
     config['mcpServers']['serena'] = {
         'command': serena_cmd,
-        'args': ['start-mcp-server', '--context', 'claude-code', '--project', project_path,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
                  '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
     }
 elif 'serena' in config['mcpServers']:
@@ -647,7 +693,7 @@ EOF
     # regardless of working directory or global config issues
     local project_mcp="$PROJECT/.mcp.json"
     if [ -n "$PROXY_CMD" ]; then
-        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" << 'MCPEOF'
+        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF'
 import json
 import sys
 
@@ -656,6 +702,7 @@ proxy_cmd = sys.argv[2]
 proxy_args = sys.argv[3] if len(sys.argv) > 3 else ""
 project_path = sys.argv[4] if len(sys.argv) > 4 else ""
 serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 entry = {
     'command': proxy_cmd,
@@ -671,7 +718,7 @@ config = {'mcpServers': {'moe': entry}}
 if serena_cmd:
     config['mcpServers']['serena'] = {
         'command': serena_cmd,
-        'args': ['start-mcp-server', '--context', 'claude-code', '--project', project_path,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
                  '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
     }
 
@@ -704,7 +751,7 @@ if [ "$CLI_TYPE" = "codex" ]; then
     fi
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" << 'PYEOF'
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$SERENA_PROJECT" << 'PYEOF'
 import sys, os, re
 
 config_file = sys.argv[1]
@@ -713,6 +760,7 @@ proxy_args = sys.argv[3]
 project_path = sys.argv[4]
 role = sys.argv[5] if len(sys.argv) > 5 else "worker"
 serena_cmd = sys.argv[6] if len(sys.argv) > 6 else ""
+serena_project = sys.argv[7] if len(sys.argv) > 7 else project_path
 
 # Top-level config lines (role instructions + model instructions)
 top_level_lines = [
@@ -744,7 +792,7 @@ if serena_cmd:
         "",
         "[mcp_servers.serena]",
         f'command = "{serena_cmd}"',
-        'args = ["start-mcp-server", "--context", "codex", "--project", "%s", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]' % project_path,
+        'args = ["start-mcp-server", "--context", "codex", "--project", "%s", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]' % serena_project,
     ])
 
 if os.path.exists(config_file):
@@ -820,7 +868,7 @@ if [ "$CLI_TYPE" = "gemini" ]; then
     if [ -z "$PROXY_CMD" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
     else
-        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" << 'GEMINIEOF'
+        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF'
 import json
 import sys
 
@@ -829,6 +877,7 @@ project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
 serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 # Build the desired moe MCP server entry
 moe_entry = {
@@ -856,7 +905,7 @@ config['mcpServers']['moe'] = moe_entry
 if serena_cmd:
     config['mcpServers']['serena'] = {
         'command': serena_cmd,
-        'args': ['start-mcp-server', '--context', 'agent', '--project', project_path,
+        'args': ['start-mcp-server', '--context', 'agent', '--project', serena_project,
                  '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
     }
 elif 'serena' in config.get('mcpServers', {}):
