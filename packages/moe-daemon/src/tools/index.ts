@@ -53,6 +53,14 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: ToolHandler;
+  /**
+   * When true, the MCP dispatch layer does NOT wrap this tool in the global
+   * state mutex. Reserved for long-blocking tools (wait_for_task, chat_wait)
+   * that park for minutes — holding the mutex across them would freeze every
+   * other tool. All other tools are serialized to prevent lost updates from
+   * concurrent read-modify-write on the same entity.
+   */
+  blocking?: boolean;
 }
 
 export function getTools(state: StateManager): ToolDefinition[] {

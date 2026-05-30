@@ -1757,7 +1757,10 @@ $mentionsJson
                         }
                         if ($LASTEXITCODE -ne 0) {
                             Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
-                            return
+                            # Skip THIS task's commit and keep polling — `return`
+                            # here would exit the whole script and silently kill
+                            # the worker's polling loop (bash uses `continue`).
+                            continue
                         }
                         $currentBranch = $moeBranch
                     }

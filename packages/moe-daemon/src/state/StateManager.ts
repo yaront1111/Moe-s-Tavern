@@ -4,6 +4,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { AsyncLocalStorage } from 'async_hooks';
 import type {
   ActivityEvent,
   ActivityEventType,
@@ -48,6 +49,7 @@ import {
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
+import { nextStatusForRelease } from './staleWorkerWatcher.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
 
@@ -99,6 +101,12 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation:
 class AsyncMutex {
   private locked = false;
   private queue: Array<() => void> = [];
+  // Tracks whether the current async context already holds the lock, so that
+  // nested runExclusive calls (e.g. a tool serialized at the MCP dispatch layer
+  // that itself calls runExclusive, like claim_next_task or submit_plan's
+  // speed-mode auto-approve) re-enter instead of deadlocking on a non-reentrant
+  // re-acquire.
+  private readonly holding = new AsyncLocalStorage<boolean>();
 
   async acquire(): Promise<void> {
     if (!this.locked) {
@@ -120,10 +128,19 @@ class AsyncMutex {
     }
   }
 
+  /** True if the calling async context is already inside runExclusive. */
+  isHeld(): boolean {
+    return this.holding.getStore() === true;
+  }
+
   async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    // Reentrant: a context that already holds the lock runs fn directly.
+    if (this.holding.getStore()) {
+      return fn();
+    }
     await this.acquire();
     try {
-      return await fn();
+      return await this.holding.run(true, fn);
     } finally {
       this.release();
     }
@@ -450,6 +467,19 @@ export class StateManager {
 
       if (now - lastActivity > this.blockedTimeoutMs) {
         logger.info({ workerId: worker.id, blockedSince: worker.lastActivityAt }, 'Auto-timing out blocked worker');
+
+        // Release any task this worker still owns BEFORE nulling its
+        // currentTaskId. Otherwise the task stays WORKING/assigned to a
+        // now-IDLE worker: stale cleanup can't run (the worker still "owns"
+        // active work) and no other worker can claim it — a permanent orphan.
+        for (const owned of this.getTasksAssignedToWorker(worker.id)) {
+          if (ACTIVE_ASSIGNMENT_STATUSES.has(owned.status)) {
+            await this.updateTask(owned.id, {
+              assignedWorkerId: null,
+              status: nextStatusForRelease(owned.status),
+            }, 'WORKER_TIMEOUT');
+          }
+        }
 
         await this.updateWorker(worker.id, {
           status: 'IDLE',
@@ -1857,12 +1887,26 @@ export class StateManager {
       throw new Error(`Team ${team.name} is full (max ${team.maxSize} members)`);
     }
 
+    // A worker belongs to exactly one team (worker.teamId is single-valued).
+    // Remove it from any previous team's memberIds first, otherwise the old
+    // team keeps listing it — inflating member counts, "team full" checks, and
+    // memberIds-iterating consumers (e.g. submit_plan's governor lookup) that
+    // would treat the moved worker as still a member of the old team.
+    const worker = this.workers.get(workerId);
+    if (worker?.teamId && worker.teamId !== teamId) {
+      const oldTeam = this.teams.get(worker.teamId);
+      if (oldTeam?.memberIds.includes(workerId)) {
+        await this.updateTeam(worker.teamId, {
+          memberIds: oldTeam.memberIds.filter((id) => id !== workerId)
+        });
+      }
+    }
+
     const updated = await this.updateTeam(teamId, {
       memberIds: [...team.memberIds, workerId]
     });
 
     // Set worker's teamId
-    const worker = this.workers.get(workerId);
     if (worker) {
       await this.updateWorker(workerId, { teamId });
     }
@@ -1883,9 +1927,11 @@ export class StateManager {
       memberIds: team.memberIds.filter((id) => id !== workerId)
     });
 
-    // Clear worker's teamId
+    // Clear worker's teamId only if it actually points at the team being left.
+    // A worker may still be a stale member of this team's memberIds while its
+    // real current team is another — don't drop the real membership pointer.
     const worker = this.workers.get(workerId);
-    if (worker) {
+    if (worker && worker.teamId === teamId) {
       await this.updateWorker(workerId, { teamId: null });
     }
 

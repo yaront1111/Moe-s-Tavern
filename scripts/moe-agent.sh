@@ -1371,8 +1371,10 @@ FIRST_RUN=true
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
-        echo -e "${YELLOW}Agent exited, relaunching in 2 seconds... (Ctrl+C to stop)${NC}"
-        sleep 2
+        echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
+        # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
+        # full CLI relaunch every 2s on an idle worker.
+        sleep "$POLL_INTERVAL"
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
     IS_FIRST_ITERATION="$FIRST_RUN"

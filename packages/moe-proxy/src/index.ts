@@ -8,7 +8,13 @@ import WebSocket from 'ws';
 import { getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
 
 // Reconnect configuration
-const MAX_RECONNECT_ATTEMPTS = 5;
+// Keep retrying for a generous wall-clock window rather than a fixed attempt
+// count. A supervised daemon restart can take tens of seconds (port scan, crash
+// backoff capped at 30s); a 5-attempt/~25s budget would make the proxy exit(1)
+// permanently — killing the `moe` MCP server for the whole agent session — mid
+// restart. The window is measured from the first failed attempt and reset on a
+// successful connect.
+const RECONNECT_WINDOW_MS = 5 * 60 * 1000;
 const INITIAL_RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 10000;
 
@@ -23,6 +29,8 @@ const WAIT_FOR_TASK_TIMEOUT_MS = 11 * 60 * 1000; // 11 minutes (longer than max 
 const TIMEOUT_CHECK_INTERVAL_MS = 5000;
 
 let reconnectAttempts = 0;
+// Wall-clock start of the current disconnect's retry window; null when connected.
+let reconnectStartedAt: number | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let isConnected = false;
 let currentWebSocket: WebSocket | null = null;
@@ -120,6 +128,20 @@ function getRequestTimeout(parsed: Record<string, unknown>): number {
     }
   }
   return MESSAGE_TIMEOUT_MS;
+}
+
+/**
+ * True while we should keep trying to reconnect. Measures elapsed wall-clock
+ * from the first failed attempt (set lazily here) against RECONNECT_WINDOW_MS,
+ * so a slow daemon restart doesn't exhaust a fixed attempt count. Reset to
+ * null on a successful open.
+ */
+function withinReconnectWindow(): boolean {
+  if (reconnectStartedAt === null) {
+    reconnectStartedAt = Date.now();
+    return true;
+  }
+  return Date.now() - reconnectStartedAt < RECONNECT_WINDOW_MS;
 }
 
 function calculateReconnectDelay(): number {
@@ -253,10 +275,10 @@ function connect(projectPath: string): void {
       process.exit(1);
       return;
     }
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+    if (withinReconnectWindow()) {
       const delay = calculateReconnectDelay();
       reconnectAttempts++;
-      writeLog(`Daemon not running, retrying in ${Math.round(delay)}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+      writeLog(`Daemon not running, retrying in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
       reconnectTimer = setTimeout(() => connect(projectPath), delay);
       return;
     }
@@ -274,6 +296,7 @@ function connect(projectPath: string): void {
   ws.on('open', () => {
     isConnected = true;
     reconnectAttempts = 0;
+    reconnectStartedAt = null;
     writeLog('Connected to daemon');
 
     // Start timeout checker
@@ -351,10 +374,10 @@ function connect(projectPath: string): void {
       pendingRequestTimes.clear();
     }
 
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+    if (withinReconnectWindow()) {
       const delay = calculateReconnectDelay();
       reconnectAttempts++;
-      writeLog(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+      writeLog(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
       reconnectTimer = setTimeout(() => connect(projectPath), delay);
     } else {
       // Also send errors for queued messages that never made it out

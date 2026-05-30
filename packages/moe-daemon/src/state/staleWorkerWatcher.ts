@@ -31,7 +31,7 @@ export interface StaleWorkerWatcherOptions {
  *   - AWAITING_APPROVAL→ AWAITING_APPROVAL (human still owns approval)
  * Anything else falls back to BACKLOG.
  */
-function nextStatusForRelease(currentStatus: TaskStatus): TaskStatus {
+export function nextStatusForRelease(currentStatus: TaskStatus): TaskStatus {
   switch (currentStatus) {
     case 'PLANNING':
       return 'PLANNING';
@@ -50,6 +50,9 @@ interface ReleaseCandidate {
   worker: Worker;
   task: Task;
   secondsStale: number;
+  /** The worker's currentTaskId points at a task already reassigned to someone
+   * else — we only clear the worker's pointer, no release/banner. */
+  alreadyReassigned: boolean;
 }
 
 function findReleaseCandidates(
@@ -69,11 +72,12 @@ function findReleaseCandidates(
     // Only release when the task is *actually* assigned to this worker. If
     // the worker thinks they own a task that's already been reassigned, just
     // clear their currentTaskId and skip the chat banner.
-    if (task.assignedWorkerId !== worker.id) {
-      out.push({ worker, task, secondsStale: Math.floor(ageMs / 1000) });
-      continue;
-    }
-    out.push({ worker, task, secondsStale: Math.floor(ageMs / 1000) });
+    out.push({
+      worker,
+      task,
+      secondsStale: Math.floor(ageMs / 1000),
+      alreadyReassigned: task.assignedWorkerId !== worker.id,
+    });
   }
   return out;
 }
@@ -89,7 +93,18 @@ export async function sweepStaleWorkers(
   const now = options.now();
   const candidates = findReleaseCandidates(state, options.staleAfterMs, now);
   let released = 0;
-  for (const { worker, task, secondsStale } of candidates) {
+  for (const { worker, task, secondsStale, alreadyReassigned } of candidates) {
+    // The task was already reassigned to someone else — don't announce a
+    // spurious release; just clear this stale worker's dangling pointer.
+    if (alreadyReassigned) {
+      if (!options.dryRun) {
+        try {
+          await state.touchWorker(worker.id, { currentTaskId: null });
+        } catch { /* never block sweep */ }
+      }
+      continue;
+    }
+
     const minutes = Math.round(secondsStale / 60);
     const banner = `🔓 auto-released task ${task.id} from stale worker ${worker.id} (idle ${minutes}m)`;
     try {

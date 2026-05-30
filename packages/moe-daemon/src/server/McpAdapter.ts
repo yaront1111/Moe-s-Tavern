@@ -265,7 +265,14 @@ export class McpAdapter {
         }
 
         try {
-          const result = await tool.handler(params.arguments, this.state);
+          // Serialize state-mutating tools through the global state mutex so
+          // concurrent MCP calls on the same entity can't lose updates (the
+          // handlers do read-modify-write and were previously unprotected).
+          // Blocking tools opt out — they'd hold the lock for minutes. The
+          // mutex is reentrant, so tools that already call runExclusive
+          // internally (claim_next_task, submit_plan, …) are safe to wrap.
+          const invoke = () => tool.handler(params.arguments, this.state);
+          const result = tool.blocking ? await invoke() : await this.state.runExclusive(invoke);
           return {
             jsonrpc: '2.0',
             id,

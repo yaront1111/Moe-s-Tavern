@@ -69,7 +69,11 @@ describe('McpAdapter', () => {
   let mockState: StateManager;
 
   beforeEach(() => {
-    mockState = {} as StateManager;
+    // Real StateManager serializes mutating MCP tool calls through its mutex;
+    // the adapter calls state.runExclusive. Pass it through in the mock.
+    mockState = {
+      runExclusive: <T>(fn: () => Promise<T>) => fn(),
+    } as unknown as StateManager;
     adapter = new McpAdapter(mockState);
   });
 

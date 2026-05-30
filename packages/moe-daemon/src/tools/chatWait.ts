@@ -44,6 +44,7 @@ export function cleanupStaleChatWaiters(state: StateManager): number {
 export function chatWaitTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.chat_wait',
+    blocking: true,
     description: 'Long-poll for chat messages mentioning this worker or from humans. Returns when a relevant message arrives or timeout.',
     inputSchema: {
       type: 'object',
@@ -111,6 +112,49 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       const channelSet = params.channels ? new Set(params.channels) : null;
       const workerId = params.workerId;
 
+      // Backlog check (lost-wakeup fix): the subscription below only sees
+      // FUTURE events, so a relevant message that arrived in the window between
+      // the worker's last chat_read and this chat_wait would otherwise be
+      // missed — the worker blocks until timeout (up to 10 min) on an already-
+      // delivered message. Unread counts are incremented for exactly the
+      // workers a message routes to (mentions/human) and cleared on chat_read,
+      // so a non-empty summary means a relevant message is already waiting.
+      // (Scoped to the no-channel-filter path; the channelSet "watch any
+      // message" path isn't reflected in unread counts.)
+      if (!channelSet) {
+        const unread = state.getUnreadSummary(workerId);
+        if (unread && unread.total > 0) {
+          const backlog: ChatMessage[] = [];
+          const worker = state.getWorker(workerId);
+          for (const channelId of Object.keys(unread.channels)) {
+            const sinceId = worker?.chatCursors?.[channelId];
+            try {
+              const msgs = await state.getMessages(channelId, { sinceId, limit: 50 });
+              for (const m of msgs) {
+                if (m.sender !== workerId) backlog.push(m);
+              }
+            } catch { /* skip unreadable channel */ }
+          }
+          if (backlog.length > 0) {
+            backlog.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+            const messages = truncateChatMessages(backlog, maxContentChars);
+            const truncated = countTruncatedMessages(messages);
+            logger.info(
+              { workerId, count: messages.length },
+              'chat_wait returning backlog (message arrived before wait — avoided lost wakeup)'
+            );
+            return {
+              hasMessage: true,
+              messages,
+              truncated,
+              ...(truncated > 0
+                ? { hint: 'Long chat messages are truncated by default. Use moe.chat_read with maxContentChars: 0 for full content.' }
+                : {})
+            };
+          }
+        }
+      }
+
       logger.info({ workerId, channels: params.channels, timeoutMs }, 'Worker waiting for chat message');
 
       return new Promise<unknown>((resolve) => {
@@ -158,8 +202,11 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
             // Caller subscribed to specific channels — the subscription set
             // IS the filter. Any message in those channels is relevant (this
             // matches the governor's "watch #governors for any signal"
-            // expectation in docs/roles/governor.md).
+            // expectation in docs/roles/governor.md). Don't wake on the
+            // worker's OWN posts, though — that returns prematurely in a
+            // post-then-wait loop.
             if (!channelSet.has(message.channel)) return;
+            if (message.sender === workerId) return;
           } else {
             // No explicit channel filter — fall back to the conservative
             // mention/human filter so workers in broad-scope chat_wait

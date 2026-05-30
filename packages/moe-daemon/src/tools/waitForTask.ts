@@ -96,6 +96,7 @@ function findMatchingTask(
 export function waitForTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.wait_for_task',
+    blocking: true,
     description: 'Block until a claimable task matching the given statuses appears. Returns immediately if one already exists. Does NOT claim the task - call moe.claim_next_task after waking.',
     inputSchema: {
       type: 'object',
