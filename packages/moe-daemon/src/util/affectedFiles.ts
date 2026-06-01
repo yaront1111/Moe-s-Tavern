@@ -18,6 +18,17 @@ import { invalidInput } from './errors.js';
 
 const MAX_PATH_LEN = 500;
 
+// On case-insensitive filesystems (Windows — the daemon's primary target — and
+// default macOS) `src/Foo.ts` and `src/foo.ts` are the SAME file. The daemon
+// runs locally alongside the repo, so process.platform reflects the FS. Fold
+// case only when comparing collisions; the stored/displayed path keeps its
+// original casing.
+const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
+
+function collisionKey(path: string): string {
+  return CASE_INSENSITIVE_FS ? path.toLowerCase() : path;
+}
+
 /**
  * Canonicalize a single affected-file path. Throws `invalidInput` on shapes
  * the daemon refuses to store:
@@ -95,17 +106,18 @@ export function collectActiveAffectedFiles(
   tasks: Iterable<Task>,
   excludeTaskId: string
 ): Map<string, Set<string>> {
-  // file → set of taskIds currently touching it
+  // case-folded file key → set of taskIds currently touching it
   const ownership = new Map<string, Set<string>>();
   for (const t of tasks) {
     if (t.id === excludeTaskId) continue;
     if (t.status !== 'WORKING') continue;
     const files = collectTaskAffectedFiles(t);
     for (const f of files) {
-      let owners = ownership.get(f);
+      const key = collisionKey(f);
+      let owners = ownership.get(key);
       if (!owners) {
         owners = new Set();
-        ownership.set(f, owners);
+        ownership.set(key, owners);
       }
       owners.add(t.id);
     }
@@ -145,7 +157,7 @@ export function computeFileCollisions(
   // Group hits by task
   const perTask = new Map<string, Set<string>>();
   for (const file of candidateFiles) {
-    const owners = activeOwnership.get(file);
+    const owners = activeOwnership.get(collisionKey(file));
     if (!owners) continue;
     for (const owner of owners) {
       let bucket = perTask.get(owner);

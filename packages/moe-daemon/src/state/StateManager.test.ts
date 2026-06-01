@@ -512,11 +512,6 @@ describe('StateManager', () => {
         speedModeDelayMs: 1000,
         agentCommand: 'codex',
         columnLimits: { WORKING: 2 },
-        memory: {
-          autoInject: 'off',
-          maxAutoResults: 2,
-          autoSave: { qaRejection: false },
-        },
       });
 
       expect(updated.settings.approvalMode).toBe('TURBO');
@@ -524,17 +519,6 @@ describe('StateManager', () => {
       expect(updated.settings.agentCommand).toBe('codex');
       expect(updated.settings.autoCreateBranch).toBe(true);
       expect(updated.settings.columnLimits).toEqual({ WORKING: 2 });
-      expect(updated.settings.memory).toEqual({
-        autoInject: 'off',
-        maxAutoResults: 2,
-        maxAutoChars: 500,
-        autoSave: {
-          completedTask: false,
-          firstPassApproval: false,
-          qaRejection: false,
-          reopenedApproval: true,
-        },
-      });
     });
   });
 

@@ -42,7 +42,7 @@ The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop be
 
 ## Quality memory
 
-When you discover a non-obvious constraint, gotcha, or pattern during exploration, call `moe.remember`. Manual remembers survive dedup better and rank higher on recall than auto-extracted ones.
+Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
 

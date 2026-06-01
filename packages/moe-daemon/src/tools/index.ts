@@ -41,10 +41,6 @@ import { chatReadTool } from './chatRead.js';
 import { chatChannelsTool } from './chatChannels.js';
 import { chatJoinTool } from './chatJoin.js';
 import { chatWaitTool } from './chatWait.js';
-import { rememberTool } from './remember.js';
-import { recallTool } from './recall.js';
-import { reflectTool } from './reflect.js';
-import { saveSessionSummaryTool } from './saveSessionSummary.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
@@ -57,6 +53,14 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: ToolHandler;
+  /**
+   * When true, the MCP dispatch layer does NOT wrap this tool in the global
+   * state mutex. Reserved for long-blocking tools (wait_for_task, chat_wait)
+   * that park for minutes — holding the mutex across them would freeze every
+   * other tool. All other tools are serialized to prevent lost updates from
+   * concurrent read-modify-write on the same entity.
+   */
+  blocking?: boolean;
 }
 
 export function getTools(state: StateManager): ToolDefinition[] {
@@ -99,10 +103,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatChannelsTool(state),
     chatJoinTool(state),
     chatWaitTool(state),
-    rememberTool(state),
-    recallTool(state),
-    reflectTool(state),
-    saveSessionSummaryTool(state),
     getHandoffHistoryTool(state),
     listMetricsTool(state),
     setTaskBudgetTool(state),

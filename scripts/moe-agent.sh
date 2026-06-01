@@ -229,7 +229,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
             echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
-            echo "  --model MODEL            Claude model override (defaults: architect=opus-4-7, worker/qa=sonnet-4-6)"
+            echo "  --model MODEL            Claude model override (default: all roles = opus-4-8)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -560,26 +560,90 @@ ensure_mcp_config() {
 
     mkdir -p "$config_dir"
 
+    # Resolve the Serena binary (LSP symbol navigation/editing). Pinned to this
+    # project below so agents get exact cross-file code intelligence. Empty if not
+    # installed -> the python writers skip the serena entry. Override: MOE_SERENA_PATH.
+    SERENA_CMD="${MOE_SERENA_PATH:-}"
+    if [ -z "$SERENA_CMD" ]; then
+        if [ -x "$HOME/.local/bin/serena" ]; then
+            SERENA_CMD="$HOME/.local/bin/serena"
+        elif command -v serena &> /dev/null; then
+            SERENA_CMD="serena"
+        fi
+    fi
+
+    # Resolve Serena's project root, DECOUPLED from the Moe project root. A
+    # multi-repo workspace root (no single language root, e.g. no root go.mod)
+    # yields near-empty symbol intelligence from gopls/Serena, so pin Serena at
+    # the actual code repo. Resolution order:
+    #   1) "serenaProject" in <project>/.moe-agent.json  (per-project, lives with the workspace)
+    #   2) $MOE_SERENA_PROJECT                            (ad-hoc / CI override)
+    #   3) the Moe project root                           (correct for single-repo projects)
+    # Computed ONCE here (where SERENA_CMD is resolved) and exported so the
+    # claude/codex/gemini config writers below all see the same value; they read
+    # it via argv (their heredocs are quoted, so bash does not interpolate inside).
+    SERENA_PROJECT=""
+    SERENA_PROJECT_SOURCE="project root"
+    local moe_agent_config="$PROJECT/.moe-agent.json"
+    if [ -f "$moe_agent_config" ]; then
+        SERENA_PROJECT=$($PYTHON_CMD -c "
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    print(d.get('serenaProject', ''))
+except Exception:
+    print('')
+" "$moe_agent_config" 2>/dev/null)
+        if [ -n "$SERENA_PROJECT" ]; then
+            SERENA_PROJECT_SOURCE=".moe-agent.json"
+        fi
+    fi
+    if [ -z "$SERENA_PROJECT" ] && [ -n "${MOE_SERENA_PROJECT:-}" ]; then
+        SERENA_PROJECT="$MOE_SERENA_PROJECT"
+        SERENA_PROJECT_SOURCE="MOE_SERENA_PROJECT"
+    fi
+    if [ -n "$SERENA_PROJECT" ] && [ ! -d "$SERENA_PROJECT" ]; then
+        echo -e "${YELLOW}[WARN]${NC} Serena project '$SERENA_PROJECT' (from $SERENA_PROJECT_SOURCE) not found; using Moe project root" >&2
+        SERENA_PROJECT=""
+        SERENA_PROJECT_SOURCE="project root (override not found)"
+    fi
+    if [ -z "$SERENA_PROJECT" ]; then
+        SERENA_PROJECT="$PROJECT"
+    fi
+    export SERENA_PROJECT
+    if [ -n "$SERENA_CMD" ]; then
+        echo -e "${GREEN}[OK]${NC} Serena MCP project: $SERENA_PROJECT (source: $SERENA_PROJECT_SOURCE)"
+    fi
+
     # Create or update config
     if [ ! -f "$config_file" ]; then
         # Create new config using python for safe JSON generation
-        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'EOF'
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'EOF'
 import json, sys
 config_file = sys.argv[1]
 project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
+serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 entry = {'command': proxy_cmd, 'env': {'MOE_PROJECT_PATH': project_path}}
 if proxy_args:
     entry['args'] = [proxy_args]
 config = {'mcpServers': {'moe': entry}}
+if serena_cmd:
+    config['mcpServers']['serena'] = {
+        'command': serena_cmd,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
+                 '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
+    }
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
 EOF
         echo -e "${GREEN}[OK]${NC} Created MCP config: $config_file"
     else
         # Update existing config using python3 (pass vars via argv to prevent injection)
-        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'EOF'
+        $PYTHON_CMD - "$config_file" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'EOF'
 import json
 import sys
 
@@ -587,6 +651,8 @@ config_file = sys.argv[1]
 project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
+serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 try:
     with open(config_file, 'r') as f:
@@ -607,6 +673,15 @@ if proxy_args:
     entry['args'] = [proxy_args]
 config['mcpServers']['moe'] = entry
 
+if serena_cmd:
+    config['mcpServers']['serena'] = {
+        'command': serena_cmd,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
+                 '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
+    }
+elif 'serena' in config['mcpServers']:
+    del config['mcpServers']['serena']
+
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
 
@@ -618,7 +693,7 @@ EOF
     # regardless of working directory or global config issues
     local project_mcp="$PROJECT/.mcp.json"
     if [ -n "$PROXY_CMD" ]; then
-        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" << 'MCPEOF'
+        $PYTHON_CMD - "$project_mcp" "$PROXY_CMD" "$PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$SERENA_PROJECT" << 'MCPEOF'
 import json
 import sys
 
@@ -626,6 +701,8 @@ project_mcp = sys.argv[1]
 proxy_cmd = sys.argv[2]
 proxy_args = sys.argv[3] if len(sys.argv) > 3 else ""
 project_path = sys.argv[4] if len(sys.argv) > 4 else ""
+serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 entry = {
     'command': proxy_cmd,
@@ -637,6 +714,13 @@ if proxy_args:
     entry['args'] = [proxy_args]
 
 config = {'mcpServers': {'moe': entry}}
+
+if serena_cmd:
+    config['mcpServers']['serena'] = {
+        'command': serena_cmd,
+        'args': ['start-mcp-server', '--context', 'claude-code', '--project', serena_project,
+                 '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
+    }
 
 with open(project_mcp, 'w') as f:
     json.dump(config, f, indent=2)
@@ -667,7 +751,7 @@ if [ "$CLI_TYPE" = "codex" ]; then
     fi
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" << 'PYEOF'
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$SERENA_PROJECT" << 'PYEOF'
 import sys, os, re
 
 config_file = sys.argv[1]
@@ -675,6 +759,8 @@ proxy_cmd = sys.argv[2]
 proxy_args = sys.argv[3]
 project_path = sys.argv[4]
 role = sys.argv[5] if len(sys.argv) > 5 else "worker"
+serena_cmd = sys.argv[6] if len(sys.argv) > 6 else ""
+serena_project = sys.argv[7] if len(sys.argv) > 7 else project_path
 
 # Top-level config lines (role instructions + model instructions)
 top_level_lines = [
@@ -698,6 +784,17 @@ moe_block_lines.extend([
 ])
 moe_block = "\n".join(moe_block_lines)
 
+# Build the serena MCP server TOML block (LSP code intelligence + memory, pinned
+# to this project). Empty when Serena isn't installed. Serena needs no .env table.
+serena_block = ""
+if serena_cmd:
+    serena_block = "\n".join([
+        "",
+        "[mcp_servers.serena]",
+        f'command = "{serena_cmd}"',
+        'args = ["start-mcp-server", "--context", "codex", "--project", "%s", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]' % serena_project,
+    ])
+
 if os.path.exists(config_file):
     # Merge: read existing, remove old moe sections and moe-managed top-level keys
     with open(config_file, "r") as f:
@@ -717,10 +814,10 @@ if os.path.exists(config_file):
     skip = False
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("[mcp_servers.moe]") or stripped.startswith("[mcp_servers.moe.env]"):
+        if stripped.startswith("[mcp_servers.moe]") or stripped.startswith("[mcp_servers.moe.env]") or stripped.startswith("[mcp_servers.serena]"):
             skip = True
             continue
-        if skip and stripped.startswith("[") and not stripped.startswith("[mcp_servers.moe"):
+        if skip and stripped.startswith("[") and not stripped.startswith("[mcp_servers.moe") and not stripped.startswith("[mcp_servers.serena]"):
             skip = False
         if not skip:
             cleaned.append(line)
@@ -741,12 +838,12 @@ if os.path.exists(config_file):
     first_section = re.search(r'^\[', content_str, re.MULTILINE)
     if first_section:
         pos = first_section.start()
-        content = content_str[:pos].rstrip() + "\n" + top_level_block + "\n\n" + content_str[pos:].rstrip() + "\n" + moe_block + "\n"
+        content = content_str[:pos].rstrip() + "\n" + top_level_block + "\n\n" + content_str[pos:].rstrip() + "\n" + moe_block + serena_block + "\n"
     else:
-        content = content_str.rstrip() + "\n" + top_level_block + "\n" + moe_block + "\n"
+        content = content_str.rstrip() + "\n" + top_level_block + "\n" + moe_block + serena_block + "\n"
 else:
     # Create new config
-    content = '# Codex project config (auto-generated by moe-agent)\nproject_doc_fallback_filenames = ["CLAUDE.md", ".codex/agent-instructions.md"]\n' + top_level_block + "\n" + moe_block + "\n"
+    content = '# Codex project config (auto-generated by moe-agent)\nproject_doc_fallback_filenames = ["CLAUDE.md", ".codex/agent-instructions.md"]\n' + top_level_block + "\n" + moe_block + serena_block + "\n"
 
 with open(config_file, "w") as f:
     f.write(content)
@@ -771,7 +868,7 @@ if [ "$CLI_TYPE" = "gemini" ]; then
     if [ -z "$PROXY_CMD" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Gemini MCP config"
     else
-        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" << 'GEMINIEOF'
+        $PYTHON_CMD - "$GEMINI_CONFIG_FILE" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$SERENA_PROJECT" << 'GEMINIEOF'
 import json
 import sys
 
@@ -779,6 +876,8 @@ config_file = sys.argv[1]
 project_path = sys.argv[2]
 proxy_cmd = sys.argv[3]
 proxy_args = sys.argv[4] if len(sys.argv) > 4 else ""
+serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 
 # Build the desired moe MCP server entry
 moe_entry = {
@@ -800,6 +899,17 @@ except (FileNotFoundError, json.JSONDecodeError):
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 config['mcpServers']['moe'] = moe_entry
+
+# Serena MCP (LSP code intelligence + memory), pinned to this project. Set/refresh
+# when installed; drop a stale entry when it isn't, for parity with the claude writer.
+if serena_cmd:
+    config['mcpServers']['serena'] = {
+        'command': serena_cmd,
+        'args': ['start-mcp-server', '--context', 'agent', '--project', serena_project,
+                 '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false'],
+    }
+elif 'serena' in config.get('mcpServers', {}):
+    del config['mcpServers']['serena']
 
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
@@ -1080,8 +1190,8 @@ fi
 
 # Resolve Claude model for this role.
 # Precedence: --model flag -> project.json settings.models.<role> -> per-role default.
-# architect -> Opus (planning quality + 1M ctx for long task histories on reopens)
-# worker/qa -> Sonnet (~40% cheaper than Opus, fine for routine impl/review)
+# All roles -> Opus 4.8 (planning/review/impl quality + 1M ctx for long task
+# histories on reopens). Override per role via project.json settings.models.{role}.
 RESOLVED_MODEL="$MODEL"
 if [ -z "$RESOLVED_MODEL" ] && [ -f "$PROJECT_JSON" ] && [ -n "$PYTHON_CMD" ]; then
     RESOLVED_MODEL=$("$PYTHON_CMD" -c "
@@ -1095,14 +1205,14 @@ except Exception:
 " "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
 fi
 if [ -z "$RESOLVED_MODEL" ]; then
-    # All roles default to Opus 4.7 -- matches moe-agent.ps1. The projects this
+    # All roles default to Opus 4.8 -- matches moe-agent.ps1. The projects this
     # wrapper runs against are large, deeply-coupled stacks where the
     # planning/review/implementation quality difference dominates the per-token
     # cost difference. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
-        architect) RESOLVED_MODEL="claude-opus-4-7" ;;
-        worker)    RESOLVED_MODEL="claude-opus-4-7" ;;
-        qa)        RESOLVED_MODEL="claude-opus-4-7" ;;
+        architect) RESOLVED_MODEL="claude-opus-4-8" ;;
+        worker)    RESOLVED_MODEL="claude-opus-4-8" ;;
+        qa)        RESOLVED_MODEL="claude-opus-4-8" ;;
     esac
 fi
 if [ -n "$RESOLVED_MODEL" ]; then
@@ -1239,15 +1349,9 @@ post_flight() {
         return 0
     fi
 
-    local summary
-    summary="$ROLE session ended (CLI exit=$exit_code). See task activity log for details."
-    if ! moe_rpc save_session_summary \
-        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'taskId':sys.argv[2],'summary':sys.argv[3]}))" \
-            "$WORKER_ID" "$PREFLIGHT_TASK_ID" "$summary" 2>/dev/null)" \
-        > /dev/null 2>&1; then
-        echo -e "${YELLOW}[WARN]${NC} post-flight save_session_summary failed" >&2
-    fi
-
+    # Session handoff is no longer persisted by the wrapper: cross-session memory
+    # now lives in Serena (the agent writes a `task-<id>-handoff` note before it
+    # stops). The post-flight chat message below remains the session-ended signal.
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
         local content
         content="$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$exit_code)"
@@ -1267,8 +1371,10 @@ FIRST_RUN=true
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
-        echo -e "${YELLOW}Agent exited, relaunching in 2 seconds... (Ctrl+C to stop)${NC}"
-        sleep 2
+        echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
+        # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
+        # full CLI relaunch every 2s on an idle worker.
+        sleep "$POLL_INTERVAL"
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
     IS_FIRST_ITERATION="$FIRST_RUN"
@@ -1277,7 +1383,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     CLI_EXIT_CODE=0
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
-    # Claim the next task, fetch context, read chat backlog, recall memory.
+    # Claim the next task, fetch context, read chat backlog.
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     PREFLIGHT_TASK_ID=""
@@ -1454,9 +1560,9 @@ except Exception:
                         2>/dev/null || echo "")
                 fi
 
-                # 7. Memory recall is handled inside moe.get_context (memory.relevant
-                #    in <claimed_task_context> below). No separate preflight recall
-                #    call -- it duplicates the same search and burns tokens.
+                # 7. Cross-session memory lives in Serena now: the agent pulls prior
+                #    knowledge with Serena list_memories / read_memory on task start.
+                #    The wrapper does no memory preflight.
 
                 # 8. Extract phase-recommended skill from context.nextAction. We
                 #    DO NOT inline the body -- the agent loads it via the Skill tool.
@@ -1690,7 +1796,7 @@ except Exception:
 
         DYNAMIC_CONTEXT="# Pre-flight Complete (runtime-injected -- do not repeat)
 You ARE: $ROLE agent, workerId=$WORKER_ID.
-The wrapper has claimed your task and surfaced unread/memory counts in <inbox> below. Fetch the full content via moe.chat_read / moe.recall when it is relevant to your next step. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
+The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; use Serena (list_memories / read_memory) to pick up prior knowledge for this task/area. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
 
 DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
 
@@ -1704,7 +1810,7 @@ $PREFLIGHT_CONTEXT
 unread_general=$PREFLIGHT_GENERAL_COUNT
 unread_task=$PREFLIGHT_TASK_COUNT
 mentions=$PREFLIGHT_ROUTED_MENTIONS_COUNT (see <routed_mentions> below if > 0)
-memory_hits=see memory.relevant in <claimed_task_context>
+memory=use Serena list_memories / read_memory for prior knowledge on this task/area
 </inbox>
 
 <pending_questions>
@@ -1761,13 +1867,13 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             # per-task content; system prompt stays stable for cache hits.
             case $ROLE in
                 architect)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, call moe.save_session_summary, then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings), then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 worker)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, call moe.save_session_summary with what you did. Use moe.remember to save any non-obvious gotchas you discovered. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 qa)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary and moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern), and call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
             esac
         elif [ "$ROLE" = "governor" ]; then
@@ -1779,7 +1885,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             PROMPT_BODY="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
         else
             # Pre-flight was skipped or failed -- fall back to the legacy multi-step prompt
-            PROMPT_BODY="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. Keep waiting until you get a task."
+            PROMPT_BODY="First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $ROLE. Then call moe.chat_read to catch up on any unread messages from other agents or human. Then call moe.get_pending_questions to check for unanswered questions. Answer any you find using moe.add_comment. Then use the MCP tool moe.claim_next_task with args $CLAIM_JSON. Do NOT read .moe/ files directly - only use moe.* MCP tools. If hasNext is false, call moe.wait_for_task with the same statuses and workerId. When it returns hasNext:true, call moe.claim_next_task again. If it returns hasChatMessage:true, call moe.chat_read to read and respond, then call moe.wait_for_task again. If it returns hasPendingQuestion:true, call moe.get_pending_questions, answer them with moe.add_comment, then call moe.wait_for_task again. If it returns timedOut:true, call moe.wait_for_task again. After claiming a task and calling moe.get_context, use Serena list_memories / read_memory to pick up prior knowledge for this task/area. Before calling moe.wait_for_task, use Serena write_memory to record a 'task-<id>-handoff' note (and any gotcha-<area> learnings) so the next agent benefits. Keep waiting until you get a task."
         fi
     else
         echo "Suggested first call:"
@@ -1831,10 +1937,10 @@ $PROMPT_BODY"
             # Legacy fallback -- pre-flight skipped or failed
             ROLE_WORKFLOW=""
             case $ROLE in
-                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
-                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
-                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
-                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → read Serena memory → explore codebase → submit_plan → write Serena memory (handoff + learnings) → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → start_step → implement → complete_step → complete_task → write Serena memory (handoff + learnings) → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → review code and tests → qa_approve or qa_reject → write Serena memory (handoff + learnings) → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → read Serena memory → complete task → write Serena memory handoff" ;;
             esac
             if [ "$AUTO_CLAIM" = true ]; then
                 SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."
@@ -1894,10 +2000,10 @@ $PROMPT_BODY"
         else
             ROLE_WORKFLOW=""
             case $ROLE in
-                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → recall memory → explore codebase → submit_plan → save learnings → save session summary → announce in chat" ;;
-                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → start_step → implement → complete_step → save learnings → complete_task → save session summary → announce in chat" ;;
-                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → recall memory → review code and tests → qa_approve or qa_reject → save learnings → save session summary → announce in chat" ;;
-                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → recall memory → complete task → save session summary" ;;
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → read Serena memory → explore codebase → submit_plan → write Serena memory (handoff + learnings) → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → start_step → implement → complete_step → complete_task → write Serena memory (handoff + learnings) → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → review code and tests → qa_approve or qa_reject → write Serena memory (handoff + learnings) → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → read Serena memory → complete task → write Serena memory handoff" ;;
             esac
             if [ "$AUTO_CLAIM" = true ]; then
                 SHORT_PROMPT="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $CLAIM_JSON. If hasNext is false, say 'No tasks' and stop."

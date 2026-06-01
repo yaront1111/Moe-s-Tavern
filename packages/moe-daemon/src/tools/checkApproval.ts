@@ -25,20 +25,14 @@ export function checkApprovalTool(_state: StateManager): ToolDefinition {
       const rejected = task.status === 'PLANNING' && task.reopenReason !== null;
 
       // nextAction tells the architect what to do given current approval state.
-      // save_session_summary requires workerId, so only emit that hint when we have one.
+      // wait_for_task accepts an optional workerId, so include it when we have one.
       let nextAction: { tool: string; args?: Record<string, unknown>; reason?: string } | undefined;
       if (approved) {
-        nextAction = params.workerId
-          ? {
-              tool: 'moe.save_session_summary',
-              args: { workerId: params.workerId, taskId: task.id, summary: 'Plan approved, handed to worker queue.' },
-              reason: 'Plan approved; record session summary and wait for next PLANNING task.'
-            }
-          : {
-              tool: 'moe.wait_for_task',
-              args: { statuses: ['PLANNING'] },
-              reason: 'Plan approved; wait for the next PLANNING task.'
-            };
+        nextAction = {
+          tool: 'moe.wait_for_task',
+          args: params.workerId ? { statuses: ['PLANNING'], workerId: params.workerId } : { statuses: ['PLANNING'] },
+          reason: 'Plan approved and handed to the worker queue. Record any reusable planning insight with Serena write_memory, then block until the next PLANNING task arrives.'
+        };
       } else if (rejected) {
         nextAction = {
           tool: 'moe.get_context',

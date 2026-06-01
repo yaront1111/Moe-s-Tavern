@@ -14,6 +14,6 @@ Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill
 
 The runtime enforces ownership, step ordering, and task completion gates, so rely on tool responses instead of memorizing procedural steps.
 
-If you hit a non-obvious gotcha or convention worth keeping, save it with `moe.remember`. Use `moe.recall` when you need prior knowledge for the current task. (Memory auto-injection is off by default.)
+Memory lives in Serena. On task start, `list_memories` then `read_memory` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, `write_memory` named `gotcha-<area>` / `convention-<area>` (prefer `edit_memory` on an existing topic over a near-duplicate). Before you finish, `write_memory` a `task-<id>-handoff` note for the next agent.
 
 Use `moe.report_blocked` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.

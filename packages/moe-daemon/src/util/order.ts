@@ -35,21 +35,21 @@ export function computeOrderBetween(prev: number | null, next: number | null): n
     return prev + 1;
   }
 
-  // Normal case: insert between two items
+  // Normal case: insert between two items. The true midpoint is always
+  // strictly inside (prev, next) for a positive gap.
   const gap = next - prev;
-
-  // If gap is too small, we risk precision issues
-  // In this case, return a value that still works but signals need for rebalancing
-  if (gap < MIN_ORDER_GAP) {
-    // Use a deterministic offset based on the values to avoid collisions
-    return prev + MIN_ORDER_GAP;
-  }
-
-  // Standard midpoint calculation
   const midpoint = prev + gap / 2;
 
-  // Round to reasonable precision to prevent accumulating floating-point errors
-  return Math.round(midpoint * 10000) / 10000;
+  // Round to limit floating-point drift, but ONLY if the rounded value stays
+  // strictly between prev and next. Rounding a near-MIN_ORDER_GAP midpoint can
+  // land on (or past) a neighbor — which would invert the order or collide.
+  // The old `prev + MIN_ORDER_GAP` shortcut returned a value GREATER than next
+  // whenever gap < MIN_ORDER_GAP, silently moving the item to the wrong slot.
+  const rounded = Math.round(midpoint * 10000) / 10000;
+  if (rounded > prev && rounded < next) {
+    return rounded;
+  }
+  return midpoint;
 }
 
 export function sortByOrder<T extends { order: number }>(items: T[]): T[] {

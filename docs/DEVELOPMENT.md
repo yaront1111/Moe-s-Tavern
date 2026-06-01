@@ -192,7 +192,7 @@ Key flags:
 
 ### Wrapper post-flight
 
-`moe-agent.sh` and `moe-agent.ps1` run a best-effort post-flight block after each normal agent CLI exit. The block is intentionally short: it calls `moe.save_session_summary` with a one-line session-ended summary and then `moe.chat_send` to announce the same outcome in `#general`. Post-flight RPC failures are logged as warnings and never block the next wrapper iteration. Ctrl+C / forced interrupt paths may skip post-flight.
+`moe-agent.sh` and `moe-agent.ps1` run a best-effort post-flight block after each normal agent CLI exit. The block is intentionally short: it calls `moe.chat_send` to announce a one-line session-ended outcome in `#general`. End-of-session continuity is the agent's responsibility — it writes a Serena `task-<id>-handoff` memory before stopping (see `docs/MEMORY.md`). Post-flight RPC failures are logged as warnings and never block the next wrapper iteration. Ctrl+C / forced interrupt paths may skip post-flight.
 
 Loop flags are now explicit on both platforms:
 - Bash: `--loop` explicitly opts into polling loop mode; `--no-loop` forces one run and exit.
@@ -210,7 +210,7 @@ bash scripts/tests/postflight.sh
 pwsh -NoProfile -File scripts\tests\postflight.ps1
 ```
 
-Both smoke tests verify the same contract: the wrapper creates a session summary under `.moe/memory/sessions/` and appends the post-flight message to the `#general` messages jsonl. They are self-contained and skip with exit 0 when an integration prerequisite such as a runnable Node.js is unavailable.
+Both smoke tests verify the same contract: the wrapper appends the post-flight session-ended message to the `#general` messages jsonl. (The wrapper no longer writes a session-summary file — cross-session memory moved to the Serena MCP server, where the agent writes a `task-<id>-handoff` note before stopping.) They are self-contained and skip with exit 0 when an integration prerequisite such as a runnable Node.js is unavailable.
 
 ### Running a Team (Parallel Agents)
 

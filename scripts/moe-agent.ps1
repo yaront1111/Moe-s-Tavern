@@ -44,11 +44,10 @@
     # opt-in (JetBrains opts the worker in for hands-on coding sessions).
     [switch]$Interactive,
 
-    # Explicit model override (e.g. "claude-opus-4-7", "claude-sonnet-4-6").
-    # When empty, the launcher picks a per-role default — architect → Opus,
-    # worker/qa → Sonnet. Per-project overrides via .moe/project.json
-    # settings.models.{role}. Only applies to the `claude` CLI; codex/gemini
-    # pick their own model.
+    # Explicit model override (e.g. "claude-opus-4-8", "claude-sonnet-4-6").
+    # When empty, the launcher picks a per-role default — all roles → Opus 4.8.
+    # Per-project overrides via .moe/project.json settings.models.{role}. Only
+    # applies to the `claude` CLI; codex/gemini pick their own model.
     [string]$Model = ""
 )
 
@@ -252,11 +251,77 @@ $mcpConfigObj = @{
         }
     }
 }
+
+# Add the Serena MCP server: LSP-based symbol navigation/editing pinned to THIS
+# project, so agents get exact cross-file code intelligence (callers, defs,
+# refactors) instead of relying on whole-file reads. Resolve the binary; skip
+# silently if Serena isn't installed (install: uv tool install -p 3.13 serena-agent).
+# Override the binary with $env:MOE_SERENA_PATH.
+$serenaPath = $env:MOE_SERENA_PATH
+if (-not $serenaPath) {
+    $serenaCandidate = Join-Path $env:USERPROFILE ".local\bin\serena.exe"
+    if (Test-Path $serenaCandidate) {
+        $serenaPath = $serenaCandidate
+    } elseif (Get-Command serena -ErrorAction SilentlyContinue) {
+        $serenaPath = (Get-Command serena).Source
+    }
+}
+
+# Serena's project root is decoupled from the Moe project root: a multi-repo
+# workspace root (no single language root, e.g. no root go.mod) yields near-empty
+# symbol intelligence, so pin Serena at the actual code repo. Resolution order:
+#   1) "serenaProject" in <project>/.moe-agent.json  (per-project, lives with the workspace)
+#   2) $env:MOE_SERENA_PROJECT                        (ad-hoc / CI override)
+#   3) the Moe project root                           (correct for single-repo projects)
+$serenaProject = $projectPath.ToString()
+$serenaProjectSource = "project root"
+$serenaProjectCandidate = $null
+$moeAgentConfig = Join-Path $projectPath ".moe-agent.json"
+if (Test-Path $moeAgentConfig) {
+    try {
+        $cfg = Get-Content -Raw -Path $moeAgentConfig | ConvertFrom-Json
+        if ($cfg.serenaProject) {
+            $serenaProjectCandidate = $cfg.serenaProject
+            $serenaProjectSource = ".moe-agent.json"
+        }
+    } catch {
+        Write-Host "[WARN] Could not parse $moeAgentConfig; ignoring serenaProject override"
+    }
+}
+if ((-not $serenaProjectCandidate) -and $env:MOE_SERENA_PROJECT) {
+    $serenaProjectCandidate = $env:MOE_SERENA_PROJECT
+    $serenaProjectSource = "MOE_SERENA_PROJECT"
+}
+if ($serenaProjectCandidate) {
+    $serenaProjectResolved = Resolve-Path -Path $serenaProjectCandidate -ErrorAction SilentlyContinue
+    if ($serenaProjectResolved) {
+        $serenaProject = $serenaProjectResolved.ToString()
+    } else {
+        Write-Host "[WARN] Serena project '$serenaProjectCandidate' (from $serenaProjectSource) not found; using Moe project root"
+        $serenaProjectSource = "project root (override not found)"
+    }
+}
+
+if ($serenaPath -and (Test-Path $serenaPath)) {
+    $mcpConfigObj.mcpServers.serena = @{
+        command = $serenaPath
+        args = @(
+            "start-mcp-server",
+            "--context", "claude-code",
+            "--project", $serenaProject,
+            "--enable-web-dashboard", "false",
+            "--enable-gui-log-window", "false"
+        )
+    }
+    Write-Host "[OK] Serena MCP enabled for project: $serenaProject (source: $serenaProjectSource)"
+} else {
+    Write-Host "[INFO] Serena not found; skipping Serena MCP (install: uv tool install -p 3.13 serena-agent)"
+}
 # Use unique temp file to prevent collision when multiple agents run
 # $PID is only available in PowerShell 7+; fall back for Windows PowerShell 5.1
 $myPid = if ($PID) { $PID } else { [System.Diagnostics.Process]::GetCurrentProcess().Id }
 $mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$myPid.json"
-$mcpConfigObj | ConvertTo-Json -Depth 4 | Set-Content -Path $mcpConfigFile -Encoding UTF8
+$mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $mcpConfigFile -Encoding UTF8
 
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
@@ -393,14 +458,14 @@ if ($projConfig -and $projConfig.settings.PSObject.Properties['enableAgentTeams'
 
 # Resolve the Claude model for this role.
 # Precedence: -Model flag → .moe/project.json settings.models.<role> → per-role default.
-# All roles default to Opus 4.7: the projects this wrapper runs against are
+# All roles default to Opus 4.8: the projects this wrapper runs against are
 # large, deeply-coupled stacks where the planning/review/implementation
 # quality difference dominates the per-token cost difference. Override per
 # role via project.json settings.models.{role} if a cheaper model suffices.
 $defaultModels = @{
-    architect = "claude-opus-4-7"
-    worker    = "claude-opus-4-7"
-    qa        = "claude-opus-4-7"
+    architect = "claude-opus-4-8"
+    worker    = "claude-opus-4-8"
+    qa        = "claude-opus-4-8"
 }
 $resolvedModel = ""
 if (-not [string]::IsNullOrWhiteSpace($Model)) {
@@ -509,6 +574,21 @@ args = ["$proxyScriptForToml"]
 MOE_PROJECT_PATH = "$projectPathForToml"
 "@
 
+        # Build the serena MCP server TOML block (LSP code intelligence + memory,
+        # pinned to this project). Empty when Serena isn't installed. Path is
+        # forward-slashed so TOML doesn't treat Windows backslashes as escapes.
+        $serenaTomlBlock = ""
+        if ($serenaPath -and (Test-Path $serenaPath)) {
+            $serenaPathForToml = $serenaPath.ToString().Replace('\', '/')
+            $serenaProjectForToml = $serenaProject.Replace('\', '/')
+            $serenaTomlBlock = @"
+
+[mcp_servers.serena]
+command = "$serenaPathForToml"
+args = ["start-mcp-server", "--context", "codex", "--project", "$serenaProjectForToml", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]
+"@
+        }
+
         if (Test-Path $codexConfigFile) {
             # Merge: remove existing moe MCP sections and moe-managed top-level keys
             $rawContent = Get-Content -Path $codexConfigFile -Raw
@@ -527,11 +607,11 @@ MOE_PROJECT_PATH = "$projectPathForToml"
             $skip = $false
             foreach ($line in $lines) {
                 $stripped = $line.Trim()
-                if ($stripped -match '^\[mcp_servers\.moe\]' -or $stripped -match '^\[mcp_servers\.moe\.env\]') {
+                if ($stripped -match '^\[mcp_servers\.moe\]' -or $stripped -match '^\[mcp_servers\.moe\.env\]' -or $stripped -match '^\[mcp_servers\.serena\]') {
                     $skip = $true
                     continue
                 }
-                if ($skip -and $stripped.StartsWith('[') -and $stripped -notmatch '^\[mcp_servers\.moe') {
+                if ($skip -and $stripped.StartsWith('[') -and $stripped -notmatch '^\[mcp_servers\.moe' -and $stripped -notmatch '^\[mcp_servers\.serena\]') {
                     $skip = $false
                 }
                 if (-not $skip) {
@@ -562,13 +642,13 @@ MOE_PROJECT_PATH = "$projectPathForToml"
             if ($firstSectionLineIdx -gt 0) {
                 $beforeSections = ($splitLines[0..($firstSectionLineIdx - 1)] -join "`n").TrimEnd()
                 $afterSections = ($splitLines[$firstSectionLineIdx..($splitLines.Count - 1)] -join "`n").TrimEnd()
-                ($beforeSections + "`n" + $topLevelConfig + "`n`n" + $afterSections + $moeTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($beforeSections + "`n" + $topLevelConfig + "`n`n" + $afterSections + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
             } elseif ($firstSectionLineIdx -eq 0) {
                 # Section header is the very first line - prepend top-level config
-                ($topLevelConfig + "`n`n" + $cleanedText.TrimEnd() + $moeTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($topLevelConfig + "`n`n" + $cleanedText.TrimEnd() + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
             } else {
                 # No section headers at all - just append
-                ($cleanedText + "`n" + $topLevelConfig + $moeTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
+                ($cleanedText + "`n" + $topLevelConfig + $moeTomlBlock + $serenaTomlBlock + "`n") | Set-Content -Path $codexConfigFile -Encoding UTF8 -NoNewline
             }
         } else {
             # Create new config with project_doc_fallback_filenames
@@ -577,6 +657,7 @@ MOE_PROJECT_PATH = "$projectPathForToml"
 project_doc_fallback_filenames = ["CLAUDE.md", ".codex/agent-instructions.md"]
 $topLevelConfig
 $moeTomlBlock
+$serenaTomlBlock
 "@
             $newContent | Set-Content -Path $codexConfigFile -Encoding UTF8
         }
@@ -617,6 +698,24 @@ $moeTomlBlock
             $geminiConfig['mcpServers'] = @{}
         }
         $geminiConfig['mcpServers']['moe'] = $moeEntry
+
+        # Serena MCP (LSP code intelligence + memory), pinned to this project.
+        # Set/refresh when installed; drop a stale entry when it isn't. The JSON
+        # serializer escapes the native Windows path, so no manual escaping here.
+        if ($serenaPath -and (Test-Path $serenaPath)) {
+            $geminiConfig['mcpServers']['serena'] = @{
+                command = $serenaPath
+                args = @(
+                    "start-mcp-server",
+                    "--context", "agent",
+                    "--project", $serenaProject,
+                    "--enable-web-dashboard", "false",
+                    "--enable-gui-log-window", "false"
+                )
+            }
+        } elseif ($geminiConfig['mcpServers'].ContainsKey('serena')) {
+            $geminiConfig['mcpServers'].Remove('serena')
+        }
 
         $jsonText = $geminiConfig | ConvertTo-Json -Depth 5
         [System.IO.File]::WriteAllText($geminiConfigFile, $jsonText, [System.Text.UTF8Encoding]::new($false))
@@ -680,9 +779,12 @@ if ($Team) {
     # Team creation is idempotent on (name, role). enter_governance strictly requires
     # team.role === 'governor', so the governor role gets a role-bound team. For
     # architect/worker/qa we omit role: a user-supplied $Team like "Cordum" should
-    # mean ONE shared team across those roles. The mention router falls back to a
-    # workerId-substring match for @architects/@workers/@qa when team.role isn't
-    # set, so role-based addressing still works.
+    # mean ONE shared team across those roles. create_team resolves a null-role
+    # request to the ROLELESS team of that name only — it will never adopt a
+    # governor team that merely shares the name (doing so would route the worker to
+    # enter_governance and it could never claim a task). The mention router falls
+    # back to a workerId-substring match for @architects/@workers/@qa when team.role
+    # isn't set, so role-based addressing still works.
     if ($Role -eq 'governor') {
         $createTeamHash = @{ name = $Team; role = 'governor' }
     } else {
@@ -789,18 +891,9 @@ function Invoke-PostFlight {
         return
     }
 
-    $summary = "$Role session ended (CLI exit=$exitCode). See task activity log for details."
-    try {
-        $result = Invoke-MoeRpc -Tool "save_session_summary" -Args @{
-            workerId = $WorkerId
-            taskId   = $preflightTaskId
-            summary  = $summary
-        }
-        if ($null -eq $result) { Write-Warning "post-flight save_session_summary failed" }
-    } catch {
-        Write-Warning "post-flight save_session_summary failed: $_"
-    }
-
+    # Session handoff is no longer persisted by the wrapper: cross-session memory
+    # now lives in Serena (the agent writes a `task-<id>-handoff` note before it
+    # stops). The post-flight chat message below remains the session-ended signal.
     if ($generalChannelId) {
         $content = "$Role session ended: task=$preflightTaskId (CLI exit=$exitCode)"
         try {
@@ -968,9 +1061,9 @@ do {
                 if ($preflightTaskChannel) {
                     $preflightTaskUnread = Invoke-MoeRpc -Tool "chat_read" -Args @{ channel = $preflightTaskChannel; workerId = $WorkerId }
                 }
-                # Memory recall is handled inside moe.get_context (memory.relevant
-                # in <claimed_task_context> below). No separate preflight recall
-                # call -- it duplicates the same search and burns tokens.
+                # Cross-session memory lives in Serena now: the agent pulls prior
+                # knowledge with Serena list_memories / read_memory on task start.
+                # The wrapper does no memory preflight.
 
                 # Extract phase-recommended skill from context.nextAction. We
                 # do NOT inline the body — the agent loads it via the Skill tool.
@@ -1122,7 +1215,7 @@ do {
         $dynamicContext += @"
 # Pre-flight Complete (runtime-injected — do not repeat)
 You ARE: $Role agent, workerId=$WorkerId.
-The wrapper has claimed your task and surfaced unread/memory counts in <inbox> below. Fetch the full content via moe.chat_read / moe.recall when it is relevant to your next step. Routed mentions tagging you are listed verbatim further down — those are mandatory replies before any other planned tool call.
+The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; use Serena (list_memories / read_memory) to pick up prior knowledge for this task/area. Routed mentions tagging you are listed verbatim further down — those are mandatory replies before any other planned tool call.
 
 DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
 
@@ -1136,7 +1229,7 @@ $ctxJson
 unread_general=$generalCount
 unread_task=$taskCount
 mentions=$mentionsCount (see <routed_mentions> below if > 0)
-memory_hits=see memory.relevant in <claimed_task_context>
+memory=use Serena list_memories / read_memory for prior knowledge on this task/area
 </inbox>
 
 <pending_questions>
@@ -1243,9 +1336,9 @@ $mentionsJson
     $claimPromptBody = $null
     if ($AutoClaim -and $preflightOk) {
         $claimPromptBody = switch ($Role) {
-            "architect" { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Then call moe.save_session_summary. Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate; the wrapper will respawn you on the next PLANNING task. Do NOT call moe.wait_for_task — the wrapper handles polling between sessions." }
-            "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Then call moe.save_session_summary with what you did, and use moe.remember to save any non-obvious gotchas. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
-            "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then moe.save_session_summary. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
+            "architect" { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate; the wrapper will respawn you on the next PLANNING task. Do NOT call moe.wait_for_task — the wrapper handles polling between sessions." }
+            "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
+            "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
         }
     } elseif ($AutoClaim -and $Role -eq 'governor') {
         # Governor enters governance mode and lives in a chat_wait loop on
@@ -1259,7 +1352,7 @@ $mentionsJson
         $claimPromptBody = $null
     } elseif ($AutoClaim) {
         # Pre-flight skipped or failed — legacy multi-step prompt
-        $claimPromptBody = "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, always check memory.relevant in the response and use moe.recall for deeper knowledge search. Before calling moe.wait_for_task, always call moe.save_session_summary to record what you accomplished and discovered. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+        $claimPromptBody = "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, use Serena list_memories / read_memory to pick up prior knowledge for this task/area. Before calling moe.wait_for_task, use Serena write_memory to record a 'task-<id>-handoff' note (and any gotcha-<area> learnings) so the next agent benefits. If hasNext is false, say: 'No tasks in $Role queue' and wait."
     }
 
     # $claimPrompt is what gets passed as the user message to the CLI.
@@ -1300,10 +1393,10 @@ $mentionsJson
         } else {
             # Legacy fallback — pre-flight skipped or failed
             $roleWorkflow = switch ($Role) {
-                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
-                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
-                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
-                default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
+                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> read Serena memory -> explore codebase -> submit_plan -> write Serena memory (handoff + learnings) -> announce in chat" }
+                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> start_step -> implement -> complete_step -> complete_task -> write Serena memory (handoff + learnings) -> announce in chat" }
+                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> review code and tests -> qa_approve or qa_reject -> write Serena memory (handoff + learnings) -> announce in chat" }
+                default     { "Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff" }
             }
             if ($claimPrompt) {
                 $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
@@ -1343,10 +1436,10 @@ $mentionsJson
             }
         } else {
             $roleWorkflow = switch ($Role) {
-                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> recall memory -> explore codebase -> submit_plan -> save learnings -> save session summary -> announce in chat" }
-                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> start_step -> implement -> complete_step -> save learnings -> complete_task -> save session summary -> announce in chat" }
-                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> recall memory -> review code and tests -> qa_approve or qa_reject -> save learnings -> save session summary -> announce in chat" }
-                default     { "Workflow: claim task -> get_context -> recall memory -> complete task -> save session summary" }
+                "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> read Serena memory -> explore codebase -> submit_plan -> write Serena memory (handoff + learnings) -> announce in chat" }
+                "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> start_step -> implement -> complete_step -> complete_task -> write Serena memory (handoff + learnings) -> announce in chat" }
+                "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> review code and tests -> qa_approve or qa_reject -> write Serena memory (handoff + learnings) -> announce in chat" }
+                default     { "Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff" }
             }
             if ($claimPrompt) {
                 $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
@@ -1664,7 +1757,10 @@ $mentionsJson
                         }
                         if ($LASTEXITCODE -ne 0) {
                             Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
-                            return
+                            # Skip THIS task's commit and keep polling — `return`
+                            # here would exit the whole script and silently kill
+                            # the worker's polling loop (bash uses `continue`).
+                            continue
                         }
                         $currentBranch = $moeBranch
                     }

@@ -8,39 +8,11 @@ import { spawn } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import {
   acquireLock,
-  initProject,
   readLockInfo,
   releaseLock,
   stopDaemon,
   validateDaemonInfoForProject,
 } from './index.js';
-
-describe('CLI project initialization', () => {
-  it('writes memory defaults for newly initialized projects', () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-cli-init-'));
-    try {
-      const result = initProject(projectPath, 'CLI Init Project');
-      expect(result.alreadyInitialized).toBe(false);
-
-      const project = JSON.parse(fs.readFileSync(path.join(projectPath, '.moe', 'project.json'), 'utf-8')) as {
-        settings: { memory?: unknown };
-      };
-      expect(project.settings.memory).toEqual({
-        autoInject: 'off',
-        maxAutoResults: 1,
-        maxAutoChars: 500,
-        autoSave: {
-          completedTask: false,
-          firstPassApproval: false,
-          qaRejection: true,
-          reopenedApproval: true,
-        },
-      });
-    } finally {
-      fs.rmSync(projectPath, { recursive: true, force: true });
-    }
-  });
-});
 
 describe('daemon lifecycle validation', () => {
   let testDir: string;

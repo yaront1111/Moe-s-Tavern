@@ -57,4 +57,4 @@ Do NOT loop between `propose_rail` and other actions on the same task — propos
 
 ## Quality memory
 
-When you spot a recurring failure mode or a subtle invariant the system missed, call `moe.remember`. Manual remembers survive dedup better and rank higher on recall than auto-extracted ones. Governors are the natural place for cross-task pattern memory — workers see one task at a time; you see the fleet.
+Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, `write_memory` a `pattern-<area>` note (or `edit_memory` an existing one). Governors own cross-task `epic-<epicId>-notes` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.

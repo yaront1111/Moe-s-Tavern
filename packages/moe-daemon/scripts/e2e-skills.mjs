@@ -187,22 +187,6 @@ async function main() {
     rb.nextAction?.recommendedSkill?.name === 'systematic-debugging',
     `got: ${JSON.stringify(rb.nextAction?.recommendedSkill)}`);
 
-  // ---------- 6b. memory subsystem still works (.moe/memory + remember/recall) ----------
-  console.log('\nPhase 2b: memory subsystem unaffected');
-  check('.moe/memory exists', fs.existsSync(path.join(projectDir, '.moe/memory')));
-  check('.moe/memory/sessions exists', fs.existsSync(path.join(projectDir, '.moe/memory/sessions')));
-  await callTool(projectDir, 'moe.remember', {
-    workerId: 'e2e-w', type: 'gotcha',
-    content: 'E2E memory check — this entry should round-trip via recall.',
-    tags: ['e2e-test'],
-  });
-  const recall = await callTool(projectDir, 'moe.recall', { workerId: 'e2e-w', query: 'E2E memory check' });
-  const memMatched = (recall.memories || []).some(r => /E2E memory check/.test(r.content || ''));
-  check('moe.remember → moe.recall round-trips', memMatched, `got ${recall.memories?.length ?? 0} memories`);
-  check('.moe/memory/knowledge.jsonl written',
-    fs.existsSync(path.join(projectDir, '.moe/memory/knowledge.jsonl')) &&
-    fs.statSync(path.join(projectDir, '.moe/memory/knowledge.jsonl')).size > 0);
-
   // ---------- 7. Agent-wrapper manifest parser ----------
   console.log('\nPhase 3: agent-wrapper manifest parser');
   const parser = `

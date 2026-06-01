@@ -47,9 +47,14 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
         }
       }
 
-      // Idempotent: return existing team if name+role matches
+      // Idempotent: return existing team if name+role matches.
+      // A null-role create means "the roleless shared team for this name"
+      // (architect/worker/qa all join it). It must NOT adopt a role-bound
+      // team that merely shares the name — notably a governor team, since
+      // claim_next_task routes every governor-team member to enter_governance
+      // and they can never claim a task. Match role explicitly (null === null).
       const existing = role === null
-        ? state.getTeamByName(params.name)
+        ? state.getTeamByNameAndRole(params.name, null)
         : state.getTeamByNameAndRole(params.name, role);
       if (existing) {
         return { team: existing, created: false };

@@ -27,18 +27,17 @@
 │  │                                                                     │   │
 │  │   Interfaces:                     State:                            │   │
 │  │   - WebSocket (/ws)               - StateManager (loads .moe/)       │   │
-│  │   - WebSocket (/mcp)              - MemoryManager (knowledge base)   │   │
+│  │   - WebSocket (/mcp)              - MentionRouter (chat @mentions)   │   │
 │  │   - HTTP (/health)                - FileWatcher (watches .moe/)      │   │
-│  │                                   - MentionRouter (chat @mentions)   │   │
 │  │                                                                     │   │
+│  │   Cross-session memory is delegated to the Serena MCP server.       │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                        │
 │                                    ▼                                        │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                      .moe/ FOLDER (Source of Truth)                 │   │
 │  │   project.json  epics/*.json  tasks/*.json  workers/*.json          │   │
-│  │   channels/*.json  messages/*.jsonl  proposals/*.json               │   │
-│  │   memory/knowledge.jsonl  memory/sessions/*.json  activity.log     │   │
+│  │   channels/*.json  messages/*.jsonl  proposals/*.json  activity.log │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    ▲                                        │
 │                                    │ WebSocket (/mcp)                       │
@@ -93,23 +92,19 @@ Key behaviors:
 packages/moe-daemon/
 ├── src/index.ts                # CLI entry + supervisor (start/stop/status/_run)
 ├── src/server/
-│   ├── McpAdapter.ts           # JSON-RPC handler for MCP (37+ tools)
+│   ├── McpAdapter.ts           # JSON-RPC handler for MCP
 │   └── WebSocketServer.ts      # /ws and /mcp endpoints
 ├── src/state/
 │   ├── StateManager.ts         # Loads/writes .moe, mutex-protected
 │   └── FileWatcher.ts          # chokidar watch with debounce
-├── src/knowledge/
-│   ├── MemoryManager.ts        # Knowledge base: BM25 search, persistence, pruning
-│   ├── tokenizer.ts            # CamelCase-aware tokenizer + stemmer
-│   └── scoring.ts              # BM25 + composite ranking + dedup
-├── src/tools/                  # 37+ MCP tools (including memory tools)
+├── src/tools/                  # MCP tools
 └── src/types/schema.ts         # Canonical types
 ```
 
 Key behaviors:
 - **Supervisor**: `start` spawns daemon as child process with auto-restart (exponential backoff, max 5 restarts/60s).
 - **Port selection**: Picks an available port (default 9876, scans a range of 50) and writes `.moe/daemon.json`.
-- **Knowledge base**: BM25-indexed in-memory knowledge base loaded from `.moe/memory/knowledge.jsonl`. Auto-surfaces in `get_context`.
+- **Cross-session memory**: Not handled by the daemon — delegated to the Serena MCP server (injected by the agent launchers). See `docs/MEMORY.md`.
 - Watches `.moe` for changes and broadcasts state snapshots.
 - Handles plugin actions (create/update/reorder/approve/reject/reopen).
 

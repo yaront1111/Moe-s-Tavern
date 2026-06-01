@@ -2,8 +2,6 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
-import { resolveMemorySettings } from '../util/memorySettings.js';
-import { logger } from '../util/logger.js';
 
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
@@ -66,41 +64,6 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(params.taskId, 'QA approved — task complete');
       } catch { /* never block tool */ }
 
-      // Auto-extract memory only for high-signal approvals by default. A
-      // first-pass approval rarely adds reusable knowledge; an approval after a
-      // reopen captures a proven fix and is worth preserving.
-      const memorySettings = resolveMemorySettings(state.project?.settings);
-      const shouldAutoSaveApproval = updated.reopenCount > 0
-        ? memorySettings.autoSave.reopenedApproval
-        : memorySettings.autoSave.firstPassApproval;
-      if (params.workerId && shouldAutoSaveApproval) {
-        try {
-          const mm = state.getMemoryManager();
-          const modified = (updated.implementationPlan || [])
-            .filter(s => s.status === 'COMPLETED')
-            .flatMap(s => s.modifiedFiles || s.affectedFiles || []);
-          const reopenTag = updated.reopenCount > 0 ? `fix-verified-reopen-${updated.reopenCount}` : 'approved-first-pass';
-          const summary = (params.summary || '').trim().slice(0, 5000);
-          const content = updated.reopenCount > 0
-            ? `Fix verified by QA after ${updated.reopenCount} reopen(s): "${updated.title}".${summary ? ' ' + summary : ''}`
-            : `Task "${updated.title}" approved by QA on first pass.${summary ? ' ' + summary : ''}`;
-          await mm.addEntry({
-            workerId: params.workerId,
-            type: 'pattern',
-            content,
-            tags: ['qa-approved', reopenTag],
-            files: Array.from(new Set(modified)).slice(0, 20),
-            taskId: updated.id,
-            epicId: updated.epicId,
-          });
-        } catch (err) {
-          logger.warn({
-            taskId: updated.id,
-            error: err instanceof Error ? err.message : String(err),
-          }, 'qaApprove memory auto-extract failed');
-        }
-      }
-
       return {
         success: true,
         taskId: updated.id,
@@ -108,13 +71,12 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         summary: params.summary || 'QA approved',
         message: `Task ${updated.id} approved and moved to DONE`,
         nextAction: {
-          tool: 'moe.save_session_summary',
+          tool: 'moe.wait_for_task',
           args: {
+            statuses: ['REVIEW'],
             workerId: params.workerId,
-            taskId: updated.id,
-            summary: params.summary || `Approved task ${updated.id} on first pass.`
           },
-          reason: 'Task approved; record QA findings, then wait_for_task for next REVIEW task.'
+          reason: 'Task approved. If the review surfaced a reusable pattern, record it with Serena write_memory (pattern-<area>), then block until the next REVIEW task arrives.'
         }
       };
     }
