@@ -305,6 +305,215 @@ describe('moe-proxy graceful shutdown', () => {
     expect(serverReceivedClose).toBe(true);
   }, 10000);
 
+  it('returns id-aware error for an oversized stdin line', async () => {
+    const responses: string[] = [];
+    let clientConnected = false;
+
+    // Server accepts the connection; the oversized line is rejected by the proxy
+    // before it ever reaches the daemon, so the server should see no message.
+    mockServer!.on('connection', () => {
+      clientConnected = true;
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    proxy.stdout!.on('data', (chunk) => {
+      const lines = chunk.toString().trim().split('\n');
+      responses.push(...lines.filter((l: string) => l.startsWith('{')));
+    });
+
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) { clearInterval(check); resolve(); }
+      }, 50);
+    });
+
+    // Build a >1MB single line carrying a recoverable id. The padding lives in a
+    // string field so the line stays valid-ish JSON shape for id extraction.
+    const padding = 'x'.repeat(1024 * 1024 + 1000);
+    const oversized = `{"jsonrpc":"2.0","id":777,"method":"tools/call","params":{"name":"big","blob":"${padding}"}}`;
+    proxy.stdin!.write(oversized + '\n');
+
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        const hit = responses.some(r => {
+          try { const p = JSON.parse(r); return p.id === 777 && p.error; } catch { return false; }
+        });
+        if (hit) { clearInterval(check); resolve(); }
+      }, 100);
+    });
+
+    proxy.stdin!.end();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', () => { clearTimeout(timeout); resolve(); });
+    });
+
+    const errorResponse = responses
+      .map(r => { try { return JSON.parse(r); } catch { return null; } })
+      .find(r => r && r.id === 777 && r.error);
+    expect(errorResponse).toBeDefined();
+    expect(errorResponse!.error.message).toContain('too large');
+  }, 15000);
+
+  it('drops a late daemon response that arrives after the per-message timeout', async () => {
+    const responses: string[] = [];
+    let clientConnected = false;
+
+    // Server responds only AFTER the per-message timeout has already fired.
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        // Reply only AFTER the timeout checker (5s cadence) has already errored
+        // out the request. The proxy must drop this late reply, not forward it.
+        setTimeout(() => {
+          try {
+            ws.send(JSON.stringify({
+              jsonrpc: '2.0',
+              id: msg.id,
+              result: { content: [{ type: 'text', text: '{"late":true}' }] }
+            }));
+          } catch { /* socket may be gone */ }
+        }, 6500);
+      });
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: {
+        ...process.env,
+        MOE_PROJECT_PATH: testDir,
+        // 500ms request timeout; the checker runs every 5s, so the request is
+        // errored at ~5s. The server's late reply (6.5s) lands afterward.
+        MOE_MESSAGE_TIMEOUT_MS: '500',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    proxy.stdout!.on('data', (chunk) => {
+      const lines = chunk.toString().trim().split('\n');
+      responses.push(...lines.filter((l: string) => l.startsWith('{')));
+    });
+
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) { clearInterval(check); resolve(); }
+      }, 50);
+    });
+
+    proxy.stdin!.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'tools/call',
+      params: { name: 'slow' }
+    }) + '\n');
+
+    // Wait for the timeout error to be emitted by the checker.
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        const hit = responses.some(r => {
+          try { const p = JSON.parse(r); return p.id === 99 && p.error; } catch { return false; }
+        });
+        if (hit) { clearInterval(check); resolve(); }
+      }, 100);
+    });
+
+    // Give the late server reply (~6.5s after send) plus any erroneous forward
+    // time to surface before we assert it was dropped.
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    proxy.stdin!.end();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', () => { clearTimeout(timeout); resolve(); });
+    });
+
+    const forId99 = responses
+      .map(r => { try { return JSON.parse(r); } catch { return null; } })
+      .filter(r => r && r.id === 99);
+    // Exactly one response for id 99: the timeout error. The late result must
+    // have been dropped, not forwarded as a duplicate.
+    expect(forId99.length).toBe(1);
+    expect(forId99[0].error).toBeDefined();
+    expect(forId99[0].error.message).toContain('timed out');
+    expect(forId99.some(r => r.result)).toBe(false);
+  }, 25000);
+
+  it('buffer overflow discards only the partial, preserving an already-complete line', async () => {
+    const responses: string[] = [];
+    let clientConnected = false;
+
+    // Echo back any complete request the proxy forwards.
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { content: [{ type: 'text', text: '{"ok":true}' }] }
+        }));
+      });
+    });
+
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    proxy.stdout!.on('data', (chunk) => {
+      const lines = chunk.toString().trim().split('\n');
+      responses.push(...lines.filter((l: string) => l.startsWith('{')));
+    });
+
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (clientConnected) { clearInterval(check); resolve(); }
+      }, 50);
+    });
+
+    // One complete request line, then a >2MB newline-free partial in the SAME
+    // chunk. The complete line must be drained/answered first; the partial then
+    // overflows the buffer and is discarded on its own.
+    const completeLine = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'tools/call',
+      params: { name: 'first' }
+    });
+    const overflowPartial = '{"jsonrpc":"2.0","id":22,"blob":"' + 'y'.repeat(2 * 1024 * 1024 + 1000);
+    proxy.stdin!.write(completeLine + '\n' + overflowPartial);
+
+    // Wait for the echoed result for id 11 AND the overflow error.
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        const parsed = responses
+          .map(r => { try { return JSON.parse(r); } catch { return null; } })
+          .filter(Boolean) as Array<{ id?: unknown; result?: unknown; error?: { message?: string } }>;
+        const gotResult = parsed.some(r => r.id === 11 && r.result);
+        const gotOverflow = parsed.some(r => r.error && /overflow/i.test(r.error.message ?? ''));
+        if (gotResult && gotOverflow) { clearInterval(check); resolve(); }
+      }, 100);
+    });
+
+    proxy.stdin!.end();
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', () => { clearTimeout(timeout); resolve(); });
+    });
+
+    const parsed = responses
+      .map(r => { try { return JSON.parse(r); } catch { return null; } })
+      .filter(Boolean) as Array<{ id?: unknown; result?: unknown; error?: { message?: string } }>;
+    // The already-complete request was answered...
+    expect(parsed.some(r => r.id === 11 && r.result)).toBe(true);
+    // ...and the partial triggered an overflow error rather than destroying it.
+    expect(parsed.some(r => r.error && /overflow/i.test(r.error.message ?? ''))).toBe(true);
+  }, 15000);
+
   it('exits immediately when no pending requests', async () => {
     let clientConnected = false;
 

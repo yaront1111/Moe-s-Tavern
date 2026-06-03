@@ -83,6 +83,16 @@ create_secure_temp() {
 }
 
 cleanup_temp() {
+    # Gracefully release any task this worker still holds so the next agent can
+    # claim it immediately. This is best-effort and never blocks exit; the
+    # daemon's worker-liveness sweep is the slower (timeout) fallback for hard
+    # crashes where this trap never runs. WORKER_ID/PROJECT are set later in the
+    # script but read here at exit time.
+    if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+        "$SCRIPT_DIR/moe-call.sh" deregister_worker \
+            "{\"workerId\":\"$WORKER_ID\",\"reason\":\"terminal_closed\"}" \
+            --project "$PROJECT" >/dev/null 2>&1 || true
+    fi
     if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
         rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
     fi
@@ -1366,6 +1376,24 @@ post_flight() {
     return 0
 }
 
+# announce_push_failure TASK_ID
+# Best-effort loud, daemon-visible warning that auto-commit pushed nothing for a
+# task that has already flipped to REVIEW. The task is reviewable in the board
+# but its code never reached the remote -- QA would review stale/missing work.
+# Posts to #general via chat_send (the daemon broadcasts it to every connected
+# client) and always returns 0 so it never aborts the loop.
+announce_push_failure() {
+    local task_id="$1"
+    local msg="PUSH FAILED for task $task_id -- committed locally only; do not review until pushed"
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 FIRST_RUN=true
 
 while [ "$LOOP_RUNNING" = true ]; do
@@ -2163,8 +2191,21 @@ except Exception:
                     # Uncommitted/staged changes follow the checkout. Existing
                     # non-default branches are reused as-is -- this is not
                     # branch-per-task.
-                    CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
-                    if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+                    # Resolve the branch via symbolic-ref first: it returns the
+                    # branch name even on an unborn branch (fresh init, zero
+                    # commits) and FAILS on a detached HEAD. rev-parse is the
+                    # fallback but returns the literal "HEAD" for both detached
+                    # and unborn -- which silently bypassed this guard and let
+                    # auto-commit land on a dangling commit (detached) or the
+                    # default branch's first commit (unborn). Treat detached
+                    # (symbolic-ref failure / literal "HEAD") AND main/master as
+                    # unsafe -> peel onto moe/work-<date> (checkout -b works from
+                    # a detached HEAD and renames an unborn ref correctly).
+                    CURRENT_BRANCH=$(git -C "$PROJECT" symbolic-ref --short -q HEAD 2>/dev/null)
+                    if [ -z "$CURRENT_BRANCH" ]; then
+                        CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+                    fi
+                    if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ] || [ "$CURRENT_BRANCH" = "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
                         MOE_BRANCH="moe/work-$(date +%Y-%m-%d)"
                         echo -e "${YELLOW}[branch]${NC} on $CURRENT_BRANCH; switching to $MOE_BRANCH so we don't commit to the default branch."
                         if git -C "$PROJECT" rev-parse --verify --quiet "refs/heads/$MOE_BRANCH" > /dev/null 2>&1; then
@@ -2174,10 +2215,21 @@ except Exception:
                         else
                             git -C "$PROJECT" checkout -b "$MOE_BRANCH" 2>&1 | tail -2
                         fi
-                        CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+                        CURRENT_BRANCH=$(git -C "$PROJECT" symbolic-ref --short -q HEAD 2>/dev/null)
+                        if [ -z "$CURRENT_BRANCH" ]; then
+                            CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+                        fi
                         if [ "$CURRENT_BRANCH" != "$MOE_BRANCH" ]; then
                             echo -e "${YELLOW}[WARN]${NC} failed to switch off default branch; aborting auto-commit to avoid writing to it."
-                            continue
+                            # In single-shot mode the wrapper loop runs once;
+                            # a bare `continue` here re-enters the while-loop
+                            # forever (LOOP_RUNNING never flips false) and drains
+                            # the backlog. Break out when looping is disabled.
+                            if [ "$LOOP_ENABLED" = false ]; then
+                                break
+                            else
+                                continue
+                            fi
                         fi
                     fi
 
@@ -2213,7 +2265,19 @@ Completed via Moe worker session."
                             echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
                         else
                             echo "$PUSH_OUT" | tail -5
-                            echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                            # The task already flipped to REVIEW, so a failed push
+                            # leaves QA reviewing work that never reached the
+                            # remote. The common cause is a non-fast-forward on the
+                            # shared moe/work-* branch: pull --rebase then re-push.
+                            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
+                            if git -C "$PROJECT" pull --rebase 2>&1 | tail -5 && PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
+                                echo "$PUSH_OUT" | tail -5
+                                echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                            else
+                                echo "$PUSH_OUT" | tail -5
+                                echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                announce_push_failure "$PREFLIGHT_TASK_ID"
+                            fi
                         fi
                     else
                         if PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
@@ -2221,7 +2285,18 @@ Completed via Moe worker session."
                             echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
                         else
                             echo "$PUSH_OUT" | tail -5
-                            echo -e "${YELLOW}[WARN]${NC} git push failed (no upstream? auth? network?) -- resolve and push manually."
+                            # No upstream yet -- a non-fast-forward is unlikely, but
+                            # the remote branch may already exist (another worker
+                            # pushed it). Pull --rebase from it, then re-push -u.
+                            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
+                            if git -C "$PROJECT" pull --rebase origin "$CURRENT_BRANCH" 2>&1 | tail -5 && PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
+                                echo "$PUSH_OUT" | tail -5
+                                echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                            else
+                                echo "$PUSH_OUT" | tail -5
+                                echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                announce_push_failure "$PREFLIGHT_TASK_ID"
+                            fi
                         fi
                     fi
                 else

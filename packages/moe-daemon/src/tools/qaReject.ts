@@ -4,6 +4,7 @@ import type { QAIssue, QAIssueType, RejectionDetails, RejectionHistoryEntry } fr
 import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { resetPlanStepsToPending } from '../util/reopen.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -173,6 +174,16 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reopenCount: newReopenCount,
       };
 
+      // On reject back to WORKING, reset the implementation steps to PENDING so
+      // the reopened plan is runnable per-step (start_step requires PENDING) and
+      // complete_task cannot vacuously re-submit work with every step still
+      // marked COMPLETED. PLANNING auto-flips are re-planned by the architect
+      // (submit_plan replaces the plan), so we leave those untouched.
+      const resetSteps =
+        nextStatus === 'WORKING' &&
+        Array.isArray(task.implementationPlan) &&
+        task.implementationPlan.length > 0;
+
       const updatePayload: Record<string, unknown> = {
         status: nextStatus,
         reopenCount: newReopenCount,
@@ -186,6 +197,12 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         rejectionHistory: updatedHistory,
         failedDodItems: nextFailedItems,
         metrics: nextMetrics,
+        ...(resetSteps
+          ? {
+              implementationPlan: resetPlanStepsToPending(task.implementationPlan),
+              stepsCompleted: [],
+            }
+          : {}),
       };
 
       const updated = await state.updateTask(

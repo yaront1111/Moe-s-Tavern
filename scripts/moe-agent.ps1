@@ -220,6 +220,33 @@ if (-not $WorkerId) {
 }
 $env:MOE_WORKER_ID = $WorkerId
 
+# Graceful deregister, fired from multiple exit paths. The top-level `finally`
+# below covers normal exits, but it is SKIPPED on a console-window close
+# (CTRL_CLOSE_EVENT) and some Ctrl+C edge cases — leaving the worker holding its
+# claimed task until the daemon's (slow, timeout-based) liveness sweep releases
+# it. Register the same best-effort deregister on PowerShell.Exiting and
+# Ctrl+C so it runs no matter how the process tears down. $script:MoeDeregistered
+# makes it idempotent (finally + handler must not double-fire). Defined here,
+# before any exit can occur, so the flag/function always exist; Invoke-MoeRpc is
+# resolved lazily at call time (it's defined further down).
+$script:MoeDeregistered = $false
+function Invoke-MoeDeregister {
+    if ($script:MoeDeregistered) { return }
+    $script:MoeDeregistered = $true
+    if (-not $WorkerId) { return }
+    try { Invoke-MoeRpc -Tool "deregister_worker" -Args @{ workerId = $WorkerId; reason = "terminal_closed" } | Out-Null } catch {}
+}
+# PowerShell.Exiting fires for normal exits AND console-window close in 5.1.
+try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action { Invoke-MoeDeregister } | Out-Null } catch {}
+# Ctrl+C: hook the static Console.CancelKeyPress event directly (Register-Object
+# Event can't bind a static .NET event). TreatControlCAsInput stays false so the
+# default terminate-after-handler behaviour is preserved; we just deregister on
+# the way out.
+try {
+    [Console]::TreatControlCAsInput = $false
+    [Console]::add_CancelKeyPress({ Invoke-MoeDeregister })
+} catch {}
+
 # Build MCP config for moe-proxy
 $proxyScript = $env:MOE_PROXY_PATH
 if ($proxyScript) { $proxyScript = $proxyScript.Trim('"') }
@@ -1738,8 +1765,23 @@ $mentionsJson
                     # Uncommitted/staged changes follow the checkout. Existing
                     # non-default branches are reused as-is — this is not
                     # branch-per-task.
-                    $currentBranch = (& git -C $projectPath rev-parse --abbrev-ref HEAD 2>$null).Trim()
-                    if ($currentBranch -eq "main" -or $currentBranch -eq "master") {
+                    # Resolve the branch via symbolic-ref first: it returns the
+                    # branch name even on an unborn branch (fresh init, zero
+                    # commits) and FAILS on a detached HEAD. rev-parse is the
+                    # fallback but returns the literal "HEAD" for both detached
+                    # and unborn -- which silently bypassed this guard and let
+                    # auto-commit land on a dangling commit (detached) or the
+                    # default branch's first commit (unborn). Treat detached
+                    # (symbolic-ref failure / literal "HEAD") AND main/master as
+                    # unsafe -> peel onto moe/work-<date> (checkout -b works from
+                    # a detached HEAD and renames an unborn ref correctly).
+                    $currentBranch = (& git -C $projectPath symbolic-ref --short -q HEAD 2>$null)
+                    if ($currentBranch) { $currentBranch = "$currentBranch".Trim() } else { $currentBranch = "" }
+                    if (-not $currentBranch) {
+                        $currentBranch = (& git -C $projectPath rev-parse --abbrev-ref HEAD 2>$null)
+                        if ($currentBranch) { $currentBranch = "$currentBranch".Trim() } else { $currentBranch = "" }
+                    }
+                    if ($currentBranch -eq "main" -or $currentBranch -eq "master" -or $currentBranch -eq "HEAD" -or -not $currentBranch) {
                         $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
                         Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
                         # Local exists?
@@ -1797,7 +1839,38 @@ $mentionsJson
                     if ($LASTEXITCODE -eq 0) {
                         Write-Host "[OK] Pushed task $preflightTaskId to $currentBranch." -ForegroundColor Green
                     } else {
-                        Write-Host "[WARN] git push failed (no upstream? auth? network?) — resolve and push manually." -ForegroundColor Yellow
+                        # The task already flipped to REVIEW, so a failed push leaves
+                        # QA reviewing work that never reached the remote. The common
+                        # cause is a non-fast-forward on the shared moe/work-* branch:
+                        # pull --rebase then re-push once.
+                        Write-Host "[WARN] git push failed; trying git pull --rebase then re-push..." -ForegroundColor Yellow
+                        & git -C $projectPath pull --rebase 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                        $rebaseOk = ($LASTEXITCODE -eq 0)
+                        if ($rebaseOk) {
+                            if ($hasUpstream) {
+                                & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                            } else {
+                                & git -C $projectPath push -u origin $currentBranch 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+                            }
+                        }
+                        if ($rebaseOk -and $LASTEXITCODE -eq 0) {
+                            Write-Host "[OK] Pushed task $preflightTaskId to $currentBranch (after rebase)." -ForegroundColor Green
+                        } else {
+                            Write-Host "[WARN] git push still failing (auth? network? conflict?) — resolve and push manually." -ForegroundColor Yellow
+                            # Loud, daemon-visible warning: the task is reviewable on
+                            # the board but its code never reached the remote. chat
+                            # tools take the channel id (resolved in pre-flight), not
+                            # the literal name.
+                            if ($generalChannelId) {
+                                try {
+                                    Invoke-MoeRpc -Tool "chat_send" -Args @{
+                                        channel  = $generalChannelId
+                                        workerId = $WorkerId
+                                        content  = "PUSH FAILED for task $preflightTaskId — committed locally only; do not review until pushed"
+                                    } | Out-Null
+                                } catch {}
+                            }
+                        }
                     }
                 } else {
                     Write-Host "[info] $projectPath is not a git repo — skipping auto-commit+push." -ForegroundColor Cyan
@@ -1808,6 +1881,12 @@ $mentionsJson
     # -------- End post-flight --------
 } while ($loopEnabled)
 } finally {
+    # Gracefully release any task this worker still holds so the next agent can
+    # claim it immediately. Best-effort and idempotent (Invoke-MoeDeregister
+    # no-ops if a Ctrl+C / window-close handler already fired) — the daemon's
+    # worker-liveness sweep is the slower (timeout) fallback for hard crashes
+    # where none of these run.
+    Invoke-MoeDeregister
     # Clean up temp files
     if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) {
         Remove-Item -Path $mcpConfigFile -Force -ErrorAction SilentlyContinue

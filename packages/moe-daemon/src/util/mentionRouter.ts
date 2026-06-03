@@ -141,9 +141,10 @@ export class MentionRouter {
     const mentions = this.parseMentions(message.content, knownWorkerIds, allWorkers, teams);
 
     if (mentions.length === 0) {
-      // No explicit mentions from human → notify all online workers
+      // No explicit mentions from human → notify all online workers. Skip IDLE
+      // (between tasks) and DEAD (deregistered/timed-out, pending prune).
       const onlineWorkers = allWorkers
-        .filter((w) => w.status !== 'IDLE')
+        .filter((w) => w.status !== 'IDLE' && w.status !== 'DEAD')
         .map((w) => w.id);
       return { targets: onlineWorkers, paused: false, hopCount: 0 };
     }

@@ -138,6 +138,33 @@ describe('daemon lifecycle validation', () => {
     }
   });
 
+  it('stopDaemon writes a stop sentinel when no daemon.json exists (supervisor may be mid-backoff)', async () => {
+    // No daemon.json: a `stop` during the supervisor's crash-restart backoff has
+    // no live child to signal, so it must leave a sentinel so the deferred
+    // respawn aborts instead of resurrecting the daemon.
+    const sentinel = path.join(testDir, '.moe', 'daemon.stop');
+    expect(fs.existsSync(sentinel)).toBe(false);
+
+    await stopDaemon(testDir);
+
+    expect(fs.existsSync(sentinel)).toBe(true);
+  });
+
+  it('stopDaemon writes a stop sentinel when daemon.json is stale', async () => {
+    fs.writeFileSync(path.join(testDir, '.moe', 'daemon.json'), JSON.stringify(daemonInfo({
+      port: await unusedPort(),
+    })));
+    const sentinel = path.join(testDir, '.moe', 'daemon.stop');
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as typeof process.kill);
+
+    await stopDaemon(testDir);
+
+    expect(killSpy).not.toHaveBeenCalledWith(process.pid, 'SIGTERM');
+    expect(fs.existsSync(sentinel)).toBe(true);
+    // Stale daemon.json is still cleaned up.
+    expect(fs.existsSync(path.join(testDir, '.moe', 'daemon.json'))).toBe(false);
+  });
+
   it('acquireLock removes stale PID-reuse-ambiguous locks after timeout', () => {
     const lockPath = path.join(testDir, '.moe', 'daemon.lock');
     fs.writeFileSync(lockPath, String(process.pid));

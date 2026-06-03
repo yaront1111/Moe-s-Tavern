@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidInput } from '../util/errors.js';
+import { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
-const DEFAULT_LIVENESS_TIMEOUT_MS = 120_000; // 2 minutes — matches chat_who
+const DEFAULT_LIVENESS_TIMEOUT_MS = LIVENESS_TIMEOUT_MS; // single source of truth
 const MAX_LIVENESS_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 
 export function listWorkersTool(_state: StateManager): ToolDefinition {
@@ -56,7 +57,7 @@ export function listWorkersTool(_state: StateManager): ToolDefinition {
       for (const w of state.workers.values()) {
         const ts = w.lastActivityAt ? new Date(w.lastActivityAt).getTime() : 0;
         const sinceMs = isNaN(ts) || ts === 0 ? Number.POSITIVE_INFINITY : now - ts;
-        const isAlive = sinceMs <= timeoutMs;
+        const isAlive = isWorkerAlive(w, now, timeoutMs);
         if (params.onlyStale && isAlive) continue;
 
         let currentTaskTitle: string | null = null;

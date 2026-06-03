@@ -217,6 +217,111 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    // Drain messages until a TASK_UPDATED reply arrives (broadcasts may interleave).
+    async function nextTaskUpdated(nextMessage: (ms?: number) => Promise<string>) {
+      for (let i = 0; i < 10; i++) {
+        const parsed = JSON.parse(await nextMessage());
+        if (parsed.type === 'TASK_UPDATED') return parsed;
+        if (parsed.type === 'ERROR') throw new Error(`Unexpected ERROR: ${parsed.message}`);
+      }
+      throw new Error('No TASK_UPDATED received');
+    }
+
+    it('UPDATE_TASK DONE→WORKING scrubs completion signals, resets steps, and bumps reopenCount', async () => {
+      // Seed a DONE task with a completed plan + completion timestamps via the daemon.
+      await state.updateTask('task-1', {
+        status: 'DONE',
+        completedAt: new Date().toISOString(),
+        reviewStartedAt: new Date().toISOString(),
+        reviewCompletedAt: new Date().toISOString(),
+        metrics: { doneAt: new Date().toISOString(), wallClockMs: 12345 },
+        implementationPlan: [
+          { stepId: 'step-1', description: 'Do thing', status: 'COMPLETED', affectedFiles: [], completedAt: new Date().toISOString() },
+        ],
+        stepsCompleted: ['step-1'],
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      const updated = parsed.payload;
+      expect(updated.status).toBe('WORKING');
+      expect(updated.reopenCount).toBe(1);
+      // Completion signals scrubbed.
+      expect(updated.completedAt == null).toBe(true);
+      expect(updated.reviewStartedAt == null).toBe(true);
+      expect(updated.reviewCompletedAt == null).toBe(true);
+      expect(updated.metrics?.doneAt == null).toBe(true);
+      expect(updated.metrics?.wallClockMs == null).toBe(true);
+      // Steps reset to PENDING and stepsCompleted cleared.
+      expect(updated.stepsCompleted).toEqual([]);
+      expect(updated.implementationPlan[0].status).toBe('PENDING');
+
+      // Authoritative state agrees.
+      const stored = state.getTask('task-1');
+      expect(stored?.status).toBe('WORKING');
+      expect(stored?.reopenCount).toBe(1);
+      expect(stored?.completedAt == null).toBe(true);
+      expect(stored?.stepsCompleted).toEqual([]);
+      expect(stored?.implementationPlan?.[0]?.status).toBe('PENDING');
+
+      ws.close();
+    });
+
+    it('UPDATE_TASK strips daemon-owned fields (id, completedAt, reopenCount) from plugin payloads', async () => {
+      const before = state.getTask('task-1');
+      const originalCreatedAt = before?.createdAt;
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: {
+          taskId: 'task-1',
+          updates: {
+            // Legit field that should still apply:
+            title: 'Renamed Task',
+            // Denylisted fields that must be ignored:
+            id: 'evil',
+            completedAt: '2020-01-01T00:00:00.000Z',
+            reopenCount: 99,
+            metrics: { doneAt: '2020-01-01T00:00:00.000Z', wallClockMs: 1 },
+            createdAt: '1999-01-01T00:00:00.000Z',
+          },
+        },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      const updated = parsed.payload;
+      // The id never changed and the task is still resolvable by its real id.
+      expect(updated.id).toBe('task-1');
+      // Legit field applied.
+      expect(updated.title).toBe('Renamed Task');
+      // Denylisted fields untouched.
+      expect(updated.completedAt == null).toBe(true);
+      expect(updated.reopenCount).toBe(0);
+      expect(updated.metrics?.doneAt == null).toBe(true);
+      expect(updated.createdAt).toBe(originalCreatedAt);
+
+      // No task created under the injected id.
+      expect(state.getTask('evil')).toBeNull();
+      const stored = state.getTask('task-1');
+      expect(stored?.title).toBe('Renamed Task');
+      expect(stored?.completedAt == null).toBe(true);
+      expect(stored?.reopenCount).toBe(0);
+
+      ws.close();
+    });
+
     it('caps and truncates GET_ACTIVITY_LOG responses', async () => {
       const logPath = path.join(moePath, 'activity.log');
       for (let i = 0; i < 120; i++) {

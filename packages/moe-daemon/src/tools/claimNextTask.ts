@@ -146,36 +146,47 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       for (const candidate of tasks) {
         task = candidate;
 
-        // Enforce single worker per epic constraint - but allow different roles to work in parallel
+        // Enforce single worker per epic+status constraint — but allow different
+        // roles (teams) to work in parallel.
         if (params.workerId) {
-          if (state.isTaskAssignedToMissingWorker(candidate)) {
+          // Resolve the candidate's CURRENT owner (mutually-exclusive branches on
+          // one snapshot — an inactive owner is never also a live takeover):
+          if (state.isTaskAssignedToInactiveWorker(candidate)) {
+            // (1) Owner is gone / marked DEAD — clear the dangling assignment so
+            // the optimistic-concurrency guard lets us reassign.
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
-          }
-
-          const tasksInEpic = Array.from(state.tasks.values())
-            .filter((t) =>
-              t.epicId === candidate.epicId &&
-              t.assignedWorkerId &&
-              !state.isTaskAssignedToMissingWorker(t) &&
-              t.assignedWorkerId !== params.workerId
-            );
-
-          const claimingStatus = candidate.status;
-          const activeWorkerOnSameStatus = tasksInEpic.find(
-            (t) => t.status === claimingStatus
-          );
-
-          if (activeWorkerOnSameStatus && !params.replaceExisting) {
-            const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
-            if (!claimingWorkerTeam) {
-              // Solo worker -> skip this epic's tasks, try next candidate
+          } else if (candidate.assignedWorkerId && candidate.assignedWorkerId !== params.workerId) {
+            // (2) Owner is present AND alive — only reachable on an explicit taskId
+            // claim (the ranked filter excludes live-owned tasks). Take over THIS
+            // task with replaceExisting: evict its ACTUAL owner (never a bystander)
+            // and idle it. Without replaceExisting it isn't claimable → next candidate.
+            if (!params.replaceExisting) {
               continue;
             }
+            const incumbent = candidate.assignedWorkerId;
+            await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+            await state.touchWorker(incumbent, { status: 'IDLE', currentTaskId: null });
           }
 
-          // If replaceExisting is true, clear the previous worker's assignment
-          if (activeWorkerOnSameStatus && params.replaceExisting) {
-            await state.updateTask(activeWorkerOnSameStatus.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+          // (3) Single-worker-per-epic-status: a DIFFERENT task in the same
+          // epic+status already held by a live OTHER worker blocks a SOLO claim
+          // (teams parallelize). This only BLOCKS — it never evicts the bystander
+          // from its own task (replaceExisting overrides the block but still does
+          // not touch other workers' tasks).
+          const otherActiveOnSameStatus = Array.from(state.tasks.values()).find((t) =>
+            t.id !== candidate.id &&
+            t.epicId === candidate.epicId &&
+            t.status === candidate.status &&
+            t.assignedWorkerId &&
+            t.assignedWorkerId !== params.workerId &&
+            !state.isTaskAssignedToInactiveWorker(t)
+          );
+          if (otherActiveOnSameStatus && !params.replaceExisting) {
+            const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
+            if (!claimingWorkerTeam) {
+              // Solo worker -> epic+status already taken, try next candidate
+              continue;
+            }
           }
 
           try {

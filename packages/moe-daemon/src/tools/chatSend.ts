@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { missingRequired, invalidInput, notFound } from '../util/errors.js';
+import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 
 export function chatSendTool(_state: StateManager): ToolDefinition {
   return {
@@ -32,16 +32,23 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         throw invalidInput('content', 'must be a string');
       }
 
-      // Validate sender identity
+      // Validate sender identity. 'system' is reserved for daemon-internal
+      // posts (which go straight through state.sendMessage); accepting it here
+      // would let any /mcp agent impersonate the daemon and reset the
+      // mentionRouter loop-guard (hopCounts=0, unpause), defeating runaway
+      // protection.
       const sender = params.workerId || 'human';
-      if (sender !== 'human' && sender !== 'system') {
+      if (sender === 'system') {
+        throw notAllowed('chat_send as "system"', 'reserved for daemon-internal messages');
+      }
+      if (sender !== 'human') {
         let worker = state.getWorker(sender);
         if (!worker) {
           // Disk fallback: worker file may exist but state hasn't reloaded yet
           worker = state.tryLoadWorkerFromDisk(sender);
         }
         if (!worker) {
-          throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker, "human", or "system"');
+          throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or "human"');
         }
       }
 
@@ -64,7 +71,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         content: params.content,
         replyTo: params.replyTo
       });
-      if (sender !== 'human' && sender !== 'system') {
+      if (sender !== 'human') {
         await state.touchWorker(sender);
       }
 

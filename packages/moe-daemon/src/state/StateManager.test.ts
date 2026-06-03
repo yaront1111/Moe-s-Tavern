@@ -1341,13 +1341,156 @@ describe('StateManager', () => {
       await stateManager.purgeAllWorkers();
       await stateManager.flushActivityLog();
 
-      expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBeNull();
+      const purgedTask = stateManager.getTask('task-test123');
+      expect(purgedTask?.assignedWorkerId).toBeNull();
+      // An in-flight WORKING task with no completed steps must be routed back to
+      // BACKLOG (not left stranded WORKING-but-unassigned, which the claim path
+      // skips because it filters by status first).
+      expect(purgedTask?.status).toBe('BACKLOG');
       const events = stateManager.getActivityLog(10);
       expect(events.some((event) =>
         event.event === 'WORKER_DISCONNECTED' &&
         event.taskId === 'task-test123' &&
         event.payload.workerId === 'worker-missing'
       )).toBe(true);
+    });
+  });
+
+  describe('updateTask identity hardening', () => {
+    it('ignores client-supplied id and createdAt overrides', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      const original = createTestTask({ status: 'BACKLOG' });
+      await stateManager.load();
+
+      // A hostile UPDATE_TASK that tries to rewrite the immutable identity must
+      // not change task.id (which keys the map and the on-disk filename) or
+      // createdAt — only the legitimate fields should apply.
+      const updated = await stateManager.updateTask('task-test123', {
+        id: 'evil',
+        createdAt: '1970-01-01T00:00:00.000Z',
+        title: 'Renamed',
+      } as Partial<Task>);
+
+      expect(updated.id).toBe('task-test123');
+      expect(updated.createdAt).toBe(original.createdAt);
+      expect(updated.title).toBe('Renamed');
+      // Map key unchanged and no rogue 'evil' entry created.
+      expect(stateManager.getTask('task-test123')?.id).toBe('task-test123');
+      expect(stateManager.getTask('evil')).toBeNull();
+      // No divergent filename written.
+      expect(fs.existsSync(path.join(moePath, 'tasks', 'evil.json'))).toBe(false);
+    });
+  });
+
+  describe('team membership repair', () => {
+    it('removeTeamMember clears worker.teamId even when memberIds entry is already gone', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      await stateManager.createWorker({
+        id: 'worker-trapped',
+        type: 'CLAUDE',
+        projectId: 'proj-test123',
+        epicId: 'epic-test123',
+        currentTaskId: null,
+        status: 'IDLE',
+      });
+      const team = await stateManager.createTeam({ name: 'Alpha', maxSize: 5 });
+      await stateManager.addTeamMember(team.id, 'worker-trapped');
+      expect(stateManager.getWorker('worker-trapped')?.teamId).toBe(team.id);
+
+      // Simulate the memberIds entry being removed out-of-band while the worker
+      // still points at the team (worker.teamId stale).
+      await stateManager.updateTeam(team.id, { memberIds: [] });
+      expect(stateManager.getWorker('worker-trapped')?.teamId).toBe(team.id);
+
+      await stateManager.removeTeamMember(team.id, 'worker-trapped');
+      expect(stateManager.getWorker('worker-trapped')?.teamId).toBeNull();
+    });
+
+    it('deleteTeam clears teamId for a worker pointing at the team but absent from memberIds', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      await stateManager.createWorker({
+        id: 'worker-ptr',
+        type: 'CLAUDE',
+        projectId: 'proj-test123',
+        epicId: 'epic-test123',
+        currentTaskId: null,
+        status: 'IDLE',
+      });
+      const team = await stateManager.createTeam({ name: 'Beta', maxSize: 5 });
+      await stateManager.addTeamMember(team.id, 'worker-ptr');
+      // Drop from memberIds out-of-band, leaving worker.teamId dangling.
+      await stateManager.updateTeam(team.id, { memberIds: [] });
+
+      await stateManager.deleteTeam(team.id);
+      expect(stateManager.getWorker('worker-ptr')?.teamId).toBeNull();
+    });
+  });
+
+  describe('normalizeProject pattern handling', () => {
+    it('preserves {} and () placeholders in branch/commit patterns on load', async () => {
+      setupMoeFolder({
+        settings: {
+          approvalMode: 'CONTROL',
+          speedModeDelayMs: 2000,
+          autoCreateBranch: true,
+          branchPattern: 'moe/{epicId}/{taskId}',
+          commitPattern: 'feat({epicId}): {taskTitle}',
+          agentCommand: 'claude',
+        } as Project['settings'],
+      });
+      createTestEpic();
+      await stateManager.load();
+
+      const settings = stateManager.getSnapshot().project.settings;
+      expect(settings.branchPattern).toBe('moe/{epicId}/{taskId}');
+      expect(settings.commitPattern).toBe('feat({epicId}): {taskTitle}');
+    });
+
+    it('still strips dangerous shell metacharacters from patterns on load', async () => {
+      setupMoeFolder({
+        settings: {
+          approvalMode: 'CONTROL',
+          speedModeDelayMs: 2000,
+          autoCreateBranch: true,
+          branchPattern: 'moe/{epicId};rm -rf $HOME',
+          commitPattern: 'feat({epicId})',
+          agentCommand: 'claude',
+        } as Project['settings'],
+      });
+      createTestEpic();
+      await stateManager.load();
+
+      const settings = stateManager.getSnapshot().project.settings;
+      // Braces/parens kept; ; and $ stripped.
+      expect(settings.branchPattern).toBe('moe/{epicId}rm -rf HOME');
+      expect(settings.branchPattern).not.toContain(';');
+      expect(settings.branchPattern).not.toContain('$');
+    });
+  });
+
+  describe('chat infrastructure self-heal', () => {
+    it('recreates missing role channels on load regardless of schemaVersion', async () => {
+      // schemaVersion already current → no migration runs, but the canonical
+      // channels are absent. ensureChatInfrastructure must self-heal them.
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      const names = new Set(stateManager.getChannels().map((c) => c.name));
+      for (const required of ['general', 'workers', 'architects', 'qa', 'governors']) {
+        expect(names.has(required)).toBe(true);
+      }
+      // Files were actually written to disk (durable across restart).
+      expect(fs.existsSync(path.join(moePath, 'channels'))).toBe(true);
+      expect(fs.readdirSync(path.join(moePath, 'channels')).filter((f) => f.endsWith('.json')).length)
+        .toBeGreaterThanOrEqual(5);
     });
   });
 

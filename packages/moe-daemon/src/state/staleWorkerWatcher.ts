@@ -1,17 +1,27 @@
 // =============================================================================
-// staleWorkerWatcher — opt-in safety net that auto-releases tasks held by
-// idle workers. Off by default; enable with MOE_AUTO_RELEASE_STALE_WORKERS=1.
-// Dry-run via MOE_AUTO_RELEASE_DRY_RUN=1 posts the chat banner without
-// mutating state, so operators can see the behavior before flipping it on.
+// worker-liveness sweep — the SINGLE default-on safety net that auto-releases
+// tasks held by workers that have stopped heart-beating (hard crash, OOM,
+// killed terminal). It funnels every stale owner through the ONE release path
+// (deregisterWorker → release tasks via nextStatusForRelease, mark worker DEAD,
+// post chat-leave), so a timed-out worker ends in exactly the same state as a
+// gracefully-deregistered one.
+//
+// On by DEFAULT. Opt OUT with MOE_DISABLE_AUTO_RELEASE=1. Preview without
+// mutating via MOE_AUTO_RELEASE_DRY_RUN=1 (posts the banner only).
+//
+// Note: the release threshold (DEFAULT_RELEASE_AFTER_MS, 30 min) is deliberately
+// much larger than the 120s presence window used by isTaskClaimable. The board
+// self-heals fast (a 2-min-idle owner's task is already claimable), but we only
+// mark the worker DEAD + hard-release after 30 min so a slow-but-live agent
+// mid-operation is never yanked out from under itself.
 // =============================================================================
 
 import type { StateManager } from './StateManager.js';
-import type { Task, TaskStatus, Worker } from '../types/schema.js';
+import { deregisterWorker } from './workerLifecycle.js';
 import { logger } from '../util/logger.js';
 
 const DEFAULT_INTERVAL_MS = 60_000;
-const DEFAULT_STALE_MS = 30 * 60_000;
-const CLAIMABLE_FALLBACK_STATUS: TaskStatus = 'BACKLOG';
+const DEFAULT_RELEASE_AFTER_MS = 30 * 60_000;
 
 export interface StaleWorkerWatcherOptions {
   intervalMs?: number;
@@ -23,124 +33,65 @@ export interface StaleWorkerWatcherOptions {
 }
 
 /**
- * Decide which status a released task should rest in. The task is currently
- * held by a worker — when we strip the assignment, route it to a sensible
- * claimable column based on the role the worker was performing:
- *   - WORKING/REVIEW   → BACKLOG (next worker picks it up)
- *   - PLANNING         → PLANNING (next architect picks it up)
- *   - AWAITING_APPROVAL→ AWAITING_APPROVAL (human still owns approval)
- * Anything else falls back to BACKLOG.
- */
-export function nextStatusForRelease(currentStatus: TaskStatus): TaskStatus {
-  switch (currentStatus) {
-    case 'PLANNING':
-      return 'PLANNING';
-    case 'AWAITING_APPROVAL':
-      return 'AWAITING_APPROVAL';
-    case 'REVIEW':
-      return 'REVIEW';
-    case 'WORKING':
-      return 'BACKLOG';
-    default:
-      return CLAIMABLE_FALLBACK_STATUS;
-  }
-}
-
-interface ReleaseCandidate {
-  worker: Worker;
-  task: Task;
-  secondsStale: number;
-  /** The worker's currentTaskId points at a task already reassigned to someone
-   * else — we only clear the worker's pointer, no release/banner. */
-  alreadyReassigned: boolean;
-}
-
-function findReleaseCandidates(
-  state: StateManager,
-  staleAfterMs: number,
-  nowMs: number
-): ReleaseCandidate[] {
-  const out: ReleaseCandidate[] = [];
-  for (const worker of state.workers.values()) {
-    if (!worker.currentTaskId) continue;
-    const lastTs = Date.parse(worker.lastActivityAt);
-    if (!Number.isFinite(lastTs)) continue;
-    const ageMs = nowMs - lastTs;
-    if (ageMs < staleAfterMs) continue;
-    const task = state.getTask(worker.currentTaskId);
-    if (!task) continue;
-    // Only release when the task is *actually* assigned to this worker. If
-    // the worker thinks they own a task that's already been reassigned, just
-    // clear their currentTaskId and skip the chat banner.
-    out.push({
-      worker,
-      task,
-      secondsStale: Math.floor(ageMs / 1000),
-      alreadyReassigned: task.assignedWorkerId !== worker.id,
-    });
-  }
-  return out;
-}
-
-/**
- * Run a single sweep of the watcher. Exposed so tests can advance fake
- * timers manually without juggling setInterval handles.
+ * Run a single sweep. Exposed so tests can advance fake timers manually without
+ * juggling setInterval handles.
  */
 export async function sweepStaleWorkers(
   state: StateManager,
   options: Required<Pick<StaleWorkerWatcherOptions, 'staleAfterMs' | 'dryRun'>> & { now: () => number }
 ): Promise<{ released: number }> {
   const now = options.now();
-  const candidates = findReleaseCandidates(state, options.staleAfterMs, now);
   let released = 0;
-  for (const { worker, task, secondsStale, alreadyReassigned } of candidates) {
-    // The task was already reassigned to someone else — don't announce a
-    // spurious release; just clear this stale worker's dangling pointer.
-    if (alreadyReassigned) {
-      if (!options.dryRun) {
-        try {
-          await state.touchWorker(worker.id, { currentTaskId: null });
-        } catch { /* never block sweep */ }
-      }
-      continue;
-    }
 
-    const minutes = Math.round(secondsStale / 60);
-    const banner = `🔓 auto-released task ${task.id} from stale worker ${worker.id} (idle ${minutes}m)`;
-    try {
-      await state.postToRoleChannel('workers', banner);
-    } catch { /* never block sweep */ }
-    try {
-      await state.postToRoleChannel('governors', banner);
-    } catch { /* never block sweep */ }
+  for (const worker of Array.from(state.workers.values())) {
+    // Already gone — nothing to release; the prune sweep removes the record.
+    if (worker.status === 'DEAD') continue;
+    // BLOCKED workers are waiting on a human (report_blocked). Leave them to
+    // checkBlockedTimeouts' dedicated, longer grace period so we don't yank a
+    // task mid-escalation and mark the worker DEAD while help is still pending.
+    if (worker.status === 'BLOCKED') continue;
+
+    const last = Date.parse(worker.lastActivityAt);
+    if (!Number.isFinite(last)) continue;
+    const ageMs = now - last;
+    if (ageMs < options.staleAfterMs) continue;
+
+    // Only act on workers that actually hold tasks. A stale-but-idle worker is
+    // left for the Layer-3 prune sweep; we don't mark it DEAD here.
+    const owned = state.getTasksAssignedToWorker(worker.id);
+    if (owned.length === 0) continue;
+
+    const minutes = Math.round(ageMs / 60_000);
 
     if (options.dryRun) {
-      logger.info({ workerId: worker.id, taskId: task.id, secondsStale }, 'stale-worker watcher (dry-run): would release');
+      const banner = `🔓 (dry-run) would auto-release ${owned.length} task(s) from stale worker ${worker.id} (idle ${minutes}m)`;
+      try { await state.postToRoleChannel('workers', banner); } catch { /* never block sweep */ }
+      try { await state.postToRoleChannel('governors', banner); } catch { /* never block sweep */ }
+      logger.info(
+        { workerId: worker.id, ownedTaskIds: owned.map((t) => t.id), minutes },
+        'worker-liveness sweep (dry-run): would release'
+      );
       continue;
     }
 
     try {
-      if (task.assignedWorkerId === worker.id) {
-        await state.updateTask(task.id, {
-          assignedWorkerId: null,
-          status: nextStatusForRelease(task.status),
-        });
-      }
-      // Clear currentTaskId on the worker but keep the worker record itself —
-      // the operator may want to inspect the worker's lastError/errorCount.
-      await state.touchWorker(worker.id, { currentTaskId: null });
-      state.appendActivity(
-        'WORKER_RELEASED',
-        { workerId: worker.id, taskId: task.id, secondsStale, auto: true, source: 'staleWorkerWatcher' },
-        task,
-        worker
+      // ONE release path: releases every owned task via nextStatusForRelease,
+      // marks the worker DEAD (UI drops it), and posts the deregister banner.
+      // Wrapped in the state mutex so the sweep's mutations serialize against
+      // concurrent MCP tool handlers (which all run under runExclusive). Lock
+      // order state→channel is preserved (deregister's chat posts take the
+      // channel mutex after), so this cannot deadlock.
+      const result = await state.runExclusive(() => deregisterWorker(state, worker.id, 'liveness_timeout'));
+      released += result.released.length;
+      logger.info(
+        { workerId: worker.id, released: result.released.length, minutes },
+        'worker-liveness sweep released stale worker'
       );
-      released++;
-      logger.info({ workerId: worker.id, taskId: task.id, secondsStale }, 'stale-worker watcher released task');
     } catch (err) {
-      logger.warn({ workerId: worker.id, taskId: task.id, error: err }, 'stale-worker watcher release failed');
+      logger.warn({ workerId: worker.id, error: err }, 'worker-liveness sweep release failed');
     }
   }
+
   return { released };
 }
 
@@ -151,30 +102,31 @@ export interface StaleWorkerWatcherHandle {
 }
 
 /**
- * Start the periodic stale-worker watcher. Returns a handle whose `stop()` is
- * safe to call multiple times. The watcher is opt-in: returns a no-op handle
- * unless MOE_AUTO_RELEASE_STALE_WORKERS=1 is set in the environment.
+ * Start the periodic worker-liveness sweep. Returns a handle whose `stop()` is
+ * safe to call multiple times. Enabled by DEFAULT; returns a no-op handle when
+ * MOE_DISABLE_AUTO_RELEASE=1 is set.
  */
-export function startStaleWorkerWatcher(
+export function startWorkerLivenessSweep(
   state: StateManager,
   opts: StaleWorkerWatcherOptions = {}
 ): StaleWorkerWatcherHandle {
-  const enabled = process.env.MOE_AUTO_RELEASE_STALE_WORKERS === '1';
+  const disabled = process.env.MOE_DISABLE_AUTO_RELEASE === '1';
   const dryRun = process.env.MOE_AUTO_RELEASE_DRY_RUN === '1' || !!opts.dryRun;
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
-  const staleAfterMs = opts.staleAfterMs ?? DEFAULT_STALE_MS;
+  const staleAfterMs = opts.staleAfterMs ?? DEFAULT_RELEASE_AFTER_MS;
   const now = opts.now ?? Date.now;
 
-  if (!enabled) {
+  if (disabled) {
+    logger.info('worker-liveness sweep disabled via MOE_DISABLE_AUTO_RELEASE=1');
     return { stop: () => {}, sweep: async () => ({ released: 0 }) };
   }
 
-  logger.info({ intervalMs, staleAfterMs, dryRun }, 'stale-worker watcher started');
+  logger.info({ intervalMs, staleAfterMs, dryRun }, 'worker-liveness sweep started');
 
   const sweep = () => sweepStaleWorkers(state, { staleAfterMs, dryRun, now });
 
   const handle = setInterval(() => {
-    sweep().catch((err) => logger.warn({ error: err }, 'stale-worker watcher sweep error'));
+    sweep().catch((err) => logger.warn({ error: err }, 'worker-liveness sweep error'));
   }, intervalMs);
   if (typeof (handle as NodeJS.Timeout).unref === 'function') {
     (handle as NodeJS.Timeout).unref();

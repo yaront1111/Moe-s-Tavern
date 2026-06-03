@@ -34,9 +34,11 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       const now = new Date().toISOString();
+      // Stamp reviewStartedAt only. completedAt means "finished" and is stamped
+      // at DONE by qa_approve — not here at REVIEW entry (that was a misnomer).
       const updated = await state.updateTask(
         task.id,
-        { status: 'REVIEW', prLink: params.prLink || task.prLink, completedAt: now, reviewStartedAt: now },
+        { status: 'REVIEW', prLink: params.prLink || task.prLink, reviewStartedAt: now },
         'TASK_COMPLETED'
       );
 

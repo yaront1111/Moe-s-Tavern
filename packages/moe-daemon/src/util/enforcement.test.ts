@@ -102,8 +102,14 @@ describe('assertContextFetched', () => {
 });
 
 describe('assertAllStepsCompleted', () => {
-  it('accepts when plan is empty', () => {
-    expect(() => assertAllStepsCompleted(makeTask())).not.toThrow();
+  it('rejects when plan is empty (no verifiable work to complete)', () => {
+    try {
+      assertAllStepsCompleted(makeTask());
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).message).toContain('no implementation plan');
+    }
   });
 
   it('accepts when all steps are COMPLETED', () => {

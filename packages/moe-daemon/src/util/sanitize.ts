@@ -66,6 +66,34 @@ export function sanitizePattern(
 }
 
 /**
+ * Like {@link sanitizePattern} but PRESERVES the `{}` and `()` used by Moe's
+ * branch/commit placeholders (e.g. `moe/{epicId}/{taskId}`,
+ * `feat({epicId}): {taskTitle}`). Only strips the unambiguously dangerous shell
+ * metacharacters (backtick, $, [], |, ;, &, <, >) — matching the brace-preserving
+ * rule enforced by the settings-update path (StateManager.validatePatternSetting),
+ * so load-time normalization and runtime updates agree.
+ */
+export function sanitizePatternPreservingPlaceholders(
+  value: unknown,
+  defaultVal: string,
+  maxLength: number = 256
+): string {
+  if (value === null || value === undefined || typeof value !== 'string') {
+    return defaultVal;
+  }
+  if (value.length > maxLength) {
+    logger.warn({ pattern: value.substring(0, 50) }, 'Pattern too long, using default');
+    return defaultVal;
+  }
+  // Strip only dangerous shell metacharacters; keep {} and () so placeholders survive.
+  const sanitized = value.replace(/[`$[\]|;&<>]/g, '');
+  if (sanitized !== value) {
+    logger.warn({ original: value, sanitized }, 'Pattern sanitized');
+  }
+  return sanitized || defaultVal;
+}
+
+/**
  * Validates that an entity ID is safe (no path traversal).
  * IDs should only contain alphanumeric characters, hyphens, and underscores.
  * Throws an error if the ID is invalid.

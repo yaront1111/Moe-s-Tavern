@@ -32,7 +32,10 @@ export type WorkerStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'CODING'
-  | 'BLOCKED';
+  | 'BLOCKED'
+  // Deregistered / liveness-timed-out. Removed from the board on WORKER_DELETED;
+  // included here so a snapshot carrying one (race window) still type-checks.
+  | 'DEAD';
 
 export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED';
 

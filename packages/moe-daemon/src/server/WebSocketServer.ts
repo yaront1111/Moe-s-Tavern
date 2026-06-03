@@ -21,6 +21,35 @@ import {
   computeDashboardAggregate,
   filterTasksForMetrics,
 } from '../util/metrics.js';
+import { buildReopenClearingUpdates } from '../util/reopen.js';
+
+// Identity / lifecycle fields a /ws plugin client must never set directly via
+// UPDATE_TASK. The daemon owns these; legit board edits only ever touch
+// status / order / title / description / definitionOfDone / priority. Stripping
+// these closes the "unauthenticated client overwrites completedAt / metrics /
+// reopenCount / step state" hole.
+const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
+  'id',
+  'createdAt',
+  'updatedAt',
+  'completedAt',
+  'reviewStartedAt',
+  'reviewCompletedAt',
+  'planSubmittedAt',
+  'planApprovedAt',
+  'workStartedAt',
+  'metrics',
+  'reopenCount',
+  'stepsCompleted',
+  'contextFetchedBy',
+  'priorHandoffs',
+  'rejectionHistory',
+  'rejectionDetails',
+  'priorAttempt',
+  'pendingPlanCritique',
+  'planCritiqueResult',
+  'budget',
+]);
 
 export type PluginMessage =
   | { type: 'PING' }
@@ -226,9 +255,26 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
+          // Strip identity/lifecycle fields the daemon owns — an unauthenticated
+          // /ws client must not be able to overwrite completedAt / metrics /
+          // reopenCount / step state via a board edit.
+          let safeUpdates: Record<string, unknown> = {};
+          if (updates && typeof updates === 'object') {
+            const dropped: string[] = [];
+            for (const [key, value] of Object.entries(updates as Record<string, unknown>)) {
+              if (UPDATE_TASK_DENYLIST.has(key)) {
+                dropped.push(key);
+                continue;
+              }
+              safeUpdates[key] = value;
+            }
+            if (dropped.length > 0) {
+              logger.debug({ taskId, dropped }, 'UPDATE_TASK: stripped daemon-owned fields from plugin updates');
+            }
+          }
           // Validation + update inside mutex to prevent TOCTOU race
           const task = await this.withMutex(async () => {
-            if (updates && typeof updates === 'object' && 'status' in updates) {
+            if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
               if (existing) {
                 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -240,7 +286,7 @@ export class MoeWebSocketServer {
                   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                   ARCHIVED: ['BACKLOG', 'WORKING']
                 };
-                const newStatus = (updates as { status: string }).status;
+                const newStatus = safeUpdates.status as string;
                 if (newStatus !== existing.status) {
                   const allowed = VALID_TRANSITIONS[existing.status];
                   if (!allowed || !allowed.includes(newStatus)) {
@@ -255,10 +301,26 @@ export class MoeWebSocketServer {
                       throw new Error(`Column ${newStatus} is at its WIP limit of ${limit}`);
                     }
                   }
+                  // Reopen route (e.g. JetBrains drag DONE/REVIEW → WORKING):
+                  // invalidate the prior completion via the SAME shared helper
+                  // every other reopen path uses, so a reopened task carries no
+                  // stale done-signals and can't be vacuously re-completed with
+                  // every step still COMPLETED. The denylist above already
+                  // stripped these fields from the client payload, so we own them.
+                  const isReopening =
+                    (existing.status === 'REVIEW' || existing.status === 'DONE' || existing.status === 'ARCHIVED') &&
+                    (newStatus === 'WORKING' || newStatus === 'BACKLOG' || newStatus === 'PLANNING');
+                  if (isReopening) {
+                    safeUpdates = {
+                      ...safeUpdates,
+                      ...buildReopenClearingUpdates(existing),
+                      reopenCount: existing.reopenCount + 1,
+                    };
+                  }
                 }
               }
             }
-            return this.state.updateTask(taskId, updates as Record<string, unknown>);
+            return this.state.updateTask(taskId, safeUpdates);
           });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
@@ -576,20 +638,27 @@ export class MoeWebSocketServer {
           const worker = workerId !== 'unknown' ? this.state.getWorker(workerId) : null;
           const taskId = worker?.currentTaskId;
           if (taskId) {
-            const task = this.state.getTask(taskId);
-            if (task) {
+            // Read-modify-write of task.metrics MUST run under the state mutex —
+            // updateTask is lock-free, so without this the fire-and-forget fold
+            // races concurrent complete_step/complete_task/qa_* mutators on the
+            // same task and loses the increment (lost update). withMutex is
+            // reentrant and this handler is not already inside it, so no deadlock.
+            this.withMutex(async () => {
+              const task = this.state.getTask(taskId);
+              if (!task) return;
               const priorMetrics = task.metrics ?? {};
               const breakdown: Record<string, number> = { ...(priorMetrics.agentToolBreakdown ?? {}) };
               breakdown[tool] = (breakdown[tool] ?? 0) + 1;
-              const nextMetrics = {
-                ...priorMetrics,
-                agentToolCallCount: (priorMetrics.agentToolCallCount ?? 0) + 1,
-                agentToolBreakdown: breakdown,
-              };
-              this.state.updateTask(taskId, { metrics: nextMetrics }).catch((err) => {
-                logger.debug({ err, taskId }, 'Failed to fold AGENT_TOOL_EVENT into task metrics');
+              await this.state.updateTask(taskId, {
+                metrics: {
+                  ...priorMetrics,
+                  agentToolCallCount: (priorMetrics.agentToolCallCount ?? 0) + 1,
+                  agentToolBreakdown: breakdown,
+                },
               });
-            }
+            }).catch((err) => {
+              logger.debug({ err, taskId }, 'Failed to fold AGENT_TOOL_EVENT into task metrics');
+            });
           }
           return;
         }

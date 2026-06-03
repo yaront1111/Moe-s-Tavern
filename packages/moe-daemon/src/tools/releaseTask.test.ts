@@ -86,7 +86,7 @@ describe('moe.release_task', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('clears assignedWorkerId and sets owning worker IDLE, status preserved', async () => {
+  it('clears assignedWorkerId, sets owning worker IDLE, and routes WORKING→BACKLOG', async () => {
     writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
     writeWorker({ id: 'worker-a', currentTaskId: 'task-1', status: 'CODING' });
     await state.load();
@@ -96,11 +96,13 @@ describe('moe.release_task', () => {
 
     expect(result.success).toBe(true);
     expect(result.previousWorkerId).toBe('worker-a');
-    expect(result.status).toBe('WORKING');
+    // Release now routes the task to a claimable column (WORKING→BACKLOG with no
+    // completed steps) instead of stranding it WORKING-but-unassigned.
+    expect(result.status).toBe('BACKLOG');
 
     const task = state.getTask('task-1')!;
     expect(task.assignedWorkerId).toBeNull();
-    expect(task.status).toBe('WORKING');
+    expect(task.status).toBe('BACKLOG');
 
     const worker = state.getWorker('worker-a')!;
     expect(worker.currentTaskId).toBeNull();

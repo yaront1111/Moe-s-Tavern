@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
+import { nextStatusForRelease } from '../state/workerLifecycle.js';
 
 export function unblockWorkerTool(_state: StateManager): ToolDefinition {
   return {
@@ -51,6 +52,23 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         updates.currentTaskId = null;
       }
 
+      // When the worker is NOT retrying, it no longer owns its task — release any
+      // active task it still holds (route to a claimable column) BEFORE nulling
+      // its pointer. Otherwise the task is stranded WORKING/assigned to a now-IDLE
+      // worker that no sweep can free — a permanent orphan. Mirrors the
+      // blocked-timeout release in StateManager.checkBlockedTimeouts. MCP handlers
+      // run under the state mutex, so the worker + task writes stay atomic.
+      const releasedTaskIds: string[] = [];
+      if (!params.retryTask) {
+        for (const owned of state.getActiveTasksAssignedToWorker(params.workerId)) {
+          await state.updateTask(owned.id, {
+            assignedWorkerId: null,
+            status: nextStatusForRelease(owned),
+          }, 'WORKER_UNBLOCKED');
+          releasedTaskIds.push(owned.id);
+        }
+      }
+
       const updated = await state.updateWorker(params.workerId, updates, 'WORKER_UNBLOCKED');
 
       return {
@@ -60,6 +78,7 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         currentTaskId: updated.currentTaskId,
         resolution: params.resolution,
         retryTask: params.retryTask || false,
+        ...(releasedTaskIds.length ? { releasedTaskIds } : {}),
         message: `Worker ${updated.id} unblocked. Resolution: ${params.resolution}`
       };
     }

@@ -81,6 +81,18 @@ describe('governance control-plane features', () => {
     return task;
   }
 
+  // Register a worker on a governor-role team so submit_plan_critique's role
+  // gate accepts it. Goes through the StateManager (sole writer) post-load so
+  // getTeamForWorker resolves it. Call after state.load().
+  async function registerGovernor(workerId: string): Promise<void> {
+    await state.createWorker({
+      id: workerId, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE',
+    });
+    const team = await state.createTeam({ name: 'governors', role: 'governor' });
+    await state.addTeamMember(team.id, workerId);
+  }
+
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-gov-'));
     moePath = path.join(testDir, '.moe');
@@ -199,6 +211,8 @@ describe('governance control-plane features', () => {
       }, state) as { priorHandoffCount: number; warning?: string };
       expect(releaseResult.priorHandoffCount).toBe(1);
       expect(releaseResult.warning).toBeUndefined();
+      // Release routes WORKING (steps not all done) → BACKLOG so a peer can claim it.
+      expect(state.getTask('task-h')!.status).toBe('BACKLOG');
 
       const histTool = getHandoffHistoryTool(state);
       const hist = await histTool.handler({ taskId: 'task-h' }, state) as {
@@ -209,11 +223,11 @@ describe('governance control-plane features', () => {
       expect(hist.priorHandoffs[0].pitfalls).toBe('Watch shared mutable state');
       expect(hist.priorHandoffs[0].releasedBy).toBe('worker-a');
 
-      // Next worker claiming the released task gets a recommendation
+      // Next worker claiming the released task (now in BACKLOG) gets a recommendation
       const claim = claimNextTaskTool(state);
       const claimResult = await claim.handler({
         workerId: 'worker-b',
-        statuses: ['WORKING'],
+        statuses: ['BACKLOG'],
         taskId: 'task-h',
       }, state) as {
         handoffHint?: string;
@@ -401,6 +415,7 @@ describe('governance control-plane features', () => {
         { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
       ] });
       await state.load();
+      await registerGovernor('governor-1');
 
       const critique = submitPlanCritiqueTool(state);
       const result = await critique.handler({
@@ -417,6 +432,68 @@ describe('governance control-plane features', () => {
       // Critique does NOT auto-approve — verdict='pass' alone never moves a task to WORKING
     });
 
+    it('rejects a non-governor caller (role gate)', async () => {
+      setupMoe('CONTROL');
+      writeEpic();
+      writeTask({ id: 'task-ng', status: 'AWAITING_APPROVAL', implementationPlan: [
+        { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
+      ] });
+      await state.load();
+      // worker-1 exists but is NOT on a governor team (no team at all).
+      await state.createWorker({
+        id: 'worker-1', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+        currentTaskId: null, status: 'IDLE',
+      });
+
+      const critique = submitPlanCritiqueTool(state);
+      await expect(
+        critique.handler({
+          taskId: 'task-ng',
+          verdict: 'block',
+          concerns: ['nope'],
+          workerId: 'worker-1',
+        }, state)
+      ).rejects.toThrow(/governor role required/);
+      // Task untouched — the block never landed.
+      expect(state.getTask('task-ng')!.status).toBe('AWAITING_APPROVAL');
+    });
+
+    it('block on a WORKING task resets the previously-assigned worker to IDLE', async () => {
+      setupMoe('CONTROL');
+      writeEpic();
+      writeTask({
+        id: 'task-cw',
+        status: 'WORKING',
+        assignedWorkerId: 'worker-x',
+        implementationPlan: [
+          { stepId: 'step-1', description: 's', status: 'IN_PROGRESS', affectedFiles: [] },
+        ],
+      });
+      await state.load();
+      await registerGovernor('governor-1');
+      // The worker actively pointed at the WORKING task.
+      await state.createWorker({
+        id: 'worker-x', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+        currentTaskId: 'task-cw', status: 'CODING',
+      });
+
+      const critique = submitPlanCritiqueTool(state);
+      const result = await critique.handler({
+        taskId: 'task-cw',
+        verdict: 'block',
+        concerns: ['Plan is wrong'],
+        workerId: 'governor-1',
+      }, state) as { status: string };
+
+      expect(result.status).toBe('PLANNING');
+      expect(state.getTask('task-cw')!.status).toBe('PLANNING');
+      expect(state.getTask('task-cw')!.assignedWorkerId).toBeNull();
+      // The orphaned worker must not be left pointing at the unowned task.
+      const worker = state.getWorker('worker-x')!;
+      expect(worker.status).toBe('IDLE');
+      expect(worker.currentTaskId).toBeNull();
+    });
+
     it('verdict=pass records the critique without changing status', async () => {
       setupMoe('CONTROL');
       writeEpic();
@@ -424,6 +501,7 @@ describe('governance control-plane features', () => {
         { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
       ] });
       await state.load();
+      await registerGovernor('governor-1');
 
       const critique = submitPlanCritiqueTool(state);
       const result = await critique.handler({
@@ -442,9 +520,10 @@ describe('governance control-plane features', () => {
       writeEpic();
       writeTask({ id: 'task-cb', status: 'AWAITING_APPROVAL' });
       await state.load();
+      await registerGovernor('governor-1');
       const critique = submitPlanCritiqueTool(state);
       await expect(
-        critique.handler({ taskId: 'task-cb', verdict: 'block' }, state)
+        critique.handler({ taskId: 'task-cb', verdict: 'block', workerId: 'governor-1' }, state)
       ).rejects.toThrow(/concerns/);
     });
   });

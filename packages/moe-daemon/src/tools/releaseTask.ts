@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { nextStatusForRelease } from '../state/workerLifecycle.js';
 
 const MAX_HANDOFFS_PER_TASK = 20;
 const MAX_HANDOFF_FIELD_LEN = 4000;
@@ -30,7 +31,7 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId, status unchanged). Anyone can call.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and routes it to a claimable column: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -101,9 +102,14 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           };
         }
 
-        // Build the update payload. If a handoff note was provided, prepend
-        // it to priorHandoffs (newest-first) and cap the list.
-        const updates: Record<string, unknown> = { assignedWorkerId: null };
+        // Build the update payload. Route the task to a claimable column via the
+        // single release-routing helper (same as the auto/deregister paths), so
+        // a released task always lands somewhere a peer can pick it up rather
+        // than stranded in WORKING-but-unassigned.
+        const updates: Record<string, unknown> = {
+          assignedWorkerId: null,
+          status: nextStatusForRelease(task),
+        };
         let nextPriorHandoffs = task.priorHandoffs;
         if (normalizedHandoff) {
           normalizedHandoff.releasedBy = params.workerId || previousWorkerId;

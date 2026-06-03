@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { PlanCritiqueResult } from '../types/schema.js';
-import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { invalidInput, missingRequired, notFound, notAllowed } from '../util/errors.js';
 
 const MAX_CONCERNS = 20;
 const MAX_CONCERN_LEN = 1000;
@@ -32,6 +32,17 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       if (!params.verdict) throw missingRequired('verdict');
       if (params.verdict !== 'pass' && params.verdict !== 'block') {
         throw invalidInput('verdict', 'must be "pass" or "block"');
+      }
+
+      // Role gate: critique is governor-only (mirrors enter_governance). A
+      // missing/non-governor workerId has no governor team, so it's rejected —
+      // otherwise any agent could 'block' a plan and evict an active peer.
+      const team = state.getTeamForWorker(params.workerId || '');
+      if (team?.role !== 'governor') {
+        throw notAllowed(
+          'submit_plan_critique',
+          `governor role required (worker ${params.workerId || '(none)'} is not on a governor team)`
+        );
       }
 
       let concerns: string[] | undefined;
@@ -73,6 +84,11 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
         pendingPlanCritique: undefined,
       };
 
+      // Capture the assignee before the flip: updateTask auto-clears
+      // assignedWorkerId on the WORKING -> PLANNING transition, so we need it
+      // to reset the now-stranded worker afterwards (mirrors qa_reject).
+      const prevAssignee = task.assignedWorkerId;
+
       if (params.verdict === 'block') {
         // Block verdict flips back to PLANNING regardless of prior status,
         // BUT we don't override a task that has already advanced past
@@ -87,6 +103,16 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       }
 
       const updated = await state.updateTask(task.id, updates, 'TASK_UPDATED');
+
+      // A block that flipped a WORKING task to PLANNING orphans the prior
+      // worker — updateTask cleared the task's assignee but left the worker
+      // entity pointing at an unowned task. Reset it to IDLE (best-effort;
+      // touchWorker skips missing worker records).
+      if (params.verdict === 'block' && prevAssignee) {
+        try {
+          await state.touchWorker(prevAssignee, { status: 'IDLE', currentTaskId: null });
+        } catch { /* never block tool */ }
+      }
 
       // Post to chat. Both verdicts get an entry — "pass" lets the human know
       // a governor has eyes on it; "block" tells the architect re-plan is needed.

@@ -74,6 +74,16 @@ export function assertContextFetched(task: Task, workerId: string | undefined, t
  */
 export function assertAllStepsCompleted(task: Task): void {
   const plan = Array.isArray(task.implementationPlan) ? task.implementationPlan : [];
+  // An empty plan must NOT pass vacuously — a task with no recorded steps has no
+  // verifiable work and cannot be "completed". Submit a plan first.
+  if (plan.length === 0) {
+    throw new MoeError(
+      MoeErrorCode.NOT_ALLOWED,
+      `Cannot complete task ${task.id}: it has no implementation plan. Submit a plan (and execute its steps) before completing.`,
+      { taskId: task.id, remaining: 0, totalSteps: 0 },
+      'NOT_ALLOWED'
+    );
+  }
   const remaining = plan.filter(s => s.status !== 'COMPLETED').length;
   if (remaining === 0) return;
   throw new MoeError(

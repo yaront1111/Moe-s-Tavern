@@ -82,9 +82,9 @@ describe('lifecycle E2E', () => {
   }
 
   async function approveAndClaimWorker(taskId: string, workerId: string): Promise<void> {
-    // CONTROL mode plan stays in AWAITING_APPROVAL; auto-approve via setTaskStatus.
-    const setStatus = setTaskStatusTool(state);
-    await setStatus.handler({ taskId, status: 'WORKING' }, state);
+    // CONTROL mode plan stays in AWAITING_APPROVAL; approve via the board path
+    // (state.approveTask). set_task_status no longer self-approves in CONTROL.
+    await state.approveTask(taskId);
     const claim = claimNextTaskTool(state);
     await claim.handler({ workerId, statuses: ['WORKING'], taskId }, state);
     // Worker also needs to record contextFetchedBy before start_step can run.
@@ -186,9 +186,12 @@ describe('lifecycle E2E', () => {
     expect(state.getTask('task-e2e')!.metrics?.rejectCount).toBe(1);
     expect(state.getTask('task-e2e')!.rejectionHistory).toHaveLength(1);
 
-    // Worker re-claims (reopened step is COMPLETED → no work; just hand back to QA)
+    // Worker re-claims. qa_reject reset the steps to PENDING, so the work must
+    // be genuinely redone per-step before it can be re-submitted to QA.
     await claim.handler({ workerId: 'worker-a', statuses: ['WORKING'], taskId: 'task-e2e' }, state);
     await state.updateTask('task-e2e', { contextFetchedBy: ['worker-a'] });
+    expect(state.getTask('task-e2e')!.implementationPlan.every((s) => s.status === 'PENDING')).toBe(true);
+    await workThroughSteps('task-e2e', 'worker-a');
     await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
 
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
@@ -239,5 +242,32 @@ describe('lifecycle E2E', () => {
 
     expect(state.getTask('task-e2e')!.status).toBe('PLANNING');
     expect(state.getTask('task-e2e')!.reopenCount).toBe(2);
+  });
+
+  // Regression: a /mcp agent must not be able to self-approve an
+  // AWAITING_APPROVAL plan via set_task_status. In CONTROL the tool rejects the
+  // AWAITING_APPROVAL→WORKING flip; in a relaxed mode it succeeds but stamps it
+  // as a real plan approval (planApprovedAt) so it can't masquerade as a
+  // free status change.
+  it('set_task_status: AWAITING_APPROVAL→WORKING is gated by approvalMode', async () => {
+    setupMoe();
+    writeTask({ status: 'AWAITING_APPROVAL' });
+    await state.load();
+
+    const setStatus = setTaskStatusTool(state);
+
+    // CONTROL (the setupMoe default): the self-approval is rejected.
+    await expect(
+      setStatus.handler({ taskId: 'task-e2e', status: 'WORKING' }, state)
+    ).rejects.toThrow('requires human approval');
+    expect(state.getTask('task-e2e')!.status).toBe('AWAITING_APPROVAL');
+    expect(state.getTask('task-e2e')!.planApprovedAt).toBeUndefined();
+
+    // TURBO: the relaxed mode allows it, but stamps it as a real approval.
+    state.project!.settings!.approvalMode = 'TURBO';
+    await setStatus.handler({ taskId: 'task-e2e', status: 'WORKING' }, state);
+    const t = state.getTask('task-e2e')!;
+    expect(t.status).toBe('WORKING');
+    expect(t.planApprovedAt).toBeDefined();
   });
 });

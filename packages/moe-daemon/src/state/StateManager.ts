@@ -42,14 +42,15 @@ import { MentionRouter } from '../util/mentionRouter.js';
 import {
   sanitizeString,
   sanitizeNumber,
-  sanitizePattern,
+  sanitizePatternPreservingPlaceholders,
   sanitizeStringArray,
   sanitizeBoolean,
   sanitizeEnum,
   sanitizeUrl,
   validateEntityId
 } from '../util/sanitize.js';
-import { nextStatusForRelease } from './staleWorkerWatcher.js';
+import { nextStatusForRelease } from './workerLifecycle.js';
+import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
 
@@ -64,7 +65,6 @@ const MAX_COMMENTS_PER_TASK_ENV = parseInt(process.env.MOE_MAX_COMMENTS_PER_TASK
 const ACTIVITY_TEXT_PREVIEW_CHARS = 200;
 const ACTIVITY_TRUNCATED_SUFFIX = ' [truncated]';
 const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW']);
-const CLEANUP_ELIGIBLE_WORKER_STATUSES = new Set<WorkerStatus>(['IDLE', 'READING_CONTEXT', 'AWAITING_APPROVAL']);
 export const MAX_COMMENTS_PER_TASK = Number.isFinite(MAX_COMMENTS_PER_TASK_ENV) && MAX_COMMENTS_PER_TASK_ENV > 0
   ? MAX_COMMENTS_PER_TASK_ENV
   : MAX_COMMENTS_PER_TASK_DEFAULT;
@@ -458,6 +458,28 @@ export class StateManager {
    * Scan workers with status=BLOCKED and auto-timeout if lastActivityAt exceeds threshold.
    */
   async checkBlockedTimeouts(): Promise<void> {
+    // Serialize the worker/task mutations on the SAME mutex every MCP handler and
+    // the worker-liveness sweep use. updateTask/updateWorker/deleteWorker are
+    // themselves lock-free, so without this wrapper this background timer would
+    // interleave with the sweep at an await boundary — a lost-update / DEAD→IDLE
+    // resurrection window. runExclusive is reentrant (AsyncLocalStorage), so the
+    // nested deleteWorker re-enters instead of deadlocking.
+    await this.mutex.runExclusive(() => this.runBlockedTimeoutSweep());
+
+    // In-memory waiter cleanup mutates no persisted state — keep it outside the
+    // lock so it never participates in any state↔channel lock ordering.
+    try {
+      const staleWaitersCleaned = cleanupStaleWaiters(this);
+      if (staleWaitersCleaned > 0) {
+        logger.info({ staleWaitersCleaned }, 'Cleaned stale wait_for_task waiters');
+      }
+    } catch (error) {
+      logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
+    }
+  }
+
+  /** Mutating body of checkBlockedTimeouts; always invoked under this.mutex. */
+  private async runBlockedTimeoutSweep(): Promise<void> {
     const now = Date.now();
     for (const worker of this.workers.values()) {
       if (worker.status !== 'BLOCKED') continue;
@@ -476,7 +498,7 @@ export class StateManager {
           if (ACTIVE_ASSIGNMENT_STATUSES.has(owned.status)) {
             await this.updateTask(owned.id, {
               assignedWorkerId: null,
-              status: nextStatusForRelease(owned.status),
+              status: nextStatusForRelease(owned),
             }, 'WORKER_TIMEOUT');
           }
         }
@@ -513,15 +535,6 @@ export class StateManager {
     if (deletedCount > 0) {
       this.emit({ type: 'STATE_SNAPSHOT', payload: this.getSnapshot() });
     }
-
-    try {
-      const staleWaitersCleaned = cleanupStaleWaiters(this);
-      if (staleWaitersCleaned > 0) {
-        logger.info({ staleWaitersCleaned }, 'Cleaned stale wait_for_task waiters');
-      }
-    } catch (error) {
-      logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
-    }
   }
 
   private isStaleResolvedProposal(proposal: RailProposal, ageMs: number, nowMs: number): boolean {
@@ -553,6 +566,8 @@ export class StateManager {
       const filePath = path.join(this.moePath, 'proposals', `${proposalId}.json`);
       try {
         if (fs.existsSync(filePath)) {
+          // Suppress the watcher echo so our own delete doesn't re-trigger load().
+          this.fileWatcher?.ignorePath(filePath);
           fs.unlinkSync(filePath);
         }
       } catch (error) {
@@ -1111,6 +1126,12 @@ export class StateManager {
       }
       this.teams = this.loadEntities<Team>(path.join(this.moePath, 'teams'));
       this.channels = this.loadEntities<ChatChannel>(path.join(this.moePath, 'channels'));
+      // Self-heal chat infrastructure on EVERY load (not just on a schemaVersion
+      // bump). A masked v5/v6 FS migration could persist the new schemaVersion
+      // while leaving the channels/ dir or role channels missing — then chat is
+      // permanently broken with the version already bumped so the migration never
+      // reruns. This idempotently recreates missing dirs / canonical channels.
+      this.ensureChatInfrastructure();
       this.decisions = this.loadEntities<Decision>(path.join(this.moePath, 'decisions'));
       this.proposals = this.loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
       try {
@@ -1145,7 +1166,9 @@ export class StateManager {
       project: this.project,
       epics: sortByOrder(Array.from(this.epics.values())),
       tasks: sortByOrder(Array.from(this.tasks.values())),
-      workers: Array.from(this.workers.values()),
+      // DEAD workers are retained server-side (idempotent re-deregister + later
+      // pruning) but never shown in the UI — exclude them from every snapshot.
+      workers: Array.from(this.workers.values()).filter((w) => w.status !== 'DEAD'),
       proposals: Array.from(this.proposals.values()).filter(
         (proposal) => !this.isStaleResolvedProposal(proposal, PROPOSAL_SNAPSHOT_RETENTION_MS, nowMs)
       ),
@@ -1163,7 +1186,9 @@ export class StateManager {
     return {
       tasks: this.tasks.size,
       epics: this.epics.size,
-      workers: this.workers.size,
+      // Exclude DEAD workers to match getSnapshot / list_workers (the UI never
+      // shows them); they linger in the map only until the Layer-3 prune.
+      workers: Array.from(this.workers.values()).filter((w) => w.status !== 'DEAD').length,
       proposals: this.proposals.size
     };
   }
@@ -1186,14 +1211,40 @@ export class StateManager {
    * orphan before assigning the next worker.
    */
   isTaskClaimable(task: Task): boolean {
-    return !task.assignedWorkerId || this.isTaskAssignedToMissingWorker(task);
+    return !task.assignedWorkerId || this.isTaskAssignedToInactiveWorker(task);
   }
 
   isTaskAssignedToMissingWorker(task: Task): boolean {
     return Boolean(task.assignedWorkerId && !this.workers.has(task.assignedWorkerId));
   }
 
-  private getTasksAssignedToWorker(workerId: string): Task[] {
+  /**
+   * Assigned to a worker that is present in the map but has been marked DEAD
+   * (graceful deregister or liveness-timeout). Keyed on the explicit DEAD
+   * status, NOT on raw idle time — a worker that is merely quiet (e.g. mid a
+   * long build/test, lastActivityAt past the 120s presence window) is still
+   * ALIVE and must keep its task. Death is established only by deregister/the
+   * 30-min sweep, both of which already release the task (null assignedWorkerId).
+   * This predicate is a defensive backstop for the rare assigned-to-DEAD race.
+   */
+  isTaskAssignedToDeadWorker(task: Task): boolean {
+    if (!task.assignedWorkerId) return false;
+    const worker = this.workers.get(task.assignedWorkerId);
+    return worker?.status === 'DEAD';
+  }
+
+  /**
+   * Assigned to a worker that can no longer act on it — either missing from the
+   * map or marked DEAD. The single predicate the claim path and claimability
+   * use so a gone owner never blocks a claim. Deliberately does NOT include
+   * "alive but idle": reclaiming a quiet-but-live worker's in-flight task would
+   * yank it mid-operation. Such a worker is released only when it becomes DEAD.
+   */
+  isTaskAssignedToInactiveWorker(task: Task): boolean {
+    return this.isTaskAssignedToMissingWorker(task) || this.isTaskAssignedToDeadWorker(task);
+  }
+
+  getTasksAssignedToWorker(workerId: string): Task[] {
     return Array.from(this.tasks.values()).filter((task) => task.assignedWorkerId === workerId);
   }
 
@@ -1201,11 +1252,23 @@ export class StateManager {
     return this.getTasksAssignedToWorker(workerId).some((task) => ACTIVE_ASSIGNMENT_STATUSES.has(task.status));
   }
 
+  /** Tasks assigned to a worker that are in an active column (PLANNING/WORKING/REVIEW). */
+  getActiveTasksAssignedToWorker(workerId: string): Task[] {
+    return this.getTasksAssignedToWorker(workerId).filter((task) => ACTIVE_ASSIGNMENT_STATUSES.has(task.status));
+  }
+
   private isWorkerEligibleForStaleCleanup(worker: Worker): boolean {
-    if (this.hasActiveTaskAssignment(worker.id)) {
-      return false;
-    }
-    return CLEANUP_ELIGIBLE_WORKER_STATUSES.has(worker.status);
+    // A DEAD worker is always prunable: its tasks were released on deregister,
+    // and if a release failed mid-way (leaving a dangling assignment), the
+    // deleteWorker cascade clears that assignment (task stays put, unassigned →
+    // claimable). Without this short-circuit a DEAD worker that still "owns" an
+    // active task would never be pruned (hasActiveTaskAssignment would veto it).
+    if (worker.status === 'DEAD') return true;
+    // Otherwise (the caller has already confirmed the worker is stale past the
+    // timeout) prune iff it holds no active task — regardless of status. A
+    // crashed, task-less GOVERNING/CODING/PLANNING worker must not linger
+    // forever just because its status isn't on a hardcoded allowlist.
+    return !this.hasActiveTaskAssignment(worker.id);
   }
 
   async touchWorker(workerId?: string | null, updates: Partial<Worker> = {}, event?: ActivityEventType): Promise<Worker | null> {
@@ -1540,16 +1603,18 @@ export class StateManager {
       const channel = this.channels.get(channelId);
       if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
-      // Remove channel JSON file
+      // Remove channel JSON file (watched — suppress the echo so our own delete
+      // doesn't re-trigger a full state.load()).
       const channelFile = path.join(this.moePath, 'channels', `${channelId}.json`);
       try {
+        this.fileWatcher?.ignorePath(channelFile);
         fs.unlinkSync(channelFile);
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
         if (err.code !== 'ENOENT') throw error;
       }
 
-      // Remove messages JSONL file
+      // Remove messages JSONL file (not watched, no echo to suppress)
       const messagesFile = path.join(this.moePath, 'messages', `${channelId}.jsonl`);
       try {
         fs.unlinkSync(messagesFile);
@@ -1558,15 +1623,19 @@ export class StateManager {
         if (err.code !== 'ENOENT') throw error;
       }
 
-      // Remove pins file for this channel
+      // Remove pins file for this channel (watched — suppress the echo).
       const pinsFile = path.join(this.moePath, 'pins', `${channelId}.json`);
       try {
-        if (fs.existsSync(pinsFile)) fs.unlinkSync(pinsFile);
+        if (fs.existsSync(pinsFile)) {
+          this.fileWatcher?.ignorePath(pinsFile);
+          fs.unlinkSync(pinsFile);
+        }
       } catch {
         // Silently ignore if pins file doesn't exist
       }
 
       this.channels.delete(channelId);
+      this.messageMutexes.delete(channelId);
       this.emit({ type: 'CHANNEL_DELETED', payload: channel });
       this.appendActivity('CHANNEL_DELETED', { channelId, name: channel.name });
     });
@@ -1849,11 +1918,13 @@ export class StateManager {
     const team = this.teams.get(teamId);
     if (!team) throw new Error(`Team not found: ${teamId}`);
 
-    // Clear teamId on all members
-    for (const memberId of team.memberIds) {
-      const worker = this.workers.get(memberId);
-      if (worker) {
-        await this.updateWorker(memberId, { teamId: null });
+    // Clear teamId on every worker that points at this team. Iterate all
+    // workers rather than only team.memberIds: a worker whose teamId still
+    // references this team but was dropped from memberIds out-of-band would
+    // otherwise be left pointing at a now-deleted team.
+    for (const worker of this.workers.values()) {
+      if (worker.teamId === teamId) {
+        await this.updateWorker(worker.id, { teamId: null });
       }
     }
 
@@ -1919,21 +1990,24 @@ export class StateManager {
     const team = this.teams.get(teamId);
     if (!team) throw new Error(`Team not found: ${teamId}`);
 
+    // Repair the worker's teamId pointer FIRST, regardless of the memberIds
+    // early-return below. If the memberIds entry was already removed out-of-band
+    // (e.g. a half-applied edit) but worker.teamId still points here, the worker
+    // would otherwise be permanently trapped in a team it isn't listed in. Only
+    // clear when it actually points at the team being left — a worker may be a
+    // stale member of this team's memberIds while its real team is another.
+    const worker = this.workers.get(workerId);
+    if (worker && worker.teamId === teamId) {
+      await this.updateWorker(workerId, { teamId: null });
+    }
+
     if (!team.memberIds.includes(workerId)) {
-      return team; // Not a member, idempotent
+      return team; // Not a member, idempotent (teamId already repaired above)
     }
 
     const updated = await this.updateTeam(teamId, {
       memberIds: team.memberIds.filter((id) => id !== workerId)
     });
-
-    // Clear worker's teamId only if it actually points at the team being left.
-    // A worker may still be a stale member of this team's memberIds while its
-    // real current team is another — don't drop the real membership pointer.
-    const worker = this.workers.get(workerId);
-    if (worker && worker.teamId === teamId) {
-      await this.updateWorker(workerId, { teamId: null });
-    }
 
     this.appendActivity('TEAM_MEMBER_REMOVED', { teamId, workerId });
     return updated;
@@ -2082,6 +2156,11 @@ export class StateManager {
 
     // Sanitize provided fields (B27)
     const sanitized: Partial<Task> = { ...updates };
+    // Identity hardening: never let a client-supplied UPDATE_TASK overwrite the
+    // immutable id/createdAt. A changed id would diverge the map key from the
+    // on-disk filename (map keyed by taskId, written to `${taskId}.json`).
+    delete (sanitized as Record<string, unknown>).id;
+    delete (sanitized as Record<string, unknown>).createdAt;
     if (sanitized.title !== undefined) {
       sanitized.title = sanitizeString(sanitized.title, 'title', 500);
     }
@@ -2198,6 +2277,8 @@ export class StateManager {
     const filePath = path.join(this.moePath, 'tasks', `${taskId}.json`);
     try {
       if (fs.existsSync(filePath)) {
+        // Suppress the watcher echo so our own delete doesn't re-trigger load().
+        this.fileWatcher?.ignorePath(filePath);
         fs.unlinkSync(filePath);
       }
     } catch (error) {
@@ -2291,6 +2372,8 @@ export class StateManager {
     const filePath = path.join(this.moePath, 'epics', `${epicId}.json`);
     try {
       if (fs.existsSync(filePath)) {
+        // Suppress the watcher echo so our own delete doesn't re-trigger load().
+        this.fileWatcher?.ignorePath(filePath);
         fs.unlinkSync(filePath);
       }
     } catch (error) {
@@ -2347,7 +2430,11 @@ export class StateManager {
       {
         status: 'BACKLOG',
         reopenCount: task.reopenCount + 1,
-        reopenReason: reason
+        reopenReason: reason,
+        // Scrub completion signals + reset steps via the same shared helper the
+        // MCP set_task_status reopen path uses, so this plugin path can't leave
+        // a reopened task advertising stale "done" data / all-COMPLETED steps.
+        ...buildReopenClearingUpdates(task),
       },
       'TASK_REOPENED'
     );
@@ -2360,10 +2447,13 @@ export class StateManager {
       throw new Error(`Worker not found: ${workerId}`);
     }
 
+    // Marking a worker DEAD is not "activity" — preserve its real lastActivityAt
+    // so staleness/pruning and display stay accurate. Any other update bumps it.
+    const becomingDead = updates.status === 'DEAD';
     const updated: Worker = {
       ...worker,
       ...updates,
-      lastActivityAt: new Date().toISOString()
+      lastActivityAt: becomingDead ? worker.lastActivityAt : new Date().toISOString()
     };
 
     await this.writeEntity('workers', workerId, updated);
@@ -2371,7 +2461,15 @@ export class StateManager {
     if (event) {
       this.appendActivity(event, updates, undefined, updated);
     }
-    this.emit({ type: 'WORKER_UPDATED', payload: updated });
+    // A DEAD worker is dropped from the UI immediately: emit WORKER_DELETED so
+    // boards remove it, while the record is retained server-side (idempotent
+    // re-deregister + later pruned by the stale-worker sweep). getSnapshot also
+    // excludes DEAD workers so reconnects/snapshots never resurface it.
+    if (updated.status === 'DEAD') {
+      this.emit({ type: 'WORKER_DELETED', payload: updated });
+    } else {
+      this.emit({ type: 'WORKER_UPDATED', payload: updated });
+    }
     return updated;
   }
 
@@ -2412,6 +2510,8 @@ export class StateManager {
       const filePath = path.join(this.moePath, 'workers', `${workerId}.json`);
       try {
         if (fs.existsSync(filePath)) {
+          // Suppress the watcher echo so our own delete doesn't re-trigger load().
+          this.fileWatcher?.ignorePath(filePath);
           fs.unlinkSync(filePath);
         }
       } catch (error) {
@@ -2473,7 +2573,10 @@ export class StateManager {
           const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
           for (const file of files) {
             try {
-              fs.unlinkSync(path.join(workersDir, file));
+              const workerFile = path.join(workersDir, file);
+              // Suppress the watcher echo so our own delete doesn't re-trigger load().
+              this.fileWatcher?.ignorePath(workerFile);
+              fs.unlinkSync(workerFile);
               deletedCount++;
             } catch (error) {
               logger.error({ error, file }, 'Failed to delete worker file during purge');
@@ -2492,7 +2595,17 @@ export class StateManager {
       for (const task of this.tasks.values()) {
         if (task.assignedWorkerId && this.isTaskAssignedToMissingWorker(task)) {
           const previousWorkerId = task.assignedWorkerId;
-          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
+          // Route the status too — stripping only assignedWorkerId leaves an
+          // in-flight WORKING task stranded WORKING-but-unassigned, which the
+          // claim path skips (it filters by status first). nextStatusForRelease
+          // sends WORKING → BACKLOG (or REVIEW if all steps are done) so the
+          // orphaned task is actually claimable after a restart.
+          const updated = {
+            ...task,
+            assignedWorkerId: null,
+            status: nextStatusForRelease(task),
+            updatedAt: new Date().toISOString(),
+          };
           this.tasks.set(task.id, updated);
           try {
             await this.writeEntity('tasks', task.id, updated);
@@ -2944,17 +3057,87 @@ export class StateManager {
   }
 
   /**
+   * Idempotently ensure the chat infrastructure exists, independent of
+   * schemaVersion. Called on EVERY load() after channels are loaded into memory.
+   *
+   * This is the self-heal for masked FS migrations: if a v5/v6 migration bumped
+   * schemaVersion but its file-system side-effects failed (dirs/role channels
+   * never created), the bumped version means the migration never reruns and chat
+   * stays broken ("Channel not found"). Recreating the canonical channels here
+   * fixes that on the next load without touching schemaVersion. No-op when
+   * everything already exists.
+   */
+  private ensureChatInfrastructure(): void {
+    // Essential directories — these MUST exist for chat to work at all.
+    fs.mkdirSync(path.join(this.moePath, 'channels'), { recursive: true });
+    fs.mkdirSync(path.join(this.moePath, 'messages'), { recursive: true });
+
+    // Default #general channel (by name/type), then the role channels.
+    const hasGeneral = Array.from(this.channels.values()).some(
+      (ch) => ch.type === 'general' || ch.name === 'general'
+    );
+    if (!hasGeneral) {
+      this.seedCanonicalChannel('general', 'general');
+    }
+    this.ensureRoleChannels();
+  }
+
+  /**
+   * Ensure the canonical role channels (#workers, #architects, #qa, #governors)
+   * exist, creating any that are missing. Idempotent — keys on channel name.
+   */
+  private ensureRoleChannels(): void {
+    const existingNames = new Set(
+      Array.from(this.channels.values()).map((ch) => ch.name)
+    );
+    for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
+      if (existingNames.has(roleName)) continue;
+      this.seedCanonicalChannel(roleName, 'role');
+    }
+  }
+
+  /**
+   * Create a canonical channel (file + empty messages JSONL + in-memory entry)
+   * if it isn't already present. Best-effort: a per-channel failure is logged but
+   * does not abort load(). The watcher echo is suppressed so the fresh file does
+   * not re-trigger a reload.
+   */
+  private seedCanonicalChannel(name: string, type: ChatChannel['type']): void {
+    try {
+      const channel: ChatChannel = {
+        id: generateId('chan'),
+        name,
+        type,
+        linkedEntityId: null,
+        createdAt: new Date().toISOString(),
+      };
+      const channelFile = path.join(this.moePath, 'channels', `${channel.id}.json`);
+      this.fileWatcher?.ignorePath(channelFile);
+      atomicWriteJson(channelFile, channel);
+      const messagesFile = path.join(this.moePath, 'messages', `${channel.id}.jsonl`);
+      if (!fs.existsSync(messagesFile)) {
+        fs.writeFileSync(messagesFile, '');
+      }
+      this.channels.set(channel.id, channel);
+      logger.info({ channelId: channel.id, name, type }, 'Self-healed missing canonical chat channel');
+    } catch (error) {
+      logger.warn({ error, name, type }, 'Failed to self-heal canonical chat channel');
+    }
+  }
+
+  /**
    * Post-migration file system setup for v5 (chat channels and messages).
    * Creates directories, default general channel, and backfills worker chatCursors.
    */
   private migrateToV5FileSystem(): void {
-    // Create channels/ and messages/ directories
-    try {
-      fs.mkdirSync(path.join(this.moePath, 'channels'), { recursive: true });
-      fs.mkdirSync(path.join(this.moePath, 'messages'), { recursive: true });
-    } catch (error) {
-      logger.warn({ error }, 'Failed to create chat directories during migration');
-    }
+    // Create channels/ and messages/ directories. These are ESSENTIAL: without
+    // them chat is unusable. Let a failure PROPAGATE out of load() so the bumped
+    // schemaVersion is NOT persisted (it's written only after migrations return)
+    // — otherwise the version sticks at the new value and this FS step never
+    // reruns, permanently breaking chat. (Non-essential per-file copies below
+    // stay tolerant.)
+    fs.mkdirSync(path.join(this.moePath, 'channels'), { recursive: true });
+    fs.mkdirSync(path.join(this.moePath, 'messages'), { recursive: true });
 
     // Create default general channel if no channels exist yet
     const channelsDir = path.join(this.moePath, 'channels');
@@ -3106,8 +3289,8 @@ export class StateManager {
         approvalMode,
         speedModeDelayMs: sanitizeNumber(project.settings?.speedModeDelayMs, 2000, 0, 60000),
         autoCreateBranch: sanitizeBoolean(project.settings?.autoCreateBranch, true),
-        branchPattern: sanitizePattern(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
-        commitPattern: sanitizePattern(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
+        branchPattern: sanitizePatternPreservingPlaceholders(project.settings?.branchPattern, 'moe/{epicId}/{taskId}'),
+        commitPattern: sanitizePatternPreservingPlaceholders(project.settings?.commitPattern, 'feat({epicId}): {taskTitle}'),
         agentCommand: sanitizeString(project.settings?.agentCommand, 'agentCommand', 256, 'claude'),
         enableAgentTeams: sanitizeBoolean(project.settings?.enableAgentTeams, false),
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,

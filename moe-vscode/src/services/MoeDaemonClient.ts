@@ -674,11 +674,17 @@ export class MoeDaemonClient implements vscode.Disposable {
                 case 'TASK_CREATED':
                     this._onTaskUpdated.fire(payload);
                     if (this.state) {
-                        const idx = this.state.tasks.findIndex(t => t.id === payload.id);
-                        if (idx >= 0) {
-                            this.state.tasks[idx] = payload;
+                        if (payload.status === 'ARCHIVED') {
+                            // STATE_SNAPSHOT strips ARCHIVED tasks; mirror that here so an
+                            // archived task does not linger in the cache (see TASK_DELETED).
+                            this.state.tasks = this.state.tasks.filter(t => t.id !== payload.id);
                         } else {
-                            this.state.tasks.push(payload);
+                            const idx = this.state.tasks.findIndex(t => t.id === payload.id);
+                            if (idx >= 0) {
+                                this.state.tasks[idx] = payload;
+                            } else {
+                                this.state.tasks.push(payload);
+                            }
                         }
                         this._onStateChanged.fire(this.state);
                     }

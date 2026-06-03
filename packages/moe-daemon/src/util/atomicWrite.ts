@@ -41,6 +41,14 @@ function writeAndFsyncSync(tmp: string, data: string): void {
   }
 }
 
+// Block the current thread for `ms` without spinning. Atomics.wait on a private
+// SharedArrayBuffer that is never notified simply times out, giving us a real
+// synchronous sleep so the retry loop actually backs off (rather than burning
+// all attempts in microseconds while an AV scanner briefly holds the file).
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function renameWithRetrySync(tmp: string, filePath: string): void {
   let lastErr: unknown;
   for (let attempt = 0; attempt < RENAME_RETRIES; attempt++) {
@@ -50,6 +58,9 @@ function renameWithRetrySync(tmp: string, filePath: string): void {
     } catch (err) {
       if (!isRetryableRename(err)) throw err;
       lastErr = err;
+      // Bounded synchronous backoff (10/20/30/40 ms between the 5 attempts,
+      // ~100ms worst case) mirroring the async sibling's 10*(attempt+1) delay.
+      if (attempt < RENAME_RETRIES - 1) sleepSync(10 * (attempt + 1));
     }
   }
   throw lastErr;

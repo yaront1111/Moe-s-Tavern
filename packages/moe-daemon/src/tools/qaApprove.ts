@@ -51,7 +51,10 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
 
       const updated = await state.updateTask(
         params.taskId,
-        { status: 'DONE', reviewCompletedAt: nowIso, metrics: nextMetrics },
+        // completedAt now means "task finished" — stamped here at DONE, the only
+        // true completion point (reviewCompletedAt/metrics.doneAt mark the same
+        // moment for review-timing/metrics).
+        { status: 'DONE', completedAt: nowIso, reviewCompletedAt: nowIso, metrics: nextMetrics },
         'QA_APPROVED'
       );
 

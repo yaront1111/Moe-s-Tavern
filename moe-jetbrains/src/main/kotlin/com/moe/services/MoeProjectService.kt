@@ -408,7 +408,13 @@ class MoeProjectService @JvmOverloads constructor(
                     }
 
                     val oldTask = current.tasks.find { it.id == task.id }
-                    val tasks = current.tasks.filter { it.id != task.id } + task
+                    // STATE_SNAPSHOT strips ARCHIVED tasks; mirror that here so an archived
+                    // task does not linger in the cache until the next refresh (see TASK_DELETED).
+                    val tasks = if (task.status == "ARCHIVED") {
+                        current.tasks.filter { it.id != task.id }
+                    } else {
+                        current.tasks.filter { it.id != task.id } + task
+                    }
                     val newState = current.copy(tasks = tasks)
                     state = newState
                     publishState(newState)

@@ -100,12 +100,15 @@ describe('moe.enter_governance', () => {
     await state.load();
     await bindWorkerToTeamRole('governor-1', 'governor');
 
-    // Create the five channels the governor should watch.
-    await state.createChannel({ name: 'general', type: 'general' });
-    const arch = await state.createChannel({ name: 'architects', type: 'role' });
-    const wrk = await state.createChannel({ name: 'workers', type: 'role' });
-    const qa = await state.createChannel({ name: 'qa', type: 'role' });
-    const gov = await state.createChannel({ name: 'governors', type: 'role' });
+    // load() self-heals the five canonical channels the governor watches via
+    // ensureChatInfrastructure — resolve their ids rather than re-creating them
+    // (re-creating would throw "already exists").
+    const channelByName = (name: string) =>
+      state.getChannels().find((c) => c.name === name)!;
+    const arch = channelByName('architects');
+    const wrk = channelByName('workers');
+    const qa = channelByName('qa');
+    const gov = channelByName('governors');
 
     const tool = enterGovernanceTool(state);
     const result = await tool.handler({ workerId: 'governor-1' }, state) as Record<string, unknown>;
@@ -133,6 +136,12 @@ describe('moe.enter_governance', () => {
     writeWorker({ id: 'governor-1' });
     await state.load();
     await bindWorkerToTeamRole('governor-1', 'governor');
+
+    // load() self-heals the canonical channels; drop them to recreate the
+    // degraded "no channels" scenario this test guards.
+    for (const ch of state.getChannels()) {
+      await state.deleteChannel(ch.id);
+    }
 
     const tool = enterGovernanceTool(state);
     const result = await tool.handler({ workerId: 'governor-1' }, state) as Record<string, unknown>;

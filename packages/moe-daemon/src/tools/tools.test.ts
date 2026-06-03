@@ -29,6 +29,7 @@ import { unblockWorkerTool } from './unblockWorker.js';
 import { addCommentTool } from './addComment.js';
 import { getPendingQuestionsTool } from './getPendingQuestions.js';
 import { chatReadTool } from './chatRead.js';
+import { chatSendTool } from './chatSend.js';
 import { chatResyncTool } from './chatResync.js';
 import { chatWaitTool } from './chatWait.js';
 import { waitForTaskTool } from './waitForTask.js';
@@ -1089,7 +1090,10 @@ describe('MCP Tools', () => {
       expect(result.task.assignedWorkerId).toBe('worker-1');
     });
 
-    it('returns current assignment data when replacing an existing worker', async () => {
+    it('replaceExisting overrides the epic-status block WITHOUT evicting a bystander worker', async () => {
+      // worker-other holds task-active-worker (same epic+status). A ranked claim
+      // for a DIFFERENT unassigned task (task-2) with replaceExisting must claim
+      // task-2 and LEAVE worker-other on its own task — never yank a bystander.
       createTask({
         id: 'task-active-worker',
         status: 'BACKLOG',
@@ -1113,7 +1117,32 @@ describe('MCP Tools', () => {
       expect(result.task.id).toBe('task-2');
       expect(result.task.assignedWorkerId).toBe('worker-replacement');
       expect(state.getTask('task-2')?.assignedWorkerId).toBe('worker-replacement');
-      expect(state.getTask('task-active-worker')?.assignedWorkerId).toBeNull();
+      // Bystander is NOT evicted (previously this wrongly nulled its assignment).
+      expect(state.getTask('task-active-worker')?.assignedWorkerId).toBe('worker-other');
+      expect(state.getWorker('worker-other')?.currentTaskId).toBe('task-active-worker');
+    });
+
+    it('taskId + replaceExisting takes over THAT task from its live owner and idles them', async () => {
+      createTask({ id: 'task-takeover', status: 'BACKLOG', assignedWorkerId: 'worker-incumbent', order: 5 });
+      createWorker({ id: 'worker-incumbent', status: 'READING_CONTEXT', currentTaskId: 'task-takeover' });
+      await state.load();
+
+      const tool = claimNextTaskTool(state);
+      const result = await tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-takeover',
+        workerId: 'worker-new',
+        replaceExisting: true,
+      }, state) as { hasNext: boolean; task: { id: string; assignedWorkerId: string | null } };
+
+      // The SPECIFIC requested task is taken over (not a bystander), and the claim succeeds.
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-takeover');
+      expect(result.task.assignedWorkerId).toBe('worker-new');
+      expect(state.getTask('task-takeover')?.assignedWorkerId).toBe('worker-new');
+      // The displaced incumbent is reconciled, not left dangling.
+      expect(state.getWorker('worker-incumbent')?.currentTaskId).toBeNull();
+      expect(state.getWorker('worker-incumbent')?.status).toBe('IDLE');
     });
 
     it('repairs and claims a task assigned to a missing worker', async () => {
@@ -2367,7 +2396,7 @@ describe('MCP Tools', () => {
       expect(taskAfterSecond?.workStartedAt).toBe(firstTimestamp);
     });
 
-    it('completeTask sets completedAt and reviewStartedAt', async () => {
+    it('completeTask sets reviewStartedAt but NOT completedAt (completedAt means DONE)', async () => {
       createTask({
         status: 'WORKING',
         implementationPlan: [
@@ -2380,12 +2409,13 @@ describe('MCP Tools', () => {
       await tool.handler({ taskId: 'task-1' }, state);
 
       const task = state.getTask('task-1');
-      expect(task?.completedAt).toBeDefined();
       expect(task?.reviewStartedAt).toBeDefined();
+      // completedAt is now stamped at DONE (qa_approve), not at REVIEW entry.
+      expect(task?.completedAt).toBeUndefined();
       expect(task?.status).toBe('REVIEW');
     });
 
-    it('qaApprove sets reviewCompletedAt', async () => {
+    it('qaApprove sets completedAt and reviewCompletedAt at DONE', async () => {
       createTask({ status: 'REVIEW' });
       await state.load();
 
@@ -2393,6 +2423,7 @@ describe('MCP Tools', () => {
       await tool.handler({ taskId: 'task-1' }, state);
 
       const task = state.getTask('task-1');
+      expect(task?.completedAt).toBeDefined();
       expect(task?.reviewCompletedAt).toBeDefined();
       expect(task?.status).toBe('DONE');
     });
@@ -2801,6 +2832,24 @@ describe('MCP Tools', () => {
 
       expect(result.hasMessage).toBe(true);
       expect(result.messages?.[0].content).toBe('status update from somebody else');
+    });
+
+    it('rejects chat_send posting as the reserved "system" sender', async () => {
+      // Regression: 'system' must not be impersonable over /mcp — it would let
+      // an agent masquerade as the daemon and reset the mentionRouter
+      // loop-guard. Daemon internals post via state.sendMessage directly.
+      const channel = await setupChat();
+      const tool = chatSendTool(state);
+
+      await expect(
+        tool.handler({ channel, content: 'pretending to be the daemon', workerId: 'system' }, state)
+      ).rejects.toMatchObject({
+        code: MoeErrorCode.NOT_ALLOWED,
+        context: { operation: 'chat_send as "system"', reason: 'reserved for daemon-internal messages' },
+      });
+
+      // No message should have landed in the channel.
+      expect(await state.getMessages(channel)).toHaveLength(0);
     });
 
     it('truncates chat_wait wake messages by default', async () => {

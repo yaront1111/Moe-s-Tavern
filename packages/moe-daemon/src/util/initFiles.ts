@@ -174,7 +174,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=eefcd17a3853 -->
+  'governor.reference.md': `<!-- moe-generated: sha=5969490dcd92 -->
 
 # Governor — Reference
 
@@ -182,7 +182,7 @@ Deep-dive material trimmed out of \`governor.md\`. Read this on demand when a si
 
 ## Stale-worker thresholds
 
-The daemon's stale-worker watcher uses the same liveness math as \`moe.list_workers {onlyStale: true}\` — see \`packages/moe-daemon/src/tools/listWorkers.ts\`. Default thresholds:
+The daemon now **auto-releases** a dead worker's tasks by default (worker-liveness sweep, ~30 min idle → tasks released, worker marked \`DEAD\` and dropped from the UI; a dead owner's task is claimable after the 120s presence window regardless). So most "stale worker holding a task" situations self-heal — your job is mainly to notice workers that are *slow but alive* and decide whether to ping. Liveness uses the shared \`isWorkerAlive\` predicate (\`moe.list_workers {onlyStale: true}\`, \`packages/moe-daemon/src/util/workerLiveness.ts\`). Default thresholds:
 
 | Multiple of liveness timeout | Default interpretation |
 |---|---|

@@ -569,7 +569,9 @@ type WorkerStatus =
   | 'AWAITING_APPROVAL' // Plan submitted, waiting
   | 'CODING'            // Executing steps
   | 'BLOCKED'           // Stuck, needs human help
-  | 'GOVERNING';        // Governor overseeing in-flight work via chat (set by moe.enter_governance)
+  | 'GOVERNING'         // Governor overseeing in-flight work via chat (set by moe.enter_governance)
+  | 'DEAD';             // Terminal: deregistered or liveness-timed-out. Tasks released, record
+                        // retained for idempotency/post-mortem, dropped from the UI, pruned later.
 ```
 
 **Example:**

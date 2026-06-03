@@ -16,7 +16,7 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { backfillTaskMetrics } from './state/migrations/backfillTaskMetrics.js';
-import { startStaleWorkerWatcher } from './state/staleWorkerWatcher.js';
+import { startWorkerLivenessSweep } from './state/staleWorkerWatcher.js';
 import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
@@ -585,9 +585,10 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   state.setFileWatcher(watcher);
   watcher.start();
 
-  // Optional auto-release safety net — opt-in via MOE_AUTO_RELEASE_STALE_WORKERS=1.
-  // No-op when unset, so this is purely additive.
-  const staleWatcher = startStaleWorkerWatcher(state);
+  // Default-on worker-liveness sweep: auto-releases tasks held by workers that
+  // stopped heart-beating (hard crash / killed terminal). Opt out with
+  // MOE_DISABLE_AUTO_RELEASE=1; preview with MOE_AUTO_RELEASE_DRY_RUN=1.
+  const staleWatcher = startWorkerLivenessSweep(state);
 
   const info: DaemonInfo = {
     port,
@@ -788,7 +789,17 @@ async function superviseDaemon(projectPath: string, preferredPort?: number): Pro
         { backoffMs, attempt: restartTimestamps.length, maxRestarts: SUPERVISOR_MAX_RESTARTS },
         'Restarting daemon after backoff'
       );
-      setTimeout(spawnChild, backoffMs);
+      // A `stop` issued during the backoff window has no live child to signal,
+      // so it only drops a stop sentinel. Re-check before respawning so we
+      // honour the stop instead of resurrecting the daemon.
+      setTimeout(() => {
+        if (shuttingDown || consumeStopSentinel(projectPath)) {
+          logger.info('Stop requested during backoff; supervisor exiting');
+          process.exit(0);
+          return;
+        }
+        spawnChild();
+      }, backoffMs);
     });
   }
 
@@ -823,6 +834,10 @@ async function superviseDaemon(projectPath: string, preferredPort?: number): Pro
 async function stopDaemon(projectPath: string): Promise<void> {
   const info = readDaemonInfo(projectPath);
   if (!info) {
+    // Write the stop sentinel even with no daemon.json: a supervisor may be
+    // mid-backoff (child already exited) and will only abort the respawn if it
+    // sees this marker.
+    writeStopSentinel(projectPath);
     logger.info('No daemon info found');
     return;
   }
@@ -833,6 +848,9 @@ async function stopDaemon(projectPath: string): Promise<void> {
     if (pid && !isProcessAlive(pid)) {
       logger.info({ pid }, '[stop] daemon.json found but pid not running; removing stale file');
     }
+    // Same backoff race: the supervisor may still be alive and waiting to
+    // respawn, so leave a stop marker before cleaning up the stale files.
+    writeStopSentinel(projectPath);
     cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
     logger.info('Daemon not running or daemon.json is stale');
     return;

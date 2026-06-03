@@ -53,12 +53,42 @@ function isSafeToSend(): boolean {
 }
 
 function writeError(message: string, code = -32000) {
+  writeErrorWithId(null, message, code);
+}
+
+/**
+ * Write a JSON-RPC error response carrying a specific request id (or null when
+ * the id is unknown), so a hung client can correlate the failure to its request
+ * instead of waiting on a reply that never comes.
+ */
+function writeErrorWithId(id: string | number | null, message: string, code = -32000) {
   const payload = JSON.stringify({
     jsonrpc: '2.0',
-    id: null,
+    id,
     error: { code, message }
   });
   safeStdoutWrite(payload + '\n');
+}
+
+/**
+ * Best-effort extraction of a JSON-RPC request id from a raw line that we can't
+ * (or won't) fully parse — e.g. an oversized line. Tries a cheap JSON.parse
+ * first, then falls back to a regex for the top-level "id" field. Returns null
+ * when no usable id can be recovered.
+ */
+function extractRequestId(line: string): string | number | null {
+  try {
+    const parsed = JSON.parse(line);
+    if (typeof parsed.id === 'string' || typeof parsed.id === 'number') {
+      return parsed.id;
+    }
+  } catch { /* fall through to regex */ }
+  const match = line.match(/"id"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|(-?\d+(?:\.\d+)?))/);
+  if (match) {
+    if (match[1] !== undefined) return match[1].replace(/\\(.)/g, '$1');
+    if (match[2] !== undefined) return Number(match[2]);
+  }
+  return null;
 }
 
 function writeLog(message: string) {
@@ -323,11 +353,20 @@ function connect(projectPath: string): void {
     // Validate response is valid JSON before forwarding
     try {
       const parsed = JSON.parse(message);
-      // Remove the request ID from pending set (handles both success and error responses)
       if (parsed.id !== undefined && parsed.id !== null) {
+        // A response carrying an id that is no longer pending means we already
+        // errored it out (per-message timeout / disconnect) and removed it.
+        // Forwarding now would be a duplicate JSON-RPC response for the same id,
+        // so drop it.
+        if (!pendingRequestIds.has(parsed.id)) {
+          writeLog(`Dropping late/duplicate response for unknown id ${parsed.id}`);
+          return;
+        }
+        // Remove the request ID from pending set (handles success and error responses)
         pendingRequestIds.delete(parsed.id);
         pendingRequestTimes.delete(parsed.id);
       }
+      // Notifications (no id) forward unconditionally.
       safeStdoutWrite(message + '\n');
     } catch {
       writeError('Received invalid JSON from daemon');
@@ -414,18 +453,14 @@ function connect(projectPath: string): void {
   if (!process.stdin.readableFlowing) {
     process.stdin.setEncoding('utf-8');
 
-    const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer
-    const MAX_LINE_SIZE = 512 * 1024; // 512KB per-line limit
+    // Match the daemon's WebSocket maxPayload (2MB) so the proxy doesn't reject
+    // a payload the daemon would otherwise accept. A single line may be up to
+    // 1MB; the buffer may hold a 1MB partial plus already-complete queued lines.
+    const MAX_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB max buffer
+    const MAX_LINE_SIZE = 1024 * 1024; // 1MB per-line limit
     let buffer = '';
     process.stdin.on('data', (chunk) => {
       buffer += chunk;
-
-      // Prevent unbounded buffer growth
-      if (buffer.length > MAX_BUFFER_SIZE) {
-        writeError('Input buffer overflow: buffer exceeds 1MB');
-        buffer = '';
-        return;
-      }
 
       let index: number;
       while ((index = buffer.indexOf('\n')) >= 0) {
@@ -433,8 +468,11 @@ function connect(projectPath: string): void {
         buffer = buffer.slice(index + 1);
         if (!line) continue;
 
-        // Enforce per-line size limit
+        // Enforce per-line size limit. Emit an id-aware JSON-RPC error so the
+        // client isn't left hanging on a request that will never be answered.
         if (line.length > MAX_LINE_SIZE) {
+          const oversizedId = extractRequestId(line);
+          writeErrorWithId(oversizedId, `Request too large (${line.length} bytes, max ${MAX_LINE_SIZE})`);
           writeLog(`Skipping oversized line (${line.length} bytes, max ${MAX_LINE_SIZE})`);
           continue;
         }
@@ -471,6 +509,17 @@ function connect(projectPath: string): void {
         } catch {
           writeError(`Invalid JSON input: ${line.substring(0, 100)}`);
         }
+      }
+
+      // Prevent unbounded buffer growth. By now all complete (newline-delimited)
+      // lines have been drained above, so `buffer` is a single newline-free
+      // partial. Only that partial is discarded — already-complete requests that
+      // were queued ahead of it are never destroyed.
+      if (buffer.length > MAX_BUFFER_SIZE) {
+        const overflowId = extractRequestId(buffer);
+        writeErrorWithId(overflowId, `Input buffer overflow: partial line exceeds ${MAX_BUFFER_SIZE} bytes`);
+        writeLog(`Input buffer overflow, discarding ${buffer.length}-byte partial line`);
+        buffer = '';
       }
     });
 

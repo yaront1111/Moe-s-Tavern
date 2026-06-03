@@ -177,6 +177,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
       const updatePayload: Record<string, unknown> = {
         implementationPlan,
+        // A freshly-submitted plan supersedes any prior attempt's step ids — clear
+        // stepsCompleted so it can't carry stale 'step-N' ids onto the new plan
+        // (request_replan already does this; submit_plan is the other fresh-plan boundary).
+        stepsCompleted: [],
         status: 'AWAITING_APPROVAL',
         planSubmittedAt: new Date().toISOString(),
         metrics: updatedMetrics,
@@ -220,6 +224,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // mutex (via approveTask) to avoid a TOCTOU race with concurrent
         // manual approve/reject calls.
         const delayMs = project.settings.speedModeDelayMs || 2000;
+        // Cancel any prior pending auto-approval for this task before scheduling a
+        // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING
+        // bounce that didn't cancel the timer) — otherwise the old timer leaks.
+        cancelSpeedModeTimeout(task.id);
         const timeoutId = setTimeout(async () => {
           try {
             // approveTask acquires the StateManager mutex and re-checks that
@@ -241,7 +249,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
               reason: 'SPEED mode auto-approval failed'
             }, state.getTask(task.id) ?? undefined);
           } finally {
-            speedModeTimeouts.delete(task.id);
+            // Only clear the map entry if it still points at THIS timer — a
+            // successor timer scheduled in the meantime must not be deleted
+            // (which would leave it live-but-untracked / uncancellable).
+            if (speedModeTimeouts.get(task.id) === timeoutId) {
+              speedModeTimeouts.delete(task.id);
+            }
           }
         }, delayMs);
         speedModeTimeouts.set(task.id, timeoutId);
