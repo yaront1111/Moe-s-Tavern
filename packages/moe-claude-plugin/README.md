@@ -57,7 +57,7 @@ export MOE_DISABLE_TOOL_HOOK=1
 }
 ```
 
-The daemon does not (yet) act on these events — they're for observability and future activity-log enrichment.
+The daemon appends these events to the activity log and folds them into per-task metrics (see `WebSocketServer`'s `AGENT_TOOL_EVENT` handler), so IDE plugins can surface Claude Code agent activity.
 
 ## Worker ID resolution
 

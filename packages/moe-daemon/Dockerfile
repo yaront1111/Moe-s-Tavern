@@ -40,15 +40,15 @@ RUN mkdir -p /project/.moe && chown -R moe:moe /project
 # Switch to non-root user
 USER moe
 
-# Expose WebSocket port
-EXPOSE 3141
+# Expose WebSocket port (daemon default; keep in sync with MOE_DEFAULT_PORT)
+EXPOSE 9876
 
 # Set default project path
 ENV MOE_PROJECT_PATH=/project
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3141/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:9876/health || exit 1
 
 # Start daemon
 ENTRYPOINT ["node", "dist/index.js"]

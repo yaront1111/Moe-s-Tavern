@@ -6,11 +6,15 @@ import com.google.gson.JsonObject
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.extensions.PluginId
 import java.io.File
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.UUID
 
 object MoeProjectInitializer {
-    private val ROLE_NAMES = listOf("qa", "architect", "worker")
+    // Fallback when the bundled docs/roles directory cannot be enumerated.
+    private val ROLE_NAMES = listOf("architect", "governor", "qa", "worker")
+
+    private val GENERATED_MARKER = Regex("^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*-->")
 
     fun initializeProject(path: String, projectName: String? = null) {
         val root = File(path)
@@ -26,7 +30,8 @@ object MoeProjectInitializer {
         File(moeDir, "proposals").mkdirs()
         File(moeDir, "roles").mkdirs()
 
-        // Always sync role docs, agent context, and skills from bundled plugin resources
+        // Sync role docs, agent context, and skills from bundled plugin resources
+        // (sha-marker upgrade semantics — see writeGeneratedDoc).
         syncRoleDocs(moeDir)
         syncAgentContext(moeDir)
         syncSkills(moeDir)
@@ -36,38 +41,44 @@ object MoeProjectInitializer {
             gitignore.writeText("# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nteams/\nproposals/\n")
         }
 
-        val now = Instant.now().toString()
-        val projectJson = JsonObject().apply {
-            addProperty("id", "proj-${shortId()}")
-            addProperty("schemaVersion", 3)
-            addProperty("name", projectName ?: root.name)
-            addProperty("rootPath", root.absolutePath)
+        // Never clobber an existing project.json — re-running init on an
+        // initialized project must not reset the project id or settings
+        // (matches the daemon's initProject semantics).
+        val projectFile = File(moeDir, "project.json")
+        if (!projectFile.exists()) {
+            val now = Instant.now().toString()
+            val projectJson = JsonObject().apply {
+                addProperty("id", "proj-${shortId()}")
+                addProperty("schemaVersion", 3)
+                addProperty("name", projectName ?: root.name)
+                addProperty("rootPath", root.absolutePath)
 
-            add("globalRails", JsonObject().apply {
-                add("techStack", JsonArray())
-                add("forbiddenPatterns", JsonArray())
-                add("requiredPatterns", JsonArray())
-                addProperty("formatting", "")
-                addProperty("testing", "")
-                add("customRules", JsonArray())
-            })
+                add("globalRails", JsonObject().apply {
+                    add("techStack", JsonArray())
+                    add("forbiddenPatterns", JsonArray())
+                    add("requiredPatterns", JsonArray())
+                    addProperty("formatting", "")
+                    addProperty("testing", "")
+                    add("customRules", JsonArray())
+                })
 
-            add("settings", JsonObject().apply {
-                addProperty("approvalMode", "CONTROL")
-                addProperty("speedModeDelayMs", 2000)
-                addProperty("autoCreateBranch", true)
-                addProperty("branchPattern", "moe/{epicId}/{taskId}")
-                addProperty("commitPattern", "feat({epicId}): {taskTitle}")
-                addProperty("agentCommand", "claude")
-                addProperty("enableAgentTeams", false)
-            })
+                add("settings", JsonObject().apply {
+                    addProperty("approvalMode", "CONTROL")
+                    addProperty("speedModeDelayMs", 2000)
+                    addProperty("autoCreateBranch", true)
+                    addProperty("branchPattern", "moe/{epicId}/{taskId}")
+                    addProperty("commitPattern", "feat({epicId}): {taskTitle}")
+                    addProperty("agentCommand", "claude")
+                    addProperty("enableAgentTeams", false)
+                })
 
-            addProperty("createdAt", now)
-            addProperty("updatedAt", now)
+                addProperty("createdAt", now)
+                addProperty("updatedAt", now)
+            }
+
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            projectFile.writeText(gson.toJson(projectJson))
         }
-
-        val gson = GsonBuilder().setPrettyPrinting().create()
-        File(moeDir, "project.json").writeText(gson.toJson(projectJson))
 
         val activity = File(moeDir, "activity.log")
         if (!activity.exists()) {
@@ -82,33 +93,88 @@ object MoeProjectInitializer {
     }
 
     /**
-     * Syncs role docs from bundled plugin resources to .moe/roles/.
-     * Always overwrites to ensure agents get the latest production-ready docs.
-     * Can be called independently of initializeProject (e.g., on every project open).
+     * Stamps content with the same `<!-- moe-generated: sha=<hex12> -->` marker
+     * the daemon's generate-init-files.ts produces: sha-256 of the LF-normalized,
+     * end-trimmed content, first 12 hex chars. Byte-identical stamping keeps the
+     * plugin and the bundled daemon agreeing on what "up to date" means, so the
+     * two writers never fight over the same file.
      */
-    fun syncRoleDocs(moeDir: File) {
-        File(moeDir, "roles").mkdirs()
-        for (role in ROLE_NAMES) {
-            val roleFile = File(moeDir, "roles/$role.md")
-            val content = loadBundledRoleDoc(role)
-            if (content != null) {
-                roleFile.writeText(content)
-            } else if (!roleFile.exists()) {
-                // Fallback: only write minimal content if bundled doc not found AND file doesn't exist
-                roleFile.writeText("# ${role.replaceFirstChar { it.uppercase() }} Role Guide\n\nRole documentation not found. Rebuild the plugin to bundle role docs.\n")
-            }
+    internal fun stampMarker(rawContent: String): String {
+        val trimmed = rawContent.replace("\r\n", "\n").trimEnd()
+        return "<!-- moe-generated: sha=${sha12(trimmed)} -->\n\n$trimmed"
+    }
+
+    private fun sha12(s: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.substring(0, 12)
+    }
+
+    /**
+     * True when both contents carry a moe-generated marker and the shas differ
+     * (i.e. the bundled copy is a different vendored version than what's on disk).
+     */
+    internal fun shouldUpgradeGeneratedDoc(onDisk: String, stamped: String): Boolean {
+        val diskSha = GENERATED_MARKER.find(onDisk)?.groupValues?.get(1) ?: return false
+        val bundledSha = GENERATED_MARKER.find(stamped)?.groupValues?.get(1) ?: return false
+        return diskSha != bundledSha
+    }
+
+    /**
+     * Writes one generated doc with the daemon's writeInitFiles semantics:
+     * create if missing, overwrite if the on-disk marker sha differs, and leave
+     * unmarked files alone (user customizations — deleting the marker line opts
+     * a file out of auto-upgrades).
+     */
+    internal fun writeGeneratedDoc(target: File, stamped: String) {
+        if (!target.exists()) {
+            target.writeText(stamped)
+            return
+        }
+        if (shouldUpgradeGeneratedDoc(target.readText(), stamped)) {
+            target.writeText(stamped)
         }
     }
 
     /**
-     * Syncs agent-context.md from bundled plugin resources to .moe/.
-     * Always overwrites to ensure agents get the latest shared context.
+     * Syncs all bundled role docs (every .md under docs/roles, incl. governor
+     * and the .reference.md companions) to .moe/roles/ with sha-marker upgrade
+     * semantics. Safe to call on every project open: bundled updates always
+     * reach the project, user-customized (unmarked) files are preserved.
+     */
+    fun syncRoleDocs(moeDir: File) {
+        File(moeDir, "roles").mkdirs()
+        for ((name, raw) in loadBundledRoleDocs()) {
+            writeGeneratedDoc(File(moeDir, "roles/$name"), stampMarker(raw))
+        }
+    }
+
+    /** All bundled role docs, falling back to the known role list when the directory can't be enumerated. */
+    private fun loadBundledRoleDocs(): Map<String, String> {
+        val docs = linkedMapOf<String, String>()
+        val bundledDir = locateBundledDir("docs/roles")
+        if (bundledDir != null) {
+            for (f in bundledDir.listFiles().orEmpty()) {
+                if (f.isFile && f.name.endsWith(".md")) {
+                    docs[f.name] = f.readText()
+                }
+            }
+        }
+        if (docs.isEmpty()) {
+            for (role in ROLE_NAMES) {
+                loadBundledFile("docs/roles/$role.md")?.let { docs["$role.md"] = it }
+            }
+        }
+        return docs
+    }
+
+    /**
+     * Syncs agent-context.md from bundled plugin resources to .moe/ with the
+     * same marker semantics (the daemon no longer manages this file; existing
+     * customized copies are preserved).
      */
     fun syncAgentContext(moeDir: File) {
-        val content = loadBundledFile("docs/agent-context.md")
-        if (content != null) {
-            File(moeDir, "agent-context.md").writeText(content)
-        }
+        val content = loadBundledFile("docs/agent-context.md") ?: return
+        writeGeneratedDoc(File(moeDir, "agent-context.md"), stampMarker(content))
     }
 
     /**
@@ -201,13 +267,5 @@ object MoeProjectInitializer {
             // Fall through to return null
         }
         return null
-    }
-
-    /**
-     * Loads a role doc from the bundled plugin directory (docs/roles/<role>.md).
-     * Returns null if the bundled file cannot be found.
-     */
-    private fun loadBundledRoleDoc(role: String): String? {
-        return loadBundledFile("docs/roles/$role.md")
     }
 }

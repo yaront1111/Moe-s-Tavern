@@ -527,6 +527,59 @@ Only one worker can work on tasks of the same status type per epic at a time:
 
 ---
 
+### moe.wait_for_task
+
+Block (long-poll) until a claimable task matching the given `statuses` appears. Returns immediately if one already exists. Does **not** claim the task — call `moe.claim_next_task` after waking.
+
+**Parameters:**
+```typescript
+{
+  statuses: string[],   // Required: task statuses to watch for (must be non-empty)
+  workerId: string,     // Required: your worker ID (used for cleanup on disconnect)
+  epicId?: string,      // Optional epic filter
+  timeoutMs?: number    // Max wait in ms (default 300000, clamped to 1000–600000)
+}
+```
+
+**Returns:**
+```typescript
+// Task available (immediately, or on a TASK_CREATED/TASK_UPDATED wake):
+{ hasNext: true, task: { id, title, status, priority, epicId },
+  nextAction: { tool: "moe.claim_next_task", args, reason } }  // claim, then moe.get_context
+
+// A task has an unanswered human question (checked before parking, and on TASK_UPDATED):
+{ hasNext: false, hasPendingQuestion: true, taskId,
+  nextAction: { tool: "moe.get_pending_questions", args, reason } }
+
+// Chat message for this worker arrived while waiting:
+{ hasNext: false, hasChatMessage: true,
+  chatMessage: { channel, sender, preview },  // preview = first 200 chars
+  nextAction: { tool: "moe.chat_read", args, reason } }
+
+// Timeout elapsed:
+{ hasNext: false, timedOut: true,
+  nextAction: { tool: "moe.wait_for_task", args, reason } }  // re-enter wait
+
+// Cancelled (superseded wait, MCP client disconnect, or stale-waiter sweep):
+{ hasNext: false, cancelled: true }
+
+// Internal failure subscribing to state events:
+{ hasNext: false, error: "subscribe_failed" }
+```
+
+**Notes:**
+- Marked `blocking`: the MCP dispatch layer does **not** wrap it in the global state mutex (it can park for minutes; all other tools stay serialized). Same mechanism as `moe.chat_wait`.
+- Only **claimable** tasks match: `assignedWorkerId` is null, or the assigned worker is missing/`DEAD`. Candidates are ranked by priority (`CRITICAL` > `HIGH` > `MEDIUM` > `LOW`), then `order`; the top match is returned.
+- Wake triggers while parked: `TASK_CREATED`/`TASK_UPDATED` producing a claimable match; `TASK_UPDATED` setting `hasPendingQuestion`; `MESSAGE_CREATED` where the message routes to/mentions this worker **or** the sender is `"human"`.
+- Refreshes the worker heartbeat on entry and again on timeout, so a parked worker is not treated as idle.
+- Calling `wait_for_task` again with the same `workerId` cancels the previous wait (the earlier call resolves `{ hasNext: false, cancelled: true }`). The same cancellation fires on MCP client disconnect and when the stale-waiter sweep finds the worker no longer tracked.
+
+**Errors:**
+- `[MISSING_REQUIRED] Missing required field: statuses` — `statuses` absent or empty
+- `[MISSING_REQUIRED] Missing required field: workerId`
+
+---
+
 ### moe.set_task_status
 
 Set task status (optionally with a reopen reason).
@@ -1049,6 +1102,38 @@ Return tasks with unanswered human task comments, using bounded defaults so a la
 **Notes:**
 - Only human comments after the last non-human response are treated as pending.
 - Long question content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed.
+
+---
+
+### moe.add_comment
+
+Add a comment to a task (for questions or responses). This is how agents answer pending human questions surfaced by `moe.get_pending_questions`.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,    // Required: the task ID to comment on
+  content: string,   // Required: comment text (trimmed; non-empty, max 10000 chars)
+  workerId?: string  // Comment author (defaults to "agent")
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, commentId, totalComments }
+```
+
+**Notes:**
+- The stored comment is `{ id, author, content, timestamp }`; `content` is trimmed before storage and validation.
+- Posting a comment clears `hasPendingQuestion` on the task — it counts as answering the outstanding human question (and stops `moe.wait_for_task` waking for it).
+- The task's comment list is bounded: only the most recent `MAX_COMMENTS_PER_TASK` comments are kept (default 200, override via `MOE_MAX_COMMENTS_PER_TASK`); older comments are dropped.
+- The update is broadcast as a `TASK_COMMENT_ADDED` event.
+
+**Errors:**
+- `[MISSING_REQUIRED] Missing required field: taskId`
+- `[MISSING_REQUIRED] Missing required field: content` — `content` absent or empty after trimming
+- `[INVALID_INPUT] Invalid content: must be a string` / `[INVALID_INPUT] Invalid content: must be 10000 characters or fewer`
+- `[TASK_NOT_FOUND] Task not found: <taskId>` — unknown `taskId`
 
 ---
 

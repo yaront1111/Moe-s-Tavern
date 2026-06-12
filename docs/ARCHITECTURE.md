@@ -11,7 +11,7 @@
 │  │                     JETBRAINS IDE (Plugin)                           │   │
 │  │  ┌─────────────────────────────────────────────────────────────┐     │   │
 │  │  │   Moe Tool Window (Swing)                                    │     │   │
-│  │  │   - 6-column board                                           │     │   │
+│  │  │   - 5-column board                                           │     │   │
 │  │  │   - drag/drop status                                         │     │   │
 │  │  │   - task detail dialog (approve/reject/reopen)               │     │   │
 │  │  └─────────────────────────────────────────────────────────────┘     │   │

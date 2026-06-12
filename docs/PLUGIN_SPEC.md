@@ -2,7 +2,7 @@
 
 ## Overview
 
-The current plugin is a Swing-based tool window that shows a 6-column task board and connects to the Moe daemon via WebSocket.
+The current plugin is a Swing-based tool window that shows a 5-column task board (AWAITING_APPROVAL tasks display in the Planning column) and connects to the Moe daemon via WebSocket.
 
 This document describes what is implemented now and what is planned next.
 

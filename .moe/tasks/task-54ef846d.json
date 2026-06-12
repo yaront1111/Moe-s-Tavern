@@ -140,7 +140,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-04-17T19:05:12.149Z",
-  "updatedAt": "2026-05-01T19:53:52.176Z",
+  "updatedAt": "2026-06-09T10:59:58.480Z",
   "planSubmittedAt": "2026-04-17T19:35:19.918Z",
   "planningNotes": {
     "approachesConsidered": "A) Enable the Claude-Code hook by default on every init_project — rejected: the task marks this phase as optional defense-in-depth; opt-in via a flag respects users who don't use Claude Code or who have their own hooks. B) Hook reads .moe/workers/<workerId>.json directly to check currentTaskId (instant file read, ~1ms) — considered faster but the task description explicitly says 'Hook calls moe-call.sh list_tasks'; follow task spec. Note the perf concern as a risk. C) Hook blocks all MCP tools by default — rejected: read-only tools (get_context, list_tasks, recall) must bypass or the hook would deadlock on its own list_tasks call. D) Chosen: opt-in flag, narrow matcher scoped to the 6 ownership-sensitive tools, fail-open on infra errors, 2-second RPC timeout. E) Writing the hook as TypeScript (compiled to JS) invoked by node — rejected: adds a node process on every tool call, slower and heavier than bash/pwsh scripts.",
@@ -196,5 +196,10 @@
     "step-7"
   ],
   "completedAt": "2026-05-01T19:28:51.400Z",
-  "reviewStartedAt": "2026-05-01T19:28:51.400Z"
+  "reviewStartedAt": "2026-05-01T19:28:51.400Z",
+  "metrics": {
+    "firstClaimAt": "2026-04-17T19:33:35.828Z",
+    "doneAt": "2026-05-01T19:53:52.178Z",
+    "wallClockMs": 1210816350
+  }
 }

@@ -10,7 +10,7 @@
 ## Current UI (MVP)
 
 - Tool window titled "Moe" on the right.
-- Board with six columns (Backlog → Done).
+- Board with five columns (Backlog → Done; Awaiting Approval tasks display in Planning).
 - Drag/drop changes task status.
 - Task card shows title only; double-click opens a detail dialog with status, description, and DoD.
 - No worker panel, notifications, settings, or status bar widget yet.

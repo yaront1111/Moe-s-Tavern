@@ -42,8 +42,24 @@ function sha12(s: string): string {
 }
 
 function stampMarker(rawContent: string): string {
-  const trimmed = rawContent.trimEnd();
+  // LF-normalize before hashing so the sha is stable across checkout
+  // line-ending settings — the JetBrains plugin stamps the same content at
+  // runtime (MoeProjectInitializer.stampMarker) and the shas must agree or
+  // the two writers ping-pong overwrites.
+  const trimmed = rawContent.replace(/\r\n/g, '\n').trimEnd();
   const sha = sha12(trimmed);
+  return `<!-- moe-generated: sha=${sha} -->\n\n${trimmed}`;
+}
+
+function stampFrontmatterMarker(rawContent: string): string {
+  // Subagent defs are YAML-frontmatter files: Claude Code's loader requires
+  // the `---` delimiter on line 1, so the marker goes INSIDE the frontmatter
+  // as a YAML comment instead of an HTML comment above it.
+  const trimmed = rawContent.replace(/\r\n/g, '\n').trimEnd();
+  const sha = sha12(trimmed);
+  if (trimmed.startsWith('---\n')) {
+    return `---\n# moe-generated: sha=${sha}\n${trimmed.slice(4)}`;
+  }
   return `<!-- moe-generated: sha=${sha} -->\n\n${trimmed}`;
 }
 
@@ -63,7 +79,7 @@ const subagentFiles = fs.existsSync(subagentsDir)
   : [];
 const subagentEntries = subagentFiles.map(f => {
   const content = fs.readFileSync(path.join(subagentsDir, f), 'utf-8');
-  const stamped = stampMarker(content);
+  const stamped = stampFrontmatterMarker(content);
   return `  '${f}': \`${escapeTemplateLiteral(stamped)}\``;
 });
 
@@ -94,7 +110,8 @@ ${roleEntries.join(',\n')}
  * Claude Code subagent definitions, auto-generated from docs/agents/moe-*.md.
  * \`writeInitFiles\` writes these to \`.moe/agents/\` so the agent launcher can
  * mirror them into \`.claude/agents/\` for Claude Code's subagent loader.
- * Same sha-marker convention as ROLE_DOCS.
+ * Same upgrade convention as ROLE_DOCS, but the marker is embedded as a YAML
+ * comment INSIDE the frontmatter (the loader needs \`---\` on line 1).
  */
 export const SUBAGENT_DOCS: Record<string, string> = {
 ${subagentEntries.join(',\n')}
@@ -111,6 +128,14 @@ proposals/
 \`;
 
 const GENERATED_MARKER_RE = /^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*-->/;
+// YAML-comment form used for frontmatter docs (subagent defs), where an HTML
+// comment above the \`---\` delimiter would break Claude Code's loader.
+const FRONTMATTER_MARKER_RE = /^---\\r?\\n#\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*\\r?\\n/;
+
+function markerSha(content: string): string | null {
+  const m = content.match(GENERATED_MARKER_RE) || content.match(FRONTMATTER_MARKER_RE);
+  return m ? m[1] : null;
+}
 
 /**
  * Returns true if the existing on-disk content is a Moe-generated doc whose
@@ -123,10 +148,10 @@ const GENERATED_MARKER_RE = /^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*
  *   - malformed marker → treat as user content
  */
 function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
-  const mDisk = onDisk.match(GENERATED_MARKER_RE);
-  const mBundled = bundled.match(GENERATED_MARKER_RE);
-  if (!mDisk || !mBundled) return false;
-  return mDisk[1] !== mBundled[1];
+  const diskSha = markerSha(onDisk);
+  const bundledSha = markerSha(bundled);
+  if (!diskSha || !bundledSha) return false;
+  return diskSha !== bundledSha;
 }
 
 /**

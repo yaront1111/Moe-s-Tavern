@@ -10,10 +10,11 @@
 // mutating via MOE_AUTO_RELEASE_DRY_RUN=1 (posts the banner only).
 //
 // Note: the release threshold (DEFAULT_RELEASE_AFTER_MS, 30 min) is deliberately
-// much larger than the 120s presence window used by isTaskClaimable. The board
-// self-heals fast (a 2-min-idle owner's task is already claimable), but we only
-// mark the worker DEAD + hard-release after 30 min so a slow-but-live agent
-// mid-operation is never yanked out from under itself.
+// much larger than the 120s presence window (isWorkerAlive — display only).
+// Task claimability never keys on idle time: isTaskClaimable releases a task
+// only when its owner is missing from the worker map or explicitly DEAD, so a
+// slow-but-live agent mid-operation is never yanked out from under itself.
+// This sweep is what establishes DEAD for hard-crashed workers.
 // =============================================================================
 
 import type { StateManager } from './StateManager.js';

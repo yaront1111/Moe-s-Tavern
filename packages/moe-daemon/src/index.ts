@@ -498,6 +498,13 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     } catch (err) {
       logger.warn({ error: err }, 'task metrics backfill failed (non-fatal)');
     }
+    // Refresh scaffold docs on EVERY start, not just init: role docs, subagent
+    // defs, and skills upgrade in place via the sha-marker convention (stale
+    // moe-generated files are replaced; unmarked user customizations are kept).
+    // Without this, a project only picks up new role docs when re-inited.
+    const moePath = path.join(projectPath, '.moe');
+    try { writeInitFiles(moePath); } catch (err) { logger.warn({ err }, 'writeInitFiles refresh failed (non-fatal)'); }
+    try { writeSkillFiles(moePath); } catch (err) { logger.warn({ err }, 'writeSkillFiles refresh failed (non-fatal)'); }
   } catch (initError) {
     logger.error({ error: initError }, 'Failed to initialize daemon');
     releaseLock(projectPath);

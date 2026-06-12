@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: moe-daemon
     ports:
-      - "3141:3141"
+      - "9876:9876"
     volumes:
       # Mount your project directory
       - ./:/project:rw
@@ -16,7 +16,7 @@ services:
       - LOG_MAX_SIZE_MB=10
       - LOG_RETENTION_COUNT=5
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3141/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9876/health"]
       interval: 30s
       timeout: 5s
       retries: 3

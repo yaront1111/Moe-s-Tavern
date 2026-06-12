@@ -9,11 +9,7 @@ Show what the Moe team is currently doing.
 
 ## Steps
 
-1. Call `moe.list_tasks` with `{ status: ["WORKING"] }`. If the tool is unavailable, fall back to running:
-
-   ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/dist/cli.js status
-   ```
+1. Call `moe.list_tasks` with `{ status: ["WORKING"] }`. If the tool is unavailable, report that the Moe MCP server is not connected (check that the daemon is running and the `moe` MCP server is configured) — there is no CLI fallback.
 
 2. Print one line per task in this format:
 

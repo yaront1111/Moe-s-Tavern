@@ -18,7 +18,7 @@ import { atomicWriteText } from './atomicWrite.js';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=6c7d3bfc1cc9 -->
+  'architect.md': `<!-- moe-generated: sha=da51e10b1521 -->
 
 # Architect
 
@@ -53,7 +53,7 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
-  'architect.reference.md': `<!-- moe-generated: sha=e10dd93e8e3b -->
+  'architect.reference.md': `<!-- moe-generated: sha=4cc7254d0592 -->
 
 # Architect — Reference
 
@@ -106,7 +106,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=0c86915c282e -->
+  'governor.md': `<!-- moe-generated: sha=3aa528c96f55 -->
 
 # Governor
 
@@ -174,7 +174,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=5969490dcd92 -->
+  'governor.reference.md': `<!-- moe-generated: sha=f57ea78fcf8c -->
 
 # Governor — Reference
 
@@ -236,7 +236,7 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=6d8b66d696f4 -->
+  'qa.md': `<!-- moe-generated: sha=33353d0a6b31 -->
 
 # QA
 
@@ -258,7 +258,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=f88efe01d7a7 -->
+  'qa.reference.md': `<!-- moe-generated: sha=5450908dd463 -->
 
 # QA — Reference
 
@@ -297,7 +297,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=4968132d8811 -->
+  'worker.md': `<!-- moe-generated: sha=cc80dfca78c5 -->
 
 # Worker
 
@@ -318,7 +318,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.`,
-  'worker.reference.md': `<!-- moe-generated: sha=4a642e1bf717 -->
+  'worker.reference.md': `<!-- moe-generated: sha=eef302e11e5d -->
 
 # Worker — Reference
 
@@ -387,12 +387,12 @@ Prefer \`edit_memory\` to append to an existing topic file over creating a near-
  * Claude Code subagent definitions, auto-generated from docs/agents/moe-*.md.
  * `writeInitFiles` writes these to `.moe/agents/` so the agent launcher can
  * mirror them into `.claude/agents/` for Claude Code's subagent loader.
- * Same sha-marker convention as ROLE_DOCS.
+ * Same upgrade convention as ROLE_DOCS, but the marker is embedded as a YAML
+ * comment INSIDE the frontmatter (the loader needs `---` on line 1).
  */
 export const SUBAGENT_DOCS: Record<string, string> = {
-  'moe-code-reviewer.md': `<!-- moe-generated: sha=6f353202d8c0 -->
-
----
+  'moe-code-reviewer.md': `---
+# moe-generated: sha=2b55fb5f669e
 name: moe-code-reviewer
 description: Adversarial diff reviewer for Moe QA. Use after a worker completes a task and before calling moe.qa_approve. Reads the working tree against HEAD~ (or the merge base), the task's Definition of Done, and all applicable rails. Returns a structured pass/fail with named issues.
 tools: Glob, Grep, Read, Bash
@@ -427,9 +427,8 @@ notes: <anything else worth raising>
 \`\`\`
 
 A single critical issue is enough to fail. Do not approve to "be nice" — your job is to catch what the worker missed.`,
-  'moe-explorer.md': `<!-- moe-generated: sha=6604209fa819 -->
-
----
+  'moe-explorer.md': `---
+# moe-generated: sha=ead3e9a3f4ca
 name: moe-explorer
 description: Fast read-only codebase exploration agent. Use during architect planning to locate files, grep symbols, trace code paths, or answer "where is X defined / which files reference Y." Returns excerpts, not full files — do NOT use for cross-file consistency checks or design-doc audits.
 tools: Glob, Grep, Read, WebFetch
@@ -454,9 +453,8 @@ A short report (under ~400 words) with:
 4. Open questions the architect should resolve before drafting the plan.
 
 Do NOT propose implementation. The architect plans; you map.`,
-  'moe-test-runner.md': `<!-- moe-generated: sha=498987613995 -->
-
----
+  'moe-test-runner.md': `---
+# moe-generated: sha=4420dba09b1a
 name: moe-test-runner
 description: Isolated test executor for Moe workers. Use during implementation when you want to run the project's tests without polluting the main agent context with multi-MB Bash output. Returns a compact summary (pass/fail count, failing test names, first failure trace).
 tools: Bash, Read
@@ -504,6 +502,14 @@ proposals/
 `;
 
 const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
+// YAML-comment form used for frontmatter docs (subagent defs), where an HTML
+// comment above the `---` delimiter would break Claude Code's loader.
+const FRONTMATTER_MARKER_RE = /^---\r?\n#\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*\r?\n/;
+
+function markerSha(content: string): string | null {
+  const m = content.match(GENERATED_MARKER_RE) || content.match(FRONTMATTER_MARKER_RE);
+  return m ? m[1] : null;
+}
 
 /**
  * Returns true if the existing on-disk content is a Moe-generated doc whose
@@ -516,10 +522,10 @@ const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->
  *   - malformed marker → treat as user content
  */
 function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
-  const mDisk = onDisk.match(GENERATED_MARKER_RE);
-  const mBundled = bundled.match(GENERATED_MARKER_RE);
-  if (!mDisk || !mBundled) return false;
-  return mDisk[1] !== mBundled[1];
+  const diskSha = markerSha(onDisk);
+  const bundledSha = markerSha(bundled);
+  if (!diskSha || !bundledSha) return false;
+  return diskSha !== bundledSha;
 }
 
 /**

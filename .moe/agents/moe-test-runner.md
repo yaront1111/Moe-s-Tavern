@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=4420dba09b1a
 name: moe-test-runner
 description: Isolated test executor for Moe workers. Use during implementation when you want to run the project's tests without polluting the main agent context with multi-MB Bash output. Returns a compact summary (pass/fail count, failing test names, first failure trace).
 tools: Bash, Read

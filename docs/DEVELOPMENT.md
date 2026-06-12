@@ -262,7 +262,7 @@ cd ../../moe-jetbrains && ./gradlew buildPlugin
 ## Current Feature Coverage
 
 Implemented now:
-- Board UI with 6 columns
+- Board UI with 5 columns (Awaiting Approval displays in Planning)
 - Drag/drop status change
 - Task detail dialog (approve/reject/reopen)
 - Daemon state manager + file watcher

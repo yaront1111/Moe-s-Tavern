@@ -1156,16 +1156,24 @@ echo ""
 # Build claim command
 CLAIM_JSON="{\"statuses\":$STATUSES,\"workerId\":\"$WORKER_ID\"}"
 
-# Load role documentation
-ROLE_DOC=""
-ROLE_DOC_PATH="$MOE_DIR/roles/$ROLE.md"
-if [ ! -f "$ROLE_DOC_PATH" ]; then
-    # Fall back to docs/roles/
-    ROLE_DOC_PATH="$ROOT_DIR/docs/roles/$ROLE.md"
-fi
+# Load role documentation. load_role_doc is re-run every loop iteration: the
+# daemon upgrades .moe/roles/ in place (sha-marker convention) while this
+# wrapper runs, and a respawned agent must pick up the latest guidance.
+# Unchanged file -> identical bytes -> the prompt-cache prefix stays stable.
+load_role_doc() {
+    ROLE_DOC=""
+    ROLE_DOC_PATH="$MOE_DIR/roles/$ROLE.md"
+    if [ ! -f "$ROLE_DOC_PATH" ]; then
+        # Fall back to docs/roles/
+        ROLE_DOC_PATH="$ROOT_DIR/docs/roles/$ROLE.md"
+    fi
+    if [ -f "$ROLE_DOC_PATH" ]; then
+        ROLE_DOC=$(cat "$ROLE_DOC_PATH")
+    fi
+}
 
-if [ -f "$ROLE_DOC_PATH" ]; then
-    ROLE_DOC=$(cat "$ROLE_DOC_PATH")
+load_role_doc
+if [ -n "$ROLE_DOC" ]; then
     echo -e "${GREEN}[OK]${NC} Loaded role doc from: $ROLE_DOC_PATH"
 else
     echo -e "${YELLOW}[WARN]${NC} Role documentation not found: $ROLE.md"
@@ -1223,6 +1231,7 @@ if [ -z "$RESOLVED_MODEL" ]; then
         architect) RESOLVED_MODEL="claude-opus-4-8" ;;
         worker)    RESOLVED_MODEL="claude-opus-4-8" ;;
         qa)        RESOLVED_MODEL="claude-opus-4-8" ;;
+        governor)  RESOLVED_MODEL="claude-opus-4-8" ;;
     esac
 fi
 if [ -n "$RESOLVED_MODEL" ]; then
@@ -1748,7 +1757,8 @@ PYEOF
 Approval mode: $APPROVAL_MODE"
     fi
 
-    # Append role doc
+    # Append role doc (re-read each iteration to pick up daemon-side upgrades)
+    load_role_doc
     if [ -n "$ROLE_DOC" ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
 

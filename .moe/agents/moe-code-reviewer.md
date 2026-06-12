@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=2b55fb5f669e
 name: moe-code-reviewer
 description: Adversarial diff reviewer for Moe QA. Use after a worker completes a task and before calling moe.qa_approve. Reads the working tree against HEAD~ (or the merge base), the task's Definition of Done, and all applicable rails. Returns a structured pass/fail with named issues.
 tools: Glob, Grep, Read, Bash

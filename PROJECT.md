@@ -6,9 +6,9 @@ Build a JetBrains IDE plugin that embeds a Jira-style board inside the IDE while
 ## Current State (MVP)
 - moe-daemon (Node/TypeScript) manages .moe state, watches files, exposes WebSocket + MCP bridge.
 - moe-proxy (Node/TypeScript) provides MCP stdio and forwards to the daemon WebSocket.
-- moe-jetbrains (Kotlin/Swing) shows a 6-column board, supports drag/drop status changes, and task detail actions (approve/reject/reopen) via WebSocket.
+- moe-jetbrains (Kotlin/Swing) shows a 5-column board (AWAITING_APPROVAL tasks appear in the Planning column), supports drag/drop status changes, and task detail actions (approve/reject/reopen) via WebSocket.
 - The plugin auto-initializes .moe if missing and can auto-start the daemon.
-- Epic/task creation is currently manual (edit `.moe` JSON or use daemon APIs).
+- Epics/tasks are created via the board UI or the `moe.*` MCP tools — never by editing `.moe` JSON by hand (the daemon owns that state).
 
 ## Goals
 - Jira-style board inside JetBrains (tool window).
@@ -46,7 +46,7 @@ Build a JetBrains IDE plugin that embeds a Jira-style board inside the IDE while
 ## UI Surface (Current)
 - JetBrains Tool Window: "Moe".
 - Views:
-  - Board: six columns (Backlog, Planning, Awaiting Approval, Working, Review, Done).
+  - Board: five columns (Backlog, Planning, Working, Review, Done); Awaiting Approval tasks are shown in the Planning column.
   - Task detail dialog with approve/reject/reopen actions where applicable.
 
 ## Repo Layout (Current)

@@ -438,17 +438,22 @@ Write-Host ""
 # Plugin/install root is always the parent of the scripts/ folder
 $pluginRoot = Resolve-Path (Join-Path $PSScriptRoot "..") -ErrorAction SilentlyContinue
 
-# Load role-specific instructions (.moe/roles/ with fallback to plugin docs/roles/)
-$roleDoc = ""
-$roleDocPath = Join-Path $moeDir "roles\$Role.md"
-if (-not (Test-Path $roleDocPath)) {
-    if ($pluginRoot) {
-        $roleDocPath = Join-Path $pluginRoot "docs\roles\$Role.md"
+# Load role-specific instructions (.moe/roles/ with fallback to plugin docs/roles/).
+# Re-resolved and re-read every loop iteration: the daemon upgrades .moe/roles/
+# in place (sha-marker convention) while this wrapper runs, and a respawned
+# agent must pick up the latest guidance. Unchanged file -> identical bytes ->
+# the prompt-cache prefix stays stable.
+function Get-RoleDoc {
+    $p = Join-Path $moeDir "roles\$Role.md"
+    if (-not (Test-Path $p) -and $pluginRoot) {
+        $p = Join-Path $pluginRoot "docs\roles\$Role.md"
     }
+    if (Test-Path $p) { return Get-Content -Raw -Path $p }
+    return ""
 }
-if (Test-Path $roleDocPath) {
-    $roleDoc = Get-Content -Raw -Path $roleDocPath
-    Write-Host "Loaded role guide from $roleDocPath"
+$roleDoc = Get-RoleDoc
+if ($roleDoc) {
+    Write-Host "Loaded role guide for $Role"
 } else {
     Write-Host "WARNING: Role documentation not found: $Role.md" -ForegroundColor Yellow
 }
@@ -493,6 +498,7 @@ $defaultModels = @{
     architect = "claude-opus-4-8"
     worker    = "claude-opus-4-8"
     qa        = "claude-opus-4-8"
+    governor  = "claude-opus-4-8"
 }
 $resolvedModel = ""
 if (-not [string]::IsNullOrWhiteSpace($Model)) {
@@ -970,26 +976,26 @@ if ($loopEnabled) {
 Write-Host "Loop: $loopEnabled (use -Loop to opt in explicitly, -NoLoop to force single-shot)"
 $firstRun = $true
 
-# Build base system/role context (static across iterations; per-iteration pre-flight is appended inside the loop)
-$systemAppendBase = "Role: $Role. Always use Moe MCP tools. "
+# Build base system/role context (static across iterations; the role doc is
+# re-read each iteration inside the loop so daemon-side upgrades land on the
+# next task spawn; per-iteration pre-flight is appended inside the loop)
+$systemAppendPre = "Role: $Role. Always use Moe MCP tools. "
 if ($AutoClaim) {
-    $systemAppendBase += "Start by claiming the next task for your role."
+    $systemAppendPre += "Start by claiming the next task for your role."
 }
 if ($approvalMode) {
-    $systemAppendBase += "`n`n# Project Settings`nApproval mode: $approvalMode"
-}
-if ($roleDoc) {
-    $systemAppendBase += "`n`n$roleDoc"
+    $systemAppendPre += "`n`n# Project Settings`nApproval mode: $approvalMode"
 }
 # The daemon surfaces a phase-recommended skill via nextAction.recommendedSkill
 # on every MCP response. Full manifest is on disk at .moe/skills/manifest.json
 # if the agent ever needs to browse what's available; we don't dump it into
 # the prompt every turn.
+$systemAppendPost = ""
 if ($knownIssues) {
-    $systemAppendBase += "`n`n# Known Issues`n$knownIssues"
+    $systemAppendPost += "`n`n# Known Issues`n$knownIssues"
 }
 if ($teamContext) {
-    $systemAppendBase += "`n`n# Team`n$teamContext"
+    $systemAppendPost += "`n`n# Team`n$teamContext"
 }
 
 try {
@@ -1163,8 +1169,14 @@ do {
     # cache (5min/1h TTL) can hit on the stable prefix. Anything per-task or
     # per-iteration (claimed_task_context, inbox, routed_mentions, skill JIT)
     # is built into $dynamicContext below and prepended to the user message —
-    # NOT appended to the system prompt.
-    $systemAppend = $systemAppendBase
+    # NOT appended to the system prompt. The role doc re-read below keeps
+    # identical bytes while .moe/roles/ is unchanged, so the cache still hits.
+    $roleDoc = Get-RoleDoc
+    $systemAppend = $systemAppendPre
+    if ($roleDoc) {
+        $systemAppend += "`n`n$roleDoc"
+    }
+    $systemAppend += $systemAppendPost
     $dynamicContext = ""
     if ($preflightOk) {
         # Curate the get_context payload before injection. The full JSON is

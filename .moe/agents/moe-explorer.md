@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=ead3e9a3f4ca
 name: moe-explorer
 description: Fast read-only codebase exploration agent. Use during architect planning to locate files, grep symbols, trace code paths, or answer "where is X defined / which files reference Y." Returns excerpts, not full files — do NOT use for cross-file consistency checks or design-doc audits.
 tools: Glob, Grep, Read, WebFetch

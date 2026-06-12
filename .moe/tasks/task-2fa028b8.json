@@ -217,7 +217,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-04-17T19:05:11.205Z",
-  "updatedAt": "2026-04-17T20:03:29.084Z",
+  "updatedAt": "2026-06-09T10:59:58.453Z",
   "planSubmittedAt": "2026-04-17T19:24:17.856Z",
   "planningNotes": {
     "approachesConsidered": "A) Middleware-style interceptor in McpAdapter.handleSingle that enforces ownership/ordering for every tool — rejected: too coarse, each tool has different preconditions (submit_plan needs PLANNING, qa_* needs REVIEW), and would require a per-tool policy map anyway. B) Adding a required (not optional) workerId param — rejected: breaks backward compat for --no-auto-claim interactive flows and plugin-driven human actions on /ws. C) Chosen: per-tool guards via shared helpers + optional workerId + null-assignedWorkerId no-op. Helpers keep each tool handler short (<50 lines) and testable in isolation. D) Strict step ordering (step N must precede N+1) — rejected: task description only calls for get_context-before-start_step and all-complete-before-complete_task; tighter order is out of scope for Phase 3 and would break plan flexibility.",
@@ -241,5 +241,10 @@
   "workStartedAt": "2026-04-17T19:27:38.554Z",
   "completedAt": "2026-04-17T19:53:08.070Z",
   "reviewStartedAt": "2026-04-17T19:53:08.070Z",
-  "reviewCompletedAt": "2026-04-17T20:03:29.084Z"
+  "reviewCompletedAt": "2026-04-17T20:03:29.084Z",
+  "metrics": {
+    "firstClaimAt": "2026-04-17T19:20:08.086Z",
+    "doneAt": "2026-04-17T20:03:29.087Z",
+    "wallClockMs": 2601001
+  }
 }
