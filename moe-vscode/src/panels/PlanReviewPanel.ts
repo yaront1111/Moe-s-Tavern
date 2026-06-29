@@ -116,17 +116,23 @@ export class PlanReviewPanel implements vscode.Disposable {
         try {
             switch (msg.type) {
                 case 'approve':
-                    this.client.approveTask(this.taskId);
-                    vscode.window.showInformationMessage('Plan approved');
-                    this.dispose();
+                    if (this.client.approveTask(this.taskId)) {
+                        vscode.window.showInformationMessage('Plan approved');
+                        this.dispose();
+                    } else {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — plan was not approved.');
+                    }
                     break;
 
                 case 'reject': {
                     const reason = msg.reason;
                     if (reason) {
-                        this.client.rejectTask(this.taskId, reason);
-                        vscode.window.showInformationMessage('Plan rejected');
-                        this.dispose();
+                        if (this.client.rejectTask(this.taskId, reason)) {
+                            vscode.window.showInformationMessage('Plan rejected');
+                            this.dispose();
+                        } else {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — plan was not rejected.');
+                        }
                     }
                     break;
                 }
@@ -137,9 +143,12 @@ export class PlanReviewPanel implements vscode.Disposable {
                         placeHolder: 'Why is this plan being rejected?',
                     });
                     if (reason) {
-                        this.client.rejectTask(this.taskId, reason);
-                        vscode.window.showInformationMessage('Plan rejected');
-                        this.dispose();
+                        if (this.client.rejectTask(this.taskId, reason)) {
+                            vscode.window.showInformationMessage('Plan rejected');
+                            this.dispose();
+                        } else {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — plan was not rejected.');
+                        }
                     }
                     break;
                 }

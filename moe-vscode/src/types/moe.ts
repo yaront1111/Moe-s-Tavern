@@ -37,7 +37,7 @@ export type WorkerStatus =
   // included here so a snapshot carrying one (race window) still type-checks.
   | 'DEAD';
 
-export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED';
+export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
 
 export type TeamRole = 'architect' | 'worker' | 'qa';
 

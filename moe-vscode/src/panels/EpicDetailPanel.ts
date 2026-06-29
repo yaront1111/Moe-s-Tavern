@@ -288,6 +288,7 @@ export class EpicDetailPanel implements vscode.Disposable {
             <option value="PLANNED"${statusVal === 'PLANNED' ? ' selected' : ''}>Planned</option>
             <option value="ACTIVE"${statusVal === 'ACTIVE' ? ' selected' : ''}>Active</option>
             <option value="COMPLETED"${statusVal === 'COMPLETED' ? ' selected' : ''}>Completed</option>
+            <option value="ARCHIVED"${statusVal === 'ARCHIVED' ? ' selected' : ''}>Archived</option>
         </select>
     </div>
     ` : ''}

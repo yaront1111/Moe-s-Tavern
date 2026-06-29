@@ -99,6 +99,19 @@ function psQuote(value: string): string {
     return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+// Reject characters that would corrupt the command regardless of quoting:
+// CR/LF break the terminal line and the -EncodedCommand framing, and a NUL
+// byte is never legitimate in a path or team name. Names flow in from
+// .moe/project.json and the workspace path, so they are not fully trusted.
+function assertSafeArg(label: string, value: string): void {
+    for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i);
+        if (code === 13 || code === 10 || code === 0) {
+            throw new Error(`Invalid ${label}: contains control characters`);
+        }
+    }
+}
+
 // Escape for a Bash single-quoted string: close, insert escaped quote, reopen.
 function shQuote(value: string): string {
     return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -113,22 +126,35 @@ function buildPowerShellCommand(
     envOverrides?: Record<string, string>,
     teamName?: string
 ): string {
+    // Validate the untrusted, free-form values before they are baked into a
+    // command line. (Role is restricted by the AgentRole type.)
+    assertSafeArg('workspace path', workspacePath);
+    assertSafeArg('worker id', workerId);
+    assertSafeArg('command', command);
+    if (teamName) {
+        assertSafeArg('team name', teamName);
+    }
+
     let prefix = '';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {
+            assertSafeArg(`env ${key}`, value);
             prefix += `$env:${key}=${psQuote(value)}; `;
         }
     }
 
-    // Role is restricted by the AgentRole type so no quoting needed.
     const inner =
         `& ${psQuote(scriptPath)} -Role ${role} -Project ${psQuote(workspacePath)} ` +
         `-WorkerId ${psQuote(workerId)} -Command ${psQuote(command)}` +
         (teamName ? ` -Team ${psQuote(teamName)}` : '');
 
-    // Outer -Command argument is wrapped in double quotes; inner single-quoted
-    // strings cannot break out of those double quotes.
-    return `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -Command "${inner}"`;
+    // Pass the inner script via -EncodedCommand (UTF-16LE base64) instead of an
+    // outer -Command "..." wrapper. psQuote only doubles single quotes, so a
+    // double quote in a project/team name would otherwise terminate the outer
+    // double-quoted wrapper and inject arbitrary commands. Base64 has no shell
+    // metacharacters, so no value can break out.
+    const encoded = Buffer.from(inner, 'utf16le').toString('base64');
+    return `${prefix}powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
 }
 
 function buildBashCommand(

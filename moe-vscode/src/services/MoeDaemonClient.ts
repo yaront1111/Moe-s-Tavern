@@ -61,6 +61,8 @@ export class MoeDaemonClient implements vscode.Disposable {
     private reconnectTimeout: NodeJS.Timeout | undefined;
     private pingInterval: NodeJS.Timeout | undefined;
     private startInProgress = false;
+    private connectInProgress = false;
+    private readonly handshakeTimeoutMs = 15000;
     private reconnectAttempts = 0;
     private readonly maxReconnectAttempts = 10;
     private stateReady = false;
@@ -162,95 +164,137 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this._connectionState !== 'disconnected') {
             return;
         }
-
-        this.daemonShuttingDown = false;
-
-        await this.ensureDaemonRunning();
-        const daemonInfo = await this.getDaemonInfo();
-        if (!daemonInfo) {
-            throw new Error('Daemon not running. Start daemon first.');
+        // Guard the awaits below: setConnectionState('connecting') only fires
+        // after ensureDaemonRunning()/getDaemonInfo() resolve, so two concurrent
+        // connect() calls could both pass the state check and each open a socket
+        // (orphaning a ping interval). Set this synchronously before awaiting.
+        if (this.connectInProgress) {
+            return;
         }
+        this.connectInProgress = true;
 
-        const { host, port } = daemonInfo;
-        const url = `ws://${host}:${port}/ws`;
+        try {
+            this.daemonShuttingDown = false;
 
-        this.setConnectionState('connecting');
+            await this.ensureDaemonRunning();
+            const daemonInfo = await this.getDaemonInfo();
+            if (!daemonInfo) {
+                throw new Error('Daemon not running. Start daemon first.');
+            }
 
-        return new Promise((resolve, reject) => {
-            let settled = false;
-            let opened = false;
-            const resolveOnce = () => {
-                if (!settled) {
-                    settled = true;
-                    resolve();
-                }
-            };
-            const rejectOnce = (err: Error) => {
-                if (!settled) {
-                    settled = true;
-                    reject(err);
-                }
-            };
+            const { host, port } = daemonInfo;
+            const url = `ws://${host}:${port}/ws`;
 
-            try {
-                const ws = new WebSocket(url);
-                this.ws = ws;
+            this.setConnectionState('connecting');
 
-                ws.on('open', () => {
-                    if (this.ws !== ws) {
-                        try { ws.close(); } catch { /* ignore stale socket close errors */ }
-                        rejectOnce(new Error('WebSocket was replaced before it opened'));
-                        return;
+            return await new Promise<void>((resolve, reject) => {
+                let settled = false;
+                let opened = false;
+                let handshakeTimer: NodeJS.Timeout | undefined;
+                const clearHandshakeTimer = () => {
+                    if (handshakeTimer) {
+                        clearTimeout(handshakeTimer);
+                        handshakeTimer = undefined;
                     }
-                    opened = true;
-                    log('Connected to Moe daemon');
-                    this.reconnectAttempts = 0;
-                    this.setConnectionState('connected');
-                    this.startPingInterval();
-                    this.requestState();
-                    resolveOnce();
-                });
-
-                ws.on('message', (data) => {
-                    if (this.ws === ws) {
-                        this.handleMessage(data.toString());
+                };
+                const resolveOnce = () => {
+                    if (!settled) {
+                        settled = true;
+                        resolve();
                     }
-                });
+                };
+                const rejectOnce = (err: Error) => {
+                    if (!settled) {
+                        settled = true;
+                        reject(err);
+                    }
+                };
 
-                ws.on('close', () => {
-                    if (this.ws !== ws) {
-                        log('Ignoring close from stale Moe daemon socket');
+                try {
+                    const ws = new WebSocket(url);
+                    this.ws = ws;
+
+                    // A port that accepts TCP but never completes the WS upgrade
+                    // fires neither 'open' nor 'close' nor 'error', wedging the
+                    // client in 'connecting' forever with no reconnect. Arm a
+                    // handshake timeout that tears the socket down and reschedules.
+                    handshakeTimer = setTimeout(() => {
+                        handshakeTimer = undefined;
+                        if (this.ws !== ws) {
+                            return;
+                        }
+                        log('WebSocket handshake timed out');
+                        this.ws = undefined;
+                        try { ws.terminate(); } catch { /* ignore */ }
+                        try { ws.close(); } catch { /* ignore */ }
+                        this.stopPingInterval();
+                        this.setConnectionState('disconnected');
+                        rejectOnce(new Error('WebSocket handshake timed out'));
+                        this.scheduleReconnect();
+                    }, this.handshakeTimeoutMs);
+
+                    ws.on('open', () => {
+                        clearHandshakeTimer();
+                        if (this.ws !== ws) {
+                            try { ws.close(); } catch { /* ignore stale socket close errors */ }
+                            rejectOnce(new Error('WebSocket was replaced before it opened'));
+                            return;
+                        }
+                        opened = true;
+                        log('Connected to Moe daemon');
+                        this.reconnectAttempts = 0;
+                        this.setConnectionState('connected');
+                        this.startPingInterval();
+                        this.requestState();
+                        resolveOnce();
+                    });
+
+                    ws.on('message', (data) => {
+                        if (this.ws === ws) {
+                            this.handleMessage(data.toString());
+                        }
+                    });
+
+                    ws.on('close', () => {
+                        clearHandshakeTimer();
+                        if (this.ws !== ws) {
+                            log('Ignoring close from stale Moe daemon socket');
+                            if (!opened) {
+                                rejectOnce(new Error('WebSocket closed before connection opened'));
+                            }
+                            return;
+                        }
+                        this.ws = undefined;
+                        log('Disconnected from Moe daemon');
+                        this.setConnectionState('disconnected');
+                        this.stopPingInterval();
+                        // Reset state readiness — new connection needs fresh STATE_SNAPSHOT
+                        this.stateReady = false;
+                        this.stateReadyPromise = new Promise<void>((resolve) => {
+                            this.stateReadyResolve = resolve;
+                        });
                         if (!opened) {
                             rejectOnce(new Error('WebSocket closed before connection opened'));
                         }
-                        return;
-                    }
-                    this.ws = undefined;
-                    log('Disconnected from Moe daemon');
-                    this.setConnectionState('disconnected');
-                    this.stopPingInterval();
-                    // Reset state readiness — new connection needs fresh STATE_SNAPSHOT
-                    this.stateReady = false;
-                    this.stateReadyPromise = new Promise<void>((resolve) => {
-                        this.stateReadyResolve = resolve;
+                        this.scheduleReconnect();
                     });
-                    if (!opened) {
-                        rejectOnce(new Error('WebSocket closed before connection opened'));
-                    }
-                    this.scheduleReconnect();
-                });
 
-                ws.on('error', (err) => {
-                    log(`WebSocket error: ${err.message}`);
-                    if (this.ws === ws && this._connectionState === 'connecting') {
-                        rejectOnce(err);
-                    }
-                });
-            } catch (err) {
-                this.setConnectionState('disconnected');
-                rejectOnce(err instanceof Error ? err : new Error(String(err)));
-            }
-        });
+                    ws.on('error', (err) => {
+                        clearHandshakeTimer();
+                        log(`WebSocket error: ${err.message}`);
+                        if (this.ws === ws && this._connectionState === 'connecting') {
+                            rejectOnce(err);
+                        }
+                    });
+                } catch (err) {
+                    clearHandshakeTimer();
+                    this.setConnectionState('disconnected');
+                    rejectOnce(err instanceof Error ? err : new Error(String(err)));
+                }
+            });
+        } finally {
+            this.connectInProgress = false;
+        }
     }
 
     disconnect(options: { manual?: boolean } = {}): void {
@@ -275,12 +319,19 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
     }
 
-    sendMessage(type: string, payload: unknown = {}): void {
+    /**
+     * Send a message to the daemon. Returns true if the frame was handed to the
+     * socket, false if the client was not connected or the send failed. Callers
+     * that gate UI success/dispose on delivery MUST check this — a silent
+     * early-return previously let panels claim success while disconnected.
+     */
+    sendMessage(type: string, payload: unknown = {}): boolean {
         if (!this.ws || this._connectionState !== 'connected' || this.ws.readyState !== WebSocket.OPEN) {
-            return;
+            return false;
         }
         try {
             this.ws.send(JSON.stringify({ type, payload }));
+            return true;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             log(`Failed to send ${type}: ${message}`);
@@ -301,6 +352,7 @@ export class MoeDaemonClient implements vscode.Disposable {
             }
             this.setConnectionState('disconnected');
             this.scheduleReconnect();
+            return false;
         }
     }
 
@@ -333,16 +385,16 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('DELETE_TASK', { taskId });
     }
 
-    approveTask(taskId: string): void {
-        this.sendMessage('APPROVE_TASK', { taskId });
+    approveTask(taskId: string): boolean {
+        return this.sendMessage('APPROVE_TASK', { taskId });
     }
 
-    rejectTask(taskId: string, reason: string): void {
-        this.sendMessage('REJECT_TASK', { taskId, reason });
+    rejectTask(taskId: string, reason: string): boolean {
+        return this.sendMessage('REJECT_TASK', { taskId, reason });
     }
 
-    reopenTask(taskId: string, reason: string): void {
-        this.sendMessage('REOPEN_TASK', { taskId, reason });
+    reopenTask(taskId: string, reason: string): boolean {
+        return this.sendMessage('REOPEN_TASK', { taskId, reason });
     }
 
     addTaskComment(taskId: string, content: string): void {
@@ -479,7 +531,12 @@ export class MoeDaemonClient implements vscode.Disposable {
                 try { fs.unlinkSync(daemonJsonPath); } catch { /* ignore */ }
                 return undefined;
             }
-            return { host: configHost, port: daemonInfo.port };
+            const port = Number(daemonInfo.port);
+            if (Number.isNaN(port) || port <= 0) {
+                log(`Invalid daemon port in daemon.json: ${String(daemonInfo.port)}`);
+                return undefined;
+            }
+            return { host: configHost, port };
         } catch {
             return undefined;
         }
@@ -901,6 +958,8 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     private startPingInterval(): void {
+        // Clear any prior interval so a re-entrant start can't orphan a 30s timer.
+        this.stopPingInterval();
         this.pingInterval = setInterval(() => {
             this.sendMessage('PING');
         }, 30000);

@@ -133,8 +133,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                 }
 
                 case 'approve':
-                    this.client.approveTask(this.taskId);
-                    vscode.window.showInformationMessage('Task approved');
+                    if (this.client.approveTask(this.taskId)) {
+                        vscode.window.showInformationMessage('Task approved');
+                    } else {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
+                    }
                     break;
 
                 case 'promptReject': {
@@ -143,8 +146,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                         placeHolder: 'Why is this plan being rejected?',
                     });
                     if (reason) {
-                        this.client.rejectTask(this.taskId, reason);
-                        vscode.window.showInformationMessage('Task rejected');
+                        if (this.client.rejectTask(this.taskId, reason)) {
+                            vscode.window.showInformationMessage('Task rejected');
+                        } else {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not rejected.');
+                        }
                     }
                     break;
                 }
@@ -152,16 +158,22 @@ export class TaskDetailPanel implements vscode.Disposable {
                 case 'reopen': {
                     const reopenReason = typeof msg.reason === 'string' ? msg.reason : '';
                     if (reopenReason) {
-                        this.client.reopenTask(this.taskId, reopenReason);
-                        vscode.window.showInformationMessage('Task reopened');
+                        if (this.client.reopenTask(this.taskId, reopenReason)) {
+                            vscode.window.showInformationMessage('Task reopened');
+                        } else {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not reopened.');
+                        }
                     } else {
                         const inputReason = await vscode.window.showInputBox({
                             prompt: 'Reopen reason',
                             placeHolder: 'Why is this task being reopened?',
                         });
                         if (inputReason) {
-                            this.client.reopenTask(this.taskId, inputReason);
-                            vscode.window.showInformationMessage('Task reopened');
+                            if (this.client.reopenTask(this.taskId, inputReason)) {
+                                vscode.window.showInformationMessage('Task reopened');
+                            } else {
+                                vscode.window.showWarningMessage('Not connected to Moe daemon — task was not reopened.');
+                            }
                         }
                     }
                     break;
@@ -199,8 +211,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                     if (msg.type === 'next') {
                         if (idx >= workflowOrder.length - 1) { break; }
                         if (currentStatus === 'AWAITING_APPROVAL') {
-                            this.client.approveTask(this.taskId);
-                            vscode.window.showInformationMessage('Task approved');
+                            if (this.client.approveTask(this.taskId)) {
+                                vscode.window.showInformationMessage('Task approved');
+                            } else {
+                                vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
+                            }
                         } else {
                             this.client.updateTaskStatus(this.taskId, workflowOrder[idx + 1]);
                         }
@@ -212,8 +227,11 @@ export class TaskDetailPanel implements vscode.Disposable {
                                 placeHolder: 'Why is this task being reopened?',
                             });
                             if (reason) {
-                                this.client.reopenTask(this.taskId, reason);
-                                vscode.window.showInformationMessage('Task reopened');
+                                if (this.client.reopenTask(this.taskId, reason)) {
+                                    vscode.window.showInformationMessage('Task reopened');
+                                } else {
+                                    vscode.window.showWarningMessage('Not connected to Moe daemon — task was not reopened.');
+                                }
                             }
                         } else {
                             this.client.updateTaskStatus(this.taskId, workflowOrder[idx - 1]);
