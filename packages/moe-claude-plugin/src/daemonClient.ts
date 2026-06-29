@@ -48,13 +48,21 @@ const DEFAULT_TIMEOUT_MS = 3000;
 export function findDaemonInfo(options: DaemonClientOptions = {}): DaemonInfo {
   const explicit = options.projectPath ?? process.env.MOE_PROJECT_PATH;
 
-  // When the caller pins a project (test, hook payload, or env var), use only
-  // that directory — never silently fall back to a different project. This
-  // keeps behavior predictable and prevents test isolation from leaking onto
-  // the developer's real Moe project.
+  // When the caller pins a project (test, hook payload, or env var), prefer
+  // that directory — never silently fall back to a *different* project. We do
+  // allow a short walk-up toward an ancestor .moe/ in case the pinned path is a
+  // subdirectory of the actual Moe project root, but we never reach for the
+  // global registry here. This keeps behavior predictable and prevents test
+  // isolation from leaking onto the developer's real Moe project.
   if (explicit) {
-    const info = readDaemonJson(path.resolve(explicit));
-    if (info) return info;
+    let current = path.resolve(explicit);
+    for (let i = 0; i < 12; i++) {
+      const info = readDaemonJson(current);
+      if (info) return info;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
     throw new DaemonError(
       'DAEMON_NOT_FOUND',
       `Moe daemon not running for project ${explicit}. Start it with: moe-daemon start --project <path>`

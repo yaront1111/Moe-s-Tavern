@@ -81,8 +81,19 @@ export async function runPostToolUseHook(input: PostToolUseInput): Promise<{
       timestamp: new Date().toISOString(),
     },
   };
+  // Prefer the launcher binding (MOE_PROJECT_PATH) over the hook's cwd: the
+  // PowerShell `claude` launcher runs the CLI in the launcher's own cwd and
+  // binds the project only via MOE_PROJECT_PATH, so input.cwd is unrelated to
+  // the Moe project. Fall back to cwd only when the env var is unset.
+  const envProject = process.env.MOE_PROJECT_PATH;
+  const projectPath =
+    envProject && envProject.trim().length > 0
+      ? envProject
+      : typeof input.cwd === 'string'
+      ? input.cwd
+      : undefined;
   try {
-    await postEvent(payload, { projectPath: typeof input.cwd === 'string' ? input.cwd : undefined });
+    await postEvent(payload, { projectPath });
     return { forwarded: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
