@@ -87,6 +87,11 @@ class MoeProjectService @JvmOverloads constructor(
     private val reconnectDelayMs = 5000L
     private val maxReconnectAttempts = 10
     private val daemonStartCooldownMs = 10_000L
+    // Generous startup ceiling: while the daemon we spawned is still alive but not
+    // yet listening, keep polling (with capped backoff) up to this many attempts so a
+    // slow cold start is not mistaken for a failure and killed prematurely.
+    private val maxStartupAttempts = 40
+    private val maxRetryDelayMs = 2000L
 
     private fun invokeLater(action: () -> Unit) {
         val testDispatcher = invokeLaterForTests
@@ -98,9 +103,15 @@ class MoeProjectService @JvmOverloads constructor(
     }
 
     fun connect() {
-        if (disposed.get() || connecting || connected) return
+        if (disposed.get()) return
+        // Atomic check-and-set: the open-listener and a pooled panel init can both
+        // race here, so guard the connecting/connected flags under wsLock instead of
+        // a non-atomic check-then-set on the @Volatile flags.
+        wsLock.withLock {
+            if (connecting || connected) return
+            connecting = true
+        }
         isManualDisconnect = false
-        connecting = true
         if (!ensureMoeInitialized()) {
             connecting = false
             publishStatus(false, "Project not initialized")
@@ -156,18 +167,38 @@ class MoeProjectService @JvmOverloads constructor(
             return
         }
 
-        if (attempt >= maxAttempts) {
-            connecting = false
-            retryFuture = null
-            // Kill the daemon we spawned since we couldn't connect to it
-            killSpawnedDaemon()
-            publishStatus(false, "Daemon failed to start. Check logs.")
-            scheduleReconnect()
+        val spawned = spawnedDaemonProcess
+        val spawnedAlive = spawned != null && spawned.isAlive
+
+        if (spawnedAlive) {
+            // The daemon we spawned is up but not yet listening: it is STILL STARTING,
+            // not failed. Don't destroy a process that's making progress toward binding
+            // its port just because the initial poll window elapsed. Reset the spawn cap
+            // so a future reconnect is never permanently disabled, and keep polling with
+            // a capped backoff up to a generous startup ceiling.
+            daemonSpawnAttempts = 0
+            if (attempt < maxStartupAttempts) {
+                val nextDelay = (delayMs * 2).coerceAtMost(maxRetryDelayMs)
+                publishStatus(false, "Starting daemon... (${attempt}/${maxStartupAttempts})")
+                scheduleRetryAttempt(maxStartupAttempts, nextDelay, attempt + 1)
+                return
+            }
+            // Alive but never bound within the generous window: treat as hung and give up.
+        } else if (attempt < maxAttempts) {
+            // No live spawned process yet (external daemon coming up, or daemon.json not
+            // written): keep the original short budget before declaring failure.
+            publishStatus(false, "Waiting for daemon... (${attempt}/${maxAttempts})")
+            scheduleRetryAttempt(maxAttempts, delayMs, attempt + 1)
             return
         }
 
-        publishStatus(false, "Waiting for daemon... (${attempt}/${maxAttempts})")
-        scheduleRetryAttempt(maxAttempts, delayMs, attempt + 1)
+        // The spawned process died, or the startup ceiling was exhausted: fail.
+        connecting = false
+        retryFuture = null
+        // Kill the daemon we spawned since we couldn't connect to it
+        killSpawnedDaemon()
+        publishStatus(false, "Daemon failed to start. Check logs.")
+        scheduleReconnect()
     }
 
     private fun scheduleRetryAttempt(maxAttempts: Int, delayMs: Long, attempt: Int) {
@@ -1514,32 +1545,47 @@ class MoeProjectService @JvmOverloads constructor(
         // Clear all listeners to prevent memory leaks
         listeners.clear()
 
-        // Shutdown scheduler gracefully
-        try {
-            scheduler.shutdown()
-            if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow()
-            }
-        } catch (ex: InterruptedException) {
-            scheduler.shutdownNow()
-            Thread.currentThread().interrupt()
-        } catch (ex: Exception) {
-            log.warn("Error shutting down scheduler: ${ex.message}")
-            scheduler.shutdownNow()
-        }
+        // Stop accepting new scheduled work immediately (non-blocking).
+        scheduler.shutdown()
 
-        // Only kill daemon if this was the last project using it
+        // Decide daemon ownership synchronously so the ref-count drops right away,
+        // but defer the blocking awaitTermination + daemon kill (each up to ~2s) off
+        // the EDT so disposing the tool window never freezes the UI.
         val pid = connectedDaemonPid
-        if (pid != null) {
+        val killDaemon: Boolean = if (pid != null) {
             val isLastUser = daemonRegistration.unregisterCurrent()
-            if (isLastUser) {
-                killSpawnedDaemon()
-            } else {
+            if (!isLastUser) {
                 log.info("Daemon PID $pid still in use by other projects, not killing")
                 spawnedDaemonProcess = null // Don't hold the process reference
             }
+            isLastUser
         } else {
-            killSpawnedDaemon()
+            true
+        }
+
+        val teardown = Runnable {
+            try {
+                if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow()
+                }
+            } catch (ex: InterruptedException) {
+                scheduler.shutdownNow()
+                Thread.currentThread().interrupt()
+            } catch (ex: Exception) {
+                log.warn("Error shutting down scheduler: ${ex.message}")
+                scheduler.shutdownNow()
+            }
+            if (killDaemon) {
+                killSpawnedDaemon()
+            }
+        }
+
+        val app = ApplicationManager.getApplication()
+        if (app != null) {
+            app.executeOnPooledThread(teardown)
+        } else {
+            // No platform application (e.g. headless unit tests): run inline.
+            teardown.run()
         }
 
         // Clear state

@@ -28,7 +28,7 @@ class EpicDetailDialog(
     private val descriptionField = JBTextArea(epic.description)
     private val architectureNotesField = JBTextArea(epic.architectureNotes)
     private val epicRailsField = JBTextArea(epic.epicRails.joinToString("\n"))
-    private val statusField = JComboBox(arrayOf("PLANNED", "ACTIVE", "COMPLETED"))
+    private val statusField = JComboBox(arrayOf("PLANNED", "ACTIVE", "COMPLETED", "ARCHIVED"))
 
     init {
         title = MoeBundle.message("moe.dialog.epicDetail", epic.title)

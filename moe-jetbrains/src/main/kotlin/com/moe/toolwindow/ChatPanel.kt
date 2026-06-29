@@ -342,14 +342,25 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
 
     private fun appendMessage(message: ChatMessage) {
         val list = messagesByChannel.getOrPut(message.channel) { mutableListOf() }
+        var trimmed = 0
         if (list.none { it.id == message.id }) {
             list.add(message)
             if (list.size > maxMessagesPerChannel) {
-                list.subList(0, list.size - maxMessagesPerChannel).clear()
+                trimmed = list.size - maxMessagesPerChannel
+                list.subList(0, trimmed).clear()
             }
         }
         if (message.channel == currentChannelId) {
             try {
+                // Drop the leading bubble components whose backing messages were just
+                // trimmed from the data list, so the Swing component tree stays bounded
+                // along with messagesByChannel (the bubbles are leading; glue is trailing).
+                repeat(trimmed) {
+                    if (messagesPanel.componentCount == 0) return@repeat
+                    val first = messagesPanel.getComponent(0)
+                    if (first is Box.Filler || first === noMessagesLabel) return@repeat
+                    messagesPanel.remove(0)
+                }
                 // Incremental add: remove trailing glue, add bubble, re-add glue
                 val componentCount = messagesPanel.componentCount
                 if (componentCount > 0 && messagesPanel.getComponent(componentCount - 1) is Box.Filler) {
