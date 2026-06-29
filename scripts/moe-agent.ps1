@@ -644,7 +644,7 @@ args = ["start-mcp-server", "--context", "codex", "--project", "$serenaProjectFo
                     $skip = $true
                     continue
                 }
-                if ($skip -and $stripped.StartsWith('[') -and $stripped -notmatch '^\[mcp_servers\.moe' -and $stripped -notmatch '^\[mcp_servers\.serena\]') {
+                if ($skip -and $stripped.StartsWith('[') -and $stripped -notmatch '^\[mcp_servers\.moe(\]|\.env\])' -and $stripped -notmatch '^\[mcp_servers\.serena\]') {
                     $skip = $false
                 }
                 if (-not $skip) {
@@ -704,6 +704,37 @@ $serenaTomlBlock
     Write-Host "Writing project-scoped Gemini MCP config..."
     $geminiConfigDir = Join-Path $projectPath ".gemini"
     $geminiConfigFile = Join-Path $geminiConfigDir "settings.json"
+    # Recursively convert a PSCustomObject graph (as produced by ConvertFrom-Json
+    # WITHOUT -AsHashtable on Windows PowerShell 5.1, where -AsHashtable does not
+    # exist) into nested hashtables, so the merge below — which relies on
+    # .ContainsKey()/index assignment — behaves identically to -AsHashtable on
+    # PowerShell 6+.
+    function ConvertTo-MoeHashtable {
+        param($InputObject)
+        if ($null -eq $InputObject) { return $null }
+        if ($InputObject -is [System.Collections.IDictionary]) {
+            $ht = @{}
+            foreach ($key in $InputObject.Keys) {
+                $ht[$key] = ConvertTo-MoeHashtable $InputObject[$key]
+            }
+            return $ht
+        }
+        if ($InputObject -is [System.Management.Automation.PSCustomObject]) {
+            $ht = @{}
+            foreach ($prop in $InputObject.PSObject.Properties) {
+                $ht[$prop.Name] = ConvertTo-MoeHashtable $prop.Value
+            }
+            return $ht
+        }
+        if ($InputObject -is [System.Collections.IEnumerable] -and $InputObject -isnot [string]) {
+            $list = @()
+            foreach ($item in $InputObject) {
+                $list += ,(ConvertTo-MoeHashtable $item)
+            }
+            return ,$list
+        }
+        return $InputObject
+    }
     try {
         if (-not (Test-Path $geminiConfigDir)) {
             New-Item -ItemType Directory -Force -Path $geminiConfigDir | Out-Null
@@ -718,41 +749,63 @@ $serenaTomlBlock
             }
         }
 
-        # Merge with existing settings.json if present
+        # Merge with existing settings.json if present. -AsHashtable is PowerShell
+        # 6+ only; on Windows PowerShell 5.1 it throws, so parse to a PSCustomObject
+        # and convert recursively. NEVER fall back to @{} on a NON-EMPTY source file:
+        # that would silently clobber the user's existing Gemini config. On a parse
+        # failure of a non-empty file we preserve the file untouched and skip the
+        # merge instead.
         $geminiConfig = @{}
+        $geminiParseFailed = $false
         if (Test-Path $geminiConfigFile) {
-            try {
-                $geminiConfig = Get-Content -Raw -Path $geminiConfigFile | ConvertFrom-Json -AsHashtable
-            } catch {
-                $geminiConfig = @{}
+            $geminiRaw = Get-Content -Raw -Path $geminiConfigFile
+            if (-not [string]::IsNullOrWhiteSpace($geminiRaw)) {
+                try {
+                    if ($PSVersionTable.PSVersion.Major -ge 6) {
+                        $geminiConfig = $geminiRaw | ConvertFrom-Json -AsHashtable
+                    } else {
+                        $geminiConfig = ConvertTo-MoeHashtable ($geminiRaw | ConvertFrom-Json)
+                    }
+                    if ($geminiConfig -isnot [System.Collections.IDictionary]) {
+                        # Top-level JSON wasn't an object (array/scalar) — don't clobber.
+                        $geminiParseFailed = $true
+                    }
+                } catch {
+                    $geminiParseFailed = $true
+                }
             }
         }
-        if (-not $geminiConfig.ContainsKey('mcpServers')) {
-            $geminiConfig['mcpServers'] = @{}
-        }
-        $geminiConfig['mcpServers']['moe'] = $moeEntry
 
-        # Serena MCP (LSP code intelligence + memory), pinned to this project.
-        # Set/refresh when installed; drop a stale entry when it isn't. The JSON
-        # serializer escapes the native Windows path, so no manual escaping here.
-        if ($serenaPath -and (Test-Path $serenaPath)) {
-            $geminiConfig['mcpServers']['serena'] = @{
-                command = $serenaPath
-                args = @(
-                    "start-mcp-server",
-                    "--context", "agent",
-                    "--project", $serenaProject,
-                    "--enable-web-dashboard", "false",
-                    "--enable-gui-log-window", "false"
-                )
+        if ($geminiParseFailed) {
+            Write-Host "WARNING: $geminiConfigFile is not a valid JSON object; leaving it untouched and skipping the Gemini MCP config merge to avoid clobbering it." -ForegroundColor Yellow
+        } else {
+            if (-not $geminiConfig.ContainsKey('mcpServers')) {
+                $geminiConfig['mcpServers'] = @{}
             }
-        } elseif ($geminiConfig['mcpServers'].ContainsKey('serena')) {
-            $geminiConfig['mcpServers'].Remove('serena')
-        }
+            $geminiConfig['mcpServers']['moe'] = $moeEntry
 
-        $jsonText = $geminiConfig | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($geminiConfigFile, $jsonText, [System.Text.UTF8Encoding]::new($false))
-        Write-Host "Gemini MCP config written to: $geminiConfigFile"
+            # Serena MCP (LSP code intelligence + memory), pinned to this project.
+            # Set/refresh when installed; drop a stale entry when it isn't. The JSON
+            # serializer escapes the native Windows path, so no manual escaping here.
+            if ($serenaPath -and (Test-Path $serenaPath)) {
+                $geminiConfig['mcpServers']['serena'] = @{
+                    command = $serenaPath
+                    args = @(
+                        "start-mcp-server",
+                        "--context", "agent",
+                        "--project", $serenaProject,
+                        "--enable-web-dashboard", "false",
+                        "--enable-gui-log-window", "false"
+                    )
+                }
+            } elseif ($geminiConfig['mcpServers'].ContainsKey('serena')) {
+                $geminiConfig['mcpServers'].Remove('serena')
+            }
+
+            $jsonText = $geminiConfig | ConvertTo-Json -Depth 5
+            [System.IO.File]::WriteAllText($geminiConfigFile, $jsonText, [System.Text.UTF8Encoding]::new($false))
+            Write-Host "Gemini MCP config written to: $geminiConfigFile"
+        }
     } catch {
         Write-Error "Failed to write Gemini MCP config: $_"
         exit 1
@@ -1771,6 +1824,20 @@ $mentionsJson
                 if ($LASTEXITCODE -eq 0) {
                     Write-Host "Post-flight: auto-commit+push (settings.autoCommit=true)..." -ForegroundColor Cyan
 
+                    # H5: native git writes progress/info to stderr even on SUCCESS
+                    # (e.g. push progress, checkout summaries). Under the script-wide
+                    # $ErrorActionPreference='Stop' the `2>&1 | ...` merges below turn
+                    # that benign stderr into a terminating NativeCommandError with no
+                    # local catch — it unwinds straight to the outer finally and kills
+                    # the polling loop after the very first task. Drop EAP to 'Continue'
+                    # for the whole git block (mirrors the Invoke-MoeRpc proxy shim);
+                    # real failures are still detected via $LASTEXITCODE. The finally
+                    # restores EAP on EVERY exit path, including the `continue` in the
+                    # branch-safety guard below.
+                    $prevGitEAP = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    try {
+
                     # Never commit/push directly to main or master. If the worker
                     # finished on the default branch, peel off onto a shared Moe
                     # working branch (moe/work-<YYYY-MM-DD>) before committing.
@@ -1834,7 +1901,11 @@ $mentionsJson
                         if ($LASTEXITCODE -eq 0) {
                             Write-Host "[OK] Committed task $preflightTaskId on $currentBranch." -ForegroundColor Green
                         } else {
-                            Write-Host "[WARN] git commit failed (pre-commit hook? detached HEAD?); skipping push." -ForegroundColor Yellow
+                            # NOTE: we deliberately fall through to the push below —
+                            # the worker may already have committed mid-session, so
+                            # any prior local commits ahead of upstream still need to
+                            # reach the remote. Only this commit attempt was a no-op.
+                            Write-Host "[WARN] git commit failed (pre-commit hook? detached HEAD?); will still push any commits already made." -ForegroundColor Yellow
                         }
                     } else {
                         Write-Host "[info] No staged changes to commit (worker may have already committed mid-session)." -ForegroundColor Cyan
@@ -1883,6 +1954,9 @@ $mentionsJson
                                 } catch {}
                             }
                         }
+                    }
+                    } finally {
+                        $ErrorActionPreference = $prevGitEAP
                     }
                 } else {
                     Write-Host "[info] $projectPath is not a git repo — skipping auto-commit+push." -ForegroundColor Cyan

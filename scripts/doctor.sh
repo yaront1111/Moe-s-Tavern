@@ -146,7 +146,9 @@ echo "Optional (for JetBrains plugin):"
 echo ""
 
 # Java (optional but needed for plugin)
-check_java
+# check_java returns 1/2 when Java is absent or too new; Java is optional, so
+# guard it from `set -e` aborting the rest of the report + summary.
+check_java || true
 
 echo ""
 

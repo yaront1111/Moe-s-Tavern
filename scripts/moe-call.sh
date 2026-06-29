@@ -205,7 +205,7 @@ process.stdout.write(JSON.stringify({
   jsonrpc: '2.0', id: 1, method: 'tools/call',
   params: { name: tool, arguments: args }
 }));
-" "$TOOL_NAME" "$TOOL_ARGS" 2>/dev/null)
+" "$TOOL_NAME" "$TOOL_ARGS" 2>/dev/null) || REQUEST=''
 
 if [ -z "$REQUEST" ]; then
     echo "Error: failed to build JSON-RPC request. Check your arguments are valid JSON." >&2
@@ -213,7 +213,7 @@ if [ -z "$REQUEST" ]; then
 fi
 
 # Call proxy with the request, pipe stdin and capture stdout
-RESULT=$(echo "$REQUEST" | MOE_PROJECT_PATH="$PROJECT" "$NODE_CMD" "$PROXY_PATH" 2>/dev/null)
+RESULT=$(echo "$REQUEST" | MOE_PROJECT_PATH="$PROJECT" "$NODE_CMD" "$PROXY_PATH" 2>/dev/null) || RESULT=''
 
 if [ -z "$RESULT" ]; then
     echo "Error: no response from daemon" >&2

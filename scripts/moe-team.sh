@@ -206,6 +206,13 @@ launch_agent() {
     safe_script_dir=$(printf '%q' "$SCRIPT_DIR")
     local cmd="$safe_script_dir/moe-agent.sh --role $role $PROJECT_ARG $TEAM_ARG"
 
+    # AppleScript (osascript) consumes backslashes inside its string literals, which
+    # would strip the %q shell-escaping out of the command and break paths with
+    # spaces. Escape the assembled shell command for embedding in an AppleScript
+    # double-quoted string (backslash and double-quote), keeping the shell quoting intact.
+    local as_cmd
+    as_cmd=$(printf '%s' "cd $safe_script_dir && $cmd" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+
     echo -e "${color}Starting $role agent...${NC}"
 
     case "$terminal" in
@@ -216,17 +223,21 @@ launch_agent() {
             konsole --new-tab -e bash -c "$cmd; exec bash" &
             ;;
         xfce4-terminal)
-            xfce4-terminal --title="Moe $role" -e "bash -c '$cmd; exec bash'" &
+            # Pass the command as separate args (no single-quote wrapper): a %q-escaped
+            # apostrophe in $cmd would otherwise close the wrapping quote.
+            xfce4-terminal --title="Moe $role" -e bash -c "$cmd; exec bash" &
             ;;
         xterm)
-            xterm -title "Moe $role" -e "bash -c '$cmd; exec bash'" &
+            # Pass the command as separate args (no single-quote wrapper): a %q-escaped
+            # apostrophe in $cmd would otherwise close the wrapping quote.
+            xterm -title "Moe $role" -e bash -c "$cmd; exec bash" &
             ;;
         iterm)
             osascript <<EOF
 tell application "iTerm"
     create window with default profile
     tell current session of current window
-        write text "cd $safe_script_dir && $cmd"
+        write text "$as_cmd"
     end tell
 end tell
 EOF
@@ -234,7 +245,7 @@ EOF
         terminal.app)
             osascript <<EOF
 tell application "Terminal"
-    do script "cd $safe_script_dir && $cmd"
+    do script "$as_cmd"
     activate
 end tell
 EOF

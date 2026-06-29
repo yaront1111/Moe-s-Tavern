@@ -37,16 +37,22 @@ function Load-Registry {
 function Quote-ForCommand {
     param([string]$Value)
     if ($null -eq $Value) { return '""' }
-    $escaped = $Value -replace '`', '``' -replace '"', '``"'
+    # The result is interpolated into a child `powershell -Command` string that gets
+    # re-parsed inside a double-quoted PS string, so backtick, double-quote AND `$`
+    # (variable expansion) must all be escaped. Escape `$` last so the backtick we
+    # introduce here is not doubled by the earlier backtick rule.
+    $escaped = $Value -replace '`', '``' -replace '"', '``"' -replace '\$', '`$'
     return "`"$escaped`""
 }
 
 # Build project argument
+# Route through Quote-ForCommand so paths containing spaces, quotes, or `$` survive
+# the child `powershell -Command` re-parse (a raw `$` in the path would otherwise expand).
 $projectArg = ""
 if ($Project) {
-    $projectArg = "-Project `"$Project`""
+    $projectArg = "-Project " + (Quote-ForCommand $Project)
 } elseif ($ProjectName) {
-    $projectArg = "-ProjectName `"$ProjectName`""
+    $projectArg = "-ProjectName " + (Quote-ForCommand $ProjectName)
 } else {
     Write-Error "Provide -Project or -ProjectName"
     exit 1

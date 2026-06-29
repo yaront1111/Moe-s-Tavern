@@ -760,9 +760,14 @@ if [ "$CLI_TYPE" = "codex" ]; then
         echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Codex MCP config"
     fi
 
+    # Normalize the Serena project path the same way PROJECT is normalized (line
+    # ~505) so a raw Windows backslash path from .moe-agent.json/MOE_SERENA_PROJECT
+    # becomes a forward-slash path before it lands in the TOML string.
+    TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
+
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$SERENA_PROJECT" << 'PYEOF'
-import sys, os, re
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF'
+import sys, os, re, json
 
 config_file = sys.argv[1]
 proxy_cmd = sys.argv[2]
@@ -779,18 +784,21 @@ top_level_lines = [
 ]
 top_level_block = "\n".join(top_level_lines)
 
-# Build the moe MCP server TOML block
+# Build the moe MCP server TOML block. Emit every string/array value via
+# json.dumps -- JSON strings are valid TOML basic strings, so this escapes
+# Windows backslashes and embedded quotes instead of injecting raw text into the
+# TOML (which a backslash path or a quote would otherwise corrupt).
 moe_block_lines = [
     "",
     "[mcp_servers.moe]",
-    f'command = "{proxy_cmd}"',
+    'command = ' + json.dumps(proxy_cmd),
 ]
 if proxy_args:
-    moe_block_lines.append(f'args = ["{proxy_args}"]')
+    moe_block_lines.append('args = ' + json.dumps([proxy_args]))
 moe_block_lines.extend([
     "",
     "[mcp_servers.moe.env]",
-    f'MOE_PROJECT_PATH = "{project_path}"',
+    'MOE_PROJECT_PATH = ' + json.dumps(project_path),
 ])
 moe_block = "\n".join(moe_block_lines)
 
@@ -801,8 +809,9 @@ if serena_cmd:
     serena_block = "\n".join([
         "",
         "[mcp_servers.serena]",
-        f'command = "{serena_cmd}"',
-        'args = ["start-mcp-server", "--context", "codex", "--project", "%s", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]' % serena_project,
+        'command = ' + json.dumps(serena_cmd),
+        'args = ' + json.dumps(["start-mcp-server", "--context", "codex", "--project", serena_project,
+                                 "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]),
     ])
 
 if os.path.exists(config_file):
@@ -2181,8 +2190,8 @@ except Exception:
         # configured -- no Claude/Codex attribution.
         if [ "$ROLE" = "worker" ] && [ "$FINAL_STATUS" = "REVIEW" ]; then
             AUTO_COMMIT=$($PYTHON_CMD -c "
-import json, os
-p = os.path.join('$MOE_DIR', 'project.json')
+import json, os, sys
+p = os.path.join(sys.argv[1], 'project.json')
 try:
     d = json.load(open(p))
     v = (d.get('settings') or {}).get('autoCommit')
@@ -2190,7 +2199,7 @@ try:
     print('false' if v is False else 'true')
 except Exception:
     print('true')
-" 2>/dev/null || echo "true")
+" "$MOE_DIR" 2>/dev/null || echo "true")
             if [ "$AUTO_COMMIT" = "true" ]; then
                 if git -C "$PROJECT" rev-parse --git-dir > /dev/null 2>&1; then
                     echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true)...${NC}"
@@ -2231,15 +2240,16 @@ except Exception:
                         fi
                         if [ "$CURRENT_BRANCH" != "$MOE_BRANCH" ]; then
                             echo -e "${YELLOW}[WARN]${NC} failed to switch off default branch; aborting auto-commit to avoid writing to it."
-                            # In single-shot mode the wrapper loop runs once;
-                            # a bare `continue` here re-enters the while-loop
-                            # forever (LOOP_RUNNING never flips false) and drains
-                            # the backlog. Break out when looping is disabled.
-                            if [ "$LOOP_ENABLED" = false ]; then
-                                break
-                            else
-                                continue
-                            fi
+                            # The finished task's edits are still uncommitted in the
+                            # worktree. A bare `continue` would loop to the next task
+                            # whose `git add -A` would absorb this task's work into
+                            # the wrong commit; a single-shot `continue` would also
+                            # spin the loop forever. Hard-stop the loop in BOTH modes
+                            # so the uncommitted edits stay isolated for manual
+                            # handling and can't be swept into a later task's commit.
+                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID left uncommitted on $CURRENT_BRANCH -- stopping the worker loop so its edits aren't absorbed by the next task's git add -A."
+                            announce_push_failure "$PREFLIGHT_TASK_ID"
+                            break
                         fi
                     fi
 
@@ -2257,11 +2267,27 @@ Completed via Moe worker session."
                     # --cached --quiet` returns 0 and we skip the commit, then
                     # still push to ship those mid-session commits.
                     git -C "$PROJECT" add -A 2>/dev/null || true
+                    # COMMIT_SKIP_PUSH stays true only when a commit was attempted
+                    # and actually failed -- in that case we must NOT push (there is
+                    # nothing new to ship and the tree is in an unknown state).
+                    COMMIT_SKIP_PUSH=false
                     if ! git -C "$PROJECT" diff --cached --quiet 2>/dev/null; then
-                        if git -C "$PROJECT" commit -m "$COMMIT_MSG" 2>&1 | tail -3; then
+                        # Capture output AND exit code separately: piping commit into
+                        # `tail` would make the `if` test tail's status (always 0) and
+                        # report success even on a failed commit. The substitution
+                        # lives in the `if` condition so `set -e` won't abort on a
+                        # non-zero commit.
+                        if COMMIT_OUT=$(git -C "$PROJECT" commit -m "$COMMIT_MSG" 2>&1); then
+                            COMMIT_RC=0
+                        else
+                            COMMIT_RC=$?
+                        fi
+                        echo "$COMMIT_OUT" | tail -3
+                        if [ "$COMMIT_RC" -eq 0 ]; then
                             echo -e "${GREEN}[OK]${NC} Committed task $PREFLIGHT_TASK_ID on $CURRENT_BRANCH."
                         else
                             echo -e "${YELLOW}[WARN]${NC} git commit failed (pre-commit hook? detached HEAD?); skipping push."
+                            COMMIT_SKIP_PUSH=true
                         fi
                     else
                         echo -e "${BLUE}[info]${NC} No staged changes to commit (worker may have already committed mid-session)."
@@ -2269,7 +2295,9 @@ Completed via Moe worker session."
                     # Push whatever commits are ahead of the upstream. If the
                     # current branch has no upstream yet (fresh moe/work-* branch),
                     # set it on first push so subsequent `git push` succeeds.
-                    if git -C "$PROJECT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
+                    if [ "$COMMIT_SKIP_PUSH" = true ]; then
+                        announce_push_failure "$PREFLIGHT_TASK_ID"
+                    elif git -C "$PROJECT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
                         if PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
                             echo "$PUSH_OUT" | tail -5
                             echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
@@ -2280,12 +2308,25 @@ Completed via Moe worker session."
                             # remote. The common cause is a non-fast-forward on the
                             # shared moe/work-* branch: pull --rebase then re-push.
                             echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
-                            if git -C "$PROJECT" pull --rebase 2>&1 | tail -5 && PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
-                                echo "$PUSH_OUT" | tail -5
-                                echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                            # Test the rebase's OWN exit code (capture into a var)
+                            # rather than piping it into `tail` -- otherwise the `if`
+                            # tests tail's status and we'd push on a conflicted,
+                            # mid-rebase tree. Only push when the rebase succeeded; on
+                            # failure abort to restore a clean checkout.
+                            if REBASE_OUT=$(git -C "$PROJECT" pull --rebase 2>&1); then
+                                echo "$REBASE_OUT" | tail -5
+                                if PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
+                                    echo "$PUSH_OUT" | tail -5
+                                    echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                                else
+                                    echo "$PUSH_OUT" | tail -5
+                                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                    announce_push_failure "$PREFLIGHT_TASK_ID"
+                                fi
                             else
-                                echo "$PUSH_OUT" | tail -5
-                                echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                echo "$REBASE_OUT" | tail -5
+                                git -C "$PROJECT" rebase --abort 2>/dev/null || true
+                                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict?); aborted rebase to restore a clean tree -- resolve and push manually."
                                 announce_push_failure "$PREFLIGHT_TASK_ID"
                             fi
                         fi
@@ -2299,12 +2340,23 @@ Completed via Moe worker session."
                             # the remote branch may already exist (another worker
                             # pushed it). Pull --rebase from it, then re-push -u.
                             echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
-                            if git -C "$PROJECT" pull --rebase origin "$CURRENT_BRANCH" 2>&1 | tail -5 && PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
-                                echo "$PUSH_OUT" | tail -5
-                                echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                            # As above: capture the rebase's exit code instead of
+                            # piping into `tail`, so a conflicted mid-rebase tree
+                            # doesn't get pushed. Abort the rebase on failure.
+                            if REBASE_OUT=$(git -C "$PROJECT" pull --rebase origin "$CURRENT_BRANCH" 2>&1); then
+                                echo "$REBASE_OUT" | tail -5
+                                if PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
+                                    echo "$PUSH_OUT" | tail -5
+                                    echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
+                                else
+                                    echo "$PUSH_OUT" | tail -5
+                                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                    announce_push_failure "$PREFLIGHT_TASK_ID"
+                                fi
                             else
-                                echo "$PUSH_OUT" | tail -5
-                                echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                                echo "$REBASE_OUT" | tail -5
+                                git -C "$PROJECT" rebase --abort 2>/dev/null || true
+                                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict?); aborted rebase to restore a clean tree -- resolve and push manually."
                                 announce_push_failure "$PREFLIGHT_TASK_ID"
                             fi
                         fi
