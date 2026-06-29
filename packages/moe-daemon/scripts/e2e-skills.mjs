@@ -80,12 +80,12 @@ async function main() {
   const skillsDir = path.join(projectDir, '.moe/skills');
   check('.moe/skills/ exists', fs.existsSync(skillsDir));
   const skillEntries = fs.readdirSync(skillsDir);
-  check('all 13 skills present', skillEntries.filter(e => fs.statSync(path.join(skillsDir, e)).isDirectory()).length === 13);
+  check('all 14 skills present', skillEntries.filter(e => fs.statSync(path.join(skillsDir, e)).isDirectory()).length === 14);
   check('manifest.json present', skillEntries.includes('manifest.json'));
   check('LICENSE-VENDORED.md present', skillEntries.includes('LICENSE-VENDORED.md'));
 
   const manifest = JSON.parse(fs.readFileSync(path.join(skillsDir, 'manifest.json'), 'utf-8'));
-  check('manifest declares 13 skills', manifest.skills?.length === 13);
+  check('manifest declares 14 skills', manifest.skills?.length === 14);
   check('every skill has SKILL.md on disk', manifest.skills.every(s => fs.existsSync(path.join(skillsDir, s.name, 'SKILL.md'))));
 
   // ---------- 2. PLANNING task → moe-planning ----------
@@ -200,7 +200,7 @@ try {
   const r = await spawnPromise(process.execPath, ['-e', parser, path.join(skillsDir, 'manifest.json')]);
   check('parser exits 0', r.code === 0);
   const lines = r.stdout.split('\n');
-  check('parser emits 13 skill lines', lines.length === 13, `got ${lines.length}`);
+  check('parser emits 14 skill lines', lines.length === 14, `got ${lines.length}`);
   check('every line is "- name (role): description"', lines.every(l => /^- [a-z-]+ \([^)]+\): /.test(l)));
 
   // ---------- 8. Bad manifest → parser warns ----------

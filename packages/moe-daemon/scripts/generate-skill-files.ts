@@ -42,17 +42,26 @@ const skillDirs = fs
   .map((d) => d.name)
   .sort();
 
-for (const name of skillDirs) {
-  const dir = path.join(skillsDir, name);
-  for (const fname of ['SKILL.md', 'SOURCE.md']) {
-    const fp = path.join(dir, fname);
-    if (fs.existsSync(fp)) {
+// Walk every file under a skill directory (SKILL.md, SOURCE.md, and any
+// nested asset like templates/CMakeLists.txt) so domain skills that ship
+// scaffolds are vendored whole, not just their top-level markdown.
+function collectSkillFiles(name: string, dir: string, prefix: string): void {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const abs = path.join(dir, entry.name);
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      collectSkillFiles(name, abs, rel);
+    } else if (entry.isFile()) {
       skillFiles.push({
-        relPath: `${name}/${fname}`,
-        content: fs.readFileSync(fp, 'utf-8'),
+        relPath: `${name}/${rel}`,
+        content: fs.readFileSync(abs, 'utf-8'),
       });
     }
   }
+}
+
+for (const name of skillDirs) {
+  collectSkillFiles(name, path.join(skillsDir, name), '');
 }
 
 const manifestContent = fs.existsSync(manifestPath)
