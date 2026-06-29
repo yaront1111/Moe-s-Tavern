@@ -25,6 +25,75 @@ export function clearAllSpeedModeTimeouts(): void {
   speedModeTimeouts.clear();
 }
 
+/**
+ * Arm (or re-arm) the SPEED-mode delayed auto-approval for a task. Cancels any
+ * prior pending timer for the task before scheduling so the old timer can't leak,
+ * then approves inside the StateManager mutex with a re-check that the task is
+ * still AWAITING_APPROVAL (TOCTOU-safe against concurrent manual approve/reject).
+ * A delayMs of 0 approves on the next tick. Shared by submit_plan and the
+ * post-restart re-arm (rearmSpeedModeApprovals) so they can never diverge.
+ */
+function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: number): void {
+  // Cancel any prior pending auto-approval for this task before scheduling a
+  // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING bounce
+  // that didn't cancel the timer) — otherwise the old timer leaks.
+  cancelSpeedModeTimeout(taskId);
+  const timeoutId = setTimeout(async () => {
+    try {
+      // approveTask path acquires the StateManager mutex and re-checks that
+      // status === 'AWAITING_APPROVAL' inside the locked section.
+      await state.runExclusive(async () => {
+        const currentTask = state.getTask(taskId);
+        if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
+        await state.updateTask(
+          taskId,
+          { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+          'PLAN_AUTO_APPROVED'
+        );
+      });
+    } catch (error) {
+      // Log error via activity log so task doesn't get stuck silently
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      state.appendActivity('TASK_BLOCKED' as import('../types/schema.js').ActivityEventType, {
+        error: errorMessage,
+        reason: 'SPEED mode auto-approval failed'
+      }, state.getTask(taskId) ?? undefined);
+    } finally {
+      // Only clear the map entry if it still points at THIS timer — a successor
+      // timer scheduled in the meantime must not be deleted (which would leave
+      // it live-but-untracked / uncancellable).
+      if (speedModeTimeouts.get(taskId) === timeoutId) {
+        speedModeTimeouts.delete(taskId);
+      }
+    }
+  }, delayMs);
+  speedModeTimeouts.set(taskId, timeoutId);
+}
+
+/**
+ * Re-arm SPEED-mode auto-approvals after a (re)start. The arming timer lives only
+ * in process memory, so a daemon restart strands every AWAITING_APPROVAL task that
+ * was waiting on a SPEED timer. Scan the current tasks and re-arm each one,
+ * approving immediately (remaining delay 0) when its planSubmittedAt is already
+ * older than the configured delay. No-op unless approvalMode === 'SPEED'. Skips
+ * tasks that already have a live timer so it's safe to call more than once.
+ */
+export function rearmSpeedModeApprovals(state: StateManager): void {
+  const project = state.project;
+  if (!project || project.settings.approvalMode !== 'SPEED') return;
+  const delayMs = project.settings.speedModeDelayMs || 2000;
+  const now = Date.now();
+  for (const task of state.tasks.values()) {
+    if (task.status !== 'AWAITING_APPROVAL') continue;
+    if (speedModeTimeouts.has(task.id)) continue; // already armed
+    const submittedAt = task.planSubmittedAt ? Date.parse(task.planSubmittedAt) : NaN;
+    const remaining = Number.isFinite(submittedAt)
+      ? Math.max(0, delayMs - (now - submittedAt))
+      : 0;
+    armSpeedModeApproval(state, task.id, remaining);
+  }
+}
+
 export function submitPlanTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.submit_plan',
@@ -224,40 +293,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // mutex (via approveTask) to avoid a TOCTOU race with concurrent
         // manual approve/reject calls.
         const delayMs = project.settings.speedModeDelayMs || 2000;
-        // Cancel any prior pending auto-approval for this task before scheduling a
-        // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING
-        // bounce that didn't cancel the timer) — otherwise the old timer leaks.
-        cancelSpeedModeTimeout(task.id);
-        const timeoutId = setTimeout(async () => {
-          try {
-            // approveTask acquires the StateManager mutex and re-checks that
-            // status === 'AWAITING_APPROVAL' inside the locked section.
-            await state.runExclusive(async () => {
-              const currentTask = state.getTask(task.id);
-              if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
-              await state.updateTask(
-                task.id,
-                { status: 'WORKING', planApprovedAt: new Date().toISOString() },
-                'PLAN_AUTO_APPROVED'
-              );
-            });
-          } catch (error) {
-            // Log error via activity log so task doesn't get stuck silently
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            state.appendActivity('TASK_BLOCKED' as import('../types/schema.js').ActivityEventType, {
-              error: errorMessage,
-              reason: 'SPEED mode auto-approval failed'
-            }, state.getTask(task.id) ?? undefined);
-          } finally {
-            // Only clear the map entry if it still points at THIS timer — a
-            // successor timer scheduled in the meantime must not be deleted
-            // (which would leave it live-but-untracked / uncancellable).
-            if (speedModeTimeouts.get(task.id) === timeoutId) {
-              speedModeTimeouts.delete(task.id);
-            }
-          }
-        }, delayMs);
-        speedModeTimeouts.set(task.id, timeoutId);
+        armSpeedModeApproval(state, task.id, delayMs);
         message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
       }
 

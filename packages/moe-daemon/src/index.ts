@@ -21,7 +21,7 @@ import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
 import { writeSkillFiles } from './util/skillFiles.js';
-import { clearAllSpeedModeTimeouts } from './tools/submitPlan.js';
+import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
@@ -596,6 +596,11 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   // stopped heart-beating (hard crash / killed terminal). Opt out with
   // MOE_DISABLE_AUTO_RELEASE=1; preview with MOE_AUTO_RELEASE_DRY_RUN=1.
   const staleWatcher = startWorkerLivenessSweep(state);
+
+  // SPEED-mode auto-approval timers live only in process memory, so a restart
+  // would otherwise strand every AWAITING_APPROVAL task whose timer was lost.
+  // Re-arm them once from persisted state now that the emitter + WS are wired.
+  rearmSpeedModeApprovals(state);
 
   const info: DaemonInfo = {
     port,

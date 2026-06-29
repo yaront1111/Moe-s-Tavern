@@ -41,6 +41,11 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         epicId: { type: 'string', description: 'Optional epic ID filter' },
+        includeArchived: {
+          type: 'boolean',
+          description: 'Include ARCHIVED tasks (default false). Shelved tickets stay out of pending-question results unless explicitly requested.',
+          default: false
+        },
         limit: {
           type: 'number',
           description: 'Maximum number of task entries to return (default: 10, max: 50)',
@@ -62,6 +67,7 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
     handler: async (args, state) => {
       const params = (args || {}) as {
         epicId?: string;
+        includeArchived?: boolean;
         limit?: number;
         maxQuestionsPerTask?: number;
         maxContentChars?: number;
@@ -110,6 +116,10 @@ export function getPendingQuestionsTool(_state: StateManager): ToolDefinition {
 
       for (const task of tasks) {
         if (!task.hasPendingQuestion) continue;
+        // Archiving a task does not clear hasPendingQuestion, so ARCHIVED tasks
+        // would otherwise leak shelved tickets into agent context. Skip them by
+        // default (mirrors list_tasks/search_tasks); opt in with includeArchived.
+        if (task.status === 'ARCHIVED' && params.includeArchived !== true) continue;
         if (params.epicId && task.epicId !== params.epicId) continue;
 
         const comments = task.comments || [];

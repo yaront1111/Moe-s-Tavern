@@ -50,10 +50,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       let epic = task ? state.getEpic(task.epicId) : null;
 
       if (!task) {
-        // Try fallback: find first task assigned to MOE_WORKER_ID
-        const workerId = process.env.MOE_WORKER_ID;
-        if (workerId) {
-          const worker = state.getWorker(workerId);
+        // Try fallback: find the task assigned to the caller (params.workerId,
+        // else MOE_WORKER_ID via callerWorkerId).
+        if (callerWorkerId) {
+          const worker = state.getWorker(callerWorkerId);
           if (worker?.currentTaskId) {
             task = state.getTask(worker.currentTaskId);
             epic = task ? state.getEpic(task.epicId) : null;

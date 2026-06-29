@@ -369,10 +369,16 @@ List tasks for an epic (optionally filtered by status).
 {
   epicId?: string,
   status?: string[],
+  includeArchived?: boolean, // default: false — see note
   limit?: number,  // default: 100, max: 500
   offset?: number  // default: 0
 }
 ```
+
+**ARCHIVED tasks are hidden by default** so shelved tickets stay out of agent
+context. They are returned only when `includeArchived: true` or when `ARCHIVED`
+is named in the `status` filter. `counts.archived` always reflects the true
+total regardless, so the existence of archived tickets is never hidden.
 
 **Returns:**
 ```typescript
@@ -406,6 +412,7 @@ Search tasks by query and filters with relevance ranking.
     epicId?: string,        // Filter by epic ID
     assignedWorkerId?: string  // Filter by assigned worker ID
   },
+  includeArchived?: boolean, // default: false — ARCHIVED excluded unless set, or filters.status === 'ARCHIVED'
   limit?: number,           // Maximum results (default: 20, max: 200)
   detail?: 'summary' | 'full', // default: 'summary'
   maxDescriptionChars?: number // summary preview budget (default: 240, max: 2000)
@@ -592,6 +599,50 @@ Set task status (optionally with a reopen reason).
 **Returns:**
 ```typescript
 { success: true, taskId, status }
+```
+
+The valid transitions allow `ARCHIVED` from any resting status — `BACKLOG`,
+`REVIEW`, or `DONE` — and `ARCHIVED → BACKLOG/WORKING` to un-archive. In-flight
+states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to
+`ARCHIVED`. For archiving, prefer the dedicated `moe.archive_task` /
+`moe.archive_epic` tools below.
+
+---
+
+### moe.archive_task
+
+Archive a single ticket so it drops out of agent context — `list_tasks` and
+`search_tasks` hide `ARCHIVED` by default. Allowed from `BACKLOG`, `REVIEW`, or
+`DONE`; rejected for in-flight tasks (move to `BACKLOG` or release first).
+Idempotent. Un-archive with `set_task_status` `ARCHIVED → BACKLOG`.
+
+**Parameters:**
+```typescript
+{ taskId: string }
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, status: "ARCHIVED", alreadyArchived?: true }
+```
+
+---
+
+### moe.archive_epic
+
+Archive an epic and all its tickets in one shot: every task → `ARCHIVED` and the
+epic → `ARCHIVED`, removing the whole epic from agent context and the board.
+Refuses (atomically — nothing changes) if any task is in-flight
+(`PLANNING`/`AWAITING_APPROVAL`/`WORKING`). Idempotent.
+
+**Parameters:**
+```typescript
+{ epicId: string }
+```
+
+**Returns:**
+```typescript
+{ success: true, epicId, epicStatus: "ARCHIVED", archivedTaskCount: number, totalTasks: number }
 ```
 
 ---

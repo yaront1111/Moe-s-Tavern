@@ -174,13 +174,14 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reopenCount: newReopenCount,
       };
 
-      // On reject back to WORKING, reset the implementation steps to PENDING so
-      // the reopened plan is runnable per-step (start_step requires PENDING) and
-      // complete_task cannot vacuously re-submit work with every step still
-      // marked COMPLETED. PLANNING auto-flips are re-planned by the architect
-      // (submit_plan replaces the plan), so we leave those untouched.
+      // On reject, reset the implementation steps to PENDING so the reopened
+      // plan is runnable per-step (start_step requires PENDING) and complete_task
+      // cannot vacuously re-submit work with every step still marked COMPLETED.
+      // This applies to BOTH destinations: a WORKING reopen reruns the steps, and
+      // a PLANNING auto-flip must not leave an all-COMPLETED plan behind that a
+      // later WORKING transition could vacuously complete before the architect
+      // resubmits.
       const resetSteps =
-        nextStatus === 'WORKING' &&
         Array.isArray(task.implementationPlan) &&
         task.implementationPlan.length > 0;
 

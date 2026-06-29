@@ -19,7 +19,7 @@ const MAX_QUERY_LENGTH = 500;
 export function searchTasksTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.search_tasks',
-    description: 'Search tasks by query and filters',
+    description: 'Search tasks by query and filters. ARCHIVED tasks are excluded by default — set includeArchived:true or filters.status=ARCHIVED to include them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,6 +45,11 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
             }
           },
           description: 'Optional filters'
+        },
+        includeArchived: {
+          type: 'boolean',
+          description: 'Include ARCHIVED tasks in results (default false). Shelved tickets stay out of search unless explicitly requested.',
+          default: false
         },
         limit: {
           type: 'number',
@@ -73,6 +78,7 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           epicId?: string;
           assignedWorkerId?: string;
         };
+        includeArchived?: boolean;
         limit?: number;
         detail?: TaskDetailMode;
         maxDescriptionChars?: number;
@@ -110,6 +116,14 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
 
       const snapshot = state.getSnapshot();
       let results = snapshot.tasks;
+
+      // Shelve ARCHIVED tasks out of search results unless the caller opts in
+      // (includeArchived, or an explicit ARCHIVED status filter). Keeps archived
+      // tickets out of agent context by default.
+      const showArchived = params.includeArchived === true || filters.status === 'ARCHIVED';
+      if (!showArchived) {
+        results = results.filter(t => t.status !== 'ARCHIVED');
+      }
 
       // Apply filters
       if (filters.status) {

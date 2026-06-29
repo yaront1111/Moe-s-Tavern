@@ -881,7 +881,7 @@ export class StateManager {
       sanitized.epicRails = this.validateStringArrayValue(input.epicRails, 'epicRails', 100, 1000);
     }
     if (input.status !== undefined) {
-      sanitized.status = this.validateEnumValue(input.status, 'status', ['PLANNED', 'ACTIVE', 'COMPLETED'] as const);
+      sanitized.status = this.validateEnumValue(input.status, 'status', ['PLANNED', 'ACTIVE', 'COMPLETED', 'ARCHIVED'] as const);
     }
     if (input.order !== undefined) {
       sanitized.order = this.validateIntegerValue(input.order, 'order', 0, Number.MAX_SAFE_INTEGER);
@@ -1275,6 +1275,11 @@ export class StateManager {
     if (!workerId || !this.workers.has(workerId)) {
       return null;
     }
+    // Never refresh a DEAD worker's heartbeat: an in-flight tool call must not
+    // reset its 30-min prune clock (lastActivityAt) and resurrect it in the UI.
+    if (this.workers.get(workerId)?.status === 'DEAD') {
+      return null;
+    }
     try {
       return await this.updateWorker(workerId, updates, event);
     } catch (error) {
@@ -1508,10 +1513,12 @@ export class StateManager {
     }
 
     let result = messages;
+    let forwardPaging = false;
     if (opts?.sinceId) {
       const idx = messages.findIndex((m) => m.id === opts.sinceId);
       if (idx >= 0) {
         result = messages.slice(idx + 1);
+        forwardPaging = true;
       } else {
         // Cursor expired (older than the bounded window) — surface the full
         // window so clients can resync rather than appearing stuck on empty.
@@ -1520,7 +1527,13 @@ export class StateManager {
     }
 
     const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
-    return result.slice(-limit);
+    // Forward paging from a known cursor returns the OLDEST slice so repeated
+    // reads — each advancing the worker cursor to the last returned id — walk
+    // the whole backlog in order. slice(-limit) would jump to the newest and
+    // the caller's cursor advance would permanently skip the older backlog
+    // (incl @mentions). Fresh reads (no/expired cursor) still return the most
+    // recent window.
+    return forwardPaging ? result.slice(0, limit) : result.slice(-limit);
   }
 
   /**
@@ -2060,8 +2073,15 @@ export class StateManager {
     }
 
     // Validate epicId exists
-    if (!this.epics.has(input.epicId)) {
+    const targetEpic = this.epics.get(input.epicId);
+    if (!targetEpic) {
       throw new Error(`Epic not found: ${input.epicId}`);
+    }
+
+    // Refuse to add tasks to an archived epic — mirror archive_epic's gate so a
+    // shelved epic stays shelved. Un-archive the epic first.
+    if (targetEpic.status === 'ARCHIVED') {
+      throw new Error(`Epic is ARCHIVED: ${input.epicId} — un-archive the epic first`);
     }
 
     // Validate and sanitize inputs using centralized sanitization
@@ -2236,6 +2256,17 @@ export class StateManager {
 
     await this.writeEntity('tasks', taskId, updated);
     this.tasks.set(taskId, updated);
+
+    // When a status change drops the task's worker pointer, also clear the prior
+    // owner's currentTaskId so the two-pointer ownership can't dangle (a worker
+    // still "holding" a task it no longer owns triggers false stale alerts).
+    if (shouldClearWorker && task.assignedWorkerId) {
+      const priorOwner = this.workers.get(task.assignedWorkerId);
+      if (priorOwner && priorOwner.currentTaskId === taskId) {
+        await this.updateWorker(priorOwner.id, { currentTaskId: null });
+      }
+    }
+
     if (event) {
       this.appendActivity(event, updates, updated);
     } else {
@@ -3286,6 +3317,11 @@ export class StateManager {
         customRules: sanitizeStringArray(project.globalRails?.customRules, 100, 1000)
       },
       settings: {
+        // Spread the persisted settings first so user keys that aren't part of
+        // this validated allowlist (autoCommit, the launcher-read models block,
+        // and any forward-compatible additions) survive a load/normalize/write
+        // cycle instead of being silently stripped on the next persist.
+        ...project.settings,
         approvalMode,
         speedModeDelayMs: sanitizeNumber(project.settings?.speedModeDelayMs, 2000, 0, 60000),
         autoCreateBranch: sanitizeBoolean(project.settings?.autoCreateBranch, true),
@@ -3322,7 +3358,12 @@ export class StateManager {
     if (this.fileWatcher) {
       this.fileWatcher.ignorePath(filePath);
     }
-    atomicWriteJson(filePath, entity);
+    // Async variant: its rename-retry backoff awaits a timer instead of the sync
+    // path's Atomics.wait, so a contended write (Windows AV/watcher briefly holds
+    // the file) no longer freezes the whole event loop — WS heartbeats, the proxy
+    // bridge and other I/O keep progressing while this entity persists. writeEntity
+    // is the hot path for every task/epic/worker/team write under the state mutex.
+    await atomicWriteJsonAsync(filePath, entity);
   }
 
   /**

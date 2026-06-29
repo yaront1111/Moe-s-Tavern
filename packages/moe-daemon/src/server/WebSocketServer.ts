@@ -102,6 +102,15 @@ export class MoeWebSocketServer {
   private pluginClients = new Set<WebSocket>();
   private mcpClients = new Set<WebSocket>();
   private mcpWorkerMap = new Map<WebSocket, Set<string>>();
+  // Ownership of parked wait_for_task / chat_wait waiters, keyed by workerId.
+  // activeWaiters/activeChatWaiters are keyed globally by workerId, so a
+  // short-lived second /mcp connection that reuses a parked id must NOT cancel
+  // the live waiter the FIRST connection registered. We record which ws issued
+  // the call that (re)registered each waiter and only cancel on disconnect when
+  // the closing ws still owns it. Overwritten whenever a new wait/chat_wait call
+  // re-registers the waiter (the tool itself cancels+replaces the prior entry).
+  private waiterOwners = new Map<string, WebSocket>();
+  private chatWaiterOwners = new Map<string, WebSocket>();
   private isClosed = false;
   private closePromise: Promise<void> | null = null;
 
@@ -204,7 +213,11 @@ export class MoeWebSocketServer {
 
   sendStateSnapshot(ws: WebSocket): void {
     const snapshot = this.state.getSnapshot();
-    const filtered = { ...snapshot, tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED') };
+    const filtered = {
+      ...snapshot,
+      tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED'),
+      epics: snapshot.epics.filter(e => e.status !== 'ARCHIVED'),
+    };
     this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: filtered }));
   }
 
@@ -277,12 +290,14 @@ export class MoeWebSocketServer {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
               if (existing) {
+                // Keep in sync with VALID_TRANSITIONS in src/tools/setTaskStatus.ts.
+                // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE).
                 const VALID_TRANSITIONS: Record<string, string[]> = {
-                  BACKLOG: ['PLANNING', 'WORKING'],
+                  BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
                   PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
                   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
                   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED'],
                   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                   ARCHIVED: ['BACKLOG', 'WORKING']
                 };
@@ -301,6 +316,16 @@ export class MoeWebSocketServer {
                       throw new Error(`Column ${newStatus} is at its WIP limit of ${limit}`);
                     }
                   }
+                  // Plan-approval route (e.g. JetBrains drag of an
+                  // AWAITING_APPROVAL card into the Working column): this is a
+                  // real plan approval, not a bare status flip. Delegate to the
+                  // SAME state.approveTask the board's APPROVE_TASK button uses so
+                  // it stamps planApprovedAt and records PLAN_APPROVED — a raw
+                  // updateTask would silently lose both. A board drag is a human
+                  // action, equivalent to clicking Approve.
+                  if (existing.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
+                    return this.state.approveTask(taskId);
+                  }
                   // Reopen route (e.g. JetBrains drag DONE/REVIEW → WORKING):
                   // invalidate the prior completion via the SAME shared helper
                   // every other reopen path uses, so a reopened task carries no
@@ -311,11 +336,23 @@ export class MoeWebSocketServer {
                     (existing.status === 'REVIEW' || existing.status === 'DONE' || existing.status === 'ARCHIVED') &&
                     (newStatus === 'WORKING' || newStatus === 'BACKLOG' || newStatus === 'PLANNING');
                   if (isReopening) {
+                    // Record this as a TASK_REOPENED activity event (not a generic
+                    // TASK_UPDATED) and stamp a reopenReason, mirroring every other
+                    // reopen path. We deliberately do NOT call state.reopenTask:
+                    // that helper forces the target to BACKLOG and rejects ARCHIVED,
+                    // whereas a board drag keeps the dragged column
+                    // (WORKING/BACKLOG/PLANNING) and supports ARCHIVED reopens.
+                    const providedReason = safeUpdates.reopenReason;
                     safeUpdates = {
                       ...safeUpdates,
                       ...buildReopenClearingUpdates(existing),
                       reopenCount: existing.reopenCount + 1,
+                      reopenReason:
+                        typeof providedReason === 'string' && providedReason.trim().length > 0
+                          ? providedReason
+                          : 'Reopened from board',
                     };
+                    return this.state.updateTask(taskId, safeUpdates, 'TASK_REOPENED');
                   }
                 }
               }
@@ -865,6 +902,18 @@ export class MoeWebSocketServer {
       this.mcpWorkerMap.set(ws, workerIds);
     }
     workerIds.add(workerId);
+
+    // Record which ws owns the (about to be re-registered) waiter for this
+    // workerId. wait_for_task / chat_wait cancel + replace any prior waiter for
+    // the same id, so the issuing ws becomes the sole owner. cleanupMcpWorkers
+    // uses this to avoid cancelling a live waiter that a different connection
+    // owns when a short-lived ws reuses the same workerId.
+    const toolName = (params as { name?: unknown }).name;
+    if (toolName === 'moe.wait_for_task') {
+      this.waiterOwners.set(workerId, ws);
+    } else if (toolName === 'moe.chat_wait') {
+      this.chatWaiterOwners.set(workerId, ws);
+    }
   }
 
   /**
@@ -890,25 +939,33 @@ export class MoeWebSocketServer {
     }
 
     for (const workerId of workerIds) {
-      // Cancel any active wait_for_task waiter registered on this WS
-      const waiter = activeWaiters.get(workerId);
-      if (waiter) {
-        clearTimeout(waiter.timer);
-        waiter.unsubscribe();
-        waiter.resolve({ hasNext: false, cancelled: true });
-        activeWaiters.delete(workerId);
-        logger.info({ workerId }, 'Cancelled active waiter for disconnected MCP client');
+      // Cancel any active wait_for_task waiter registered on THIS ws. The map is
+      // keyed globally by workerId, so guard on ownership: a live waiter another
+      // connection registered (id reused by a short-lived second ws) must survive.
+      if (this.waiterOwners.get(workerId) === ws) {
+        const waiter = activeWaiters.get(workerId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          waiter.unsubscribe();
+          waiter.resolve({ hasNext: false, cancelled: true });
+          activeWaiters.delete(workerId);
+          logger.info({ workerId }, 'Cancelled active waiter for disconnected MCP client');
+        }
+        this.waiterOwners.delete(workerId);
       }
 
-      // Cancel any active chat_wait waiter
+      // Cancel any active chat_wait waiter — same ownership guard.
       try {
-        const chatWaiter = activeChatWaiters.get(workerId);
-        if (chatWaiter) {
-          clearTimeout(chatWaiter.timer);
-          chatWaiter.unsubscribe();
-          chatWaiter.resolve({ hasMessage: false, cancelled: true });
-          activeChatWaiters.delete(workerId);
-          logger.info({ workerId }, 'Cancelled active chat waiter for disconnected MCP client');
+        if (this.chatWaiterOwners.get(workerId) === ws) {
+          const chatWaiter = activeChatWaiters.get(workerId);
+          if (chatWaiter) {
+            clearTimeout(chatWaiter.timer);
+            chatWaiter.unsubscribe();
+            chatWaiter.resolve({ hasMessage: false, cancelled: true });
+            activeChatWaiters.delete(workerId);
+            logger.info({ workerId }, 'Cancelled active chat waiter for disconnected MCP client');
+          }
+          this.chatWaiterOwners.delete(workerId);
         }
       } catch (err) {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
@@ -982,6 +1039,8 @@ export class MoeWebSocketServer {
       this.pluginClients.clear();
       this.mcpClients.clear();
       this.mcpWorkerMap.clear();
+      this.waiterOwners.clear();
+      this.chatWaiterOwners.clear();
 
       await new Promise<void>((resolve, reject) => {
         this.wss.close((err) => {

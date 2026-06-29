@@ -89,26 +89,27 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       // to reset the now-stranded worker afterwards (mirrors qa_reject).
       const prevAssignee = task.assignedWorkerId;
 
-      if (params.verdict === 'block') {
-        // Block verdict flips back to PLANNING regardless of prior status,
-        // BUT we don't override a task that has already advanced past
-        // AWAITING_APPROVAL / WORKING — that means the human already
-        // weighed in and we should leave it alone (critique becomes purely
-        // advisory). DONE / ARCHIVED tasks are also untouchable.
-        const flippable = task.status === 'AWAITING_APPROVAL' || task.status === 'WORKING';
-        if (flippable) {
-          updates.status = 'PLANNING';
-          updates.reopenReason = `Plan blocked by governor critique: ${(concerns ?? []).slice(0, 3).join(' | ').slice(0, 500)}`;
-        }
+      // Block verdict flips back to PLANNING regardless of prior status,
+      // BUT we don't override a task that has already advanced past
+      // AWAITING_APPROVAL / WORKING — that means the human already
+      // weighed in and we should leave it alone (critique becomes purely
+      // advisory). DONE / ARCHIVED tasks are also untouchable.
+      const flippable = task.status === 'AWAITING_APPROVAL' || task.status === 'WORKING';
+      const didFlip = flippable && params.verdict === 'block';
+      if (didFlip) {
+        updates.status = 'PLANNING';
+        updates.reopenReason = `Plan blocked by governor critique: ${(concerns ?? []).slice(0, 3).join(' | ').slice(0, 500)}`;
       }
 
       const updated = await state.updateTask(task.id, updates, 'TASK_UPDATED');
 
-      // A block that flipped a WORKING task to PLANNING orphans the prior
+      // Only a block that actually flipped the task to PLANNING orphans the prior
       // worker — updateTask cleared the task's assignee but left the worker
       // entity pointing at an unowned task. Reset it to IDLE (best-effort;
-      // touchWorker skips missing worker records).
-      if (params.verdict === 'block' && prevAssignee) {
+      // touchWorker skips missing worker records). A non-flipping block (task
+      // already past AWAITING_APPROVAL/WORKING) leaves an active QA/worker owning
+      // its task, so we must NOT evict it.
+      if (didFlip && prevAssignee) {
         try {
           await state.touchWorker(prevAssignee, { status: 'IDLE', currentTaskId: null });
         } catch { /* never block tool */ }

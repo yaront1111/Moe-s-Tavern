@@ -180,6 +180,15 @@ export class McpAdapter {
 
   private async handleSingleWithRateLimit(request: unknown): Promise<JsonRpcResponse | null> {
     const id = this.getRequestId(request);
+
+    // A JSON-RPC notification is a valid request with no `id` member; it produces
+    // no response. Detect it BEFORE rate-limiting / shape checks so a rate-limited
+    // or otherwise rejected notification never yields an errorResponse(null, …)
+    // (which would be an illegal response to a notification). Mirrors handleSingle.
+    if (this.isNotification(request)) {
+      return null;
+    }
+
     if (this.rateLimiter && !this.rateLimiter.checkLimit()) {
       const stats = this.rateLimiter.getStats();
       logger.warn({ stats }, 'Rate limit exceeded');
@@ -195,6 +204,18 @@ export class McpAdapter {
     }
 
     return this.handleSingle(request);
+  }
+
+  // An MCP notification is a well-formed request whose method is in the
+  // `notifications/*` namespace (e.g. notifications/initialized, .../cancelled);
+  // it produces no response. We key on the method — matching handleSingle's own
+  // notifications/initialized handling — rather than merely on a missing `id`,
+  // so a malformed-but-non-notification request (e.g. a `tools/list` that omits
+  // its id) still gets a normal id:null response instead of being silently
+  // swallowed. An invalid object (no `method`) is NOT a notification — it still
+  // gets the -32600 invalid-request response below.
+  private isNotification(request: unknown): boolean {
+    return this.isJsonRpcRequest(request) && request.method.startsWith('notifications/');
   }
 
   private isJsonRpcRequest(request: unknown): request is JsonRpcRequest {

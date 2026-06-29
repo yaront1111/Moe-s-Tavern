@@ -82,7 +82,28 @@ export async function sweepStaleWorkers(
       // concurrent MCP tool handlers (which all run under runExclusive). Lock
       // order state→channel is preserved (deregister's chat posts take the
       // channel mutex after), so this cannot deadlock.
-      const result = await state.runExclusive(() => deregisterWorker(state, worker.id, 'liveness_timeout'));
+      //
+      // The stale/DEAD/BLOCKED/owns-tasks decision above came from a PRE-LOCK
+      // snapshot. By the time we acquire the lock the worker may have
+      // heart-beat again, gone BLOCKED, been marked DEAD, or had its tasks
+      // released by a concurrent deregister. Re-fetch the CURRENT record and
+      // re-validate every gate inside the mutex; bail out otherwise so we never
+      // yank a now-active worker's in-flight task off the stale snapshot.
+      const result = await state.runExclusive(async () => {
+        const fresh = state.getWorker(worker.id);
+        if (!fresh || fresh.status === 'DEAD' || fresh.status === 'BLOCKED') return null;
+        const freshLast = Date.parse(fresh.lastActivityAt);
+        if (!Number.isFinite(freshLast) || now - freshLast < options.staleAfterMs) return null;
+        if (state.getTasksAssignedToWorker(fresh.id).length === 0) return null;
+        return deregisterWorker(state, fresh.id, 'liveness_timeout');
+      });
+      if (!result) {
+        logger.debug(
+          { workerId: worker.id },
+          'worker-liveness sweep: worker recovered between snapshot and lock; skipped'
+        );
+        continue;
+      }
       released += result.released.length;
       logger.info(
         { workerId: worker.id, released: result.released.length, minutes },

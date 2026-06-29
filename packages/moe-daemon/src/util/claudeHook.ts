@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { logger } from './logger.js';
 
 export const CLAUDE_HOOK_MATCHER = 'mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)';
@@ -18,7 +19,7 @@ export const CLAUDE_SETTINGS_CONTENT = `${JSON.stringify({
   },
 }, null, 2)}\n`;
 
-export const REQUIRE_CLAIM_SH_CONTENT = `#!/usr/bin/env bash
+const REQUIRE_CLAIM_SH_BODY = `#!/usr/bin/env bash
 set -euo pipefail
 ALLOWLIST_RE='^mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)$'
 find_python() {
@@ -62,7 +63,7 @@ sys.exit(2)
 PY
 `;
 
-export const REQUIRE_CLAIM_PS1_CONTENT = `[CmdletBinding()]
+const REQUIRE_CLAIM_PS1_BODY = `[CmdletBinding()]
 param()
 Set-StrictMode -Version Latest
 $allowlist = '^(mcp__moe__moe_start_step|mcp__moe__moe_complete_step|mcp__moe__moe_complete_task|mcp__moe__moe_submit_plan|mcp__moe__moe_qa_approve|mcp__moe__moe_qa_reject)$'
@@ -110,6 +111,51 @@ foreach ($task in @($result.tasks)) { if ($task.assignedWorkerId -eq $workerId -
 [Console]::Error.WriteLine("No active claim for worker $workerId — call moe.claim_next_task first")
 exit 2
 `;
+
+// Marker line that stamps a Moe-generated hook so writeHookFile() can tell an
+// upgradeable Moe-generated copy apart from a user-customized one — same scheme
+// as ROLE_DOCS in util/initFiles.ts, but using a `#` shell/PowerShell comment
+// instead of an HTML comment. A user who wants to customize the hook deletes the
+// marker line, opting the file out of future auto-upgrades.
+const HOOK_MARKER_RE = /^#\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*$/m;
+
+function hookMarkerSha(content: string): string | null {
+  const m = content.match(HOOK_MARKER_RE);
+  return m ? m[1] : null;
+}
+
+/**
+ * Returns true when the on-disk hook carries a Moe-generated marker whose sha
+ * differs from the bundled hook's marker (i.e. an upgradeable stale copy).
+ * False when the disk copy has no marker (user-customized, preserve) or matches.
+ */
+function shouldUpgradeHook(onDisk: string, bundled: string): boolean {
+  const diskSha = hookMarkerSha(onDisk);
+  const bundledSha = hookMarkerSha(bundled);
+  if (!diskSha || !bundledSha) return false;
+  return diskSha !== bundledSha;
+}
+
+// Stamp a `# moe-generated: sha=<hex12>` marker into a hook body. The sha is a
+// content hash of the marker-free body, so any future edit to the body bumps the
+// marker and triggers an upgrade on existing projects. The marker goes after the
+// `#!` shebang for the bash script (the shebang must stay on line 1) and on the
+// first line for the PowerShell script (a leading comment is valid there).
+function stampHookBody(body: string, afterFirstLine: boolean): string {
+  const sha = crypto.createHash('sha256').update(body).digest('hex').slice(0, 12);
+  const marker = `# moe-generated: sha=${sha}`;
+  if (!afterFirstLine) {
+    return `${marker}\n${body}`;
+  }
+  const nl = body.indexOf('\n');
+  if (nl === -1) {
+    return `${marker}\n${body}`;
+  }
+  return `${body.slice(0, nl + 1)}${marker}\n${body.slice(nl + 1)}`;
+}
+
+export const REQUIRE_CLAIM_SH_CONTENT = stampHookBody(REQUIRE_CLAIM_SH_BODY, true);
+export const REQUIRE_CLAIM_PS1_CONTENT = stampHookBody(REQUIRE_CLAIM_PS1_BODY, false);
 
 export interface ClaudeHookWriteResult {
   settingsWritten: boolean;
@@ -215,15 +261,25 @@ function writeHookFile(
   writtenKey: 'shHookWritten' | 'ps1HookWritten'
 ): void {
   if (fs.existsSync(hookPath)) {
+    let onDisk: string;
     try {
-      if (fs.readFileSync(hookPath, 'utf-8') !== content) {
-        result.hookSkippedReason = 'user-modified';
-      }
+      onDisk = fs.readFileSync(hookPath, 'utf-8');
     } catch (error) {
       logger.warn({ error, hookPath }, 'Preserving unreadable Claude hook file');
       result.hookSkippedReason = 'user-modified';
+      return;
     }
-    return;
+    // Already current — nothing to do.
+    if (onDisk === content) {
+      return;
+    }
+    // A Moe-generated hook with a stale marker is upgraded (claim-gate fixes
+    // must reach existing projects); a marker-stripped (user-edited) hook is
+    // preserved. Mirrors writeInitFiles()'s role-doc upgrade convention.
+    if (!shouldUpgradeHook(onDisk, content)) {
+      result.hookSkippedReason = 'user-modified';
+      return;
+    }
   }
 
   try {

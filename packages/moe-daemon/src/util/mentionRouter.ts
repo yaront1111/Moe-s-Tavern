@@ -168,8 +168,14 @@ export class MentionRouter {
 
     const mentions = this.parseMentions(message.content, knownWorkerIds, allWorkers, teams);
 
-    // Agents must explicitly @mention to route — no mentions means no routing
-    if (mentions.length === 0) {
+    // Filter out self-routing (agent can't trigger itself). Do this BEFORE the
+    // hop counter / loop guard: a pure self-mention routes to nobody, so it must
+    // not advance the hop counter or pause the channel.
+    const targets = mentions.filter((id) => id !== message.sender);
+
+    // Agents must explicitly @mention someone other than themselves to route —
+    // no routable targets means no routing and no hop advance.
+    if (targets.length === 0) {
       return { targets: [], paused: false, hopCount };
     }
 
@@ -182,9 +188,6 @@ export class MentionRouter {
       this.pausedChannels.add(channel);
       return { targets: [], paused: true, hopCount: newHopCount };
     }
-
-    // Filter out self-routing (agent can't trigger itself)
-    const targets = mentions.filter((id) => id !== message.sender);
 
     return { targets, paused: false, hopCount: newHopCount };
   }

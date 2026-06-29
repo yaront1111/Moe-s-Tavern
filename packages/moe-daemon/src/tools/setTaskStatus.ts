@@ -22,11 +22,15 @@ const VALID_STATUSES: TaskStatus[] = [
  * Key is current status, value is array of valid target statuses.
  */
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  BACKLOG: ['PLANNING', 'WORKING'],
+  // ARCHIVED is reachable from any *resting* status (BACKLOG / REVIEW / DONE) so
+  // stale tickets can be shelved out of context — not from in-flight states
+  // (PLANNING / AWAITING_APPROVAL / WORKING) where a worker may own the task;
+  // move those to BACKLOG first. ARCHIVED → BACKLOG/WORKING un-archives.
+  BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
   PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING'],
+  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED'],
   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
   ARCHIVED: ['BACKLOG', 'WORKING']
 };
@@ -105,7 +109,9 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         const columnLimits = state.project?.settings?.columnLimits;
         if (columnLimits && typeof columnLimits[newStatus] === 'number') {
           const limit = columnLimits[newStatus];
-          const currentCount = Array.from(state.tasks.values()).filter(t => t.status === newStatus).length;
+          // Exclude ARCHIVED tasks from WIP counts — they're not in flight
+          // (mirrors the WS APPROVE/move path in WebSocketServer).
+          const currentCount = Array.from(state.tasks.values()).filter(t => t.status === newStatus && t.status !== 'ARCHIVED').length;
           if (currentCount >= limit) {
             throw notAllowed(
               'status transition',

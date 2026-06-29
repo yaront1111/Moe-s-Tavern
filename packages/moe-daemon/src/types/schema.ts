@@ -30,7 +30,7 @@ export type WorkerStatus =
   // for post-mortem/idempotency and pruned later by the stale-worker sweep.
   | 'DEAD';
 
-export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED';
+export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
 
 export interface GlobalRails {
   techStack: string[];
@@ -392,6 +392,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'EPIC_DELETED',
   'EPIC_STARTED',
   'EPIC_COMPLETED',
+  'EPIC_ARCHIVED',
   'TASK_CREATED',
   'TASK_UPDATED',
   'TASK_DELETED',

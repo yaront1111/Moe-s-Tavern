@@ -64,8 +64,20 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
         fs.mkdirSync(path.join(moePath, dir), { recursive: true });
       }
 
-      // Generate project ID
-      const projectId = `proj-${crypto.randomUUID().slice(0, 8)}`;
+      // Generate project ID, preserving the existing one on a force re-init so
+      // tasks/epics/messages that reference projectId stay consistent.
+      let projectId = `proj-${crypto.randomUUID().slice(0, 8)}`;
+      const existingProjectFile = path.join(moePath, 'project.json');
+      if (fs.existsSync(existingProjectFile)) {
+        try {
+          const existing = JSON.parse(fs.readFileSync(existingProjectFile, 'utf-8'));
+          if (existing && typeof existing.id === 'string' && existing.id) {
+            projectId = existing.id;
+          }
+        } catch {
+          // Malformed project.json — fall back to a fresh id.
+        }
+      }
       const name = params.name || path.basename(projectPath);
 
       // Create project.json
@@ -105,36 +117,54 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
       // Create empty activity.log
       fs.writeFileSync(path.join(moePath, 'activity.log'), '');
 
-      // Create default "general" chat channel
-      const channelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
-      const generalChannel = {
-        id: channelId,
-        name: 'general',
-        type: 'general',
-        linkedEntityId: null,
-        createdAt: new Date().toISOString()
-      };
-      fs.writeFileSync(
-        path.join(moePath, 'channels', `${channelId}.json`),
-        JSON.stringify(generalChannel, null, 2)
-      );
-      fs.writeFileSync(path.join(moePath, 'messages', `${channelId}.jsonl`), '');
+      // Collect names of channels that already exist on disk. On a force
+      // re-init the old channel files survive, so creating a fresh chan-<uuid>
+      // for every canonical name produced duplicate-named channels. Key on the
+      // channel name (same invariant StateManager.ensureRoleChannels uses) and
+      // only create the ones that are genuinely missing.
+      const existingChannelNames = new Set<string>();
+      try {
+        for (const file of fs.readdirSync(path.join(moePath, 'channels'))) {
+          if (!file.endsWith('.json')) continue;
+          try {
+            const channel = JSON.parse(
+              fs.readFileSync(path.join(moePath, 'channels', file), 'utf-8')
+            );
+            if (channel && typeof channel.name === 'string') {
+              existingChannelNames.add(channel.name);
+            }
+          } catch {
+            // Skip unreadable/malformed channel files.
+          }
+        }
+      } catch {
+        // channels dir may be brand new (empty) — nothing to dedupe against.
+      }
 
-      // Create role-based channels: #workers, #architects, #qa, #governors
-      for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
-        const roleChannelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
-        const roleChannel = {
-          id: roleChannelId,
-          name: roleName,
-          type: 'role',
+      const createCanonicalChannel = (channelName: string, type: 'general' | 'role') => {
+        if (existingChannelNames.has(channelName)) return;
+        const newChannelId = `chan-${crypto.randomUUID().slice(0, 8)}`;
+        const channel = {
+          id: newChannelId,
+          name: channelName,
+          type,
           linkedEntityId: null,
           createdAt: new Date().toISOString()
         };
         fs.writeFileSync(
-          path.join(moePath, 'channels', `${roleChannelId}.json`),
-          JSON.stringify(roleChannel, null, 2)
+          path.join(moePath, 'channels', `${newChannelId}.json`),
+          JSON.stringify(channel, null, 2)
         );
-        fs.writeFileSync(path.join(moePath, 'messages', `${roleChannelId}.jsonl`), '');
+        fs.writeFileSync(path.join(moePath, 'messages', `${newChannelId}.jsonl`), '');
+        existingChannelNames.add(channelName);
+      };
+
+      // Create default "general" chat channel
+      createCanonicalChannel('general', 'general');
+
+      // Create role-based channels: #workers, #architects, #qa, #governors
+      for (const roleName of ['workers', 'architects', 'qa', 'governors']) {
+        createCanonicalChannel(roleName, 'role');
       }
 
       // Write role docs and .gitignore

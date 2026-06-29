@@ -316,7 +316,14 @@ describe('SPEED mode timeout cancellation', () => {
     // Advance time past the delay without cancelling
     await vi.advanceTimersByTimeAsync(6000);
 
-    // Task should now be WORKING (auto-approved)
-    expect(state.getTask('task-auto')?.status).toBe('WORKING');
+    // The auto-approval persists via real async fs I/O (atomicWriteJsonAsync,
+    // which yields the event loop instead of blocking it) and only flips the
+    // in-memory status after that write resolves — fake timers don't drive real
+    // I/O, so restore real timers and poll until it settles.
+    vi.useRealTimers();
+    await vi.waitFor(
+      () => expect(state.getTask('task-auto')?.status).toBe('WORKING'),
+      { timeout: 2000, interval: 20 }
+    );
   });
 });

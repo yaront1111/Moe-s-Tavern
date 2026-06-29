@@ -16,6 +16,8 @@ import { createTaskTool } from './createTask.js';
 import { createEpicTool } from './createEpic.js';
 import { createTeamTool } from './createTeam.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
+import { archiveTaskTool } from './archiveTask.js';
+import { archiveEpicTool } from './archiveEpic.js';
 import { claimNextTaskTool } from './claimNextTask.js';
 import { proposeRailTool } from './proposeRail.js';
 import { deleteTaskTool } from './deleteTask.js';
@@ -2154,21 +2156,62 @@ describe('MCP Tools', () => {
       expect(result.status).toBe('BACKLOG');
     });
 
-    it('rejects BACKLOG to ARCHIVED transition', async () => {
+    it('allows BACKLOG to ARCHIVED transition (shelve stale tickets)', async () => {
       createTask({ id: 'task-bl', status: 'BACKLOG' });
       await state.load();
       const tool = setTaskStatusTool(state);
-      await expect(tool.handler({
+      const result = await tool.handler({
         taskId: 'task-bl',
+        status: 'ARCHIVED',
+      }, state) as { success: boolean; status: string };
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('ARCHIVED');
+    });
+
+    it('rejects WORKING to ARCHIVED transition (in-flight, not a resting state)', async () => {
+      createTask({ id: 'task-wk', status: 'WORKING' });
+      await state.load();
+      const tool = setTaskStatusTool(state);
+      await expect(tool.handler({
+        taskId: 'task-wk',
         status: 'ARCHIVED',
       }, state)).rejects.toThrow();
     });
 
-    it('listTasks includes archived count', async () => {
+    it('listTasks hides archived tasks by default but still counts them', async () => {
       await state.updateTask('task-1', { status: 'ARCHIVED' });
       const tool = listTasksTool(state);
-      const result = await tool.handler({}, state) as { counts: { archived: number } };
+      const result = await tool.handler({}, state) as {
+        tasks: Array<{ id: string }>;
+        counts: { archived: number };
+      };
       expect(result.counts.archived).toBe(1);
+      expect(result.tasks.some((t) => t.id === 'task-1')).toBe(false);
+    });
+
+    it('listTasks surfaces archived tasks when includeArchived is set', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = listTasksTool(state);
+      const result = await tool.handler({ includeArchived: true }, state) as {
+        tasks: Array<{ id: string }>;
+      };
+      expect(result.tasks.some((t) => t.id === 'task-1')).toBe(true);
+    });
+
+    it('listTasks surfaces archived tasks when ARCHIVED is named in the status filter', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = listTasksTool(state);
+      const result = await tool.handler({ status: ['ARCHIVED'] }, state) as {
+        tasks: Array<{ id: string }>;
+      };
+      expect(result.tasks.some((t) => t.id === 'task-1')).toBe(true);
+    });
+
+    it('searchTasks excludes archived tasks by default', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = searchTasksTool(state);
+      const result = await tool.handler({}, state) as { tasks: Array<{ id: string }> };
+      expect(result.tasks.some((t) => t.id === 'task-1')).toBe(false);
     });
 
     it('searchTasks can filter by ARCHIVED status', async () => {
@@ -2179,6 +2222,97 @@ describe('MCP Tools', () => {
       }, state) as { tasks: Task[] };
       expect(result.tasks.length).toBe(1);
       expect(result.tasks[0].id).toBe('task-1');
+    });
+  });
+
+  describe('moe.archive_task', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      createTask({ id: 'task-1', status: 'DONE' });
+      await state.load();
+    });
+
+    it('archives a resting (DONE) ticket', async () => {
+      const tool = archiveTaskTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as { success: boolean; status: string };
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('ARCHIVED');
+      expect(state.getTask('task-1')!.status).toBe('ARCHIVED');
+    });
+
+    it('archives a stale BACKLOG ticket', async () => {
+      createTask({ id: 'task-bl', status: 'BACKLOG' });
+      await state.load();
+      const tool = archiveTaskTool(state);
+      const result = await tool.handler({ taskId: 'task-bl' }, state) as { status: string };
+      expect(result.status).toBe('ARCHIVED');
+    });
+
+    it('refuses to archive an in-flight (WORKING) ticket', async () => {
+      createTask({ id: 'task-wk', status: 'WORKING' });
+      await state.load();
+      const tool = archiveTaskTool(state);
+      await expect(tool.handler({ taskId: 'task-wk' }, state)).rejects.toThrow();
+    });
+
+    it('is idempotent on an already-archived ticket', async () => {
+      await state.updateTask('task-1', { status: 'ARCHIVED' });
+      const tool = archiveTaskTool(state);
+      const result = await tool.handler({ taskId: 'task-1' }, state) as { success: boolean; alreadyArchived?: boolean };
+      expect(result.success).toBe(true);
+      expect(result.alreadyArchived).toBe(true);
+    });
+
+    it('throws for an unknown task', async () => {
+      const tool = archiveTaskTool(state);
+      await expect(tool.handler({ taskId: 'nope' }, state)).rejects.toThrow();
+    });
+  });
+
+  describe('moe.archive_epic', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      await state.load();
+    });
+
+    it('archives the epic and all its resting tickets', async () => {
+      createTask({ id: 'task-1', status: 'DONE' });
+      createTask({ id: 'task-2', status: 'BACKLOG' });
+      await state.load();
+      const tool = archiveEpicTool(state);
+      const result = await tool.handler({ epicId: 'epic-1' }, state) as {
+        success: boolean; epicStatus: string; archivedTaskCount: number; totalTasks: number;
+      };
+      expect(result.success).toBe(true);
+      expect(result.epicStatus).toBe('ARCHIVED');
+      expect(result.archivedTaskCount).toBe(2);
+      expect(result.totalTasks).toBe(2);
+      expect(state.getEpic('epic-1')!.status).toBe('ARCHIVED');
+      expect(state.getTask('task-1')!.status).toBe('ARCHIVED');
+      expect(state.getTask('task-2')!.status).toBe('ARCHIVED');
+    });
+
+    it('refuses when the epic has an in-flight ticket', async () => {
+      createTask({ id: 'task-1', status: 'WORKING' });
+      await state.load();
+      const tool = archiveEpicTool(state);
+      await expect(tool.handler({ epicId: 'epic-1' }, state)).rejects.toThrow();
+      // nothing changed
+      expect(state.getEpic('epic-1')!.status).not.toBe('ARCHIVED');
+    });
+
+    it('archives an empty epic', async () => {
+      const tool = archiveEpicTool(state);
+      const result = await tool.handler({ epicId: 'epic-1' }, state) as { archivedTaskCount: number; epicStatus: string };
+      expect(result.archivedTaskCount).toBe(0);
+      expect(result.epicStatus).toBe('ARCHIVED');
+    });
+
+    it('throws for an unknown epic', async () => {
+      const tool = archiveEpicTool(state);
+      await expect(tool.handler({ epicId: 'nope' }, state)).rejects.toThrow();
     });
   });
 

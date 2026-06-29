@@ -11,12 +11,17 @@ import {
 export function listTasksTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.list_tasks',
-    description: 'List tasks for an epic (optionally by status)',
+    description: 'List tasks for an epic (optionally by status). ARCHIVED tasks are hidden by default — pass includeArchived:true or name ARCHIVED in status to see them. counts.archived always reflects the true total.',
     inputSchema: {
       type: 'object',
       properties: {
         epicId: { type: 'string' },
         status: { type: 'array', items: { type: 'string' } },
+        includeArchived: {
+          type: 'boolean',
+          description: 'Include ARCHIVED tasks in the returned list (default false). ARCHIVED tasks are shelved out of context unless explicitly requested.',
+          default: false
+        },
         limit: {
           type: 'number',
           description: 'Maximum number of task summaries to return (default: 100, max: 500)',
@@ -31,7 +36,15 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { epicId?: string; status?: string[]; limit?: number; offset?: number };
+      const params = (args || {}) as { epicId?: string; status?: string[]; includeArchived?: boolean; limit?: number; offset?: number };
+
+      // ARCHIVED tasks stay out of the returned list (and therefore out of agent
+      // context) unless the caller opts in — either explicitly via
+      // includeArchived, or by naming ARCHIVED in the status filter. The
+      // counts.archived field below still reports the true total regardless, so
+      // the existence of shelved tickets is never hidden, only their bulk.
+      const statusFilter = params.status && params.status.length > 0 ? params.status : null;
+      const showArchived = params.includeArchived === true || (statusFilter?.includes('ARCHIVED') ?? false);
       const limit = normalizeIntegerOption(
         params.limit,
         'limit',
@@ -49,8 +62,9 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
 
       const tasks = Array.from(state.tasks.values()).filter((task) => {
         if (params.epicId && task.epicId !== params.epicId) return false;
-        if (params.status && params.status.length > 0) {
-          return params.status.includes(task.status);
+        if (task.status === 'ARCHIVED' && !showArchived) return false;
+        if (statusFilter) {
+          return statusFilter.includes(task.status);
         }
         return true;
       });
@@ -61,6 +75,13 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
       const sortedTasks = [...tasks].sort((a, b) => a.order - b.order);
       const pagedTasks = sortedTasks.slice(offset, offset + limit);
 
+      // counts.archived must report the true epic-scoped total even when the
+      // archived tasks themselves are hidden from the returned list — otherwise
+      // hiding them would also hide the fact that they exist.
+      const archivedTotal = Array.from(state.tasks.values()).filter(
+        (t) => (!params.epicId || t.epicId === params.epicId) && t.status === 'ARCHIVED'
+      ).length;
+
       const counts = {
         total: tasks.length,
         backlog: tasks.filter((t) => t.status === 'BACKLOG').length,
@@ -69,7 +90,7 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
         inProgress: tasks.filter((t) => t.status === 'WORKING').length,
         review: tasks.filter((t) => t.status === 'REVIEW').length,
         done: tasks.filter((t) => t.status === 'DONE').length,
-        archived: tasks.filter((t) => t.status === 'ARCHIVED').length
+        archived: archivedTotal
       };
 
       // Build response with explicit null handling

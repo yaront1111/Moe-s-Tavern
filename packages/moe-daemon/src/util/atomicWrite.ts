@@ -12,6 +12,7 @@
 // =============================================================================
 
 import fs from 'fs';
+import path from 'path';
 
 const RENAME_RETRIES = 5;
 const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
@@ -49,6 +50,25 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// Best-effort durability of the rename itself: on POSIX the directory entry
+// created by rename isn't guaranteed persisted until the parent directory is
+// fsynced, so a crash right after a "successful" rename could lose the new file.
+// Opening a directory for fsync is unsupported on Windows (EISDIR/EPERM), so we
+// skip it there. Always non-throwing — durability is best-effort, never fatal.
+function fsyncParentDirSync(filePath: string): void {
+  if (process.platform === 'win32') return;
+  try {
+    const fd = fs.openSync(path.dirname(filePath), 'r');
+    try {
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    /* best effort — directory fsync unsupported or transiently failed */
+  }
+}
+
 function renameWithRetrySync(tmp: string, filePath: string): void {
   let lastErr: unknown;
   for (let attempt = 0; attempt < RENAME_RETRIES; attempt++) {
@@ -75,6 +95,7 @@ export function atomicWriteText(filePath: string, content: string): void {
   try {
     writeAndFsyncSync(tmp, content);
     renameWithRetrySync(tmp, filePath);
+    fsyncParentDirSync(filePath);
   } catch (err) {
     cleanupTmp(tmp);
     throw err;
@@ -94,6 +115,21 @@ async function writeAndFsyncAsync(tmp: string, data: string): Promise<void> {
     await fh.sync();
   } finally {
     await fh.close();
+  }
+}
+
+// Async sibling of fsyncParentDirSync — see that function. Best-effort, never throws.
+async function fsyncParentDirAsync(filePath: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  try {
+    const fh = await fs.promises.open(path.dirname(filePath), 'r');
+    try {
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    /* best effort — directory fsync unsupported or transiently failed */
   }
 }
 
@@ -121,6 +157,7 @@ export async function atomicWriteTextAsync(filePath: string, content: string): P
   try {
     await writeAndFsyncAsync(tmp, content);
     await renameWithRetryAsync(tmp, filePath);
+    await fsyncParentDirAsync(filePath);
   } catch (err) {
     cleanupTmp(tmp);
     throw err;

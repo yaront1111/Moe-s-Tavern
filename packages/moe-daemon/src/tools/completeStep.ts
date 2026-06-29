@@ -108,7 +108,11 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       } catch { /* never block tool */ }
 
       const completed = steps.filter((s) => s.status === 'COMPLETED').length;
-      const nextStep = steps.find((s) => s.status === 'PENDING');
+      // A step still "remains" if it's PENDING or IN_PROGRESS. start_step allows
+      // out-of-order starts, so a PENDING-only scan misses an IN_PROGRESS step
+      // and wrongly nudges complete_task — which then rejects via
+      // assertAllStepsCompleted (PENDING || IN_PROGRESS both block). Match it here.
+      const nextStep = steps.find((s) => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
 
       // Nudge for QA handoff when all steps are done
       let chatHint: string | undefined;
@@ -124,6 +128,18 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
 
       const nextAction = nextStep
         ? (() => {
+            // An IN_PROGRESS remaining step was started out-of-order; start_step
+            // would reject it (PENDING-only). Point the worker at completing it.
+            if (nextStep.status === 'IN_PROGRESS') {
+              return {
+                tool: 'moe.complete_step',
+                args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
+                reason: `Finish in-progress step ${nextStep.stepId}: ${nextStep.description.slice(0, 80)}`,
+                recommendedSkill: steps.indexOf(nextStep) === steps.length - 1
+                  ? recommendSkillFor('worker', 'final_step')
+                  : undefined
+              };
+            }
             const desc = (nextStep.description || '').toLowerCase();
             const files = (nextStep.affectedFiles || []).join(' ').toLowerCase();
             const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);

@@ -4,7 +4,7 @@ import { generateId } from './ids.js';
 describe('generateId', () => {
   it('generates an id with the given prefix', () => {
     const id = generateId('task');
-    expect(id).toMatch(/^task-[a-f0-9]{8}$/);
+    expect(id).toMatch(/^task-[a-f0-9]{32}$/);
   });
 
   it('generates unique ids on each call', () => {
@@ -23,6 +23,6 @@ describe('generateId', () => {
 
   it('handles empty prefix', () => {
     const id = generateId('');
-    expect(id).toMatch(/^-[a-f0-9]{8}$/);
+    expect(id).toMatch(/^-[a-f0-9]{32}$/);
   });
 });

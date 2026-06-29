@@ -18,6 +18,8 @@ import { createTaskTool } from './createTask.js';
 import { createEpicTool } from './createEpic.js';
 import { updateEpicTool } from './updateEpic.js';
 import { deleteEpicTool } from './deleteEpic.js';
+import { archiveTaskTool } from './archiveTask.js';
+import { archiveEpicTool } from './archiveEpic.js';
 import { searchTasksTool } from './searchTasks.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
@@ -41,8 +43,15 @@ import { chatReadTool } from './chatRead.js';
 import { chatChannelsTool } from './chatChannels.js';
 import { chatJoinTool } from './chatJoin.js';
 import { chatWaitTool } from './chatWait.js';
+import { chatWhoTool } from './chatWho.js';
+import { chatResyncTool } from './chatResync.js';
+import { chatPinTool } from './chatPin.js';
+import { chatUnpinTool } from './chatUnpin.js';
+import { chatDecisionTool } from './chatDecision.js';
+import { chatCreateChannelTool } from './chatCreateChannel.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
+import { getActivityLogTool } from './getActivityLog.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
@@ -83,6 +92,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     deleteEpicTool(state),
     searchTasksTool(state),
     setTaskStatusTool(state),
+    archiveTaskTool(state),
+    archiveEpicTool(state),
     claimNextTaskTool(state),
     deleteTaskTool(state),
     qaApproveTool(state),
@@ -104,8 +115,15 @@ export function getTools(state: StateManager): ToolDefinition[] {
     chatChannelsTool(state),
     chatJoinTool(state),
     chatWaitTool(state),
+    chatWhoTool(state),
+    chatResyncTool(state),
+    chatPinTool(state),
+    chatUnpinTool(state),
+    chatDecisionTool(state),
+    chatCreateChannelTool(state),
     getHandoffHistoryTool(state),
     listMetricsTool(state),
+    getActivityLogTool(state),
     setTaskBudgetTool(state),
     submitPlanCritiqueTool(state),
     deregisterWorkerTool(state),

@@ -137,7 +137,12 @@ export function queryActivityLog(state: StateManager, params: NormalizedActivity
   }
 
   const matchingWithinScan = events.length;
-  const hasMore = matchingWithinScan > params.offset + params.limit || scanned.hasMoreOlderLines;
+  // hasMore must be filter-AWARE: it reports whether more MATCHING events exist
+  // beyond the returned window. `scanned.hasMoreOlderLines` is filter-UNaware
+  // (it only means the raw log has more lines than we scanned), so folding it in
+  // made filtered pagination report hasMore:true forever on logs >scanLimit
+  // lines. Truncation is still surfaced via `search.complete`/`scanLimit` below.
+  const hasMore = matchingWithinScan > params.offset + params.limit;
   events = events
     .slice(params.offset, params.offset + params.limit)
     .map(e => truncateActivityPayload(e, params.maxPayloadChars));
