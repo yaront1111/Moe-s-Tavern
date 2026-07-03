@@ -307,7 +307,7 @@ type TaskStatus =
 
 interface ImplementationStep {
   stepId: string;                // "step-1"
-  description: string;           // "Create LoginForm component" (≤2000 chars; max 100 steps/plan)
+  description: string;           // "Create LoginForm component" (≤10000 chars; max 100 steps/plan)
   status: StepStatus;
   affectedFiles: string[];       // project-relative paths; max 50/step
   startedAt?: string;            // When step started
@@ -401,7 +401,7 @@ type StepStatus =
 
 - Absolute paths and any segment containing `..` (parent traversal) are **rejected** with `INVALID_INPUT`.
 - Path separators are normalized to `/` and entries are deduplicated.
-- Max 50 entries per step; max 100 steps per plan; max 2000 chars per step description.
+- Max 50 entries per step; max 100 steps per plan; max 10000 chars per step description.
 - Overlap with another `WORKING` task's `affectedFiles` surfaces as a `fileCollision[]` warning on `moe.claim_next_task` — advisory only, never blocks the claim.
 
 ### Task subtypes

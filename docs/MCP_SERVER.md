@@ -229,7 +229,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 - **Enforced rails:** Only `forbiddenPatterns` and global `requiredPatterns` are strictly enforced.
 - **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
-- **Step bounds:** max 100 steps, each `description` ≤2000 chars, each `affectedFiles` ≤50 entries.
+- **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` ≤50 entries.
 - `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
 - **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count + DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
 

@@ -5,6 +5,9 @@ import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '..
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 
+/** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
+export const MAX_STEP_DESCRIPTION_CHARS = 10000;
+
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
 
@@ -181,8 +184,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (!step.description || typeof step.description !== 'string' || step.description.trim().length === 0) {
           throw invalidInput('steps', `Step ${i + 1} has empty description`);
         }
-        if (step.description.length > 2000) {
-          throw invalidInput('steps', `Step ${i + 1} description too long (max 2000 chars)`);
+        if (step.description.length > MAX_STEP_DESCRIPTION_CHARS) {
+          throw invalidInput('steps', `Step ${i + 1} description too long (max ${MAX_STEP_DESCRIPTION_CHARS} chars)`);
         }
         if (step.affectedFiles !== undefined && !Array.isArray(step.affectedFiles)) {
           throw invalidInput('steps', `Step ${i + 1} affectedFiles must be a string[]`);

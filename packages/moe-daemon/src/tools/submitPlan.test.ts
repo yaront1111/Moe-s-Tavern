@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { cancelSpeedModeTimeout, clearAllSpeedModeTimeouts } from './submitPlan.js';
+import { cancelSpeedModeTimeout, clearAllSpeedModeTimeouts, MAX_STEP_DESCRIPTION_CHARS } from './submitPlan.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import fs from 'fs';
 import path from 'path';
@@ -297,6 +297,34 @@ describe('SPEED mode timeout cancellation', () => {
     expect(result.status).toBe('AWAITING_APPROVAL');
     expect(state.getTask('task-missing-worker')?.assignedWorkerId).toBeNull();
     expect(state.getWorker('architect-missing')).toBeNull();
+  });
+
+  it('accepts step descriptions longer than 2000 chars up to the cap', async () => {
+    setupMoeFolder();
+    createEpic();
+    createTask({ id: 'task-long-step', status: 'PLANNING' });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    await tool.handler({
+      taskId: 'task-long-step',
+      steps: [{ description: 'x'.repeat(MAX_STEP_DESCRIPTION_CHARS) }],
+    }, state);
+    expect(state.getTask('task-long-step')?.status).toBe('AWAITING_APPROVAL');
+  });
+
+  it('rejects step descriptions over the cap', async () => {
+    setupMoeFolder();
+    createEpic();
+    createTask({ id: 'task-too-long-step', status: 'PLANNING' });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    await expect(tool.handler({
+      taskId: 'task-too-long-step',
+      steps: [{ description: 'x'.repeat(MAX_STEP_DESCRIPTION_CHARS + 1) }],
+    }, state)).rejects.toThrow(/description too long/);
+    expect(state.getTask('task-too-long-step')?.status).toBe('PLANNING');
   });
 
   it('timeout auto-approves when not cancelled', async () => {
