@@ -49,6 +49,11 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'pendingPlanCritique',
   'planCritiqueResult',
   'budget',
+  // Assignment is owned by the claim/release lifecycle (moe.claim_next_task /
+  // release paths). A board client must not set or carry it — a full-task
+  // payload echoing the old owner across a WORKING→REVIEW drag would defeat
+  // updateTask's clear-worker-on-status-change invariant.
+  'assignedWorkerId',
 ]);
 
 export type PluginMessage =

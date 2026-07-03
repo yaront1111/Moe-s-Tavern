@@ -2257,13 +2257,21 @@ export class StateManager {
     await this.writeEntity('tasks', taskId, updated);
     this.tasks.set(taskId, updated);
 
-    // When a status change drops the task's worker pointer, also clear the prior
-    // owner's currentTaskId so the two-pointer ownership can't dangle (a worker
-    // still "holding" a task it no longer owns triggers false stale alerts).
+    // When a status change drops the task's worker pointer, also release the
+    // prior owner: clear its currentTaskId so the two-pointer ownership can't
+    // dangle, and flip a task-bound status back to IDLE so the worker is free
+    // to claim next (the one-task-per-worker guard keys on task assignment,
+    // but a worker left CODING with no task reads as stuck on every board).
+    // BLOCKED stays (owned by the report_blocked/unblock flow), DEAD stays
+    // (never resurrect), GOVERNING stays (not task-bound).
     if (shouldClearWorker && task.assignedWorkerId) {
       const priorOwner = this.workers.get(task.assignedWorkerId);
       if (priorOwner && priorOwner.currentTaskId === taskId) {
-        await this.updateWorker(priorOwner.id, { currentTaskId: null });
+        const TASK_BOUND = new Set(['READING_CONTEXT', 'PLANNING', 'AWAITING_APPROVAL', 'CODING']);
+        await this.updateWorker(priorOwner.id, {
+          currentTaskId: null,
+          ...(TASK_BOUND.has(priorOwner.status) ? { status: 'IDLE' as const } : {}),
+        });
       }
     }
 

@@ -322,6 +322,47 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK WORKING→REVIEW releases the worker even when the payload echoes the old owner', async () => {
+      await state.createWorker({
+        id: 'w-owner',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: 'task-1',
+        status: 'CODING',
+      });
+      await state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'w-owner' });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: {
+          taskId: 'task-1',
+          // A full-task echo from a board client tries to carry the old owner
+          // across the move — assignedWorkerId is denylisted, so the status
+          // change must release the worker anyway.
+          updates: { status: 'REVIEW', assignedWorkerId: 'w-owner' },
+        },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      expect(parsed.payload.status).toBe('REVIEW');
+      expect(parsed.payload.assignedWorkerId).toBeNull();
+
+      const stored = state.getTask('task-1');
+      expect(stored?.status).toBe('REVIEW');
+      expect(stored?.assignedWorkerId).toBeNull();
+      // The prior owner is fully released: pointer cleared AND back to IDLE.
+      const worker = state.getWorker('w-owner');
+      expect(worker?.currentTaskId).toBeNull();
+      expect(worker?.status).toBe('IDLE');
+
+      ws.close();
+    });
+
     it('caps and truncates GET_ACTIVITY_LOG responses', async () => {
       const logPath = path.join(moePath, 'activity.log');
       for (let i = 0; i < 120; i++) {
