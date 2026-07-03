@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { claimNextTaskTool } from './claimNextTask.js';
-import type { Project, Epic, Worker, TeamRole } from '../types/schema.js';
+import type { Project, Epic, Worker, Task, TeamRole } from '../types/schema.js';
 
 describe('moe.claim_next_task — role-aware routing', () => {
   let testDir: string;
@@ -116,5 +116,135 @@ describe('moe.claim_next_task — role-aware routing', () => {
     expect(result.hasNext).toBe(false);
     const next = result.nextAction as { tool: string };
     expect(next.tool).toBe('moe.wait_for_task');
+  });
+});
+
+describe('moe.claim_next_task — one task per worker', () => {
+  let testDir: string;
+  let moePath: string;
+  let state: StateManager;
+
+  function setupMoe() {
+    fs.mkdirSync(moePath, { recursive: true });
+    for (const sub of ['epics', 'tasks', 'workers', 'proposals', 'channels', 'messages', 'teams']) {
+      fs.mkdirSync(path.join(moePath, sub));
+    }
+    const project: Partial<Project> = {
+      id: 'proj-test', schemaVersion: 6, name: 'Test', rootPath: testDir,
+      globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
+      settings: {
+        approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false,
+        branchPattern: '', commitPattern: '', agentCommand: 'claude', enableAgentTeams: false,
+      },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
+    const epic: Epic = {
+      id: 'epic-1', projectId: 'proj-test', title: 'E', description: '', architectureNotes: '',
+      epicRails: [], status: 'ACTIVE', order: 1,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
+  }
+
+  function writeWorker(id: string, overrides: Partial<Worker> = {}): Worker {
+    const now = new Date().toISOString();
+    const worker: Worker = {
+      id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'CODING', branch: '', modifiedFiles: [],
+      startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0, teamId: null,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'workers', id + '.json'), JSON.stringify(worker, null, 2));
+    return worker;
+  }
+
+  function writeTask(id: string, overrides: Partial<Task> = {}): Task {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id, epicId: 'epic-1', title: `Task ${id}`, description: '',
+      definitionOfDone: ['Done'], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId: null, branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      order: 1, createdAt: now, updatedAt: now,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', id + '.json'), JSON.stringify(task, null, 2));
+    return task;
+  }
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-claim-one-'));
+    moePath = path.join(testDir, '.moe');
+    setupMoe();
+    state = new StateManager({ projectPath: testDir });
+  });
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('blocks claiming a second task while holding an active one, pointing back to the held task', async () => {
+    writeTask('task-held', { status: 'WORKING', assignedWorkerId: 'w-1' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-held' });
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler({ workerId: 'w-1', statuses: ['WORKING'] }, state) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    expect((result.alreadyAssigned as { taskId: string }).taskId).toBe('task-held');
+    const next = result.nextAction as { tool: string; args: Record<string, unknown> };
+    expect(next.tool).toBe('moe.get_context');
+    expect(next.args.taskId).toBe('task-held');
+    // The free task was NOT claimed.
+    expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+  });
+
+  it('blocks an explicit taskId claim of a DIFFERENT task while holding one', async () => {
+    writeTask('task-held', { status: 'WORKING', assignedWorkerId: 'w-1' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-held' });
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler(
+      { workerId: 'w-1', statuses: ['WORKING'], taskId: 'task-free' },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    expect((result.alreadyAssigned as { taskId: string }).taskId).toBe('task-held');
+    expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+  });
+
+  it('allows re-claiming your OWN task by taskId (resume after respawn)', async () => {
+    writeTask('task-held', { status: 'WORKING', assignedWorkerId: 'w-1' });
+    writeWorker('w-1', { currentTaskId: 'task-held' });
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler(
+      { workerId: 'w-1', statuses: ['WORKING'], taskId: 'task-held' },
+      state
+    ) as { hasNext: boolean; task: { id: string } };
+
+    expect(result.hasNext).toBe(true);
+    expect(result.task.id).toBe('task-held');
+    expect(state.getTask('task-held')!.assignedWorkerId).toBe('w-1');
+  });
+
+  it('a held task in a terminal status does not block a new claim', async () => {
+    writeTask('task-done', { status: 'DONE', assignedWorkerId: 'w-1' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: null, status: 'IDLE' });
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler({ workerId: 'w-1', statuses: ['WORKING'] }, state) as { hasNext: boolean; task: { id: string } };
+
+    expect(result.hasNext).toBe(true);
+    expect(result.task.id).toBe('task-free');
   });
 });

@@ -71,6 +71,33 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
         }
 
+        // One task per worker: a worker already holding an active task
+        // (PLANNING/WORKING/REVIEW) must finish or release it before claiming
+        // another. Re-claiming the SAME task is the resume path (fresh CLI
+        // respawn mid-task) and stays allowed — both by explicit taskId and by
+        // steering the ranked claim back to the held task.
+        if (params.workerId) {
+          const held = state
+            .getActiveTasksAssignedToWorker(params.workerId)
+            .filter((t) => t.id !== params.taskId);
+          if (held.length > 0) {
+            const current = held[0];
+            return {
+              hasNext: false,
+              alreadyAssigned: {
+                taskId: current.id,
+                title: current.title,
+                status: current.status,
+              },
+              nextAction: {
+                tool: 'moe.get_context',
+                args: { taskId: current.id, workerId: params.workerId },
+                reason: `One task per worker: you already hold ${current.id} (${current.status}). Resume it, finish it (submit_plan / complete_task / qa_approve / qa_reject), or release it (moe.release_task) before claiming another.`
+              }
+            };
+          }
+        }
+
         let tasks: Task[];
         if (params.taskId) {
           const requested = state.getTask(params.taskId);
@@ -86,7 +113,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               `Task ${requested.id} belongs to epic ${requested.epicId}, not ${params.epicId}`
             );
           }
-          if (!state.isTaskClaimable(requested) && !params.replaceExisting) {
+          // Re-claiming a task you already own is a resume, not a takeover.
+          const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
+          if (!state.isTaskClaimable(requested) && !ownedBySelf && !params.replaceExisting) {
             throw notAllowed(
               'claim',
               `Task ${requested.id} is already assigned to ${requested.assignedWorkerId}. Pass replaceExisting:true to take over.`
