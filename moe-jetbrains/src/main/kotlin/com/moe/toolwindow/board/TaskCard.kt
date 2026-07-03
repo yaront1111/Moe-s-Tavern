@@ -32,7 +32,8 @@ class TaskCard(
     private val onOpen: (Task) -> Unit,
     private val onDelete: (Task) -> Unit,
     private val onNext: ((Task) -> Unit)? = null,
-    private val onPrevious: ((Task) -> Unit)? = null
+    private val onPrevious: ((Task) -> Unit)? = null,
+    private val onReleaseAgent: ((Task) -> Unit)? = null
 ) : RoundedPanel(10, BoardStyles.borderColor, BorderLayout()) {
 
     init {
@@ -291,6 +292,12 @@ class TaskCard(
         val askItem = JMenuItem(MoeBundle.message("moe.button.askQuestion"))
         askItem.addActionListener { safeCallback("ask question") { onOpen(task) } }
         menu.add(askItem)
+
+        if (onReleaseAgent != null && !task.assignedWorkerId.isNullOrBlank()) {
+            val releaseItem = JMenuItem(MoeBundle.message("moe.button.releaseAgent"))
+            releaseItem.addActionListener { safeCallback("release agent") { onReleaseAgent.invoke(task) } }
+            menu.add(releaseItem)
+        }
 
         menu.addSeparator()
 

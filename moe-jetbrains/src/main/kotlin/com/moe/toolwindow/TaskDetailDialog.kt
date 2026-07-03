@@ -516,6 +516,23 @@ class TaskDetailDialog(
             })
         }
 
+        if (!task.assignedWorkerId.isNullOrBlank()) {
+            actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.releaseAgent")) {
+                override fun doAction(e: java.awt.event.ActionEvent) {
+                    val result = Messages.showYesNoDialog(
+                        project,
+                        MoeBundle.message("moe.message.releaseAgent", task.assignedWorkerId ?: "", task.title),
+                        MoeBundle.message("moe.message.releaseAgentTitle"),
+                        Messages.getQuestionIcon()
+                    )
+                    if (result == Messages.YES) {
+                        service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
+                        close(OK_EXIT_CODE)
+                    }
+                }
+            })
+        }
+
         if (task.status == "REVIEW" || task.status == "DONE") {
             actions.add(object : DialogWrapperAction(MoeBundle.message("moe.button.reopen")) {
                 override fun doAction(e: java.awt.event.ActionEvent) {

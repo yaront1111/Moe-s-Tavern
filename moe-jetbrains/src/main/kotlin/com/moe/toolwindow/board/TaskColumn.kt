@@ -38,6 +38,7 @@ class TaskColumn(
     private val onClearColumn: (() -> Unit)? = null,
     private val onNext: ((Task) -> Unit)? = null,
     private val onPrevious: ((Task) -> Unit)? = null,
+    private val onReleaseAgent: ((Task) -> Unit)? = null,
     private val epicSortByDate: Boolean = false
 ) : JBPanel<TaskColumn>(BorderLayout()) {
 
@@ -166,7 +167,7 @@ class TaskColumn(
             val epicTasks = grouped[epicId].orEmpty().sortedBy { it.order }
             if (!isCollapsed) {
                 for (task in epicTasks) {
-                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext, onPrevious = onPrevious))
+                    listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext, onPrevious = onPrevious, onReleaseAgent = onReleaseAgent))
                 }
             }
         }

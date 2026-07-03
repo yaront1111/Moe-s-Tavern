@@ -12,6 +12,7 @@ import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
+import { releaseTaskTool } from '../tools/releaseTask.js';
 import {
   ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
   normalizeActivityLogParams,
@@ -68,6 +69,7 @@ export type PluginMessage =
   | { type: 'DELETE_EPIC'; payload: { epicId: string } }
   | { type: 'REORDER_TASK'; payload: { taskId: string; beforeId: string | null; afterId: string | null } }
   | { type: 'APPROVE_TASK'; payload: { taskId: string } }
+  | { type: 'RELEASE_TASK'; payload: { taskId: string; reason?: string } }
   | { type: 'REJECT_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'APPROVE_PROPOSAL'; payload: { proposalId: string } }
@@ -439,6 +441,26 @@ export class MoeWebSocketServer {
           }
           const task = await this.withMutex(() => this.state.approveTask(message.payload.taskId));
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          return;
+        }
+        case 'RELEASE_TASK': {
+          if (!message.payload || typeof message.payload !== 'object' || !message.payload.taskId) {
+            this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
+            return;
+          }
+          // Delegate to the SAME moe.release_task tool the agents use (single
+          // release path: routes via nextStatusForRelease, idles the worker,
+          // posts the release banner to chat). The tool takes the state mutex
+          // itself, so no withMutex wrapper here.
+          const releaseReason = typeof message.payload.reason === 'string' && message.payload.reason.trim().length > 0
+            ? message.payload.reason.trim()
+            : 'Released from board';
+          await releaseTaskTool(this.state).handler(
+            { taskId: message.payload.taskId, reason: releaseReason },
+            this.state
+          );
+          const releasedTask = this.state.getTask(message.payload.taskId);
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: releasedTask }));
           return;
         }
         case 'REJECT_TASK': {

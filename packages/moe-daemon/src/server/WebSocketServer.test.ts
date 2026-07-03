@@ -363,6 +363,41 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('RELEASE_TASK frees the task and idles the worker (board button path)', async () => {
+      await state.createWorker({
+        id: 'w-rel',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: 'task-1',
+        status: 'CODING',
+      });
+      await state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'w-rel' });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'RELEASE_TASK',
+        payload: { taskId: 'task-1', reason: 'human released from board' },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      // No steps done → released WORKING task routes to BACKLOG, unassigned.
+      expect(parsed.payload.status).toBe('BACKLOG');
+      expect(parsed.payload.assignedWorkerId).toBeNull();
+
+      const stored = state.getTask('task-1');
+      expect(stored?.status).toBe('BACKLOG');
+      expect(stored?.assignedWorkerId).toBeNull();
+      const worker = state.getWorker('w-rel');
+      expect(worker?.currentTaskId).toBeNull();
+      expect(worker?.status).toBe('IDLE');
+
+      ws.close();
+    });
+
     it('caps and truncates GET_ACTIVITY_LOG responses', async () => {
       const logPath = path.join(moePath, 'activity.log');
       for (let i = 0; i < 120; i++) {

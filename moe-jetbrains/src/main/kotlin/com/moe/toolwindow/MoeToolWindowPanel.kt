@@ -482,6 +482,19 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 }
             }
 
+            fun handleReleaseAgent(task: Task) {
+                val workerId = task.assignedWorkerId ?: return
+                val result = Messages.showYesNoDialog(
+                    project,
+                    MoeBundle.message("moe.message.releaseAgent", workerId, task.title),
+                    MoeBundle.message("moe.message.releaseAgentTitle"),
+                    Messages.getQuestionIcon()
+                )
+                if (result == Messages.YES) {
+                    service.releaseTask(task.id, MoeBundle.message("moe.message.releasedInUI"))
+                }
+            }
+
             fun handlePrevious(task: Task) {
                 val prevStatus = getPreviousStatus(task.status) ?: return
                 val reason = Messages.showInputDialog(
@@ -579,6 +592,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     } else null,
                     onNext = if (!isDone) { task -> handleNext(task) } else null,
                     onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null,
+                    onReleaseAgent = { task -> handleReleaseAgent(task) },
                     epicSortByDate = epicSortByDate
                 )
                 val colPref = column.preferredSize

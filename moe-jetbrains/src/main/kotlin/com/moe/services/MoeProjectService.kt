@@ -874,6 +874,17 @@ class MoeProjectService @JvmOverloads constructor(
         sendMessage("APPROVE_TASK", payload)
     }
 
+    fun releaseTask(taskId: String, reason: String? = null) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("taskId", taskId)
+            if (!reason.isNullOrBlank()) {
+                addProperty("reason", reason)
+            }
+        }
+        sendMessage("RELEASE_TASK", payload)
+    }
+
     fun rejectTask(taskId: String, reason: String) {
         if (!ensureConnected()) return
         val payload = JsonObject().apply {
