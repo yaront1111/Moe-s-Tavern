@@ -892,13 +892,13 @@ List all registered workers with liveness derived from `lastActivityAt`. Use to 
 
 ### moe.deregister_worker
 
-Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING→BACKLOG, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). The default-on worker-liveness sweep calls the same path for hard crashes after the idle timeout. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
+Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING→BACKLOG, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
 
 **Parameters:**
 ```typescript
 {
   workerId: string,   // Worker ID to deregister
-  reason?: string     // Short reason ("terminal_closed", "liveness_timeout", …). Default: "deregistered".
+  reason?: string     // Short reason ("terminal_closed", …). Default: "deregistered".
 }
 ```
 
@@ -914,7 +914,7 @@ Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRele
 }
 ```
 
-The worker record is retained (status `DEAD`) for post-mortem/idempotency, dropped from the UI immediately (a `WORKER_DELETED` event is emitted and `DEAD` workers are excluded from state snapshots), and pruned by a later stale-worker sweep once it owns nothing.
+The worker record is retained (status `DEAD`) for post-mortem/idempotency, dropped from the UI immediately (a `WORKER_DELETED` event is emitted and `DEAD` workers are excluded from state snapshots), and pruned later once it owns nothing.
 
 ---
 

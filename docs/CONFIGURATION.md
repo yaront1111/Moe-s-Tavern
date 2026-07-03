@@ -14,8 +14,6 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_DEFAULT_PORT` | WebSocket/HTTP server port (auto-scans upward if taken) | `9876` | `9900` |
 | `MOE_PORT_RANGE` | How many ports to scan past the default | `50` | `100` |
 | `MOE_SHUTDOWN_TIMEOUT_MS` | Grace period for clean shutdown | `10000` | `5000` |
-| `MOE_DISABLE_AUTO_RELEASE` | Disable the dead-worker auto-release sweep | unset | `1` |
-| `MOE_AUTO_RELEASE_DRY_RUN` | Log what the sweep would release without acting | unset | `1` |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `warn`, `error` |
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
 | `LOG_RETENTION_COUNT` | Number of rotated logs to keep | `5` | `3` |

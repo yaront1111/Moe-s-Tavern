@@ -2,7 +2,6 @@
 // workerLifecycle — the SINGLE source of truth for releasing a worker's tasks
 // and marking the worker gone. Used by:
 //   - the `moe.deregister_worker` MCP tool (graceful: shell trap on terminal close)
-//   - the periodic worker-liveness sweep (hard-crash safety net)
 //   - claim takeover of a dead-but-present owner
 // One code path so every trigger produces an identical, deterministic end state.
 // =============================================================================
@@ -33,8 +32,8 @@ export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boole
  *                         otherwise BACKLOG (next worker picks it up)
  * Anything else falls back to BACKLOG.
  *
- * This is the ONLY definition of release routing — every release path (the
- * stale-worker sweep, checkBlockedTimeouts, deregister) routes through here.
+ * This is the ONLY definition of release routing — every release path
+ * (checkBlockedTimeouts, deregister, manual release) routes through here.
  */
 export function nextStatusForRelease(task: Pick<Task, 'status' | 'implementationPlan'>): TaskStatus {
   switch (task.status) {
@@ -101,8 +100,9 @@ export interface DeregisterResult {
  * single banner to #workers / #governors summarizing the cleanup.
  *
  * Marking the worker DEAD (rather than deleting it) keeps lastError/history for
- * post-mortem and makes repeat calls idempotent; the stale-worker sweep prunes
- * DEAD workers that own nothing. The UI drops DEAD workers immediately
+ * post-mortem and makes repeat calls idempotent; the record prune in
+ * runBlockedTimeoutSweep later removes DEAD workers that own nothing (records
+ * only — it never touches tasks). The UI drops DEAD workers immediately
  * (updateWorker emits WORKER_DELETED + getSnapshot excludes them).
  *
  * Idempotent: if the worker is already DEAD with no current task, returns
@@ -129,7 +129,7 @@ export async function deregisterWorker(
   const released = await releaseWorkerTasks(state, workerId, reason);
 
   // Mark worker DEAD. Keep the record (preserves history / lastError) so the
-  // sweep can prune it later. updateWorker preserves lastActivityAt on the DEAD
+  // record prune can remove it later. updateWorker preserves lastActivityAt on the DEAD
   // transition (so staleness/pruning stays accurate) and emits WORKER_DELETED
   // so the UI removes it.
   try {

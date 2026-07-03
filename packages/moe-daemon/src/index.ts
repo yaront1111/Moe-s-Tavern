@@ -16,7 +16,6 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { backfillTaskMetrics } from './state/migrations/backfillTaskMetrics.js';
-import { startWorkerLivenessSweep } from './state/staleWorkerWatcher.js';
 import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';
@@ -592,11 +591,6 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   state.setFileWatcher(watcher);
   watcher.start();
 
-  // Default-on worker-liveness sweep: auto-releases tasks held by workers that
-  // stopped heart-beating (hard crash / killed terminal). Opt out with
-  // MOE_DISABLE_AUTO_RELEASE=1; preview with MOE_AUTO_RELEASE_DRY_RUN=1.
-  const staleWatcher = startWorkerLivenessSweep(state);
-
   // SPEED-mode auto-approval timers live only in process memory, so a restart
   // would otherwise strand every AWAITING_APPROVAL task whose timer was lost.
   // Re-arm them once from persisted state now that the emitter + WS are wired.
@@ -648,12 +642,6 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
       }
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
-
-    try {
-      staleWatcher.stop();
-    } catch (error) {
-      logger.error({ error }, 'Error stopping stale-worker watcher');
-    }
 
     try {
       await watcher.stop();

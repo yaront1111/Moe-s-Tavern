@@ -4,7 +4,7 @@ Deep-dive material trimmed out of `governor.md`. Read this on demand when a situ
 
 ## Stale-worker thresholds
 
-The daemon now **auto-releases** a dead worker's tasks by default (worker-liveness sweep, ~30 min idle → tasks released, worker marked `DEAD` and dropped from the UI; a dead owner's task is claimable after the 120s presence window regardless). So most "stale worker holding a task" situations self-heal — your job is mainly to notice workers that are *slow but alive* and decide whether to ping. Liveness uses the shared `isWorkerAlive` predicate (`moe.list_workers {onlyStale: true}`, `packages/moe-daemon/src/util/workerLiveness.ts`). Default thresholds:
+The daemon does **not** auto-release tasks on idle time — a long-running worker keeps its task no matter how quiet it goes. Tasks are released only on daemon restart, graceful `moe.deregister_worker`, or an explicit `release_task`. That makes YOUR judgment the safety net for hard-crashed workers holding tasks: notice them, ping, and escalate to `release_task` when warranted. Liveness uses the shared `isWorkerAlive` predicate (`moe.list_workers {onlyStale: true}`, `packages/moe-daemon/src/util/workerLiveness.ts`). Default thresholds:
 
 | Multiple of liveness timeout | Default interpretation |
 |---|---|

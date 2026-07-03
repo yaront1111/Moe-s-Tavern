@@ -25,9 +25,9 @@ export type WorkerStatus =
   | 'CODING'
   | 'BLOCKED'
   | 'GOVERNING'
-  // Terminal presence state: the worker is gone (graceful deregister or
-  // liveness-timeout). Its tasks have been released; the record is retained
-  // for post-mortem/idempotency and pruned later by the stale-worker sweep.
+  // Terminal presence state: the worker is gone (graceful deregister). Its
+  // tasks have been released; the record is retained for post-mortem/
+  // idempotency and pruned later once it owns nothing.
   | 'DEAD';
 
 export type EpicStatus = 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';

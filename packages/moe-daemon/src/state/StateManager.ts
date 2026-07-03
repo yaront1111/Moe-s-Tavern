@@ -458,12 +458,12 @@ export class StateManager {
    * Scan workers with status=BLOCKED and auto-timeout if lastActivityAt exceeds threshold.
    */
   async checkBlockedTimeouts(): Promise<void> {
-    // Serialize the worker/task mutations on the SAME mutex every MCP handler and
-    // the worker-liveness sweep use. updateTask/updateWorker/deleteWorker are
-    // themselves lock-free, so without this wrapper this background timer would
-    // interleave with the sweep at an await boundary — a lost-update / DEAD→IDLE
-    // resurrection window. runExclusive is reentrant (AsyncLocalStorage), so the
-    // nested deleteWorker re-enters instead of deadlocking.
+    // Serialize the worker/task mutations on the SAME mutex every MCP handler
+    // uses. updateTask/updateWorker/deleteWorker are themselves lock-free, so
+    // without this wrapper this background timer would interleave with handlers
+    // at an await boundary — a lost-update / DEAD→IDLE resurrection window.
+    // runExclusive is reentrant (AsyncLocalStorage), so the nested deleteWorker
+    // re-enters instead of deadlocking.
     await this.mutex.runExclusive(() => this.runBlockedTimeoutSweep());
 
     // In-memory waiter cleanup mutates no persisted state — keep it outside the
@@ -1220,12 +1220,12 @@ export class StateManager {
 
   /**
    * Assigned to a worker that is present in the map but has been marked DEAD
-   * (graceful deregister or liveness-timeout). Keyed on the explicit DEAD
-   * status, NOT on raw idle time — a worker that is merely quiet (e.g. mid a
-   * long build/test, lastActivityAt past the 120s presence window) is still
-   * ALIVE and must keep its task. Death is established only by deregister/the
-   * 30-min sweep, both of which already release the task (null assignedWorkerId).
-   * This predicate is a defensive backstop for the rare assigned-to-DEAD race.
+   * (graceful deregister). Keyed on the explicit DEAD status, NOT on raw idle
+   * time — a worker that is merely quiet (e.g. mid a long build/test,
+   * lastActivityAt past the 120s presence window) is still ALIVE and must keep
+   * its task. Death is established only by deregister, which already releases
+   * the task (null assignedWorkerId). This predicate is a defensive backstop
+   * for the rare assigned-to-DEAD race.
    */
   isTaskAssignedToDeadWorker(task: Task): boolean {
     if (!task.assignedWorkerId) return false;
@@ -1276,7 +1276,7 @@ export class StateManager {
       return null;
     }
     // Never refresh a DEAD worker's heartbeat: an in-flight tool call must not
-    // reset its 30-min prune clock (lastActivityAt) and resurrect it in the UI.
+    // reset its prune clock (lastActivityAt) and resurrect it in the UI.
     if (this.workers.get(workerId)?.status === 'DEAD') {
       return null;
     }
@@ -2494,7 +2494,7 @@ export class StateManager {
     }
     // A DEAD worker is dropped from the UI immediately: emit WORKER_DELETED so
     // boards remove it, while the record is retained server-side (idempotent
-    // re-deregister + later pruned by the stale-worker sweep). getSnapshot also
+    // re-deregister + later pruned once it owns nothing). getSnapshot also
     // excludes DEAD workers so reconnects/snapshots never resurface it.
     if (updated.status === 'DEAD') {
       this.emit({ type: 'WORKER_DELETED', payload: updated });

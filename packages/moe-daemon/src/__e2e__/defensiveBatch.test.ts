@@ -11,7 +11,6 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { backfillTaskMetrics, __testing as backfillTesting } from '../state/migrations/backfillTaskMetrics.js';
-import { sweepStaleWorkers } from '../state/staleWorkerWatcher.js';
 import { deregisterWorker, nextStatusForRelease } from '../state/workerLifecycle.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
@@ -164,70 +163,6 @@ describe('defensive batch', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Feature 4: stale-worker watcher
-  // -----------------------------------------------------------------------
-  describe('stale-worker watcher', () => {
-    it('releases tasks held by stale workers and posts to #workers / #governors', async () => {
-      writeProject(moePath);
-      writeEpic(moePath);
-      const oldTs = new Date(Date.now() - 60 * 60_000).toISOString();
-      writeTask(moePath, {
-        id: 'task-stale',
-        status: 'WORKING',
-        assignedWorkerId: 'worker-stale',
-      });
-      writeWorker(moePath, {
-        id: 'worker-stale',
-        currentTaskId: 'task-stale',
-        lastActivityAt: oldTs,
-      });
-      await state.load();
-
-      const result = await sweepStaleWorkers(state, {
-        staleAfterMs: 30 * 60_000,
-        dryRun: false,
-        now: () => Date.now(),
-      });
-      expect(result.released).toBe(1);
-      const task = state.getTask('task-stale')!;
-      expect(task.assignedWorkerId).toBeNull();
-      expect(task.status).toBe('BACKLOG');
-      const worker = state.getWorker('worker-stale')!;
-      expect(worker.currentTaskId).toBeNull();
-      // The sweep funnels through the single deregister path: worker → DEAD.
-      expect(worker.status).toBe('DEAD');
-      // And the released task is now claimable (the orphan is unstuck).
-      expect(state.isTaskClaimable(task)).toBe(true);
-    });
-
-    it('dry-run posts banner without mutating task or worker', async () => {
-      writeProject(moePath);
-      writeEpic(moePath);
-      const oldTs = new Date(Date.now() - 60 * 60_000).toISOString();
-      writeTask(moePath, {
-        id: 'task-dry',
-        status: 'WORKING',
-        assignedWorkerId: 'worker-dry',
-      });
-      writeWorker(moePath, {
-        id: 'worker-dry',
-        currentTaskId: 'task-dry',
-        lastActivityAt: oldTs,
-      });
-      await state.load();
-
-      await sweepStaleWorkers(state, {
-        staleAfterMs: 30 * 60_000,
-        dryRun: true,
-        now: () => Date.now(),
-      });
-      const task = state.getTask('task-dry')!;
-      expect(task.assignedWorkerId).toBe('worker-dry');
-      expect(task.status).toBe('WORKING');
-    });
-  });
-
-  // -----------------------------------------------------------------------
   // Feature 4b: dead-worker handling — orphan unstick, deregister, UI removal
   // -----------------------------------------------------------------------
   describe('dead-worker handling', () => {
@@ -285,7 +220,7 @@ describe('defensive batch', () => {
       writeTask(moePath, { id: 'task-done', status: 'WORKING', assignedWorkerId: 'w-fin', implementationPlan: allDone.implementationPlan });
       writeWorker(moePath, { id: 'w-fin', currentTaskId: 'task-done', status: 'CODING', lastActivityAt: STALE_TS() });
       await state.load();
-      await deregisterWorker(state, 'w-fin', 'liveness_timeout');
+      await deregisterWorker(state, 'w-fin', 'terminal_closed');
       expect(state.getTask('task-done')!.status).toBe('REVIEW');
       expect(state.getTask('task-done')!.assignedWorkerId).toBeNull();
     });
@@ -339,19 +274,6 @@ describe('defensive batch', () => {
       expect(events.some((e) => e.type === 'WORKER_UPDATED' && e.payload.id === 'w-u')).toBe(false);
     });
 
-    it('the liveness sweep leaves BLOCKED workers alone (checkBlockedTimeouts owns their longer grace)', async () => {
-      writeProject(moePath);
-      writeEpic(moePath);
-      writeTask(moePath, { id: 'task-b', status: 'WORKING', assignedWorkerId: 'w-b' });
-      writeWorker(moePath, { id: 'w-b', currentTaskId: 'task-b', status: 'BLOCKED', lastActivityAt: new Date(Date.now() - 60 * 60_000).toISOString() });
-      await state.load();
-
-      const res = await sweepStaleWorkers(state, { staleAfterMs: 30 * 60_000, dryRun: false, now: () => Date.now() });
-      expect(res.released).toBe(0);
-      // Task still held; worker not yanked or marked DEAD by the sweep.
-      expect(state.getTask('task-b')!.assignedWorkerId).toBe('w-b');
-      expect(state.getWorker('w-b')!.status).toBe('BLOCKED');
-    });
   });
 
   // -----------------------------------------------------------------------
