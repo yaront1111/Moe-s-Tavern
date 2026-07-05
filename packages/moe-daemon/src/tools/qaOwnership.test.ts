@@ -48,6 +48,10 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
       status: 'REVIEW', assignedWorkerId: 'qa-a', branch: null, prLink: null,
       reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
       priority: 'MEDIUM', order: 1, comments: [],
+      // Seed the context stamp so the qa_approve/qa_reject context guard passes
+      // for owned-path tests (the real flow records this via preflight
+      // get_context). Tests that exercise the missing-context guard override it.
+      contextFetchedBy: ['qa-a'],
       createdAt: now, updatedAt: now,
       ...overrides,
     };
@@ -120,7 +124,7 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
   });
 
   it('qa_approve does not block when the assigned QA worker record is missing', async () => {
-    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-missing' });
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-missing', contextFetchedBy: ['qa-missing'] });
     await state.load();
 
     const tool = qaApproveTool(state);
@@ -172,5 +176,34 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     const tool = qaRejectTool(state);
     const result = await tool.handler({ taskId: 'task-1', reason: 'needs fixes' }, state) as { status: string };
     expect(result.status).toBe('WORKING');
+  });
+
+  it('qa_approve requires the caller to have fetched context first', async () => {
+    // Owner matches but never called get_context → blocked.
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-a', contextFetchedBy: [] });
+    await state.load();
+    const tool = qaApproveTool(state);
+    try {
+      await tool.handler({ taskId: 'task-1', workerId: 'qa-a' }, state);
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).code).toBe(MoeErrorCode.NOT_ALLOWED);
+      expect((err as MoeError).message).toContain('moe.get_context');
+    }
+  });
+
+  it('qa_reject requires the caller to have fetched context first', async () => {
+    setupMoe(); writeEpic(); writeTask({ assignedWorkerId: 'qa-a', contextFetchedBy: [] });
+    await state.load();
+    const tool = qaRejectTool(state);
+    try {
+      await tool.handler({ taskId: 'task-1', reason: 'nope', workerId: 'qa-a' }, state);
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).code).toBe(MoeErrorCode.NOT_ALLOWED);
+      expect((err as MoeError).message).toContain('moe.get_context');
+    }
   });
 });

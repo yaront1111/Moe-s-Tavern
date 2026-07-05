@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 /**
  * Valid task statuses for validation.
@@ -162,7 +163,39 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       }
 
       const updated = await state.updateTask(params.taskId, updates, event);
-      return { success: true, taskId: updated.id, status: updated.status };
+
+      // Hand the acting agent a next step. The reopen path (governor REVIEW→
+      // PLANNING flip, human un-park) is the one most likely to strand a task
+      // with no guidance: it lands in an actionable column with a cleared
+      // context stamp, so the next claimer MUST re-fetch context. Point there
+      // and surface the destination-appropriate skill so the workflow resumes.
+      let nextAction: Record<string, unknown> | undefined;
+      if (isReopening) {
+        const reopenSkill = updated.status === 'PLANNING'
+          ? recommendSkillFor('architect', 'planning_entry')
+          : updated.status === 'WORKING'
+            ? recommendSkillFor('worker', 'reopened')
+            : undefined;
+        nextAction = {
+          tool: 'moe.get_context',
+          args: { taskId: updated.id },
+          reason: `Task reopened (reopen #${updated.reopenCount}). Re-read reopenReason + rejectionDetails via get_context before acting — do not resume the prior attempt blind.`,
+          ...(reopenSkill ? { recommendedSkill: reopenSkill } : {}),
+        };
+      } else if (updated.status === 'PLANNING' || updated.status === 'WORKING' || updated.status === 'REVIEW') {
+        nextAction = {
+          tool: 'moe.get_context',
+          args: { taskId: updated.id },
+          reason: `Task moved to ${updated.status}. Fetch full context before acting.`,
+        };
+      }
+
+      return {
+        success: true,
+        taskId: updated.id,
+        status: updated.status,
+        ...(nextAction ? { nextAction } : {}),
+      };
     }
   };
 }

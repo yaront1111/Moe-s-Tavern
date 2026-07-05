@@ -253,6 +253,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // stepsCompleted so it can't carry stale 'step-N' ids onto the new plan
         // (request_replan already does this; submit_plan is the other fresh-plan boundary).
         stepsCompleted: [],
+        // A new plan is a new attempt: scrub the failed-DoD-item log so the
+        // qa_reject "same item failed twice" net counts only within this
+        // attempt, not against items that failed under the superseded plan.
+        failedDodItems: [],
         status: 'AWAITING_APPROVAL',
         planSubmittedAt: new Date().toISOString(),
         metrics: updatedMetrics,

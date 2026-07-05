@@ -82,6 +82,14 @@ export const CURRENT_SCHEMA_VERSION = 6;
  */
 export const MAX_REOPENS_DEFAULT = 3;
 
+/**
+ * Default cap on governor plan-critique `block` flips before the task is parked
+ * for a human instead of bounced back to PLANNING again. Governor block →
+ * architect re-plan → block is its own loop (separate from the qa_reject reopen
+ * cap), so it gets its own bound. Tracked via `task.critiqueBlockCount`.
+ */
+export const MAX_CRITIQUE_BLOCKS_DEFAULT = 2;
+
 export type TeamRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 export interface Team {
@@ -346,6 +354,22 @@ export interface Task {
    * the global reopen cap hasn't been hit.
    */
   failedDodItems?: FailedDodItem[];
+  /**
+   * Set true when a task exhausts BOTH its reopen budget AND the single
+   * architect re-plan that follows (qa_reject hard cap), or exhausts the
+   * governor plan-critique block cap. The task is parked in place (status
+   * unchanged, assignee cleared) and excluded from the QA claim pool until a
+   * human clears it (qa_approve / set_task_status reopen / release_task / board
+   * move). This is what breaks the qa_reject and critique-block churn loops.
+   */
+  needsHumanReview?: boolean;
+  /**
+   * Count of governor plan-critique `block` verdicts that flipped this task
+   * back to PLANNING. Bounded by MAX_CRITIQUE_BLOCKS_DEFAULT; deliberately
+   * separate from `reopenCount` so critique blocks don't corrupt the qa_reject
+   * cap or reopen metrics.
+   */
+  critiqueBlockCount?: number;
 }
 
 export interface Worker {

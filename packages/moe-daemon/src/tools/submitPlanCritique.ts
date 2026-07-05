@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { PlanCritiqueResult } from '../types/schema.js';
+import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound, notAllowed } from '../util/errors.js';
 
 const MAX_CONCERNS = 20;
@@ -94,10 +95,22 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       // AWAITING_APPROVAL / WORKING — that means the human already
       // weighed in and we should leave it alone (critique becomes purely
       // advisory). DONE / ARCHIVED tasks are also untouchable.
+      //
+      // Bound the block→re-plan→block loop: a governor can otherwise flip the
+      // same task to PLANNING forever with no cap. After
+      // MAX_CRITIQUE_BLOCKS_DEFAULT flips we stop flipping and leave the task in
+      // AWAITING_APPROVAL/WORKING — that column already blocks on a human, so
+      // resting there IS the escalation (no needsHumanReview flag: this task is
+      // not in REVIEW, and the flag would wrongly follow it into REVIEW later).
       const flippable = task.status === 'AWAITING_APPROVAL' || task.status === 'WORKING';
-      const didFlip = flippable && params.verdict === 'block';
+      const wantsBlock = flippable && params.verdict === 'block';
+      const blockCount = task.critiqueBlockCount ?? 0;
+      const underCap = blockCount < MAX_CRITIQUE_BLOCKS_DEFAULT;
+      const didFlip = wantsBlock && underCap;
+      const blockedButCapped = wantsBlock && !underCap;
       if (didFlip) {
         updates.status = 'PLANNING';
+        updates.critiqueBlockCount = blockCount + 1;
         updates.reopenReason = `Plan blocked by governor critique: ${(concerns ?? []).slice(0, 3).join(' | ').slice(0, 500)}`;
       }
 
@@ -125,14 +138,33 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
           );
         } else {
           const concernText = (concerns ?? []).map((c) => `• ${c}`).join('\n');
-          await state.postToRoleChannel(
-            'architects',
-            `🚫 plan blocked on ${updated.id} (${updated.title}) by ${reviewer}.\nConcerns:\n${concernText}`
-          );
-          await state.postToRoleChannel(
-            'governors',
-            `🚫 critique blocked: ${updated.id} — flipped to ${updated.status}.`
-          );
+          if (didFlip) {
+            await state.postToRoleChannel(
+              'architects',
+              `🚫 plan blocked on ${updated.id} (${updated.title}) by ${reviewer} — flipped to PLANNING for re-plan (block ${blockCount + 1}/${MAX_CRITIQUE_BLOCKS_DEFAULT}).\nConcerns:\n${concernText}`
+            );
+            await state.postToRoleChannel(
+              'governors',
+              `🚫 critique blocked: ${updated.id} — flipped to ${updated.status} (block ${blockCount + 1}/${MAX_CRITIQUE_BLOCKS_DEFAULT}).`
+            );
+          } else if (blockedButCapped) {
+            // Cap reached: do NOT flip again. The task rests in its current
+            // (human-gated) column; surface a hard human-decision nudge.
+            const msg = `🛑 HUMAN DECISION REQUIRED — ${updated.id} (${updated.title}) hit the plan-critique block cap (${MAX_CRITIQUE_BLOCKS_DEFAULT}). Not auto-flipping again; it rests in ${updated.status} for a human to approve the plan or re-plan it.\nConcerns:\n${concernText}`;
+            await state.postToRoleChannel('architects', msg);
+            await state.postToRoleChannel('governors', msg);
+          } else {
+            // Block verdict on a task already past AWAITING_APPROVAL/WORKING —
+            // advisory only (the human already weighed in); status unchanged.
+            await state.postToRoleChannel(
+              'architects',
+              `🚫 plan critique (advisory) on ${updated.id} (${updated.title}) by ${reviewer} — task already in ${updated.status}, not flipping.\nConcerns:\n${concernText}`
+            );
+            await state.postToRoleChannel(
+              'governors',
+              `🚫 critique blocked (advisory): ${updated.id} — task in ${updated.status}.`
+            );
+          }
         }
       } catch { /* never block tool */ }
 
@@ -143,6 +175,10 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
         verdict: params.verdict,
         concerns: concerns ?? [],
         planCritiqueResult: result,
+        flipped: didFlip,
+        critiqueBlockCount: updated.critiqueBlockCount ?? blockCount,
+        maxCritiqueBlocks: MAX_CRITIQUE_BLOCKS_DEFAULT,
+        blockCapReached: blockedButCapped,
       };
     }
   };

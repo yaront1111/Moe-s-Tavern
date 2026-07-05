@@ -33,6 +33,14 @@ export function resetPlanStepsToPending(plan: ImplementationStep[]): Implementat
  *  - re-arm budget warn/escalate latches so alerts fire again on re-work
  *  - reset the plan steps to PENDING + clear stepsCompleted (enforced rework;
  *    closes the "all-steps-COMPLETED → vacuous complete_task" hole)
+ *  - clear the escalation latches (needsHumanReview / critiqueBlockCount) and
+ *    the failed-DoD-item log so the reopened task starts a fresh attempt with a
+ *    clean budget (a human reopening a parked task un-parks it; the same-item
+ *    net counts only within the new attempt, not across the task's whole life)
+ *  - clear contextFetchedBy so whoever re-claims the reopened task is FORCED to
+ *    call get_context again (assertContextFetched) — i.e. actually re-read the
+ *    rejectionDetails/reopenReason instead of resuming on a stale context stamp
+ *    and re-doing the same work the same way
  *
  * Returns a Partial<Task> to be merged into the reopen update payload. Does NOT
  * set status / reopenCount / reopenReason — the caller owns those.
@@ -42,6 +50,10 @@ export function buildReopenClearingUpdates(task: Task): Partial<Task> {
     completedAt: undefined,
     reviewStartedAt: undefined,
     reviewCompletedAt: undefined,
+    needsHumanReview: undefined,
+    critiqueBlockCount: undefined,
+    failedDodItems: [],
+    contextFetchedBy: [],
   };
 
   if (task.metrics && (task.metrics.doneAt || task.metrics.wallClockMs)) {

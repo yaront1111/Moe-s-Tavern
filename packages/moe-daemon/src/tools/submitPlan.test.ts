@@ -211,6 +211,26 @@ describe('SPEED mode timeout cancellation', () => {
     expect(state.getTask('task-own2')?.status).toBe('AWAITING_APPROVAL');
   });
 
+  it('scrubs failedDodItems on a fresh plan so the same-item net counts only within the new attempt', async () => {
+    setupMoeFolder();
+    createEpic();
+    createTask({
+      id: 'task-clear',
+      status: 'PLANNING',
+      assignedWorkerId: 'architect-a',
+      failedDodItems: [{ item: 'DoD-X', rejectedAt: new Date().toISOString(), rejectedBy: 'qa-1' }],
+    });
+    await state.load();
+
+    const tool = submitPlanTool(state);
+    await tool.handler({
+      taskId: 'task-clear',
+      workerId: 'architect-a',
+      steps: [{ description: 'Step 1' }],
+    }, state);
+    expect(state.getTask('task-clear')?.failedDodItems).toEqual([]);
+  });
+
   it('releases the assigned architect worker after TURBO auto-approval', async () => {
     setupMoeFolder({
       settings: {

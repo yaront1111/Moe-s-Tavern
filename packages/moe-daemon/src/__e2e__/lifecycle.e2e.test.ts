@@ -139,9 +139,10 @@ describe('lifecycle E2E', () => {
     await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
     expect(state.getTask('task-e2e')!.status).toBe('REVIEW');
 
-    // 4. QA claim + approve → DONE
+    // 4. QA claim + get_context + approve → DONE
     const claim = claimNextTaskTool(state);
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
+    await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     const qaApprove = qaApproveTool(state);
     await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1' }, state);
 
@@ -172,9 +173,10 @@ describe('lifecycle E2E', () => {
     const completeTask = completeTaskTool(state);
     await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
 
-    // QA claim + reject
+    // QA claim + get_context + reject
     const claim = claimNextTaskTool(state);
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
+    await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     const qaReject = qaRejectTool(state);
     await qaReject.handler({
       taskId: 'task-e2e',
@@ -195,6 +197,7 @@ describe('lifecycle E2E', () => {
     await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
 
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
+    await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     const qaApprove = qaApproveTool(state);
     await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1' }, state);
     expect(state.getTask('task-e2e')!.status).toBe('DONE');
@@ -223,6 +226,7 @@ describe('lifecycle E2E', () => {
 
     // First reject on DoD1 → WORKING
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
+    await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     await qaReject.handler({
       taskId: 'task-e2e',
       reason: 'first fail',
@@ -231,8 +235,9 @@ describe('lifecycle E2E', () => {
     }, state);
     expect(state.getTask('task-e2e')!.status).toBe('WORKING');
 
-    // Worker hands back to QA, second reject on SAME item → auto-flip PLANNING
-    await state.updateTask('task-e2e', { status: 'REVIEW', assignedWorkerId: 'qa-1' });
+    // Worker hands back to QA, second reject on SAME item → auto-flip PLANNING.
+    // qa_reject cleared contextFetchedBy, so re-seed the returning QA's fetch.
+    await state.updateTask('task-e2e', { status: 'REVIEW', assignedWorkerId: 'qa-1', contextFetchedBy: ['qa-1'] });
     await qaReject.handler({
       taskId: 'task-e2e',
       reason: 'still fails',

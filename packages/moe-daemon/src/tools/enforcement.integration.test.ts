@@ -164,6 +164,18 @@ describe('Phase 3 enforcement integration flow', () => {
       throw new Error('expected throw');
     } catch (err) { expectNotAllowed(err); }
 
+    // qa_approve before the QA worker has fetched context is rejected — the
+    // review must actually read the task (DoD/rails) before signing off.
+    try {
+      await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
+      throw new Error('expected throw');
+    } catch (err) {
+      expectNotAllowed(err);
+      expect((err as Error).message).toContain('moe.get_context');
+    }
+
+    // QA fetches context, then approves.
+    await ctx.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
     await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
     expect(state.getTask('task-1')?.status).toBe('DONE');
     expect(state.getTask('task-1')?.stepsCompleted).toEqual(['step-1', 'step-2']);

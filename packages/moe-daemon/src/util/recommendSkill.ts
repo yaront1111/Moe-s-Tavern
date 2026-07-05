@@ -63,19 +63,19 @@ export type SkillTrigger =
 
 const TABLE: Record<Role, Partial<Record<SkillTrigger, SkillRecommendation>>> = {
   architect: {
-    planning_entry:     { name: 'moe-planning',                  reason: 'Fresh PLANNING task.' },
-    before_submit_plan: { name: 'writing-plans',                 reason: 'Before submit_plan.' },
+    planning_entry:     { name: 'moe-planning',                  reason: 'You are starting a fresh PLANNING task. Load this before drafting the plan — it is the plan structure the runtime expects. Do not skip it as trivial.' },
+    before_submit_plan: { name: 'writing-plans',                 reason: 'You are about to call submit_plan. Load this first so the plan is complete and reviewable.' },
   },
   worker: {
-    first_start_step:     { name: 'explore-before-assume',         reason: 'First step in unfamiliar code.' },
-    test_step:            { name: 'test-driven-development',       reason: 'Step touches tests.' },
-    final_step:           { name: 'adversarial-self-review',       reason: 'Final step before complete_step.' },
-    before_complete_task: { name: 'verification-before-completion', reason: 'Before complete_task.' },
-    task_blocked:         { name: 'systematic-debugging',          reason: 'Before blocking.' },
-    reopened:             { name: 'receiving-code-review',         reason: 'Reopened by QA.' },
+    first_start_step:     { name: 'explore-before-assume',         reason: 'First step in code you have not verified. Load this before editing so you build on what actually exists, not assumptions.' },
+    test_step:            { name: 'test-driven-development',       reason: 'This step touches tests. Load this and write the test before the implementation.' },
+    final_step:           { name: 'adversarial-self-review',       reason: 'Final step before complete_step. Load this and read your own diff as an attacker before you finish.' },
+    before_complete_task: { name: 'verification-before-completion', reason: 'You are about to call complete_task. Load this and actually run the verification and regression checks before claiming done.' },
+    task_blocked:         { name: 'systematic-debugging',          reason: 'You are about to report blocked. Load this and debug systematically before giving up.' },
+    reopened:             { name: 'receiving-code-review',         reason: 'QA rejected this task. Load this and read the rejection carefully before re-doing the work the same way.' },
   },
   qa: {
-    review_entry: { name: 'moe-qa-loop', reason: 'Claimed REVIEW.' },
+    review_entry: { name: 'moe-qa-loop', reason: 'You claimed a REVIEW task. Load this before you approve or reject — it is the QA decision flow. Do not sign off blind.' },
   },
 };
 

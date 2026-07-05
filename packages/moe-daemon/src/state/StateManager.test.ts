@@ -1308,6 +1308,57 @@ describe('StateManager', () => {
       expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBe('worker-active');
     });
 
+    it('releases a REVIEW task from a stale owner so another QA can claim it', async () => {
+      // reviewStaleTimeoutMs defaults to staleWorkerTimeoutMs (1ms here).
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 1,
+        blockedTimeoutMs: 60 * 60 * 1000,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'REVIEW', assignedWorkerId: 'qa-stale' });
+      createTestWorker({
+        id: 'qa-stale',
+        currentTaskId: 'task-test123',
+        status: 'READING_CONTEXT',
+        lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      const task = stateManager.getTask('task-test123')!;
+      // Status stays REVIEW; only the assignment is cleared → claimable again.
+      expect(task.status).toBe('REVIEW');
+      expect(task.assignedWorkerId).toBeNull();
+      expect(stateManager.isTaskClaimable(task)).toBe(true);
+    });
+
+    it('does NOT release a REVIEW task whose owner is within the review timeout', async () => {
+      // Long timeouts: neither the self-heal nor the prune fires.
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 60 * 60 * 1000,
+        reviewStaleTimeoutMs: 60 * 60 * 1000,
+        blockedTimeoutMs: 60 * 60 * 1000,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'REVIEW', assignedWorkerId: 'qa-fresh' });
+      createTestWorker({
+        id: 'qa-fresh',
+        currentTaskId: 'task-test123',
+        status: 'READING_CONTEXT',
+        lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBe('qa-fresh');
+    });
+
     it('deletes a stale IDLE worker without an active task assignment', async () => {
       stateManager = new StateManager({
         projectPath: testDir,

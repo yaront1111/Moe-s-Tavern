@@ -113,6 +113,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               `Task ${requested.id} belongs to epic ${requested.epicId}, not ${params.epicId}`
             );
           }
+          // A REVIEW task parked for a human is off-limits to agents even by
+          // explicit taskId — mirrors the ranked-pool exclusion above.
+          if (requested.status === 'REVIEW' && requested.needsHumanReview === true) {
+            throw notAllowed(
+              'claim',
+              `Task ${requested.id} is parked for human review (reopen/critique budget exhausted). A human must reopen or approve it before it re-enters the QA queue.`
+            );
+          }
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
           if (!state.isTaskClaimable(requested) && !ownedBySelf && !params.replaceExisting) {
@@ -137,6 +145,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             .filter((t) => statuses.includes(t.status))
             .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
             .filter((t) => state.isTaskClaimable(t))
+            // A REVIEW task parked for a human (qa_reject hard cap / critique
+            // block cap) is excluded from the QA queue until a human clears it.
+            .filter((t) => !(t.status === 'REVIEW' && t.needsHumanReview === true))
             .sort((a, b) => {
               // When preferAdjacentInEpic is on and a hint epic is set,
               // rank in-epic candidates ahead of out-of-epic. This lets a

@@ -307,8 +307,9 @@ describe('governance control-plane features', () => {
         const completeTask = completeTaskTool(state);
         await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a' }, state);
 
-        // QA claim and approve
+        // QA claim and approve (simulate QA get_context so the context guard passes)
         await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-m' }, state);
+        await state.updateTask('task-m', { contextFetchedBy: ['worker-a', 'qa-1'] });
         const qaApprove = qaApproveTool(state);
         await qaApprove.handler({ taskId: 'task-m', workerId: 'qa-1' }, state);
 
@@ -526,6 +527,47 @@ describe('governance control-plane features', () => {
         critique.handler({ taskId: 'task-cb', verdict: 'block', workerId: 'governor-1' }, state)
       ).rejects.toThrow(/concerns/);
     });
+
+    it('stops flipping to PLANNING once the block cap is reached (bounded loop)', async () => {
+      // MAX_CRITIQUE_BLOCKS_DEFAULT = 2: two blocks flip, the third does not.
+      setupMoe('CONTROL');
+      writeEpic();
+      writeTask({ id: 'task-cap', status: 'AWAITING_APPROVAL', implementationPlan: [
+        { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
+      ] });
+      await state.load();
+      await registerGovernor('governor-1');
+      const critique = submitPlanCritiqueTool(state);
+
+      const block = async () => critique.handler(
+        { taskId: 'task-cap', verdict: 'block', concerns: ['still wrong'], workerId: 'governor-1' },
+        state,
+      ) as Promise<{ status: string; flipped: boolean; critiqueBlockCount: number; blockCapReached: boolean }>;
+
+      // Block #1 → PLANNING, count 1.
+      const r1 = await block();
+      expect(r1.status).toBe('PLANNING');
+      expect(r1.flipped).toBe(true);
+      expect(r1.critiqueBlockCount).toBe(1);
+      // Architect re-plans (raw status move back — does NOT reset critiqueBlockCount).
+      await state.updateTask('task-cap', { status: 'AWAITING_APPROVAL' });
+
+      // Block #2 → PLANNING, count 2 (== cap).
+      const r2 = await block();
+      expect(r2.status).toBe('PLANNING');
+      expect(r2.flipped).toBe(true);
+      expect(r2.critiqueBlockCount).toBe(2);
+      await state.updateTask('task-cap', { status: 'AWAITING_APPROVAL' });
+
+      // Block #3 → NO flip; task rests in AWAITING_APPROVAL for a human.
+      const r3 = await block();
+      expect(r3.status).toBe('AWAITING_APPROVAL');
+      expect(r3.flipped).toBe(false);
+      expect(r3.blockCapReached).toBe(true);
+      expect(state.getTask('task-cap')!.status).toBe('AWAITING_APPROVAL');
+      // Count does not climb past the cap.
+      expect(state.getTask('task-cap')!.critiqueBlockCount).toBe(2);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -539,6 +581,7 @@ describe('governance control-plane features', () => {
         id: 'task-d',
         status: 'REVIEW',
         assignedWorkerId: 'qa-1',
+        contextFetchedBy: ['qa-1'], // simulate QA preflight get_context
         maxReopens: 10, // ensure reopen-cap does NOT trigger first
         implementationPlan: [
           { stepId: 'step-1', description: 's', status: 'COMPLETED', affectedFiles: [] },
@@ -560,8 +603,9 @@ describe('governance control-plane features', () => {
       const afterFirst = state.getTask('task-d')!;
       expect(afterFirst.failedDodItems?.map((f) => f.item)).toEqual(['Tests pass']);
 
-      // Worker re-claims, completes, hands to QA again
-      await state.updateTask('task-d', { status: 'REVIEW', assignedWorkerId: 'qa-1' });
+      // Worker re-claims, completes, hands to QA again. qa_reject cleared
+      // contextFetchedBy, so the returning QA must re-fetch context — seed it.
+      await state.updateTask('task-d', { status: 'REVIEW', assignedWorkerId: 'qa-1', contextFetchedBy: ['qa-1'] });
 
       // Second rejection on the SAME item → auto-flip to PLANNING
       const result = await reject.handler({

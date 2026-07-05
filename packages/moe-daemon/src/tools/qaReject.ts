@@ -3,7 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { QAIssue, QAIssueType, RejectionDetails, RejectionHistoryEntry } from '../types/schema.js';
 import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
-import { assertWorkerOwns } from '../util/enforcement.js';
+import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
@@ -102,15 +102,28 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       }
 
       assertWorkerOwns(task, params.workerId);
+      // QA must read the task before rejecting — a reject without reading the
+      // DoD/rails/diff produces a bogus rejectionReason that sends the worker in
+      // circles. No-ops on the human path (assignedWorkerId null).
+      assertContextFetched(task, params.workerId, 'qa_reject');
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
+
+      // Dedupe + trim the failed-DoD payload up front. Two callers listing the
+      // same item twice in ONE rejection must not fake a "same item failed
+      // twice" signal — that flip should only fire across two DISTINCT rejects.
+      // Every downstream use (history, failed-item log, repeat detection) reads
+      // this deduped list rather than the raw params.
+      const uniqueFailed = Array.from(
+        new Set((params.failedDodItems ?? []).map((s) => s.trim()).filter((s) => s.length > 0))
+      );
 
       // Build rejection details when structured feedback is provided. Reason-only
       // rejections must explicitly clear any stale details from previous cycles.
       let rejectionDetails: RejectionDetails | null = null;
-      if (params.failedDodItems?.length || params.issues?.length) {
+      if (uniqueFailed.length || params.issues?.length) {
         rejectionDetails = {};
-        if (params.failedDodItems?.length) {
-          rejectionDetails.failedDodItems = params.failedDodItems;
+        if (uniqueFailed.length) {
+          rejectionDetails.failedDodItems = uniqueFailed;
         }
         if (params.issues?.length) {
           rejectionDetails.issues = params.issues;
@@ -125,20 +138,28 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reason: params.reason,
         rejectedAt: nowIso,
         reopenCount: newReopenCount,
-        ...(params.failedDodItems?.length ? { failedDodItems: params.failedDodItems } : {}),
+        ...(uniqueFailed.length ? { failedDodItems: uniqueFailed } : {}),
         ...(params.issues?.length ? { issues: params.issues } : {}),
       };
       const priorHistory = Array.isArray(task.rejectionHistory) ? task.rejectionHistory : [];
       const updatedHistory = [historyEntry, ...priorHistory].slice(0, 20);
 
-      // Auto-flip back to PLANNING when reopen count crosses the cap so the
-      // architect picks the task up instead of the worker spinning on the
-      // same rejection. Default cap is MAX_REOPENS_DEFAULT (3); per-task
-      // overrides via task.maxReopens.
+      // Bounded escalation. Two tiers off the reopen cap (default
+      // MAX_REOPENS_DEFAULT (3), per-task override via task.maxReopens):
+      //   soft cap  (== maxReopens): flip back to PLANNING once so the
+      //             architect gets ONE re-plan instead of the worker spinning.
+      //   hard cap  (>  maxReopens): the re-plan didn't help either — PARK the
+      //             task for a human instead of re-flipping to PLANNING forever.
+      // Because reopenCount is monotonic (never reset), a single `>=` test would
+      // re-flip to PLANNING on every reject past the cap — an unbounded
+      // PLANNING↔WORKING↔REVIEW loop. The hard cap is the terminating tier.
       const maxReopens = typeof task.maxReopens === 'number' && task.maxReopens > 0
         ? task.maxReopens
         : MAX_REOPENS_DEFAULT;
-      const exceededCap = newReopenCount >= maxReopens;
+      const softCap = maxReopens;
+      const hardCap = maxReopens + 1;
+      const reachedHardCap = newReopenCount >= hardCap;
+      const reachedSoftCap = !reachedHardCap && newReopenCount >= softCap;
 
       // Append-only failed-DoD-item log. The append happens regardless of
       // reopen cap so the audit trail stays complete; what changes is whether
@@ -146,7 +167,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // immediate PLANNING flip on the assumption the task spec, not the
       // worker, is the problem.
       const priorFailed = Array.isArray(task.failedDodItems) ? task.failedDodItems : [];
-      const newFailedEntries = (params.failedDodItems ?? []).map((item) => ({
+      const newFailedEntries = uniqueFailed.map((item) => ({
         item,
         rejectedAt: nowIso,
         rejectedBy: params.workerId || 'qa',
@@ -155,17 +176,21 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
 
       // Detect same-item-failed-twice: counts every entry across history.
       // Any item present ≥2 times after this rejection forces a PLANNING flip
-      // even if reopenCount hasn't crossed the cap.
+      // even if reopenCount hasn't crossed the cap. Uses the deduped payload so
+      // duplicates within a single reject can't reach the count on their own.
       const itemCounts = new Map<string, number>();
       for (const entry of nextFailedItems) {
         itemCounts.set(entry.item, (itemCounts.get(entry.item) ?? 0) + 1);
       }
-      const repeatedItem = (params.failedDodItems ?? []).find(
-        (item) => (itemCounts.get(item) ?? 0) >= 2
-      );
-      const triggeredBySameItem = !exceededCap && !!repeatedItem;
-      const shouldReplan = exceededCap || triggeredBySameItem;
-      const nextStatus = shouldReplan ? 'PLANNING' : 'WORKING';
+      const repeatedItem = uniqueFailed.find((item) => (itemCounts.get(item) ?? 0) >= 2);
+      const triggeredBySameItem = !reachedSoftCap && !reachedHardCap && !!repeatedItem;
+
+      // Destination: hard cap → park in REVIEW (status unchanged, unassigned,
+      // flagged for a human); soft cap or same-item → PLANNING; otherwise the
+      // worker fixes it in WORKING.
+      const shouldReplan = reachedSoftCap || triggeredBySameItem;
+      const parkedForHuman = reachedHardCap;
+      const nextStatus = parkedForHuman ? 'REVIEW' : shouldReplan ? 'PLANNING' : 'WORKING';
 
       const priorMetrics = task.metrics ?? {};
       const nextMetrics = {
@@ -177,11 +202,15 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // On reject, reset the implementation steps to PENDING so the reopened
       // plan is runnable per-step (start_step requires PENDING) and complete_task
       // cannot vacuously re-submit work with every step still marked COMPLETED.
-      // This applies to BOTH destinations: a WORKING reopen reruns the steps, and
-      // a PLANNING auto-flip must not leave an all-COMPLETED plan behind that a
-      // later WORKING transition could vacuously complete before the architect
-      // resubmits.
+      // This applies to the WORKING and PLANNING destinations: a WORKING reopen
+      // reruns the steps, and a PLANNING auto-flip must not leave an
+      // all-COMPLETED plan behind that a later WORKING transition could vacuously
+      // complete before the architect resubmits. When PARKED, the task stays in
+      // REVIEW awaiting a human — preserve the completed steps (and diff) so the
+      // reviewer sees the actual attempt; the human's later reopen scrubs them
+      // via buildReopenClearingUpdates.
       const resetSteps =
+        !parkedForHuman &&
         Array.isArray(task.implementationPlan) &&
         task.implementationPlan.length > 0;
 
@@ -197,7 +226,15 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         rejectionDetails: rejectionDetails ?? undefined,
         rejectionHistory: updatedHistory,
         failedDodItems: nextFailedItems,
+        // Force a fresh get_context on re-claim: whoever picks the reopened task
+        // up (worker on WORKING, architect on PLANNING) must re-read the
+        // rejectionReason/rejectionDetails, not resume on a stale context stamp.
+        contextFetchedBy: [],
         metrics: nextMetrics,
+        // Park for a human: clear the assignee (so no worker owns it) and flag
+        // it so the QA claim pool skips it. Status stays REVIEW — inert, not
+        // re-flipping to PLANNING — until a human clears the flag.
+        ...(parkedForHuman ? { assignedWorkerId: null, needsHumanReview: true } : {}),
         ...(resetSteps
           ? {
               implementationPlan: resetPlanStepsToPending(task.implementationPlan),
@@ -212,16 +249,33 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         'QA_REJECTED'
       );
 
-      // When the cap was crossed, cross-post to #architects with the full
-      // history so the architect can re-plan with context, and surface the
-      // event in the activity log.
-      if (exceededCap) {
+      // Escalation messaging, one branch per destination.
+      if (parkedForHuman) {
+        // Hard cap: reopen budget AND the one architect re-plan are both spent.
+        // Stop the loop and hand it to a human — post to BOTH #governors and
+        // #architects so whoever is watching sees it.
         state.appendActivity('TASK_REOPENED', {
           taskId: updated.id,
           reopenCount: newReopenCount,
           maxReopens,
           rejectionHistory: updatedHistory,
-          reason: 'maxReopens exceeded; flipped back to PLANNING',
+          reason: 'reopen budget + architect re-plan exhausted; parked in REVIEW for a human',
+        }, updated);
+        const parkMsg = `🛑 HUMAN INTERVENTION REQUIRED — ${updated.id} exhausted its reopen budget (${newReopenCount}/${maxReopens}) and the architect re-plan. Parked in REVIEW (unassigned), excluded from the QA queue until a human reopens or approves it. Latest: ${updatedHistory
+          .slice(0, 3)
+          .map((h) => `[#${h.reopenCount}] ${h.reason.slice(0, 80)}`)
+          .join(' | ')}`;
+        try { await state.postToRoleChannel('governors', parkMsg); } catch { /* never block tool */ }
+        try { await state.postToRoleChannel('architects', parkMsg); } catch { /* never block tool */ }
+      } else if (reachedSoftCap) {
+        // Soft cap: cross-post to #architects with the full history so the
+        // architect can re-plan with context, and surface it in the activity log.
+        state.appendActivity('TASK_REOPENED', {
+          taskId: updated.id,
+          reopenCount: newReopenCount,
+          maxReopens,
+          rejectionHistory: updatedHistory,
+          reason: 'reopen cap reached; flipped back to PLANNING for one re-plan',
         }, updated);
         try {
           await state.postToRoleChannel(
@@ -273,26 +327,31 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       } catch { /* never block tool */ }
 
       const destination = shouldReplan ? 'PLANNING' : 'WORKING';
-      const replanReason = exceededCap
-        ? 'reopen cap hit'
+      const replanReason = reachedSoftCap
+        ? 'reopen cap reached'
         : triggeredBySameItem
           ? `same DoD item failed twice: "${(repeatedItem ?? '').slice(0, 120)}"`
           : null;
+      const message = parkedForHuman
+        ? `Task ${updated.id} rejected and PARKED in REVIEW — reopen budget (${newReopenCount}/${maxReopens}) and the architect re-plan are exhausted. A human must reopen or approve it; it is excluded from the QA queue until then.`
+        : replanReason
+          ? `Task ${updated.id} rejected and flipped to PLANNING (${replanReason}). Architect will re-plan.`
+          : `Task ${updated.id} rejected and moved to ${destination}. Worker should address: ${params.reason}`;
       return {
         success: true,
         taskId: updated.id,
         status: updated.status,
         reopenCount: updated.reopenCount,
         maxReopens,
-        exceededReopenCap: exceededCap,
+        exceededReopenCap: reachedSoftCap || reachedHardCap,
+        parkedForHuman,
+        needsHumanReview: updated.needsHumanReview ?? false,
         repeatedFailedDodItem: triggeredBySameItem ? repeatedItem : undefined,
         reason: params.reason,
         rejectionDetails,
         rejectionHistory: updatedHistory,
         failedDodItems: updated.failedDodItems ?? nextFailedItems,
-        message: replanReason
-          ? `Task ${updated.id} rejected and flipped to PLANNING (${replanReason}). Architect will re-plan.`
-          : `Task ${updated.id} rejected and moved to ${destination}. Worker should address: ${params.reason}`,
+        message,
         nextAction: {
           tool: 'moe.wait_for_task',
           args: {

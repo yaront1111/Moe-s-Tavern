@@ -177,6 +177,14 @@ export interface StateManagerOptions {
   projectPath: string;
   blockedTimeoutMs?: number;
   staleWorkerTimeoutMs?: number;
+  /**
+   * How long a REVIEW task's owner may be silent before the task is released
+   * (unassigned, status unchanged) so another QA agent can claim it. Scoped to
+   * REVIEW only — WORKING/PLANNING assignments are never yanked by staleness
+   * (that was 3d2cb16's fix for stealing tasks off long-running coders).
+   * Defaults to staleWorkerTimeoutMs.
+   */
+  reviewStaleTimeoutMs?: number;
 }
 
 export class StateManager {
@@ -217,6 +225,7 @@ export class StateManager {
   private alertedStaleAssignments = new Set<string>();
   private readonly blockedTimeoutMs: number;
   private readonly staleWorkerTimeoutMs: number;
+  private readonly reviewStaleTimeoutMs: number;
   private mentionRouter: MentionRouter;
   private fileWatcher?: import('./FileWatcher.js').FileWatcher;
   /** In-memory per-worker per-channel unread message counts */
@@ -227,6 +236,9 @@ export class StateManager {
     this.moePath = path.join(this.projectPath, '.moe');
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
+    // Defaults to the stale-worker timeout: never releases a REVIEW task faster
+    // than the pre-existing record prune would, so this is purely additive.
+    this.reviewStaleTimeoutMs = options.reviewStaleTimeoutMs ?? this.staleWorkerTimeoutMs;
     this.mentionRouter = new MentionRouter(4);
   }
 
@@ -508,6 +520,39 @@ export class StateManager {
           lastError: null,
           currentTaskId: null,
         }, 'WORKER_TIMEOUT');
+      }
+    }
+
+    // REVIEW self-heal: a hard-crashed QA (no graceful deregister) is not DEAD
+    // and still "owns" its REVIEW task, so isTaskClaimable stays false and no
+    // other QA can pick it up — the task strands (regression window opened when
+    // the idle liveness sweep was removed in 3d2cb16). Scoped to REVIEW ONLY
+    // (there is no active coding to interrupt there), release a REVIEW task
+    // whose owner has gone silent past reviewStaleTimeoutMs. WORKING/PLANNING
+    // assignments are deliberately never yanked by staleness — that is exactly
+    // what 3d2cb16 fixed (stealing tasks off long-running coders).
+    for (const task of this.tasks.values()) {
+      if (task.status !== 'REVIEW' || !task.assignedWorkerId) continue;
+      const owner = this.workers.get(task.assignedWorkerId);
+      // Missing owner → already claimable via isTaskClaimable; DEAD → handled by
+      // claim takeover / the record prune. Only act on a present, non-DEAD owner.
+      if (!owner || owner.status === 'DEAD') continue;
+      const ownerLast = owner.lastActivityAt ? new Date(owner.lastActivityAt).getTime() : 0;
+      if (isNaN(ownerLast) || ownerLast === 0) continue;
+      if (now - ownerLast <= this.reviewStaleTimeoutMs) continue;
+
+      logger.info(
+        { taskId: task.id, workerId: owner.id, lastActivityAt: owner.lastActivityAt },
+        'Releasing REVIEW task from stale owner so another QA can claim it'
+      );
+      // Status stays REVIEW (nextStatusForRelease(REVIEW) === 'REVIEW'); we only
+      // clear the assignment. Because there's no status change, updateTask does
+      // NOT auto-release the prior owner, so clear its currentTaskId here too
+      // (matters when reviewStaleTimeoutMs is set shorter than the stale-worker
+      // prune; at the default they're equal and Layer-3 prunes the owner below).
+      await this.updateTask(task.id, { assignedWorkerId: null }, 'WORKER_TIMEOUT');
+      if (owner.currentTaskId === task.id) {
+        await this.updateWorker(owner.id, { currentTaskId: null });
       }
     }
 

@@ -209,4 +209,36 @@ describe('lifecycle tool fixes', () => {
       expect(w.status).toBe('IDLE');
     });
   });
+
+  // ---- set_task_status reopen hands back a next step + clears context --------
+  describe('set_task_status reopen guidance', () => {
+    it('returns a get_context nextAction (with reopen skill) and clears contextFetchedBy on a REVIEW→PLANNING reopen', async () => {
+      setupMoe();
+      writeEpic();
+      writeTask({
+        id: 'task-1',
+        status: 'REVIEW',
+        assignedWorkerId: null,
+        contextFetchedBy: ['qa-1'],
+        implementationPlan: [
+          { stepId: 'step-1', description: 's', status: 'COMPLETED', affectedFiles: [] },
+        ],
+      });
+      state = new StateManager({ projectPath: testDir });
+      await state.load();
+
+      const result = await setTaskStatusTool(state).handler(
+        { taskId: 'task-1', status: 'PLANNING', reason: 'governor blocked the plan' },
+        state
+      ) as Record<string, unknown>;
+
+      expect(result.status).toBe('PLANNING');
+      const nextAction = result.nextAction as { tool: string; recommendedSkill?: { name: string } };
+      expect(nextAction).toBeDefined();
+      expect(nextAction.tool).toBe('moe.get_context');
+      expect(nextAction.recommendedSkill?.name).toBe('moe-planning');
+      // Reopen scrubbed the stale context stamp → next claimer must re-fetch.
+      expect(state.getTask('task-1')!.contextFetchedBy).toEqual([]);
+    });
+  });
 });

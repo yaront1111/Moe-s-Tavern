@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
-import { assertWorkerOwns } from '../util/enforcement.js';
+import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
@@ -34,6 +34,10 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       }
 
       assertWorkerOwns(task, params.workerId);
+      // QA must read the task (DoD + rails + diff) before signing off. This is
+      // the last gate — approving blind is the highest-impact way to skip the
+      // review workflow. No-ops on the human path (assignedWorkerId null).
+      assertContextFetched(task, params.workerId, 'qa_approve');
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       // Capture metrics: doneAt + wallClockMs (first claim → DONE). If no
@@ -53,8 +57,16 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         params.taskId,
         // completedAt now means "task finished" — stamped here at DONE, the only
         // true completion point (reviewCompletedAt/metrics.doneAt mark the same
-        // moment for review-timing/metrics).
-        { status: 'DONE', completedAt: nowIso, reviewCompletedAt: nowIso, metrics: nextMetrics },
+        // moment for review-timing/metrics). Clear the escalation latches so a
+        // future reopen of this task starts from a clean budget.
+        {
+          status: 'DONE',
+          completedAt: nowIso,
+          reviewCompletedAt: nowIso,
+          metrics: nextMetrics,
+          needsHumanReview: undefined,
+          critiqueBlockCount: undefined,
+        },
         'QA_APPROVED'
       );
 
