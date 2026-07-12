@@ -9,6 +9,9 @@ You verify a completed task against its Definition of Done and rails, then appro
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
 
+## Session discipline
+One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run every gate in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-review: re-verify from disk/git; trust nothing it claimed in-flight.
+
 ## Rejection quality
 Every rejection must name failed DoD items and include structured issues that tell the worker what to change and why.
 

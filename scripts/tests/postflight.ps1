@@ -12,9 +12,20 @@ try {
         exit 0
     }
 
+    # Prefer pwsh (CI), fall back to Windows PowerShell 5.1 — the wrapper
+    # targets 5.1, so either engine is a valid harness host.
+    $psExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+
     $conflictOut = Join-Path $tempRoot 'conflict.out'
-    & pwsh -NoProfile -File $wrapper -Loop -NoLoop *> $conflictOut
+    # Windows PowerShell 5.1 wraps a child's stderr lines into ErrorRecords
+    # when redirected, which $ErrorActionPreference='Stop' escalates to a
+    # throw even though the child exited as expected. Relax EAP around child
+    # invocations; exit codes are checked explicitly.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $psExe -NoProfile -File $wrapper -Loop -NoLoop *> $conflictOut
     $conflictCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
     if ($conflictCode -ne 2) {
         Get-Content $conflictOut -ErrorAction SilentlyContinue | Write-Error
         throw "Expected -Loop -NoLoop to exit 2; got $conflictCode"
@@ -52,8 +63,21 @@ switch (tool) {
   case 'chat_join': ok({ success: true }); break;
   case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
-  case 'claim_next_task': ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } }); break;
-  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
+  case 'claim_next_task': {
+    if (process.env.FAKE_CLAIM_MODE === 'resume') {
+      // One-task-per-worker guard shape (claimNextTask.ts): the worker already
+      // holds an active task from a CLI session that died mid-task.
+      ok({
+        hasNext: false,
+        alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'REVIEW' },
+        nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (REVIEW).' }
+      });
+    } else {
+      ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
+    }
+    break;
+  }
+  case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
   case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
@@ -76,8 +100,10 @@ switch (tool) {
     $env:USERPROFILE = $homeDir
     $env:TEMP = $tempRoot
     $wrapperOut = Join-Path $tempRoot 'wrapper.out'
+    $wrapperResumeOut = Join-Path $tempRoot 'wrapper-resume.out'
     try {
-        & pwsh -NoProfile -File $wrapper `
+        $ErrorActionPreference = 'Continue'
+        & $psExe -NoProfile -File $wrapper `
             -Project $projectDir `
             -WorkerId worker-postflight `
             -Role worker `
@@ -88,7 +114,29 @@ switch (tool) {
             -PollInterval 0 `
             *> $wrapperOut
         $wrapperCode = $LASTEXITCODE
+
+        # --- Resume path: a worker that already holds an active task (its
+        # previous CLI died mid-task) gets hasNext:false + alreadyAssigned from
+        # claim_next_task. The wrapper must treat that as a claim and relaunch
+        # the CLI instead of idle-looping on "No claimable task". ---
+        $env:FAKE_CLAIM_MODE = 'resume'
+        try {
+            & $psExe -NoProfile -File $wrapper `
+                -Project $projectDir `
+                -WorkerId qa-postflight `
+                -Role qa `
+                -Team Smoke `
+                -NoStartDaemon `
+                -Command $trueCmd `
+                -Loop `
+                -PollInterval 0 `
+                *> $wrapperResumeOut
+            $resumeCode = $LASTEXITCODE
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+        }
     } finally {
+        $ErrorActionPreference = $prevEap
         $env:MOE_PROXY_PATH = $oldProxy
         $env:USERPROFILE = $oldUserProfile
         $env:TEMP = $oldTemp
@@ -97,6 +145,10 @@ switch (tool) {
         Get-Content $wrapperOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
         throw "Wrapper exited with $wrapperCode"
     }
+    if ($resumeCode -ne 0) {
+        Get-Content $wrapperResumeOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw "Resume wrapper exited with $resumeCode"
+    }
 
     # Post-flight no longer writes a session-summary file (cross-session memory
     # moved to Serena). The post-flight chat message remains the session signal.
@@ -104,6 +156,15 @@ switch (tool) {
     $messages = Get-Content -Raw -Path $messagesFile
     if ($messages -notlike '*worker session ended: task=task-postflight (CLI exit=0)*') {
         throw 'Expected post-flight chat message not found'
+    }
+
+    $resumeOutText = Get-Content -Raw -Path $wrapperResumeOut
+    if ($resumeOutText -notlike '*Pre-flight complete. Resuming: task-resume*') {
+        Write-Host $resumeOutText
+        throw 'Expected resume pre-flight banner not found'
+    }
+    if ($messages -notlike '*qa session ended: task=task-resume (CLI exit=0)*') {
+        throw 'Expected resume post-flight chat message not found'
     }
 
     Write-Host 'PASS postflight.ps1'

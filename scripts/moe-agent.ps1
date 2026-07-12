@@ -57,7 +57,9 @@
 $ErrorActionPreference = 'Stop'
 
 if ($Loop -and $NoLoop) {
-    Write-Error "Conflicting switches: -Loop and -NoLoop cannot be used together. Choose -Loop for polling mode or -NoLoop for single-shot mode."
+    # Not Write-Error: with $ErrorActionPreference='Stop' (above) it becomes a
+    # terminating error and the script dies with exit 1 before reaching exit 2.
+    [Console]::Error.WriteLine("Conflicting switches: -Loop and -NoLoop cannot be used together. Choose -Loop for polling mode or -NoLoop for single-shot mode.")
     exit 2
 }
 
@@ -1051,6 +1053,18 @@ if ($teamContext) {
     $systemAppendPost += "`n`n# Team`n$teamContext"
 }
 
+# Consecutive-resume tracking for the alreadyAssigned resume path (pre-flight
+# below). Wrapper-scope: survives loop iterations, resets whenever the held
+# task changes or clears. MOE_RESUME_MAX_ATTEMPTS caps how many fresh CLIs we
+# relaunch onto the same still-assigned task before escalating to #general and
+# idling — a CLI that keeps dying on one task should page the governor, not
+# burn sessions forever.
+$script:ResumeTrackTaskId = ""
+$script:ResumeAttempts = 0
+$script:ResumeEscalated = $false
+$resumeMaxAttempts = 5
+if ($env:MOE_RESUME_MAX_ATTEMPTS -match '^\d+$') { $resumeMaxAttempts = [int]$env:MOE_RESUME_MAX_ATTEMPTS }
+
 try {
 do {
     if (-not $firstRun) {
@@ -1077,6 +1091,7 @@ do {
     $preflightSkillNextTool = $null
     $preflightOk = $false
     $preflightNoTask = $false
+    $preflightIsResume = $false
     $preflightRoutedMentions = @()
 
     if ($AutoClaim) {
@@ -1125,6 +1140,44 @@ do {
             $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
         }
         if ($null -ne $claim) {
+            # Resume signal: hasNext:false + alreadyAssigned means THIS worker
+            # still holds an active task from a previous CLI session that died
+            # mid-task (one-shot --print exits at end_turn; crashes land here
+            # too). Treat it as a claim and relaunch the CLI onto the held task.
+            # Ignoring it strands the task: it is never claimable by anyone else
+            # while this wrapper's polling keeps the worker record alive, and
+            # the wrapper would idle-loop on "No claimable task" forever.
+            $resumeInfo = $null
+            if (-not $claim.hasNext -and $claim.PSObject.Properties['alreadyAssigned'] -and $claim.alreadyAssigned -and $claim.alreadyAssigned.taskId) {
+                $resumeInfo = $claim.alreadyAssigned
+            }
+            if ($resumeInfo) {
+                if ($script:ResumeTrackTaskId -ne [string]$resumeInfo.taskId) {
+                    $script:ResumeTrackTaskId = [string]$resumeInfo.taskId
+                    $script:ResumeAttempts = 0
+                    $script:ResumeEscalated = $false
+                }
+                $script:ResumeAttempts++
+                if ($script:ResumeAttempts -gt $resumeMaxAttempts) {
+                    # The CLI keeps dying on this task without finishing it.
+                    # Stop burning sessions: escalate once to #general (governor
+                    # or human can release_task / investigate) and idle.
+                    if (-not $script:ResumeEscalated -and $generalChannelId) {
+                        $resumeStatusForMsg = if ($resumeInfo.PSObject.Properties['status']) { [string]$resumeInfo.status } else { "?" }
+                        $escalation = "@governors ${WorkerId}: CLI session ended $($script:ResumeAttempts - 1) times in a row while still holding $($resumeInfo.taskId) ($resumeStatusForMsg); wrapper is pausing auto-resume. release_task to reassign, or investigate why sessions keep dying mid-task."
+                        Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $escalation } | Out-Null
+                        $script:ResumeEscalated = $true
+                    }
+                    Write-Host "[resume] Auto-resume cap reached ($resumeMaxAttempts) for $($resumeInfo.taskId) — escalated to #general; idling until released." -ForegroundColor Red
+                    $resumeInfo = $null
+                }
+            } else {
+                # No held task this iteration — clear the consecutive-resume tracker.
+                $script:ResumeTrackTaskId = ""
+                $script:ResumeAttempts = 0
+                $script:ResumeEscalated = $false
+            }
+
             # Worker is registered by team-setup join_team (above) when teams are
             # enabled, and re-registered by claim_next_task on a successful claim.
             # If both were skipped (no team + no claim), chat_send would fail with
@@ -1133,16 +1186,29 @@ do {
             # Per-task starts/completions are conveyed by post-flight session-end
             # messages and the daemon's task-state events.
             if ($generalChannelId -and $isFirstIteration) {
-                $announceText = if ($claim.hasNext) { "$Role online, starting $($claim.task.id): $($claim.task.title)" } else { "$Role online, waiting for tasks" }
+                $announceText = if ($claim.hasNext) { "$Role online, starting $($claim.task.id): $($claim.task.title)" } elseif ($resumeInfo) { "$Role online, resuming held task $($resumeInfo.taskId)" } else { "$Role online, waiting for tasks" }
                 Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $announceText } | Out-Null
             }
-            if ($claim.hasNext) {
-                $preflightTaskId = $claim.task.id
-                $preflightTaskTitle = $claim.task.title
-                if ($claim.task.PSObject.Properties['chatChannel']) { $preflightTaskChannel = $claim.task.chatChannel }
+            if ($claim.hasNext -or $resumeInfo) {
+                if ($claim.hasNext) {
+                    $preflightTaskId = $claim.task.id
+                    $preflightTaskTitle = $claim.task.title
+                    if ($claim.task.PSObject.Properties['chatChannel']) { $preflightTaskChannel = $claim.task.chatChannel }
+                } else {
+                    $preflightIsResume = $true
+                    $preflightTaskId = [string]$resumeInfo.taskId
+                    if ($resumeInfo.PSObject.Properties['title'] -and $resumeInfo.title) { $preflightTaskTitle = [string]$resumeInfo.title }
+                    $resumeStatus = if ($resumeInfo.PSObject.Properties['status']) { [string]$resumeInfo.status } else { "?" }
+                    Write-Host "[resume] $WorkerId already holds $preflightTaskId ($resumeStatus) from a previous session (attempt $($script:ResumeAttempts)/$resumeMaxAttempts) — relaunching CLI to resume it." -ForegroundColor Yellow
+                }
 
                 if ($preflightTaskId) {
                     $preflightContext = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+                }
+                # alreadyAssigned carries no chatChannel — recover it from the
+                # fetched context on the resume path.
+                if (-not $preflightTaskChannel -and $preflightContext -and $preflightContext.task -and $preflightContext.task.PSObject.Properties['chatChannel'] -and $preflightContext.task.chatChannel) {
+                    $preflightTaskChannel = [string]$preflightContext.task.chatChannel
                 }
                 if ($preflightTaskChannel) {
                     $preflightTaskUnread = Invoke-MoeRpc -Tool "chat_read" -Args @{ channel = $preflightTaskChannel; workerId = $WorkerId }
@@ -1175,7 +1241,8 @@ do {
                 }
 
                 $preflightOk = $true
-                Write-Host "[OK] Pre-flight complete. Claimed: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
+                $preflightVerb = if ($preflightIsResume) { "Resuming" } else { "Claimed" }
+                Write-Host "[OK] Pre-flight complete. ${preflightVerb}: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
             } else {
                 $preflightNoTask = $true
                 Write-Host "[INFO] No claimable task for role $Role. Agent will wait_for_task." -ForegroundColor Yellow
@@ -1432,6 +1499,12 @@ $mentionsJson
             "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
             "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
         }
+        if ($claimPromptBody -and $preflightIsResume) {
+            # A previous CLI session died while holding this task (see the
+            # resume path in pre-flight). Tell the fresh session to treat that
+            # session's in-flight state as untrusted and finish the job.
+            $claimPromptBody = "RESUME: you are workerId $WorkerId and you already claimed task $preflightTaskId in a previous CLI session that ended before the task was finished. Anything that session left running (background builds, tests, jobs) is DEAD. Do not trust its in-flight claims: re-verify current state from the task context above, the files on disk, and git, then finish the remaining work in THIS session. " + $claimPromptBody
+        }
     } elseif ($AutoClaim -and $Role -eq 'governor') {
         # Governor enters governance mode and lives in a chat_wait loop on
         # #governors. They never claim tasks. The wrapper has already called
@@ -1445,6 +1518,16 @@ $mentionsJson
     } elseif ($AutoClaim) {
         # Pre-flight skipped or failed — legacy multi-step prompt
         $claimPromptBody = "First call moe.chat_channels to find #general, then moe.chat_join and moe.chat_send to announce yourself as $Role. Then call moe.chat_read to catch up on any unread messages. Then call moe.claim_next_task $claimJson. After claiming a task and calling moe.get_context, use Serena list_memories / read_memory to pick up prior knowledge for this task/area. Before calling moe.wait_for_task, use Serena write_memory to record a 'task-<id>-handoff' note (and any gotcha-<area> learnings) so the next agent benefits. If hasNext is false, say: 'No tasks in $Role queue' and wait."
+    }
+
+    # One-shot (--print) sessions exit the moment the model ends its turn,
+    # killing any background jobs with the process. Observed failure mode: QA
+    # agents started a background build gate, ended the turn "to wait for its
+    # completion notification", and died mid-review — the notification can
+    # never arrive in --print mode. Say so explicitly in the prompt. Governor
+    # is excluded: its prompt is a chat_wait loop, not a finish-and-stop task.
+    if ($claimPromptBody -and -not $Interactive -and $Role -ne 'governor') {
+        $claimPromptBody += " CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
     }
 
     # $claimPrompt is what gets passed as the user message to the CLI.

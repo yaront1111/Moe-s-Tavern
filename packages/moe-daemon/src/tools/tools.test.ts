@@ -2968,6 +2968,34 @@ describe('MCP Tools', () => {
       expect(result.messages?.[0].content).toBe('status update from somebody else');
     });
 
+    it('refreshes worker lastActivityAt when starting a chat wait', async () => {
+      // Regression: chat_wait is a long-poll (up to 10 min) that previously
+      // never touched the worker's heartbeat, so a worker legitimately parked
+      // in chat_wait would report isAlive=false past the 120s presence window
+      // even though it's actively blocked in a moe call — unlike wait_for_task,
+      // which touches on entry. Bring chat_wait to parity.
+      const channel = await setupChat();
+      const before = state.getWorker('worker-chat')!.lastActivityAt;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const tool = chatWaitTool(state);
+      const waitPromise = tool.handler({
+        workerId: 'worker-chat',
+        channels: [channel],
+        timeoutMs: 1000,
+      }, state) as Promise<{ hasMessage: boolean }>;
+
+      // The heartbeat touch is fire-and-forget (must not delay subscribing —
+      // see the comment in chatWait.ts), so give it a tick to land before
+      // asserting, independent of the wake/timeout timing below.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(new Date(state.getWorker('worker-chat')!.lastActivityAt).getTime())
+        .toBeGreaterThan(new Date(before).getTime());
+
+      await state.sendMessage({ channel, sender: 'system', content: 'wake up' });
+      await waitPromise;
+    });
+
     it('rejects chat_send posting as the reserved "system" sender', async () => {
       // Regression: 'system' must not be impersonable over /mcp — it would let
       // an agent masquerade as the daemon and reset the mentionRouter

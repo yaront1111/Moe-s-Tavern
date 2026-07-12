@@ -112,6 +112,15 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       const channelSet = params.channels ? new Set(params.channels) : null;
       const workerId = params.workerId;
 
+      // Blocking calls must refresh the heartbeat on entry — otherwise a worker
+      // legitimately parked here (up to 10 min) reports isAlive=false past the
+      // 120s presence window despite being actively blocked in a moe call.
+      // Mirrors moe.wait_for_task, the other blocking tool. Fire-and-forget:
+      // must not delay the subscription below (the channelSet path has no
+      // backlog re-check, so any await here would open a lost-wakeup window).
+      void state.touchWorker(workerId)
+        .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on chat_wait entry'));
+
       // Backlog check (lost-wakeup fix): the subscription below only sees
       // FUTURE events, so a relevant message that arrived in the window between
       // the worker's last chat_read and this chat_wait would otherwise be
@@ -167,7 +176,9 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         const timer = setTimeout(() => {
           cleanup();
           logger.info({ workerId }, 'Chat wait timed out');
-          resolve({ hasMessage: false, timedOut: true });
+          void state.touchWorker(workerId)
+            .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on chat_wait timeout'))
+            .finally(() => resolve({ hasMessage: false, timedOut: true }));
         }, timeoutMs);
 
         if (timer.unref) {

@@ -13,7 +13,11 @@ if ! command -v timeout >/dev/null 2>&1; then
 fi
 
 # Fast flag regressions: no daemon/proxy required.
-MOE_NODE_COMMAND=/bin/echo "$WRAPPER" --loop --help | grep -q -- '--loop'
+# Capture --help output before grepping: piping straight into `grep -q` makes
+# grep exit at the first match while the wrapper is still writing, which under
+# `pipefail` surfaces as SIGPIPE (exit 141) on Windows Git Bash.
+help_out="$(MOE_NODE_COMMAND=/bin/echo "$WRAPPER" --loop --help)"
+grep -q -- '--loop' <<< "$help_out"
 set +e
 MOE_NODE_COMMAND=/bin/echo "$WRAPPER" --loop --no-loop >"$TMP_DIR/conflict.out" 2>&1
 conflict_code=$?
@@ -39,9 +43,17 @@ exec "$NODE_FOR_TEST" "\$@"
 EOF
 chmod +x "$NODE_SHIM"
 NODE_FOR_TEST="$NODE_SHIM"
+# Match the wrapper's own python resolution (find_python: python3, py -3,
+# plain python 3.x) instead of hard-requiring python3 — Windows Git Bash
+# typically ships `python` only.
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "SKIP postflight.sh: python3 is not available in this shell"
-  exit 0
+  case "$(python --version 2>&1)" in
+    "Python 3."*) : ;;
+    *)
+      echo "SKIP postflight.sh: python 3 is not available in this shell"
+      exit 0
+      ;;
+  esac
 fi
 
 PROJECT_DIR="$TMP_DIR/project"
@@ -75,8 +87,21 @@ switch (tool) {
   case 'chat_join': ok({ success: true }); break;
   case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
-  case 'claim_next_task': ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } }); break;
-  case 'get_context': ok({ task: { id: 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
+  case 'claim_next_task': {
+    if (process.env.FAKE_CLAIM_MODE === 'resume') {
+      // One-task-per-worker guard shape (claimNextTask.ts): the worker already
+      // holds an active task from a CLI session that died mid-task.
+      ok({
+        hasNext: false,
+        alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'REVIEW' },
+        nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (REVIEW).' }
+      });
+    } else {
+      ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
+    }
+    break;
+  }
+  case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
   case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
@@ -116,6 +141,54 @@ if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=0)' "$MESSAG
   cat "$TMP_DIR/wrapper.out" >&2 || true
   cat "$MESSAGES_FILE" >&2 || true
   echo "Expected post-flight chat message not found" >&2
+  exit 1
+fi
+
+# --- Resume path: a worker that already holds an active task (its previous CLI
+# died mid-task) gets hasNext:false + alreadyAssigned from claim_next_task. The
+# wrapper must treat that as a claim and relaunch the CLI with a RESUME prompt
+# instead of idle-looping on "No claimable task". ---
+FAKE_CLI="$TMP_DIR/fake-cli"
+CLI_ARGS_FILE="$TMP_DIR/cli-args.txt"
+cat > "$FAKE_CLI" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$CLI_ARGS_FILE"
+exit 0
+EOF
+chmod +x "$FAKE_CLI"
+
+set +e
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 20s \
+  "$WRAPPER" \
+  --project "$PROJECT_DIR" \
+  --worker-id qa-postflight \
+  --role qa \
+  --team Smoke \
+  --no-start-daemon \
+  --command "$FAKE_CLI" \
+  --loop \
+  --poll-interval 0 \
+  >"$TMP_DIR/wrapper-resume.out" 2>&1
+resume_code=$?
+set -e
+if [ "$resume_code" -ne 0 ]; then
+  cat "$TMP_DIR/wrapper-resume.out" >&2 || true
+  echo "Resume wrapper exited with $resume_code" >&2
+  exit 1
+fi
+if ! grep -Fq 'Pre-flight complete. Resuming: task-resume' "$TMP_DIR/wrapper-resume.out"; then
+  cat "$TMP_DIR/wrapper-resume.out" >&2 || true
+  echo "Expected resume pre-flight banner not found" >&2
+  exit 1
+fi
+if ! grep -Fq 'qa session ended: task=task-resume (CLI exit=0)' "$MESSAGES_FILE"; then
+  cat "$MESSAGES_FILE" >&2 || true
+  echo "Expected resume post-flight chat message not found" >&2
+  exit 1
+fi
+if [ ! -f "$CLI_ARGS_FILE" ] || ! grep -Fq 'RESUME: you are workerId qa-postflight' "$CLI_ARGS_FILE"; then
+  cat "$TMP_DIR/wrapper-resume.out" >&2 || true
+  echo "Expected CLI to be launched with a RESUME prompt" >&2
   exit 1
 fi
 

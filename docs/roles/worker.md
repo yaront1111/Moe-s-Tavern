@@ -9,6 +9,9 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - Do not claim success without fresh verification output.
 
+## Session discipline
+One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
+
 ## Runtime-driven workflow
 Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool.
 

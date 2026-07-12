@@ -214,10 +214,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ad5fc8c2586d459aa97981845285c210",
+      "author": "architect-028d",
+      "content": "Regression/production incident found 2026-07-11 in px4swarm task-9ea83fc8: current ownership enforcement fails open when task.assignedWorkerId is null. A status transition silently clears assignment, start_step/complete_step then recreate only worker.currentTaskId, and the task remains claimable by another worker. Follow-up must make identified-worker mutations reject null ownership, authorize set_task_status/release_task/replaceExisting, atomically maintain task+worker ownership, add claim epochs, audit before/after owner+actor, and add the exact long-verification/takeover regression.",
+      "timestamp": "2026-07-11T12:59:35.654Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-04-17T19:05:11.205Z",
-  "updatedAt": "2026-06-09T10:59:58.453Z",
+  "updatedAt": "2026-07-11T12:59:35.655Z",
   "planSubmittedAt": "2026-04-17T19:24:17.856Z",
   "planningNotes": {
     "approachesConsidered": "A) Middleware-style interceptor in McpAdapter.handleSingle that enforces ownership/ordering for every tool — rejected: too coarse, each tool has different preconditions (submit_plan needs PLANNING, qa_* needs REVIEW), and would require a per-tool policy map anyway. B) Adding a required (not optional) workerId param — rejected: breaks backward compat for --no-auto-claim interactive flows and plugin-driven human actions on /ws. C) Chosen: per-tool guards via shared helpers + optional workerId + null-assignedWorkerId no-op. Helpers keep each tool handler short (<50 lines) and testable in isolation. D) Strict step ordering (step N must precede N+1) — rejected: task description only calls for get_context-before-start_step and all-complete-before-complete_task; tighter order is out of scope for Phase 3 and would break plan flexibility.",

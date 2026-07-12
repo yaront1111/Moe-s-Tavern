@@ -1321,7 +1321,11 @@ trap 'echo ""; echo "Agent stopped."; exit 0' INT TERM
 # Uses TEAM_PROXY / PROXY_CMD resolved earlier. Returns non-zero on failure.
 moe_rpc() {
     local tool="$1"
-    local args_json="${2:-{}}"
+    # NOTE: not "${2:-{}}" — bash ends the brace expansion at the FIRST '}',
+    # so with $2 set that form appends a stray '}' to the caller's JSON
+    # ('{"a":1}' -> '{"a":1}}'), silently failing every RPC that passes args.
+    local args_json="${2:-}"
+    if [ -z "$args_json" ]; then args_json='{}'; fi
     local rpc
     rpc=$($PYTHON_CMD -c "
 import json, sys
@@ -1414,6 +1418,20 @@ announce_push_failure() {
 
 FIRST_RUN=true
 
+# Consecutive-resume tracking for the alreadyAssigned resume path (pre-flight
+# below). Wrapper-scope: survives loop iterations, resets whenever the held
+# task changes or clears. MOE_RESUME_MAX_ATTEMPTS caps how many fresh CLIs we
+# relaunch onto the same still-assigned task before escalating to #general and
+# idling -- a CLI that keeps dying on one task should page the governor, not
+# burn sessions forever.
+RESUME_TRACK_TASK_ID=""
+RESUME_ATTEMPTS=0
+RESUME_ESCALATED=false
+RESUME_MAX_ATTEMPTS="${MOE_RESUME_MAX_ATTEMPTS:-5}"
+case "$RESUME_MAX_ATTEMPTS" in
+    ''|*[!0-9]*) RESUME_MAX_ATTEMPTS=5 ;;
+esac
+
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
@@ -1444,6 +1462,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_SKILL_NEXT_TOOL=""
     PREFLIGHT_NO_TASK=false
     PREFLIGHT_OK=false
+    PREFLIGHT_IS_RESUME=false
     PREFLIGHT_ROUTED_MENTIONS_JSON=""
     PREFLIGHT_ROUTED_MENTIONS_COUNT=0
 
@@ -1514,7 +1533,76 @@ except Exception:
     print('error')
 " <<< "$CLAIM_RESULT" 2>/dev/null || echo "error")
 
-            if [ "$HAS_NEXT" = "true" ]; then
+            # Resume signal: hasNext:false + alreadyAssigned means THIS worker
+            # still holds an active task from a previous CLI session that died
+            # mid-task (crash, or a one-shot session ending its turn early).
+            # Treat it as a claim and relaunch the CLI onto the held task.
+            # Ignoring it strands the task: it is never claimable by anyone
+            # else while this wrapper's polling keeps the worker record alive,
+            # and the wrapper would idle-loop on "No claimable task" forever.
+            RESUME_TASK_ID=""
+            RESUME_TASK_TITLE=""
+            RESUME_TASK_STATUS=""
+            if [ "$HAS_NEXT" = "false" ]; then
+                # Unit-separator (\x1f) fields, newlines sanitized: bash
+                # command substitution strips NUL bytes, so a '\0' separator
+                # would silently concatenate the fields.
+                PARSED_RESUME=$($PYTHON_CMD -c "
+import json, sys
+def clean(s):
+    return (s or '').replace('\r', ' ').replace('\n', ' ')
+try:
+    d = json.loads(sys.stdin.read())
+    aa = d.get('alreadyAssigned') or {}
+    tid = clean(aa.get('taskId'))
+    if tid:
+        sys.stdout.write(tid + '\x1f' + clean(aa.get('title')) + '\x1f' + clean(aa.get('status')))
+except Exception:
+    pass
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
+                if [ -n "$PARSED_RESUME" ]; then
+                    IFS=$'\x1f' read -r RESUME_TASK_ID RESUME_TASK_TITLE RESUME_TASK_STATUS <<< "$PARSED_RESUME" || true
+                    RESUME_TASK_ID="${RESUME_TASK_ID:-}"
+                    RESUME_TASK_TITLE="${RESUME_TASK_TITLE:-}"
+                    RESUME_TASK_STATUS="${RESUME_TASK_STATUS:-}"
+                fi
+            fi
+            if [ -n "$RESUME_TASK_ID" ]; then
+                if [ "$RESUME_TRACK_TASK_ID" != "$RESUME_TASK_ID" ]; then
+                    RESUME_TRACK_TASK_ID="$RESUME_TASK_ID"
+                    RESUME_ATTEMPTS=0
+                    RESUME_ESCALATED=false
+                fi
+                RESUME_ATTEMPTS=$((RESUME_ATTEMPTS + 1))
+                if [ "$RESUME_ATTEMPTS" -gt "$RESUME_MAX_ATTEMPTS" ]; then
+                    # The CLI keeps dying on this task without finishing it.
+                    # Stop burning sessions: escalate once to #general (governor
+                    # or human can release_task / investigate) and idle.
+                    if [ "$RESUME_ESCALATED" = false ] && [ -n "$GENERAL_CHANNEL_ID" ]; then
+                        ESCALATION_MSG="@governors $WORKER_ID: CLI session ended $((RESUME_ATTEMPTS - 1)) times in a row while still holding $RESUME_TASK_ID (${RESUME_TASK_STATUS:-?}); wrapper is pausing auto-resume. release_task to reassign, or investigate why sessions keep dying mid-task."
+                        moe_rpc chat_send \
+                            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ESCALATION_MSG" 2>/dev/null)" \
+                            > /dev/null 2>&1 || true
+                        RESUME_ESCALATED=true
+                    fi
+                    echo -e "${RED}[resume]${NC} Auto-resume cap reached ($RESUME_MAX_ATTEMPTS) for $RESUME_TASK_ID -- escalated to #general; idling until released."
+                    RESUME_TASK_ID=""
+                fi
+            else
+                # No held task this iteration -- clear the consecutive-resume tracker.
+                RESUME_TRACK_TASK_ID=""
+                RESUME_ATTEMPTS=0
+                RESUME_ESCALATED=false
+            fi
+
+            if [ "$HAS_NEXT" = "true" ] || [ -n "$RESUME_TASK_ID" ]; then
+                if [ -n "$RESUME_TASK_ID" ]; then
+                    PREFLIGHT_IS_RESUME=true
+                    PREFLIGHT_TASK_ID="$RESUME_TASK_ID"
+                    PREFLIGHT_TASK_TITLE="$RESUME_TASK_TITLE"
+                    echo -e "${YELLOW}[resume]${NC} $WORKER_ID already holds $PREFLIGHT_TASK_ID (${RESUME_TASK_STATUS:-?}) from a previous session (attempt $RESUME_ATTEMPTS/$RESUME_MAX_ATTEMPTS) -- relaunching CLI to resume it."
+                fi
+                if [ "$HAS_NEXT" = "true" ]; then
                 PREFLIGHT_TASK_ID=$($PYTHON_CMD -c "
 import json, sys
 try:
@@ -1539,12 +1627,25 @@ try:
 except Exception:
     pass
 " <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
+                fi
 
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
                     PREFLIGHT_CONTEXT=$(moe_rpc get_context \
                         "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
                         2>/dev/null || echo "")
+                    # alreadyAssigned carries no chatChannel -- recover it from
+                    # the full context on the resume path (the trim below drops it).
+                    if [ -z "$PREFLIGHT_TASK_CHANNEL" ] && [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
+                        PREFLIGHT_TASK_CHANNEL=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print((d.get('task') or {}).get('chatChannel') or '')
+except Exception:
+    pass
+" <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || echo "")
+                    fi
                     # Trim the get_context payload before injection. Full JSON is
                     # 5-30KB; agents only need a working subset. Comments are
                     # dropped (re-fetch via moe.get_context if needed); plan notes
@@ -1615,11 +1716,15 @@ except Exception:
                 #    We only pull name + reason + the tool it gates, to emit a short
                 #    JIT reminder further down in SYSTEM_APPEND.
                 #
-                #    The three fields are emitted NUL-separated so multi-line reasons
-                #    (should one ever be introduced) don't corrupt the split.
+                #    The three fields are emitted \x1f-separated with newlines
+                #    sanitized to spaces: bash command substitution strips NUL
+                #    bytes, so the previous '\0' separator silently concatenated
+                #    name+reason+tool into PREFLIGHT_SKILL_NAME.
                 if [ -n "$PREFLIGHT_CONTEXT" ]; then
                     PARSED_SKILL=$($PYTHON_CMD -c "
 import json, sys
+def clean(s):
+    return (s or '').replace('\r', ' ').replace('\n', ' ')
 try:
     d = json.loads(sys.stdin.read())
     na = d.get('nextAction') or {}
@@ -1631,16 +1736,11 @@ try:
         reason = rec.get('reason') or ''
     elif isinstance(rec, str):
         name = rec
-    # NUL-separated so newlines inside reason are preserved verbatim.
-    sys.stdout.write(name + '\0' + reason + '\0' + (na.get('tool') or '') + '\0')
+    sys.stdout.write(clean(name) + '\x1f' + clean(reason) + '\x1f' + clean(na.get('tool')))
 except Exception:
     pass
 " <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || echo "")
-                    # Split on NUL. IFS+read -d '' reads one NUL-terminated field at a time.
-                    { IFS= read -r -d '' PREFLIGHT_SKILL_NAME
-                      IFS= read -r -d '' PREFLIGHT_SKILL_REASON
-                      IFS= read -r -d '' PREFLIGHT_SKILL_NEXT_TOOL
-                    } <<< "$PARSED_SKILL" 2>/dev/null || true
+                    IFS=$'\x1f' read -r PREFLIGHT_SKILL_NAME PREFLIGHT_SKILL_REASON PREFLIGHT_SKILL_NEXT_TOOL <<< "$PARSED_SKILL" || true
                     # Fallback defaults if parse failed -- keep vars set to avoid
                     # "unbound variable" under `set -u` (not used today, but cheap).
                     PREFLIGHT_SKILL_NAME="${PREFLIGHT_SKILL_NAME:-}"
@@ -1652,14 +1752,20 @@ except Exception:
                 fi
 
                 PREFLIGHT_OK=true
-                echo -e "${GREEN}[OK]${NC} Pre-flight complete. Claimed: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
+                if [ "$PREFLIGHT_IS_RESUME" = true ]; then
+                    echo -e "${GREEN}[OK]${NC} Pre-flight complete. Resuming: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
+                else
+                    echo -e "${GREEN}[OK]${NC} Pre-flight complete. Claimed: $PREFLIGHT_TASK_ID ($PREFLIGHT_TASK_TITLE)"
+                fi
 
                 # Announce "online" once per wrapper-process lifetime. Per-task
                 # starts/completions are conveyed by post-flight session-end and
                 # the daemon's task-state events.
                 if [ -n "$GENERAL_CHANNEL_ID" ] && [ "$IS_FIRST_ITERATION" = true ]; then
+                    ANNOUNCE_VERB="starting"
+                    if [ "$PREFLIGHT_IS_RESUME" = true ]; then ANNOUNCE_VERB="resuming held task"; fi
                     moe_rpc chat_send \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, starting '+sys.argv[4]+': '+sys.argv[5]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, '+sys.argv[4]+' '+sys.argv[5]+': '+sys.argv[6]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$ANNOUNCE_VERB" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
                         > /dev/null 2>&1 || true
                 fi
             elif [ "$HAS_NEXT" = "false" ]; then
@@ -1923,6 +2029,12 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
                     PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern), and call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
             esac
+            if [ "$PREFLIGHT_IS_RESUME" = true ] && [ -n "$PROMPT_BODY" ]; then
+                # A previous CLI session died while holding this task (see the
+                # resume path in pre-flight). Tell the fresh session to treat
+                # that session's in-flight state as untrusted and finish the job.
+                PROMPT_BODY="RESUME: you are workerId $WORKER_ID and you already claimed task $PREFLIGHT_TASK_ID in a previous CLI session that ended before the task was finished. Anything that session left running (background builds, tests, jobs) is DEAD. Do not trust its in-flight claims: re-verify current state from the task context above, the files on disk, and git, then finish the remaining work in THIS session. $PROMPT_BODY"
+            fi
         elif [ "$ROLE" = "governor" ]; then
             # Governor: enter_governance was already invoked in the preflight
             # short-circuit. Now subscribe to #governors and #general via
