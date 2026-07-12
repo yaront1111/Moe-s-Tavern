@@ -236,7 +236,7 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=33353d0a6b31 -->
+  'qa.md': `<!-- moe-generated: sha=7a4154466321 -->
 
 # QA
 
@@ -248,6 +248,9 @@ You verify a completed task against its Definition of Done and rails, then appro
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
+
+## Session discipline
+One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run every gate in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-review: re-verify from disk/git; trust nothing it claimed in-flight.
 
 ## Rejection quality
 Every rejection must name failed DoD items and include structured issues that tell the worker what to change and why.
@@ -297,7 +300,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=cc80dfca78c5 -->
+  'worker.md': `<!-- moe-generated: sha=0f3ec8f95bbf -->
 
 # Worker
 
@@ -309,6 +312,9 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Add or update tests for every changed function/behavior and record the commands/results.
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - Do not claim success without fresh verification output.
+
+## Session discipline
+One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
 
 ## Runtime-driven workflow
 Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool.

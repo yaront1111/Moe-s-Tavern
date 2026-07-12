@@ -86,12 +86,23 @@ switch (tool) {
     ok({ success: true });
     break;
   }
+  case 'heartbeat': {
+    fs.appendFileSync(path.join(moe, 'heartbeat.log'), `${new Date().toISOString()} ${args.workerId}\n`);
+    ok({ ok: true });
+    break;
+  }
   default: ok({ success: true });
 }
 '@
 
     $trueCmd = Join-Path $tempRoot 'true.cmd'
     Set-Content -Path $trueCmd -Encoding ASCII -Value "@echo off`r`nexit /b 0`r`n"
+
+    # A "slow" fake CLI that sleeps a few seconds before exiting, standing in
+    # for a long silent verification step with no moe.* calls of its own —
+    # exactly the scenario the heartbeat sidecar exists to cover.
+    $slowCmd = Join-Path $tempRoot 'slow.cmd'
+    Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
 
     $oldProxy = $env:MOE_PROXY_PATH
     $oldUserProfile = $env:USERPROFILE
@@ -135,6 +146,40 @@ switch (tool) {
         } finally {
             Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
         }
+
+        # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no
+        # moe.* calls of its own for the CLI's whole runtime, so a long silent
+        # step (a build, a test run) risks the REVIEW self-heal sweep evicting
+        # a still-alive session. $slowCmd stands in for that — it sleeps ~5s
+        # making zero tool calls. With a 1s heartbeat interval the sidecar
+        # should ping several times DURING that window, and stop promptly once
+        # the CLI (and the wrapper) exits — not leak an orphaned process. ---
+        $heartbeatLogFile = Join-Path $projectDir '.moe\heartbeat.log'
+        $wrapperHeartbeatOut = Join-Path $tempRoot 'wrapper-heartbeat.out'
+        $env:MOE_HEARTBEAT_INTERVAL_SEC = '1'
+        $env:MOE_HEARTBEAT_MAX_DURATION_SEC = '30'
+        try {
+            & $psExe -NoProfile -File $wrapper `
+                -Project $projectDir `
+                -WorkerId qa-heartbeat `
+                -Role qa `
+                -Team Smoke `
+                -NoStartDaemon `
+                -Command $slowCmd `
+                -NoLoop `
+                *> $wrapperHeartbeatOut
+            $heartbeatWrapperCode = $LASTEXITCODE
+        } finally {
+            Remove-Item Env:MOE_HEARTBEAT_INTERVAL_SEC -ErrorAction SilentlyContinue
+            Remove-Item Env:MOE_HEARTBEAT_MAX_DURATION_SEC -ErrorAction SilentlyContinue
+        }
+        $countAtExit = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
+        # The wrapper process (and any Start-Job it spawned) has already
+        # exited by the time the call above returns. If Stop-HeartbeatSidecar
+        # didn't run, the job would keep pinging past that point — confirm it
+        # didn't by checking the count is stable a few seconds later.
+        Start-Sleep -Seconds 3
+        $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
     } finally {
         $ErrorActionPreference = $prevEap
         $env:MOE_PROXY_PATH = $oldProxy
@@ -148,6 +193,17 @@ switch (tool) {
     if ($resumeCode -ne 0) {
         Get-Content $wrapperResumeOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
         throw "Resume wrapper exited with $resumeCode"
+    }
+    if ($heartbeatWrapperCode -ne 0) {
+        Get-Content $wrapperHeartbeatOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw "Heartbeat wrapper exited with $heartbeatWrapperCode"
+    }
+    if ($countAtExit -lt 2) {
+        Get-Content $wrapperHeartbeatOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw "Expected the heartbeat sidecar to ping at least twice during a ~5s silent CLI step; got $countAtExit"
+    }
+    if ($countAfterWait -ne $countAtExit) {
+        throw "Heartbeat sidecar kept pinging ($countAfterWait calls) after the wrapper exited ($countAtExit at exit) - Stop-HeartbeatSidecar cleanup failed"
     }
 
     # Post-flight no longer writes a session-summary file (cross-session memory

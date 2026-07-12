@@ -110,6 +110,11 @@ switch (tool) {
     ok({ success: true });
     break;
   }
+  case 'heartbeat': {
+    fs.appendFileSync(path.join(moe, 'heartbeat.log'), `${new Date().toISOString()} ${args.workerId}\n`);
+    ok({ ok: true });
+    break;
+  }
   default: ok({ success: true });
 }
 JS
@@ -189,6 +194,63 @@ fi
 if [ ! -f "$CLI_ARGS_FILE" ] || ! grep -Fq 'RESUME: you are workerId qa-postflight' "$CLI_ARGS_FILE"; then
   cat "$TMP_DIR/wrapper-resume.out" >&2 || true
   echo "Expected CLI to be launched with a RESUME prompt" >&2
+  exit 1
+fi
+
+# --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no moe.*
+# calls of its own for the CLI's whole runtime, so a long silent step (a
+# build, a test run) risks the REVIEW self-heal sweep evicting a still-alive
+# session. SLOW_CLI stands in for that -- it sleeps ~5s making zero tool
+# calls. With a 1s heartbeat interval the sidecar should ping several times
+# DURING that window, and stop promptly once the CLI (and the wrapper) exit
+# -- not leak an orphaned background process. ---
+SLOW_CLI="$TMP_DIR/slow-cli"
+cat > "$SLOW_CLI" <<EOF
+#!/usr/bin/env bash
+sleep 5
+exit 0
+EOF
+chmod +x "$SLOW_CLI"
+HEARTBEAT_LOG="$PROJECT_DIR/.moe/heartbeat.log"
+
+set +e
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
+  MOE_HEARTBEAT_INTERVAL_SEC=1 MOE_HEARTBEAT_MAX_DURATION_SEC=30 timeout 20s \
+  "$WRAPPER" \
+  --project "$PROJECT_DIR" \
+  --worker-id qa-heartbeat \
+  --role qa \
+  --team Smoke \
+  --no-start-daemon \
+  --command "$SLOW_CLI" \
+  --no-loop \
+  >"$TMP_DIR/wrapper-heartbeat.out" 2>&1
+heartbeat_wrapper_code=$?
+set -e
+if [ "$heartbeat_wrapper_code" -ne 0 ]; then
+  cat "$TMP_DIR/wrapper-heartbeat.out" >&2 || true
+  echo "Heartbeat wrapper exited with $heartbeat_wrapper_code" >&2
+  exit 1
+fi
+count_at_exit=0
+if [ -f "$HEARTBEAT_LOG" ]; then
+  count_at_exit=$(wc -l < "$HEARTBEAT_LOG" | tr -d ' ')
+fi
+if [ "$count_at_exit" -lt 2 ]; then
+  cat "$TMP_DIR/wrapper-heartbeat.out" >&2 || true
+  echo "Expected the heartbeat sidecar to ping at least twice during a ~5s silent CLI step; got $count_at_exit" >&2
+  exit 1
+fi
+# The wrapper process (and any background subshell it started) has already
+# exited by the time the call above returns. If stop_heartbeat_sidecar didn't
+# run, the subshell would keep pinging past that point -- confirm it didn't.
+sleep 3
+count_after_wait=0
+if [ -f "$HEARTBEAT_LOG" ]; then
+  count_after_wait=$(wc -l < "$HEARTBEAT_LOG" | tr -d ' ')
+fi
+if [ "$count_after_wait" -ne "$count_at_exit" ]; then
+  echo "Heartbeat sidecar kept pinging ($count_after_wait calls) after the wrapper exited ($count_at_exit at exit) - stop_heartbeat_sidecar cleanup failed" >&2
   exit 1
 fi
 

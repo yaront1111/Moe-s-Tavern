@@ -224,8 +224,14 @@ export class StateManager {
   // moves to a different task.
   private alertedStaleAssignments = new Set<string>();
   private readonly blockedTimeoutMs: number;
-  private readonly staleWorkerTimeoutMs: number;
-  private readonly reviewStaleTimeoutMs: number;
+  private staleWorkerTimeoutMs: number;
+  private reviewStaleTimeoutMs: number;
+  // True when the constructor caller passed an explicit override (tests, mainly).
+  // Explicit constructor options always win over .moe/project.json settings —
+  // otherwise load() would silently clobber a test's chosen timeout with
+  // whatever normalizeProject defaults to.
+  private readonly staleWorkerTimeoutMsExplicit: boolean;
+  private readonly reviewStaleTimeoutMsExplicit: boolean;
   private mentionRouter: MentionRouter;
   private fileWatcher?: import('./FileWatcher.js').FileWatcher;
   /** In-memory per-worker per-channel unread message counts */
@@ -235,9 +241,11 @@ export class StateManager {
     this.projectPath = options.projectPath;
     this.moePath = path.join(this.projectPath, '.moe');
     this.blockedTimeoutMs = options.blockedTimeoutMs ?? 3600000; // default 1 hour
+    this.staleWorkerTimeoutMsExplicit = options.staleWorkerTimeoutMs !== undefined;
     this.staleWorkerTimeoutMs = options.staleWorkerTimeoutMs ?? 1800000; // default 30 min
     // Defaults to the stale-worker timeout: never releases a REVIEW task faster
     // than the pre-existing record prune would, so this is purely additive.
+    this.reviewStaleTimeoutMsExplicit = options.reviewStaleTimeoutMs !== undefined;
     this.reviewStaleTimeoutMs = options.reviewStaleTimeoutMs ?? this.staleWorkerTimeoutMs;
     this.mentionRouter = new MentionRouter(4);
   }
@@ -1127,6 +1135,7 @@ export class StateManager {
 
       const normalized = this.normalizeProject(rawProject as Partial<Project>);
       this.project = normalized;
+      this.applySettingsTimeouts(normalized);
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
         try {
           atomicWriteJson(projectFile, normalized);
@@ -3349,12 +3358,36 @@ export class StateManager {
     }
   }
 
+  /**
+   * Apply .moe/project.json settings.{staleWorkerTimeoutMs,reviewStaleTimeoutMs}
+   * over the constructor defaults — but never over an EXPLICIT constructor
+   * option (tests construct StateManager with specific timeouts and don't
+   * expect a project.json's normalized defaults to override them).
+   */
+  private applySettingsTimeouts(project: Project): void {
+    if (!this.staleWorkerTimeoutMsExplicit && typeof project.settings.staleWorkerTimeoutMs === 'number') {
+      this.staleWorkerTimeoutMs = project.settings.staleWorkerTimeoutMs;
+    }
+    // reviewStaleTimeoutMs's constructor-time default chains off staleWorkerTimeoutMs
+    // when neither is explicit. Preserve that chain here too — an explicit
+    // staleWorkerTimeoutMs-only override (several tests do this) must not be
+    // clobbered by the settings-derived reviewStaleTimeoutMs default.
+    if (!this.reviewStaleTimeoutMsExplicit && !this.staleWorkerTimeoutMsExplicit
+      && typeof project.settings.reviewStaleTimeoutMs === 'number') {
+      this.reviewStaleTimeoutMs = project.settings.reviewStaleTimeoutMs;
+    }
+  }
+
   private normalizeProject(project: Partial<Project>): Project {
     const now = new Date().toISOString();
 
     // Validate approvalMode using centralized sanitization
     const validApprovalModes = ['CONTROL', 'SPEED', 'TURBO'] as const;
     const approvalMode = sanitizeEnum(project.settings?.approvalMode, validApprovalModes, 'CONTROL');
+    // Bounded [1 min, 24h]: floor guards against a typo thrashing claims;
+    // ceiling keeps the REVIEW self-heal safety net meaningful even if
+    // someone sets an extreme value.
+    const staleWorkerTimeoutMs = sanitizeNumber(project.settings?.staleWorkerTimeoutMs, 1800000, 60000, 86400000);
 
     return {
       id: project.id || generateId('proj'),
@@ -3385,6 +3418,8 @@ export class StateManager {
         columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
         chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
         chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
+        staleWorkerTimeoutMs,
+        reviewStaleTimeoutMs: sanitizeNumber(project.settings?.reviewStaleTimeoutMs, staleWorkerTimeoutMs, 60000, 86400000),
       },
       createdAt: project.createdAt || now,
       updatedAt: project.updatedAt || now

@@ -55,6 +55,7 @@ import { getActivityLogTool } from './getActivityLog.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
+import { heartbeatTool } from './heartbeat.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -127,5 +128,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     setTaskBudgetTool(state),
     submitPlanCritiqueTool(state),
     deregisterWorkerTool(state),
+    heartbeatTool(state),
   ];
 }

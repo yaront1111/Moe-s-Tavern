@@ -60,6 +60,21 @@ export interface ProjectSettings {
    * Claude/Codex attribution. Set false to disable.
    */
   autoCommit?: boolean;               // default: true
+  /**
+   * How long (ms) a worker may go without a moe.* tool call before Layer-3
+   * staleness sweeps act on it. Raise this for projects whose verification
+   * steps (builds, test suites) legitimately run long with no moe.* calls in
+   * between — the agent wrapper's heartbeat sidecar covers most of this
+   * already, so it mainly matters when the sidecar itself can't run.
+   * default: 1800000 (30 min)
+   */
+  staleWorkerTimeoutMs?: number;
+  /**
+   * How long (ms) a REVIEW task's owner may be silent before the task is
+   * released back to the QA pool. Scoped to REVIEW only. default: same as
+   * staleWorkerTimeoutMs.
+   */
+  reviewStaleTimeoutMs?: number;
 }
 
 export interface Project {

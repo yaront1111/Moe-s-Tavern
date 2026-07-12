@@ -35,6 +35,7 @@ import { chatSendTool } from './chatSend.js';
 import { chatResyncTool } from './chatResync.js';
 import { chatWaitTool } from './chatWait.js';
 import { waitForTaskTool } from './waitForTask.js';
+import { heartbeatTool } from './heartbeat.js';
 import { MoeErrorCode } from '../util/errors.js';
 import type { Task, Epic, Worker, Project, RailProposal } from '../types/schema.js';
 
@@ -478,6 +479,59 @@ describe('MCP Tools', () => {
 
       expect(new Date(state.getWorker('worker-approval')!.lastActivityAt).getTime())
         .toBeGreaterThan(new Date(before).getTime());
+    });
+  });
+
+  describe('moe.heartbeat', () => {
+    beforeEach(async () => {
+      setupMoeFolder();
+      createEpic();
+      await state.load();
+    });
+
+    it('refreshes lastActivityAt for a live worker', async () => {
+      await state.createWorker({
+        id: 'worker-hb',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: null,
+        status: 'REVIEWING',
+      });
+      const before = state.getWorker('worker-hb')!.lastActivityAt;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const tool = heartbeatTool(state);
+      const result = await tool.handler({ workerId: 'worker-hb' }, state) as { ok: boolean };
+
+      expect(result.ok).toBe(true);
+      expect(new Date(state.getWorker('worker-hb')!.lastActivityAt).getTime())
+        .toBeGreaterThan(new Date(before).getTime());
+    });
+
+    it('is a no-op for an unknown worker (never throws)', async () => {
+      const tool = heartbeatTool(state);
+      await expect(tool.handler({ workerId: 'worker-does-not-exist' }, state))
+        .resolves.toEqual({ ok: true });
+    });
+
+    it('does not resurrect a DEAD worker', async () => {
+      await state.createWorker({
+        id: 'worker-hb-dead',
+        type: 'CLAUDE',
+        projectId: 'proj-test',
+        epicId: 'epic-1',
+        currentTaskId: null,
+        status: 'DEAD',
+      });
+      const before = state.getWorker('worker-hb-dead')!.lastActivityAt;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const tool = heartbeatTool(state);
+      await tool.handler({ workerId: 'worker-hb-dead' }, state);
+
+      expect(state.getWorker('worker-hb-dead')!.lastActivityAt).toBe(before);
+      expect(state.getWorker('worker-hb-dead')!.status).toBe('DEAD');
     });
   });
 

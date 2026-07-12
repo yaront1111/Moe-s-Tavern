@@ -232,7 +232,21 @@ $env:MOE_WORKER_ID = $WorkerId
 # before any exit can occur, so the flag/function always exist; Invoke-MoeRpc is
 # resolved lazily at call time (it's defined further down).
 $script:MoeDeregistered = $false
+# Set by Start-HeartbeatSidecar (defined later) to whatever heartbeat job is
+# CURRENTLY running, so an async Ctrl+C/exit handler firing mid-task can reach
+# it — a local try/finally around one CLI invocation only covers normal
+# unwinds, not this class of abrupt teardown.
+$script:CurrentHeartbeatJob = $null
 function Invoke-MoeDeregister {
+    # Kill any live heartbeat sidecar first — it's an unmanaged background
+    # process (Start-Job's child powershell.exe) that outlives this one unless
+    # explicitly stopped; unconditional and idempotent, so it runs even when
+    # the deregister-proper half below is skipped by MoeDeregistered.
+    if ($script:CurrentHeartbeatJob) {
+        try { Stop-Job -Job $script:CurrentHeartbeatJob -ErrorAction SilentlyContinue | Out-Null } catch {}
+        try { Remove-Job -Job $script:CurrentHeartbeatJob -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+        $script:CurrentHeartbeatJob = $null
+    }
     if ($script:MoeDeregistered) { return }
     $script:MoeDeregistered = $true
     if (-not $WorkerId) { return }
@@ -971,6 +985,64 @@ function Invoke-MoeRpc {
     return $null
 }
 
+# The CLI invocation below blocks this process for the CLI's entire runtime
+# with no interleaved activity of our own. moe-proxy opens a fresh connection
+# per RPC call rather than holding one for the CLI's lifetime (see
+# WebSocketServer.cleanupMcpWorkers's comment on why TCP-close can't mean
+# "agent died"), so the daemon's ONLY liveness signal is "did this worker call
+# a moe.* tool recently." A long silent local step (a build, a full test run)
+# can go quiet longer than the 30-min REVIEW self-heal window even while the
+# CLI is very much still running and about to call qa_approve/qa_reject — the
+# self-heal then yanks the task out from under a live session. This sidecar
+# pings moe.heartbeat on a timer from a SEPARATE process (Start-Job) so a
+# genuinely-alive-but-quiet session keeps its task. Bounded by MaxDurationSec
+# so a truly-hung CLI still eventually goes stale — this extends the
+# self-heal's patience window, it does not defeat it.
+function Start-HeartbeatSidecar {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProxyScript,
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$WorkerId
+    )
+    if ($env:MOE_DISABLE_HEARTBEAT -eq '1') { return $null }
+    $intervalSec = 60
+    if ($env:MOE_HEARTBEAT_INTERVAL_SEC -match '^\d+$') { $intervalSec = [int]$env:MOE_HEARTBEAT_INTERVAL_SEC }
+    $maxDurationSec = 7200
+    if ($env:MOE_HEARTBEAT_MAX_DURATION_SEC -match '^\d+$') { $maxDurationSec = [int]$env:MOE_HEARTBEAT_MAX_DURATION_SEC }
+
+    try {
+        $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
+            param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec)
+            $env:MOE_PROJECT_PATH = $ProjectPath
+            $rpc = (@{
+                jsonrpc = "2.0"
+                id      = 1
+                method  = "tools/call"
+                params  = @{ name = "moe.heartbeat"; arguments = @{ workerId = $WorkerId } }
+            } | ConvertTo-Json -Compress)
+            $deadline = (Get-Date).AddSeconds($MaxDurationSec)
+            while ((Get-Date) -lt $deadline) {
+                Start-Sleep -Seconds $IntervalSec
+                try { $rpc | & node $ProxyScript 2>&1 | Out-Null } catch {}
+            }
+        } -ArgumentList $ProxyScript, $ProjectPath, $WorkerId, $intervalSec, $maxDurationSec
+        return $script:CurrentHeartbeatJob
+    } catch {
+        Write-Host "[WARN] Failed to start heartbeat sidecar: $_ — a long silent verification step risks REVIEW self-heal eviction." -ForegroundColor Yellow
+        return $null
+    }
+}
+
+# Stops whatever heartbeat job is currently tracked in $script:CurrentHeartbeatJob
+# (set by Start-HeartbeatSidecar). No param: this is also called from
+# Invoke-MoeDeregister's async Ctrl+C/exit handler, which has no local
+# reference to the job — only the script-scoped one.
+function Stop-HeartbeatSidecar {
+    if (-not $script:CurrentHeartbeatJob) { return }
+    try { Stop-Job -Job $script:CurrentHeartbeatJob -ErrorAction SilentlyContinue | Out-Null } catch {}
+    try { Remove-Job -Job $script:CurrentHeartbeatJob -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+    $script:CurrentHeartbeatJob = $null
+}
 
 function Invoke-PostFlight {
     $exitCode = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } elseif ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
@@ -1831,6 +1903,8 @@ $mentionsJson
                 }
             }
 
+            Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+            try {
             if ($userPromptForCli) {
                 Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort max $($printArgs -join ' ') `"<prompt>`""
                 if ($usePrintMode) {
@@ -1856,6 +1930,9 @@ $mentionsJson
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs
                     $script:CliExitCode = $LASTEXITCODE
                 }
+            }
+            } finally {
+                Stop-HeartbeatSidecar
             }
         }
     }

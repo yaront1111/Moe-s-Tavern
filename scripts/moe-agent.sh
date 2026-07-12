@@ -83,6 +83,13 @@ create_secure_temp() {
 }
 
 cleanup_temp() {
+    # Kill the heartbeat sidecar first — it's just a background subshell, not
+    # tracked by anything else, so a hard exit (Ctrl+C, error) would otherwise
+    # leak it past this process's own lifetime. HEARTBEAT_PID/stop_heartbeat_sidecar
+    # are defined later in the script but read/called here at exit time.
+    if [ "$(type -t stop_heartbeat_sidecar)" = "function" ]; then
+        stop_heartbeat_sidecar
+    fi
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. This is best-effort and never blocks exit; the
     # daemon's worker-liveness sweep is the slower (timeout) fallback for hard
@@ -1374,6 +1381,44 @@ sys.exit(1)
 " <<< "$raw"
 }
 
+# The CLI invocation below blocks this process for the CLI's entire runtime
+# with no interleaved activity of our own. moe-proxy opens a fresh connection
+# per RPC call rather than holding one for the CLI's lifetime, so the
+# daemon's ONLY liveness signal is "did this worker call a moe.* tool
+# recently." A long silent local step (a build, a full test run) can go quiet
+# longer than the 30-min REVIEW self-heal window even while the CLI is very
+# much still running and about to call qa_approve/qa_reject — the self-heal
+# then yanks the task out from under a live session. This sidecar pings
+# moe.heartbeat on a timer from a background subshell (inherits moe_rpc and
+# every resolved proxy/project variable, so no separate resolution needed) so
+# a genuinely-alive-but-quiet session keeps its task. Bounded by
+# MOE_HEARTBEAT_MAX_DURATION_SEC so a truly-hung CLI still eventually goes
+# stale — this extends the self-heal's patience window, it does not defeat it.
+HEARTBEAT_PID=""
+start_heartbeat_sidecar() {
+    local worker_id="$1"
+    if [ "${MOE_DISABLE_HEARTBEAT:-}" = "1" ]; then return; fi
+    local interval_sec="${MOE_HEARTBEAT_INTERVAL_SEC:-60}"
+    local max_duration_sec="${MOE_HEARTBEAT_MAX_DURATION_SEC:-7200}"
+    (
+        set +e
+        end_time=$(( $(date +%s) + max_duration_sec ))
+        while [ "$(date +%s)" -lt "$end_time" ]; do
+            sleep "$interval_sec"
+            moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" >/dev/null 2>&1
+        done
+    ) &
+    HEARTBEAT_PID=$!
+}
+
+stop_heartbeat_sidecar() {
+    if [ -n "$HEARTBEAT_PID" ]; then
+        kill "$HEARTBEAT_PID" 2>/dev/null || true
+        wait "$HEARTBEAT_PID" 2>/dev/null || true
+        HEARTBEAT_PID=""
+    fi
+}
+
 post_flight() {
     local exit_code="${CLI_EXIT_CODE:-0}"
 
@@ -2068,6 +2113,8 @@ $PROMPT_BODY"
         PROMPT=""
     fi
 
+    start_heartbeat_sidecar "$WORKER_ID"
+
     if [ "$CLI_TYPE" = "codex" ]; then
         # Check codex is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
@@ -2259,6 +2306,8 @@ $PROMPT_BODY"
             set -e
         fi
     fi
+
+    stop_heartbeat_sidecar
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
     # Save session summary and announce session end in #general. Best-effort -- any
