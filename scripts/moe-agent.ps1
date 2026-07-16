@@ -225,8 +225,9 @@ $env:MOE_WORKER_ID = $WorkerId
 # Graceful deregister, fired from multiple exit paths. The top-level `finally`
 # below covers normal exits, but it is SKIPPED on a console-window close
 # (CTRL_CLOSE_EVENT) and some Ctrl+C edge cases — leaving the worker holding its
-# claimed task until the daemon's (slow, timeout-based) liveness sweep releases
-# it. Register the same best-effort deregister on PowerShell.Exiting and
+# claimed task until the next daemon restart, a moe.deregister_worker, or a
+# manual/governor release (there is deliberately NO idle-based auto-release for
+# WORKING/PLANNING). Register the same best-effort deregister on PowerShell.Exiting and
 # Ctrl+C so it runs no matter how the process tears down. $script:MoeDeregistered
 # makes it idempotent (finally + handler must not double-fire). Defined here,
 # before any exit can occur, so the flag/function always exist; Invoke-MoeRpc is
@@ -1581,7 +1582,7 @@ $mentionsJson
         # Governor enters governance mode and lives in a chat_wait loop on
         # #governors. They never claim tasks. The wrapper has already called
         # moe.enter_governance; the agent now subscribes to channel signals.
-        $claimPromptBody = "You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. Loop forever. Do NOT call moe.claim_next_task."
+        $claimPromptBody = "You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. On stale-worker alerts: quiet is not dead (long builds/tests are silent) — ping the worker first and NEVER call moe.release_task on idle time alone; release needs a confirmed crash plus the human's nod. Loop forever. Do NOT call moe.claim_next_task."
     } elseif ($AutoClaim -and $preflightNoTask) {
         # No-task case: wrapper's outer loop handles the poll/sleep cycle at the
         # PowerShell level, so we don't launch the CLI just to call wait_for_task.
@@ -1628,12 +1629,18 @@ $mentionsJson
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
             # Pre-flight baked context into .codex/agent-instructions.md. When that file already
-            # includes $dynamicContext (see $codexUsesFileContext branch above), we pass only the
-            # short role directive on argv to avoid PS 5.1's broken native-command quote escaping
-            # tripping over double quotes inside task JSON (e.g. \"audit.read\"). Falls back to the
-            # combined $claimPrompt when there's no dynamic context to fold.
-            if ($codexUsesFileContext -and $claimPromptBody) {
-                $shortPrompt = $claimPromptBody
+            # includes $dynamicContext (see $codexUsesFileContext branch above), argv carries ONLY
+            # a short quote-free directive — PS < 7.3 forwards native args without escaping embedded
+            # double quotes, so any raw task JSON or chat text on argv word-splits the prompt
+            # (codex: "unrecognized subcommand"). This must hold even when $claimPromptBody is null
+            # (no-task-with-mentions pre-flight): never fall back to $claimPrompt here, because that
+            # IS the dynamic context (routed mention text = arbitrary quotes) that just crashed on argv.
+            if ($codexUsesFileContext) {
+                if ($claimPromptBody) {
+                    $shortPrompt = $claimPromptBody
+                } else {
+                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in .codex/agent-instructions.md - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                }
             } else {
                 $shortPrompt = $claimPrompt
             }
@@ -1646,22 +1653,41 @@ $mentionsJson
                 default     { "Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff" }
             }
             if ($claimPrompt) {
-                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task $claimJson. If hasNext is false, say 'No tasks' and stop."
+                # Quote-free claim args (NOT $claimJson): embedded JSON double quotes word-split
+                # native argv on PS < 7.3.
+                $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task with statuses [$($statuses -join ', ')] and workerId $WorkerId. If hasNext is false, say 'No tasks' and stop."
             } else {
                 $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
             }
         }
 
-        if ($CodexExec) {
-            # Non-interactive exec mode: codex exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
-            Write-Host "Command: $Command exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
-            & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
-            $script:CliExitCode = $LASTEXITCODE
-        } else {
-            # Interactive TUI mode: codex -C <project> "<prompt>"
-            Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
-            & $Command @CommandArgs -C "$projectPath" "$shortPrompt"
-            $script:CliExitCode = $LASTEXITCODE
+        # Last-resort argv guard: PS < 7.3 forwards native args without escaping embedded
+        # double quotes, so any that survive the routing above would word-split the prompt
+        # and codex would parse a fragment as a subcommand. Prose survives the swap fine.
+        if ($shortPrompt -and $PSVersionTable.PSVersion -lt [version]'7.3') {
+            $shortPrompt = $shortPrompt -replace '"', "'"
+        }
+
+        # Heartbeat sidecar: the CLI call below blocks this wrapper for its whole
+        # runtime with zero interleaved moe.* activity — without the sidecar a
+        # long silent local step outlasts reviewStaleTimeoutMs and the REVIEW
+        # self-heal steals the task from a live session (the bash wrapper starts
+        # it for all CLIs; this must match).
+        Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+        try {
+            if ($CodexExec) {
+                # Non-interactive exec mode: codex exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
+                Write-Host "Command: $Command exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
+                & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
+                $script:CliExitCode = $LASTEXITCODE
+            } else {
+                # Interactive TUI mode: codex -C <project> "<prompt>"
+                Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
+                & $Command @CommandArgs -C "$projectPath" "$shortPrompt"
+                $script:CliExitCode = $LASTEXITCODE
+            }
+        } finally {
+            Stop-HeartbeatSidecar
         }
     } elseif ($cliType -eq "gemini") {
         # Check gemini is available
@@ -1673,11 +1699,17 @@ $mentionsJson
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
             # Pre-flight baked context into .gemini/GEMINI.md. When that file already includes
-            # $dynamicContext (see $geminiUsesFileContext branch above), pass only the short role
-            # directive on argv to avoid PS 5.1's broken native-command quote escaping tripping over
-            # double quotes inside task JSON. Falls back to combined $claimPrompt otherwise.
-            if ($geminiUsesFileContext -and $claimPromptBody) {
-                $shortPrompt = $claimPromptBody
+            # $dynamicContext (see $geminiUsesFileContext branch above), argv carries ONLY a short
+            # quote-free directive — PS < 7.3 forwards native args without escaping embedded double
+            # quotes, so raw task JSON or chat text on argv word-splits the prompt. Never fall back
+            # to $claimPrompt when the file holds the context (even with a null $claimPromptBody —
+            # the no-task-with-mentions case): $claimPrompt IS that context.
+            if ($geminiUsesFileContext) {
+                if ($claimPromptBody) {
+                    $shortPrompt = $claimPromptBody
+                } else {
+                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in .gemini/GEMINI.md - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                }
             } else {
                 $shortPrompt = $claimPrompt
             }
@@ -1695,22 +1727,28 @@ $mentionsJson
             }
         }
 
-        if ($GeminiExec) {
-            # Non-interactive headless mode
-            Write-Host "Command: $Command --prompt `"<prompt>`" --yolo"
-            try {
-                Push-Location $projectPath
-                & $Command @CommandArgs --prompt "$shortPrompt" --yolo
-                $script:CliExitCode = $LASTEXITCODE
-            } finally { Pop-Location }
-        } else {
-            # Interactive mode
-            Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
-            try {
-                Push-Location $projectPath
-                & $Command @CommandArgs --prompt-interactive "$shortPrompt"
-                $script:CliExitCode = $LASTEXITCODE
-            } finally { Pop-Location }
+        # Heartbeat sidecar — same rationale as the codex branch above.
+        Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+        try {
+            if ($GeminiExec) {
+                # Non-interactive headless mode
+                Write-Host "Command: $Command --prompt `"<prompt>`" --yolo"
+                try {
+                    Push-Location $projectPath
+                    & $Command @CommandArgs --prompt "$shortPrompt" --yolo
+                    $script:CliExitCode = $LASTEXITCODE
+                } finally { Pop-Location }
+            } else {
+                # Interactive mode
+                Write-Host "Command: $Command --prompt-interactive `"<prompt>`""
+                try {
+                    Push-Location $projectPath
+                    & $Command @CommandArgs --prompt-interactive "$shortPrompt"
+                    $script:CliExitCode = $LASTEXITCODE
+                } finally { Pop-Location }
+            }
+        } finally {
+            Stop-HeartbeatSidecar
         }
     } else {
         # Enable Claude Code subagents for all Moe roles by default. Architects
@@ -2129,9 +2167,9 @@ $mentionsJson
 } finally {
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. Best-effort and idempotent (Invoke-MoeDeregister
-    # no-ops if a Ctrl+C / window-close handler already fired) — the daemon's
-    # worker-liveness sweep is the slower (timeout) fallback for hard crashes
-    # where none of these run.
+    # no-ops if a Ctrl+C / window-close handler already fired). There is NO
+    # idle-timeout fallback for hard crashes where none of these run: the task
+    # stays assigned until daemon restart, deregister, or an explicit release.
     Invoke-MoeDeregister
     # Clean up temp files
     if ($mcpConfigFile -and (Test-Path $mcpConfigFile)) {

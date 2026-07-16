@@ -133,6 +133,17 @@ class AsyncMutex {
     return this.holding.getStore() === true;
   }
 
+  /**
+   * Run fn OUTSIDE the held-lock async context. Timers (setTimeout/setInterval)
+   * created inside holding.run(true, …) inherit the AsyncLocalStorage context,
+   * so their callbacks' runExclusive would short-circuit as "reentrant" and
+   * mutate state WITHOUT the lock long after the arming call released it. Every
+   * timer whose callback uses runExclusive must be armed through this.
+   */
+  exit<T>(fn: () => T): T {
+    return this.holding.exit(fn);
+  }
+
   async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
     // Reentrant: a context that already holds the lock runs fn directly.
     if (this.holding.getStore()) {
@@ -334,6 +345,17 @@ export class StateManager {
   }
 
   /**
+   * Arm a timer (or run any sync fn) OUTSIDE the mutex's reentrancy context.
+   * Required for every setTimeout/setInterval created from code that may run
+   * under runExclusive (tool handlers are dispatched under it): an inherited
+   * "holding" context makes the timer callback's runExclusive short-circuit
+   * and mutate state without the lock. See AsyncMutex.exit.
+   */
+  detachFromMutexContext<T>(fn: () => T): T {
+    return this.mutex.exit(fn);
+  }
+
+  /**
    * Check if the state manager has loaded project data.
    * Used for health checks.
    */
@@ -347,11 +369,13 @@ export class StateManager {
    */
   startBlockedTimeoutCheck(intervalMs = 300000): void {
     this.stopBlockedTimeoutCheck();
-    this.blockedTimeoutInterval = setInterval(() => {
+    // mutex.exit: detach the interval from any held-lock ALS context so the
+    // sweep's runExclusive actually acquires the lock (see AsyncMutex.exit).
+    this.blockedTimeoutInterval = this.mutex.exit(() => setInterval(() => {
       this.checkBlockedTimeouts().catch((err) => {
         logger.error({ error: err }, 'Error checking blocked worker timeouts');
       });
-    }, intervalMs);
+    }, intervalMs));
     // Don't prevent process exit
     if (this.blockedTimeoutInterval.unref) {
       this.blockedTimeoutInterval.unref();
@@ -374,7 +398,8 @@ export class StateManager {
    */
   startProposalPurgeInterval(intervalMs = PROPOSAL_PURGE_INTERVAL_MS): void {
     this.stopProposalPurgeInterval();
-    this.proposalPurgeInterval = setInterval(() => {
+    // mutex.exit: see startBlockedTimeoutCheck.
+    this.proposalPurgeInterval = this.mutex.exit(() => setInterval(() => {
       this.purgeResolvedProposals()
         .then((purgedCount) => {
           if (purgedCount > 0) {
@@ -384,7 +409,7 @@ export class StateManager {
         .catch((error) => {
           logger.error({ error }, 'Error purging resolved proposals');
         });
-    }, intervalMs);
+    }, intervalMs));
 
     // Don't prevent process exit
     if (this.proposalPurgeInterval.unref) {
@@ -410,11 +435,12 @@ export class StateManager {
    */
   startStaleWorkerWatcher(intervalMs = 60_000, livenessTimeoutMs = 120_000): void {
     this.stopStaleWorkerWatcher();
-    this.staleWorkerInterval = setInterval(() => {
+    // mutex.exit: see startBlockedTimeoutCheck.
+    this.staleWorkerInterval = this.mutex.exit(() => setInterval(() => {
       this.checkStaleWorkers(livenessTimeoutMs).catch((err) => {
         logger.error({ error: err }, 'Error checking stale workers');
       });
-    }, intervalMs);
+    }, intervalMs));
     if (this.staleWorkerInterval.unref) {
       this.staleWorkerInterval.unref();
     }
@@ -462,7 +488,7 @@ export class StateManager {
       const secs = sinceMs === Number.POSITIVE_INFINITY ? 'unknown' : Math.floor(sinceMs / 1000) + 's';
       const task = this.getTask(w.currentTaskId);
       const taskTitle = task?.title || w.currentTaskId;
-      const alert = `⚠️ ${w.id} stale on ${w.currentTaskId} (${taskTitle}) — last activity ${secs} ago`;
+      const alert = `⚠️ ${w.id} stale on ${w.currentTaskId} (${taskTitle}) — last activity ${secs} ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.`;
       try { await this.postToRoleChannel('governors', alert); } catch { /* never throw */ }
       this.alertedStaleAssignments.add(key);
     }
@@ -558,9 +584,12 @@ export class StateManager {
       // NOT auto-release the prior owner, so clear its currentTaskId here too
       // (matters when reviewStaleTimeoutMs is set shorter than the stale-worker
       // prune; at the default they're equal and Layer-3 prunes the owner below).
+      // Preserve the owner's real lastActivityAt: letting updateWorker stamp a
+      // fresh one would resurrect the crashed QA as "alive" and defeat the
+      // same-sweep Layer-3 prune this comment promises.
       await this.updateTask(task.id, { assignedWorkerId: null }, 'WORKER_TIMEOUT');
       if (owner.currentTaskId === task.id) {
-        await this.updateWorker(owner.id, { currentTaskId: null });
+        await this.updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt });
       }
     }
 
@@ -1201,13 +1230,19 @@ export class StateManager {
       // Re-initialize MentionRouter with project-configured maxHops
       this.mentionRouter = new MentionRouter(this.project?.settings?.chatMaxAgentHops ?? 4);
 
-      // Start periodic blocked worker timeout check
-      this.startBlockedTimeoutCheck();
-      this.startProposalPurgeInterval();
-      this.startStaleWorkerWatcher();
     });
 
-    return withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
+    await withTimeout(loadOperation, STATE_LOAD_TIMEOUT_MS, 'State load');
+
+    // Arm the periodic sweeps OUTSIDE the locked section. Armed inside it,
+    // the intervals inherit the mutex's AsyncLocalStorage "holding" context,
+    // and every subsequent tick's runExclusive short-circuits as reentrant —
+    // running the whole sweep unlocked and racing tool handlers (lost-update
+    // windows: a sweep release clobbering a concurrent qa_approve, etc.).
+    // The start* methods also arm detached (mutex.exit) as defense in depth.
+    this.startBlockedTimeoutCheck();
+    this.startProposalPurgeInterval();
+    this.startStaleWorkerWatcher();
   }
 
   getSnapshot(): MoeStateSnapshot {
@@ -1326,20 +1361,30 @@ export class StateManager {
   }
 
   async touchWorker(workerId?: string | null, updates: Partial<Worker> = {}, event?: ActivityEventType): Promise<Worker | null> {
-    if (!workerId || !this.workers.has(workerId)) {
+    if (!workerId) {
       return null;
     }
-    // Never refresh a DEAD worker's heartbeat: an in-flight tool call must not
-    // reset its prune clock (lastActivityAt) and resurrect it in the UI.
-    if (this.workers.get(workerId)?.status === 'DEAD') {
-      return null;
-    }
-    try {
-      return await this.updateWorker(workerId, updates, event);
-    } catch (error) {
-      logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat');
-      return null;
-    }
+    // Serialize on the state mutex (reentrant — already-locked callers pass
+    // straight through). Blocking tools (wait_for_task / chat_wait) call this
+    // from raw timer callbacks with NO lock held; an unlocked read-modify-write
+    // here can interleave with a concurrent deregister at the writeEntity await
+    // and resurrect the DEAD worker by writing the stale ALIVE record back.
+    return this.mutex.runExclusive(async () => {
+      if (!this.workers.has(workerId)) {
+        return null;
+      }
+      // Never refresh a DEAD worker's heartbeat: an in-flight tool call must not
+      // reset its prune clock (lastActivityAt) and resurrect it in the UI.
+      if (this.workers.get(workerId)?.status === 'DEAD') {
+        return null;
+      }
+      try {
+        return await this.updateWorker(workerId, updates, event);
+      } catch (error) {
+        logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat');
+        return null;
+      }
+    });
   }
 
   /**
@@ -2541,12 +2586,17 @@ export class StateManager {
     }
 
     // Marking a worker DEAD is not "activity" — preserve its real lastActivityAt
-    // so staleness/pruning and display stay accurate. Any other update bumps it.
+    // so staleness/pruning and display stay accurate. Any other update bumps it,
+    // unless the caller passes an explicit lastActivityAt (system-side repairs
+    // like the REVIEW self-heal, which must not gift a crashed worker a fresh
+    // heartbeat and resurrect it as "alive").
     const becomingDead = updates.status === 'DEAD';
     const updated: Worker = {
       ...worker,
       ...updates,
-      lastActivityAt: becomingDead ? worker.lastActivityAt : new Date().toISOString()
+      lastActivityAt: becomingDead
+        ? worker.lastActivityAt
+        : (updates.lastActivityAt ?? new Date().toISOString())
     };
 
     await this.writeEntity('workers', workerId, updated);
@@ -2611,16 +2661,23 @@ export class StateManager {
         logger.error({ error, workerId }, 'Failed to delete worker file');
       }
 
-      // Clear assignedWorkerId on tasks referencing this worker (don't change task status)
-      for (const task of this.tasks.values()) {
-        if (task.assignedWorkerId === workerId) {
-          const updated = { ...task, assignedWorkerId: null, updatedAt: new Date().toISOString() };
-          this.tasks.set(task.id, updated);
-          try {
-            await this.writeEntity('tasks', task.id, updated);
-          } catch (error) {
-            logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
-          }
+      // Clear assignedWorkerId on tasks referencing this worker, routing status
+      // via nextStatusForRelease (same as purgeAllWorkers). Leaving status
+      // untouched strands a WORKING task WORKING-but-unassigned: claim_next_task
+      // filters by status before checking claimability, so it becomes invisible
+      // to every claimer until a daemon restart's purgeAllWorkers repairs it.
+      // Route through updateTask (not a hand-rolled write) so TASK_UPDATED is
+      // emitted — boards refresh and parked wait_for_task waiters wake for the
+      // newly claimable task.
+      for (const task of Array.from(this.tasks.values())) {
+        if (task.assignedWorkerId !== workerId) continue;
+        try {
+          await this.updateTask(task.id, {
+            assignedWorkerId: null,
+            status: nextStatusForRelease(task),
+          }, 'WORKER_RELEASED');
+        } catch (error) {
+          logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
         }
       }
 

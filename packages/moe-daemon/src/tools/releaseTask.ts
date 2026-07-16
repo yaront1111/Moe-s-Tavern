@@ -31,7 +31,7 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and routes it to a claimable column: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and routes it to a claimable column: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -92,13 +92,74 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         const previousWorkerId = task.assignedWorkerId;
 
         if (!previousWorkerId) {
+          // Terminal tasks are never "stuck": a duplicate/late release_task on
+          // a DONE/ARCHIVED task (proxy retry, agent cleanup, release racing a
+          // qa_approve that landed first) must stay a strict no-op — routing it
+          // through nextStatusForRelease used to resurrect finished work.
+          if (task.status === 'DONE' || task.status === 'ARCHIVED') {
+            return {
+              success: true,
+              taskId: task.id,
+              previousWorkerId: null,
+              status: task.status,
+              message: `Task is ${task.status}; nothing to release`,
+              ...(normalizedHandoff ? { warning: `handoffNote ignored: task is ${task.status}` } : {}),
+            };
+          }
+
+          // The task is already unassigned, but a WORKING task may be stuck
+          // (e.g. its worker got deleted/purged before this call landed) —
+          // claim_next_task filters by status before checking claimability, so
+          // a WORKING-but-unassigned task is invisible to every claimer until
+          // something repairs the status. Only WORKING needs this; every other
+          // non-terminal status is already claimable where it stands. Also
+          // persist the caller's handoffNote instead of silently discarding it,
+          // and clear needsHumanReview — release_task is one of the documented
+          // human unpark paths for a qa_reject-capped task (see schema.ts).
+          const correctedStatus = task.status === 'WORKING' ? nextStatusForRelease(task) : task.status;
+          const unparking = task.needsHumanReview === true;
+          if (correctedStatus === task.status && !normalizedHandoff && !unparking) {
+            return {
+              success: true,
+              taskId: task.id,
+              previousWorkerId: null,
+              status: task.status,
+              message: 'Task already unassigned',
+            };
+          }
+
+          const repairUpdates: Record<string, unknown> = {};
+          if (correctedStatus !== task.status) repairUpdates.status = correctedStatus;
+          if (unparking) repairUpdates.needsHumanReview = false;
+          let repairedHandoffs = task.priorHandoffs;
+          if (normalizedHandoff) {
+            normalizedHandoff.releasedBy = params.workerId || 'unknown';
+            if (params.reason) normalizedHandoff.reason = params.reason.slice(0, 2000);
+            repairedHandoffs = [normalizedHandoff, ...(task.priorHandoffs ?? [])].slice(
+              0,
+              MAX_HANDOFFS_PER_TASK
+            );
+            repairUpdates.priorHandoffs = repairedHandoffs;
+          }
+
+          const repaired = await state.updateTask(task.id, repairUpdates, 'WORKER_RELEASED');
+
+          if (correctedStatus !== task.status) {
+            const msg = `🔧 task ${repaired.id} was unassigned but stuck in ${task.status}; auto-routed to ${correctedStatus}`;
+            try { await state.postToGeneral(msg); } catch { /* never block tool */ }
+            try { await state.postToRoleChannel('workers', msg); } catch { /* never block tool */ }
+          }
+
           return {
             success: true,
-            taskId: task.id,
+            taskId: repaired.id,
             previousWorkerId: null,
-            status: task.status,
-            message: 'Task already unassigned',
-            ...(normalizedHandoff ? { warning: 'handoffNote ignored: task was already unassigned' } : {}),
+            status: repaired.status,
+            priorHandoffCount: repairedHandoffs?.length ?? 0,
+            ...(unparking ? { unparked: true } : {}),
+            message: correctedStatus !== task.status
+              ? `Task was unassigned but stuck in ${task.status}; repaired to ${correctedStatus}`
+              : (unparking ? 'Task unparked (needsHumanReview cleared); it re-enters the QA queue' : 'Task already unassigned; handoffNote recorded'),
           };
         }
 
@@ -109,6 +170,9 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         const updates: Record<string, unknown> = {
           assignedWorkerId: null,
           status: nextStatusForRelease(task),
+          // release_task is a documented human unpark path (schema.ts): clear
+          // the qa_reject-cap park so the task re-enters the QA queue.
+          ...(task.needsHumanReview === true ? { needsHumanReview: false } : {}),
         };
         let nextPriorHandoffs = task.priorHandoffs;
         if (normalizedHandoff) {

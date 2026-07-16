@@ -30,6 +30,12 @@ export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boole
  *   - WORKING           → REVIEW if every step is already COMPLETED (don't
  *                         discard a dead worker's finished work — hand to QA),
  *                         otherwise BACKLOG (next worker picks it up)
+ *   - DONE / ARCHIVED   → unchanged. Terminal statuses must never be routed
+ *                         back to a claimable column: a stale assignee on a
+ *                         finished task (explicit-status claim, git-pulled
+ *                         .moe/tasks from another machine) would otherwise be
+ *                         "released" into BACKLOG and the fleet would redo
+ *                         completed work. Release only strips the assignee.
  * Anything else falls back to BACKLOG.
  *
  * This is the ONLY definition of release routing — every release path
@@ -45,6 +51,10 @@ export function nextStatusForRelease(task: Pick<Task, 'status' | 'implementation
       return 'REVIEW';
     case 'WORKING':
       return allStepsCompleted(task) ? 'REVIEW' : 'BACKLOG';
+    case 'DONE':
+      return 'DONE';
+    case 'ARCHIVED':
+      return 'ARCHIVED';
     default:
       return CLAIMABLE_FALLBACK_STATUS;
   }

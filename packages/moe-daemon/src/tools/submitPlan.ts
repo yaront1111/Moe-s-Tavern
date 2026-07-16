@@ -41,7 +41,11 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
   // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING bounce
   // that didn't cancel the timer) — otherwise the old timer leaks.
   cancelSpeedModeTimeout(taskId);
-  const timeoutId = setTimeout(async () => {
+  // detachFromMutexContext: submit_plan runs under the state mutex (McpAdapter
+  // dispatch), and a timer created inside that context inherits it — the
+  // callback's runExclusive would then short-circuit as "reentrant" and run the
+  // re-check + approval WITHOUT the lock, voiding the TOCTOU guarantee below.
+  const timeoutId = state.detachFromMutexContext(() => setTimeout(async () => {
     try {
       // approveTask path acquires the StateManager mutex and re-checks that
       // status === 'AWAITING_APPROVAL' inside the locked section.
@@ -69,7 +73,7 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
         speedModeTimeouts.delete(taskId);
       }
     }
-  }, delayMs);
+  }, delayMs));
   speedModeTimeouts.set(taskId, timeoutId);
 }
 

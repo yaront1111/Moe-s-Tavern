@@ -814,7 +814,7 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId`, status unchanged). Anyone can call — no ownership check. Use when an agent shuts down without releasing, or when you want to hand a task to a different agent.
+Release a task from its assigned worker (clears `assignedWorkerId` and routes the task to a claimable column via `nextStatusForRelease`: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff.
 
 **Parameters:**
 ```typescript
@@ -837,7 +837,7 @@ Release a task from its assigned worker (clears `assignedWorkerId`, status uncha
   success: true,
   taskId: string,
   previousWorkerId: string | null,   // null if task was already unassigned
-  status: TaskStatus,                // unchanged
+  status: TaskStatus,                // post-release status (routed via nextStatusForRelease)
   priorHandoffCount?: number,        // length of priorHandoffs after this release
   message: string,
   warning?: string                   // set when called without handoffNote
@@ -845,7 +845,9 @@ Release a task from its assigned worker (clears `assignedWorkerId`, status uncha
 ```
 
 **Side effects:**
-- Sets `task.assignedWorkerId = null`.
+- Sets `task.assignedWorkerId = null` and routes `task.status` via `nextStatusForRelease`. If the task was already unassigned but stuck WORKING (the one status invisible to claimers when unassigned), the call repairs the status the same way — and still records the `handoffNote` instead of discarding it.
+- **DONE/ARCHIVED tasks are a strict no-op** (any `handoffNote` is ignored with a warning): release must never resurrect finished work into a claimable column.
+- Clears `needsHumanReview` when set — `release_task` is one of the documented human unpark paths for a task parked by the `qa_reject` hard cap; after release it re-enters the QA queue.
 - When `handoffNote` is provided, builds a `HandoffNote` (with `releasedBy`, `releasedAt`, optional `reason`) and **prepends** it to `task.priorHandoffs` (newest-first, capped at 20).
 - Without `handoffNote`, the chat broadcast tags the release `(released without handoff)` and the response includes `warning: "release_task called without handoffNote; next claimer will lack context."`.
 - If the released worker exists and `worker.currentTaskId === taskId`, sets the worker to `IDLE` with `currentTaskId = null`.
@@ -856,7 +858,7 @@ Release a task from its assigned worker (clears `assignedWorkerId`, status uncha
 
 ### moe.list_workers
 
-List all registered workers with liveness derived from `lastActivityAt`. Use to see which agents are alive and which shut down (potentially still holding task assignments).
+List all registered workers with presence derived from `lastActivityAt`. **Display-only signal**: `isAlive: false` means "no tool call or heartbeat within the window" — which a live worker mid-build routinely exceeds. It is never evidence of shutdown and never grounds to release a task.
 
 **Parameters:**
 ```typescript
@@ -882,7 +884,9 @@ List all registered workers with liveness derived from `lastActivityAt`. Use to 
     teamId: string | null
   }>,
   summary: { total, alive, stale, staleWithAssignedTask, livenessTimeoutMs },
-  // Present only when stale workers still hold assignments:
+  // Present only when quiet workers still hold assignments. The hint warns
+  // AGAINST releasing on idle (quiet ≠ dead — ping first); staleAssignments
+  // is triage data, not a release worklist:
   hint?: string,
   staleAssignments?: Array<{ workerId, taskId, taskTitle, secondsSinceLastActivity }>
 }
@@ -955,7 +959,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 - `🚧 {worker} blocked on {taskId}: {reason}` (from `moe.report_blocked`).
 - `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
 - `🔓 {worker} released task: {title}` (from `moe.release_task`).
-- `⚠️ {worker} stale on {taskId} — last activity {N}s ago` (from the daemon's stale-worker watcher; only fires when at least one governor is online).
+- `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; a presence/triage signal, not a release trigger).
 - `📋 New plan needed: {title} ({id})` (cross-post of the PLANNING announcement; informational — governors never claim PLANNING tasks).
 
 ---

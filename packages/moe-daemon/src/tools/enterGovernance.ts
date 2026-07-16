@@ -2,11 +2,13 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatChannel } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
+import { releaseWorkerTasks } from '../state/workerLifecycle.js';
+import { logger } from '../util/logger.js';
 
 const GOVERNANCE_DUTIES = [
   'Watch #governors, #general, #architects, #workers, #qa for @mentions and oversight signals.',
   'Reply to any @mention via moe.chat_send before any other tool call (Mention Response Protocol).',
-  'Triage stale-worker alerts (⚠️), QA rejections (❌), and block reports (🚧) as they cross-post to #governors.',
+  'Triage stale-worker alerts (⚠️), QA rejections (❌), and block reports (🚧) as they cross-post to #governors. On ⚠️: quiet ≠ dead (long builds/tests are silent) — ping the worker first; NEVER release a WORKING/PLANNING task on idle time alone.',
   'When a new PLANNING task lands you will see it cross-posted to #governors — @ping an architect to resume planning. Do NOT claim PLANNING tasks yourself.',
   'For QA rejection loops that require a re-plan, use moe.set_task_status to flip the task back to PLANNING; the architect picks it up.',
 ];
@@ -55,6 +57,16 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
       const channels: { id: string; name: string }[] = [];
       await state.runExclusive(async () => {
         const fresh = state.getWorker(params.workerId!);
+        // Release any task this worker still owns BEFORE nulling its
+        // currentTaskId. A worker that switched to a governor team while
+        // holding a WORKING task would otherwise leave it assigned to a live
+        // GOVERNING worker — unclaimable (owner present, not DEAD) and never
+        // self-healed (idle never releases WORKING): a permanent orphan until
+        // deregister or daemon restart.
+        const released = await releaseWorkerTasks(state, params.workerId!, 'enter_governance');
+        if (released.length > 0) {
+          logger.info({ workerId: params.workerId, released }, 'enter_governance released held tasks');
+        }
         if (fresh?.status === 'GOVERNING') {
           alreadyGoverning = true;
         } else {
@@ -92,7 +104,7 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
             channels: channelIds.length > 0 ? channelIds : undefined,
             timeoutMs: 300000
           },
-          reason: 'Watch #governors for stale-worker, rejection, and block alerts; respond to @mentions across all channels.'
+          reason: 'Watch #governors for stale-worker, rejection, and block alerts; respond to @mentions across all channels. Stale alerts are presence signals, not death certificates — never release a task on idle time alone.'
         }
       };
     }

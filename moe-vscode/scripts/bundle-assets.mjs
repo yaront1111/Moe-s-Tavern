@@ -1,4 +1,4 @@
-import { cp, rm, mkdir, stat } from 'fs/promises';
+import { cp, rm, mkdir, stat, readdir } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -14,12 +14,14 @@ const assets = [
     name: 'daemon',
     dist: path.join(repoRoot, 'packages', 'moe-daemon', 'dist'),
     deps: path.join(repoRoot, 'packages', 'moe-daemon', 'node_modules'),
+    src: path.join(repoRoot, 'packages', 'moe-daemon', 'src'),
     out: path.join(outputRoot, 'daemon')
   },
   {
     name: 'proxy',
     dist: path.join(repoRoot, 'packages', 'moe-proxy', 'dist'),
     deps: path.join(repoRoot, 'packages', 'moe-proxy', 'node_modules'),
+    src: path.join(repoRoot, 'packages', 'moe-proxy', 'src'),
     out: path.join(outputRoot, 'proxy')
   }
 ];
@@ -31,6 +33,21 @@ async function exists(p) {
   } catch {
     return false;
   }
+}
+
+// Newest mtime of any non-test source file under dir. Used to refuse bundling
+// a dist that predates the sources — an old dist bundles silently and ships
+// removed behavior (e.g. the pre-3d2cb16 idle-based worker sweep) inside the
+// extension, where it resurrects bugs the repo already fixed.
+async function newestSourceMtime(dir) {
+  let newest = 0;
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || entry.name.includes('.test.')) continue;
+    const s = await stat(path.join(entry.parentPath ?? entry.path, entry.name));
+    if (s.mtimeMs > newest) newest = s.mtimeMs;
+  }
+  return newest;
 }
 
 async function copyDir(src, dest, { excludeBin } = {}) {
@@ -56,6 +73,17 @@ async function main() {
     }
     if (!(await exists(asset.deps))) {
       throw new Error(`${asset.name} dependencies not found at ${asset.deps}. Run npm install first.`);
+    }
+    if (await exists(asset.src)) {
+      const distMain = path.join(asset.dist, 'index.js');
+      const distMtime = (await exists(distMain)) ? (await stat(distMain)).mtimeMs : 0;
+      const srcMtime = await newestSourceMtime(asset.src);
+      if (srcMtime > distMtime) {
+        throw new Error(
+          `${asset.name} dist at ${asset.dist} is STALE (source files are newer than dist/index.js). ` +
+          `Rebuild first (cd packages/moe-${asset.name} && npm run build) — bundling an old dist ships outdated daemon behavior.`
+        );
+      }
     }
 
     const distOut = asset.out;

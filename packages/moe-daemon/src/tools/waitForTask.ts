@@ -66,7 +66,26 @@ function findPendingQuestion(
 ): { taskId: string; title: string; status: string; epicId: string } | null {
   for (const task of state.tasks.values()) {
     if (!task.hasPendingQuestion) continue;
+    // Mirror get_pending_questions' filters — anything visible here but
+    // filtered there spins every idle agent in a hot wait→get→wait loop with
+    // zero progress. (1) Archiving does not clear hasPendingQuestion, and
+    // get_pending_questions skips ARCHIVED. (2) It also only surfaces human
+    // comments AFTER the last agent comment — a flag left set after an agent
+    // already answered yields an empty result there.
+    if (task.status === 'ARCHIVED') continue;
     if (epicId && task.epicId !== epicId) continue;
+    const comments = task.comments || [];
+    let lastAgentIdx = -1;
+    for (let i = comments.length - 1; i >= 0; i--) {
+      if (comments[i].author !== 'human') {
+        lastAgentIdx = i;
+        break;
+      }
+    }
+    const hasUnansweredHumanComment = comments
+      .slice(lastAgentIdx + 1)
+      .some((c) => c.author === 'human');
+    if (!hasUnansweredHumanComment) continue;
     return { taskId: task.id, title: task.title, status: task.status, epicId: task.epicId };
   }
   return null;
@@ -75,12 +94,35 @@ function findPendingQuestion(
 function findMatchingTask(
   state: StateManager,
   statuses: string[],
-  epicId?: string
+  epicId?: string,
+  workerId?: string
 ): { id: string; title: string; status: string; priority: string; epicId: string } | null {
+  // Eligibility here must be at least as strict as claim_next_task's ranked
+  // pool: any task that is wait-visible but claim-ineligible wakes the waiter
+  // into a claim that declines straight back to wait_for_task — a hot
+  // wake→claim→wait spin at full RPC speed for as long as the task persists.
   const tasks = Array.from(state.tasks.values())
     .filter((t) => statuses.includes(t.status))
     .filter((t) => (epicId ? t.epicId === epicId : true))
     .filter((t) => state.isTaskClaimable(t))
+    // A REVIEW task parked for a human (qa_reject hard cap) is excluded from
+    // the QA claim queue until a human clears it — mirror that here.
+    .filter((t) => !(t.status === 'REVIEW' && t.needsHumanReview === true))
+    // Single-worker-per-epic-status (solo workers only): claim skips a
+    // candidate when a live OTHER worker holds a different task in the same
+    // epic+status — mirror that too.
+    .filter((t) => {
+      if (!workerId || state.getTeamForWorker(workerId)) return true;
+      const otherActiveOnSameStatus = Array.from(state.tasks.values()).some((o) =>
+        o.id !== t.id &&
+        o.epicId === t.epicId &&
+        o.status === t.status &&
+        o.assignedWorkerId &&
+        o.assignedWorkerId !== workerId &&
+        !state.isTaskAssignedToInactiveWorker(o)
+      );
+      return !otherActiveOnSameStatus;
+    })
     .sort((a, b) => {
       const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
       const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
@@ -131,7 +173,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       }
 
       // Check if a matching task already exists
-      const immediate = findMatchingTask(state, statuses, params.epicId);
+      const immediate = findMatchingTask(state, statuses, params.epicId, workerId);
       if (immediate) {
         return {
           hasNext: true,
@@ -239,7 +281,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           // Only react to task creation/update events
           if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;
 
-          const match = findMatchingTask(state, statuses, params.epicId);
+          const match = findMatchingTask(state, statuses, params.epicId, workerId);
           if (match) {
             cleanup();
             logger.info({ workerId, taskId: match.id }, 'Task available, waking worker');

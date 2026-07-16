@@ -1335,6 +1335,37 @@ describe('StateManager', () => {
       expect(stateManager.isTaskClaimable(task)).toBe(true);
     });
 
+    it('REVIEW self-heal preserves the stale owner lastActivityAt (no resurrection as alive)', async () => {
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 60 * 60 * 1000, // prune must not delete the record in this test
+        reviewStaleTimeoutMs: 1,
+        blockedTimeoutMs: 60 * 60 * 1000,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'REVIEW', assignedWorkerId: 'qa-stale' });
+      const staleTs = new Date(Date.now() - 60_000).toISOString();
+      createTestWorker({
+        id: 'qa-stale',
+        currentTaskId: 'task-test123',
+        status: 'READING_CONTEXT',
+        lastActivityAt: staleTs,
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      // The task was released...
+      expect(stateManager.getTask('task-test123')!.assignedWorkerId).toBeNull();
+      // ...and clearing the owner's currentTaskId must NOT stamp a fresh
+      // heartbeat — that would re-enter the crashed QA into the alive window
+      // and defer its prune by a full staleWorkerTimeoutMs.
+      const owner = stateManager.getWorker('qa-stale')!;
+      expect(owner.currentTaskId).toBeNull();
+      expect(owner.lastActivityAt).toBe(staleTs);
+    });
+
     it('does NOT release a REVIEW task whose owner is within the review timeout', async () => {
       // Long timeouts: neither the self-heal nor the prune fires.
       stateManager = new StateManager({
@@ -1568,6 +1599,81 @@ describe('StateManager', () => {
       expect(task).toBeDefined();
       expect(task!.assignedWorkerId).toBeNull();
       expect(stateManager.getWorker('worker-to-delete')).toBeNull();
+    });
+
+    it('deleteWorker routes a WORKING task to BACKLOG instead of stranding it WORKING-but-unassigned', async () => {
+      // claim_next_task filters candidates by status before checking
+      // claimability, so a WORKING task with no assignee is invisible to
+      // every claimer until something routes it to a claimable status.
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ assignedWorkerId: 'worker-to-delete', status: 'WORKING' });
+      await stateManager.load();
+
+      await stateManager.createWorker({
+        id: 'worker-to-delete',
+        type: 'CLAUDE',
+        projectId: 'proj-test123',
+        epicId: 'epic-test123',
+        currentTaskId: 'task-test123',
+        status: 'CODING'
+      });
+
+      await stateManager.deleteWorker('worker-to-delete');
+
+      const task = stateManager.getTask('task-test123')!;
+      expect(task.assignedWorkerId).toBeNull();
+      expect(task.status).toBe('BACKLOG');
+      expect(stateManager.isTaskClaimable(task)).toBe(true);
+    });
+
+    it('deleteWorker preserves a DONE task (release must never resurrect finished work)', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ assignedWorkerId: 'worker-to-delete', status: 'DONE' });
+      await stateManager.load();
+
+      await stateManager.createWorker({
+        id: 'worker-to-delete',
+        type: 'CLAUDE',
+        projectId: 'proj-test123',
+        epicId: 'epic-test123',
+        currentTaskId: 'task-test123',
+        status: 'CODING'
+      });
+
+      await stateManager.deleteWorker('worker-to-delete');
+
+      const task = stateManager.getTask('task-test123')!;
+      expect(task.assignedWorkerId).toBeNull();
+      expect(task.status).toBe('DONE');
+    });
+
+    it('timers armed inside runExclusive do not inherit the lock (ALS leak regression)', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      await stateManager.load();
+
+      // Old bug: a timer created inside runExclusive inherited the mutex's
+      // AsyncLocalStorage "holding" context, so its callback's runExclusive
+      // short-circuited as reentrant and ran WITHOUT the lock — interleaving
+      // with real lock holders. With detachFromMutexContext the tick must
+      // queue behind the outer critical section.
+      const order: string[] = [];
+      let tickDone!: () => void;
+      const tickPromise = new Promise<void>((r) => { tickDone = r; });
+
+      await stateManager.runExclusive(async () => {
+        stateManager.detachFromMutexContext(() => setTimeout(() => {
+          void stateManager.runExclusive(async () => { order.push('tick'); }).then(tickDone);
+        }, 0));
+        // Give the timer a chance to fire while we still hold the lock.
+        await new Promise((r) => setTimeout(r, 50));
+        order.push('outer-done');
+      });
+      await tickPromise;
+
+      expect(order).toEqual(['outer-done', 'tick']);
     });
 
     it('concurrent sendMessage calls produce valid JSONL', async () => {

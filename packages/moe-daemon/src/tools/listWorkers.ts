@@ -9,7 +9,7 @@ const MAX_LIVENESS_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 export function listWorkersTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.list_workers',
-    description: 'List all registered workers with liveness (alive/stale) based on lastActivityAt. Use to see which agents shut down without releasing their task.',
+    description: 'List all registered workers with presence (alive/stale) based on lastActivityAt. Display-only signal: a stale worker may be mid-build with its CLI blocked on a long local step — staleness alone is NEVER grounds to release its task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -105,7 +105,7 @@ export function listWorkersTool(_state: StateManager): ToolDefinition {
         },
         ...(staleWithTask.length > 0
           ? {
-              hint: `${staleWithTask.length} stale worker(s) still hold task assignments. Use moe.release_task { taskId } to free them.`,
+              hint: `${staleWithTask.length} worker(s) are quiet past the presence window while holding tasks. Quiet ≠ dead: a long build or test run can outlast the window. Ping them in #workers first; release only after a confirmed crash or with human approval. Never call moe.release_task on idle time alone — WORKING/PLANNING tasks are deliberately not auto-released, and a crashed QA's REVIEW task self-heals after reviewStaleTimeoutMs.`,
               staleAssignments: staleWithTask.map((w) => ({
                 workerId: w.workerId,
                 taskId: w.currentTaskId,

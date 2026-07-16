@@ -138,6 +138,95 @@ describe('moe.release_task', () => {
     expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
   });
 
+  it('repairs a WORKING-but-unassigned orphan (e.g. left by deleteWorker) instead of leaving it stuck', async () => {
+    // Simulates the state a task is left in when its owning worker gets
+    // deleted/purged out from under it: assignedWorkerId cleared, status
+    // still WORKING — invisible to claim_next_task, which filters by status
+    // before checking claimability.
+    writeTask({ assignedWorkerId: null, status: 'WORKING' });
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('BACKLOG');
+    expect(state.getTask('task-1')!.status).toBe('BACKLOG');
+  });
+
+  it('is a strict no-op on an unassigned DONE task (must NOT resurrect it to BACKLOG)', async () => {
+    // Every normally-finished task is DONE+unassigned (status changes auto-clear
+    // the assignee), so a duplicate/late release_task must not "repair" it.
+    writeTask({ assignedWorkerId: null, status: 'DONE' });
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      handoffNote: { whatIsDone: 'everything', whatRemains: 'nothing' },
+    }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('DONE');
+    expect(result.warning).toMatch(/ignored/);
+
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('DONE');
+    expect(task.priorHandoffs ?? []).toHaveLength(0);
+  });
+
+  it('is a strict no-op on an unassigned ARCHIVED task', async () => {
+    writeTask({ assignedWorkerId: null, status: 'ARCHIVED' });
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('ARCHIVED');
+    expect(state.getTask('task-1')!.status).toBe('ARCHIVED');
+  });
+
+  it('clears needsHumanReview on a parked REVIEW task (documented human unpark path)', async () => {
+    writeTask({ assignedWorkerId: null, status: 'REVIEW', needsHumanReview: true });
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1', reason: 'human unpark' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.unparked).toBe(true);
+
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('REVIEW');
+    expect(task.needsHumanReview).toBe(false);
+  });
+
+  it('persists handoffNote even when the task is already unassigned, instead of discarding it', async () => {
+    writeTask({ assignedWorkerId: null, status: 'WORKING' });
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      workerId: 'worker-recovering',
+      handoffNote: {
+        whatIsDone: 'wired the new endpoint',
+        whatRemains: 'add tests',
+      },
+    }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.warning).toBeUndefined();
+    expect(result.priorHandoffCount).toBe(1);
+
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('BACKLOG');
+    expect(task.priorHandoffs).toHaveLength(1);
+    expect(task.priorHandoffs![0].whatIsDone).toBe('wired the new endpoint');
+    expect(task.priorHandoffs![0].releasedBy).toBe('worker-recovering');
+  });
+
   it('throws notFound for unknown taskId', async () => {
     await state.load();
     const tool = releaseTaskTool(state);

@@ -91,10 +91,11 @@ cleanup_temp() {
         stop_heartbeat_sidecar
     fi
     # Gracefully release any task this worker still holds so the next agent can
-    # claim it immediately. This is best-effort and never blocks exit; the
-    # daemon's worker-liveness sweep is the slower (timeout) fallback for hard
-    # crashes where this trap never runs. WORKER_ID/PROJECT are set later in the
-    # script but read here at exit time.
+    # claim it immediately. This is best-effort and never blocks exit. There is
+    # NO idle-timeout fallback for hard crashes where this trap never runs: the
+    # task stays assigned until daemon restart, deregister, or an explicit
+    # release. WORKER_ID/PROJECT are set later in the script but read here at
+    # exit time.
     if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
         "$SCRIPT_DIR/moe-call.sh" deregister_worker \
             "{\"workerId\":\"$WORKER_ID\",\"reason\":\"terminal_closed\"}" \
@@ -2084,7 +2085,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             # Governor: enter_governance was already invoked in the preflight
             # short-circuit. Now subscribe to #governors and #general via
             # chat_wait — never call claim_next_task.
-            PROMPT_BODY="You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. Loop forever. Do NOT call moe.claim_next_task."
+            PROMPT_BODY="You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. On stale-worker alerts: quiet is not dead (long builds/tests are silent) — ping the worker first and NEVER call moe.release_task on idle time alone; release needs a confirmed crash plus the human's nod. Loop forever. Do NOT call moe.claim_next_task."
         elif [ "$PREFLIGHT_NO_TASK" = true ]; then
             PROMPT_BODY="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
         else

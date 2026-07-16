@@ -305,7 +305,7 @@ flowchart LR
     RV -->|qa: qa_approve| DN[DONE]
     RV -->|qa: qa_reject| WK
     RV -.->|governor: set_task_status (rejection loop)| PL
-    WK -.->|governor: release_task| WK
+    WK -.->|governor: release_task (confirmed crash only)| WK
 ```
 
 ### 1. Architect — the planner
@@ -338,8 +338,8 @@ flowchart LR
 ### 4. Governor — the overseer
 
 - Never claims tasks. `moe.claim_next_task` routes governors straight to `moe.enter_governance`.
-- Watches `#governors` for auto-pushed signals: `🚧` worker blocks, `❌` QA rejections, `⚠️` stale-worker alerts, `🔓` task releases, and `📋` new PLANNING announcements (informational).
-- Triages: ping a worker, ping the architect, `moe.propose_rail` for rail conflicts, `moe.release_task` for hard hangs, `moe.set_task_status` back to PLANNING for QA rejection loops.
+- Watches `#governors` for auto-pushed signals: `🚧` worker blocks, `❌` QA rejections, `⚠️` stale-worker alerts (ping-first — quiet ≠ dead, never release on idle alone), `🔓` task releases, and `📋` new PLANNING announcements (informational).
+- Triages: ping a worker, ping the architect, `moe.propose_rail` for rail conflicts, `moe.release_task` for confirmed crashes (never on idle time alone — with human confirmation), `moe.set_task_status` back to PLANNING for QA rejection loops.
 - Runs in interactive TUI by default — the human steers escalation decisions via the REPL.
 - Role guide: [`docs/roles/governor.md`](docs/roles/governor.md).
 

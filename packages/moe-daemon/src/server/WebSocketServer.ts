@@ -956,7 +956,11 @@ export class MoeWebSocketServer {
    *
    * Stale workers from truly-disconnected agents should be cleaned up by a
    * presence/heartbeat mechanism (lastActivityAt timeout) rather than by
-   * TCP close events, since TCP close no longer implies agent death.
+   * TCP close events, since TCP close no longer implies agent death — but
+   * ONLY for workers holding no active task (the Layer-3 prune) or via the
+   * REVIEW self-heal. WORKING/PLANNING tasks are deliberately never released
+   * on idle time (isTaskClaimable keys on missing/DEAD owners only); do not
+   * reintroduce an idle sweep that touches them.
    */
   private async cleanupMcpWorkers(ws: WebSocket): Promise<void> {
     const workerIds = this.mcpWorkerMap.get(ws);

@@ -246,7 +246,7 @@ async function probeStaleWorkers(moePath: string): Promise<ProbeResult> {
     } catch { /* skip unreadable */ }
   }
   if (stale > 0) {
-    return { symbol: 'warn', message: `${stale}/${total} worker(s) stale (>5m idle)` };
+    return { symbol: 'warn', message: `${stale}/${total} worker(s) quiet >5m (may be mid-build — informational; tasks are never auto-released on idle)` };
   }
   return { symbol: 'pass', message: `${total} worker(s), none stale` };
 }

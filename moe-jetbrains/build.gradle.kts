@@ -32,11 +32,30 @@ val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
 val bundledSkillsDir = repoRoot.resolve("docs/skills")
 
+// Newest mtime of any non-test source file under src. Guards against bundling
+// a dist that predates the sources — an old dist ships silently and resurrects
+// removed daemon behavior (e.g. the pre-3d2cb16 idle-based worker sweep)
+// inside every installed plugin.
+fun newestSourceMtime(srcDir: java.io.File): Long =
+    srcDir.walkTopDown()
+        .filter { it.isFile && !it.name.contains(".test.") }
+        .map { it.lastModified() }
+        .maxOrNull() ?: 0L
+
+fun requireFreshDist(name: String, distMain: java.io.File, srcDir: java.io.File) {
+    if (!srcDir.exists()) return
+    check(distMain.lastModified() >= newestSourceMtime(srcDir)) {
+        "Bundled $name dist at ${distMain.parentFile} is STALE (source files are newer than dist). " +
+            "Rebuild first (cd packages/$name && npm run build) — bundling an old dist ships outdated daemon behavior."
+    }
+}
+
 fun requireBundledAssets() {
     check(bundledDaemonMain.exists()) {
         "Bundled moe-daemon dist not found at ${bundledDaemonMain}. " +
             "Build it first (cd packages/moe-daemon && npm run build)."
     }
+    requireFreshDist("moe-daemon", bundledDaemonMain, repoRoot.resolve("packages/moe-daemon/src"))
     check(bundledDaemonMarker.exists()) {
         "Bundled moe-daemon dependencies not found at ${bundledDaemonModules}. " +
             "Install them first (cd packages/moe-daemon && npm install)."
@@ -45,6 +64,7 @@ fun requireBundledAssets() {
         "Bundled moe-proxy dist not found at ${bundledProxyMain}. " +
             "Build it first (cd packages/moe-proxy && npm run build)."
     }
+    requireFreshDist("moe-proxy", bundledProxyMain, repoRoot.resolve("packages/moe-proxy/src"))
     check(bundledProxyMarker.exists()) {
         "Bundled moe-proxy dependencies not found at ${bundledProxyModules}. " +
             "Install them first (cd packages/moe-proxy && npm install)."

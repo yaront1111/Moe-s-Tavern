@@ -1,21 +1,21 @@
-<!-- moe-generated: sha=00267f739525 -->
+<!-- moe-generated: sha=81ea7e05636b -->
 
 # Governor — Reference
 
 Deep-dive material trimmed out of `governor.md`. Read this on demand when a situation calls for it; it is not loaded into your system prompt every turn.
 
-## Stale-worker thresholds
+## Stale-worker handling
 
-The daemon does **not** auto-release tasks on idle time — a long-running worker keeps its task no matter how quiet it goes. Tasks are released only on daemon restart, graceful `moe.deregister_worker`, or an explicit `release_task`. That makes YOUR judgment the safety net for hard-crashed workers holding tasks: notice them, ping, and escalate to `release_task` when warranted. Liveness uses the shared `isWorkerAlive` predicate (`moe.list_workers {onlyStale: true}`, `packages/moe-daemon/src/util/workerLiveness.ts`). Default thresholds:
+The daemon does **not** auto-release WORKING/PLANNING tasks on idle time — a long-running worker keeps its task no matter how quiet it goes. Crash recovery is already layered without you: daemon restart purges all workers and releases their tasks; graceful exits call `moe.deregister_worker` from the wrapper's exit trap; a crashed QA's REVIEW task self-heals after `reviewStaleTimeoutMs` (30 min default); and live CLIs run a heartbeat sidecar that pings `moe.heartbeat` every 60s even during silent local steps. Your job on a ⚠️ alert is triage, not reaping.
 
-| Multiple of liveness timeout | Default interpretation |
-|---|---|
-| 1× (just past timeout) | Likely paused mid-tool-call. Wait one more tick before pinging. |
-| 2× | Probably stuck. Ping the worker. |
-| 4× | Definitely stuck or crashed. Ask the human; consider `release_task`. |
-| 8× | Hard hang. Release without further prompting (still flag the human). |
+**Idle time alone — any amount, any multiple of the presence window — is never grounds for `release_task`.** A stale flag means "no tool call or heartbeat lately," which is compatible with a worker deep in a long build whose sidecar is disabled or past its 2h bound. Releasing such a worker destroys real in-flight work and strands its local state.
 
-These are heuristics, not hard rules. The `lastError` and `errorCount` fields on the worker record are stronger signals than wall-clock time alone — a worker with `errorCount > 3` and a recent `lastError` is in worse shape than one quietly running for 5 minutes.
+What to do instead, in order:
+
+1. **Ping the worker** in `#workers`. Most stale workers answer.
+2. **Read the worker record.** `lastError` and `errorCount` are stronger signals than wall-clock silence — `errorCount > 3` with a recent `lastError` is real trouble; quiet-with-no-errors usually is not.
+3. **Look for a death signal**: a deregister banner in chat, a wrapper exit, the human confirming the process is gone. No death signal → keep waiting or ask the human.
+4. **Release only on a confirmed crash, and with the human's nod.** When you do release, pass a `handoffNote` if any context is recoverable from chat or the task's comments.
 
 ## Rail proposal patterns
 
@@ -44,8 +44,8 @@ Do NOT loop between `propose_rail` and other actions on the same task — propos
 
 | Anti-pattern | Why it's wrong | What to do instead |
 |---|---|---|
-| Second-guess the architect's plan when the worker hasn't actually stalled | You don't own planning. Workers sometimes look slow but are working. | Wait until 2×liveness or a self-reported block. |
-| Auto-release a worker that's making progress | The worker may have local edits in its TUI that you'll discard. | Ping first; release only after confirmation or hard hang. |
+| Second-guess the architect's plan when the worker hasn't actually stalled | You don't own planning. Workers sometimes look slow but are working. | Wait for a self-reported block or a real death signal. |
+| Release a worker because it looks idle | Quiet ≠ dead — long builds/tests are silent, and you'll discard the worker's local edits. | Ping first; release only on a confirmed crash with the human's nod. |
 | Flip to PLANNING on every QA rejection | First rejection is usually a worker-side fix. Re-plan is for systemic issues. | Re-plan only after the same DoD item gets rejected twice. |
 | Reply to every drift signal with a tool call | The chat log is a tool too. Sometimes the right action is "watch and wait." | Post an acknowledgement; let the worker self-correct first. |
 | Use `moe.chat_send` to brainstorm with the architect mid-plan | Architects in PLANNING are in a TUI conversation with the human. Cross-talk derails them. | Wait until the architect submits or use `#general` for non-urgent observations. |
