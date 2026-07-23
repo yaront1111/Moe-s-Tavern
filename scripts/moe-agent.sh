@@ -249,7 +249,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
             echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
-            echo "  --model MODEL            Claude model override (default: all roles = opus-4-8)"
+            echo "  --model MODEL            Claude model override (default: all roles = sonnet-5)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -783,7 +783,7 @@ if [ "$CLI_TYPE" = "codex" ]; then
     TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
 
     if [ -n "$TOML_PROXY_CMD" ]; then
-        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF'
+        $PYTHON_CMD - "$CODEX_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$ROLE" "$SERENA_CMD" "$TOML_SERENA_PROJECT" "${MOE_CODEX_REASONING_EFFORT:-xhigh}" << 'PYEOF'
 import sys, os, re, json
 
 config_file = sys.argv[1]
@@ -793,10 +793,12 @@ project_path = sys.argv[4]
 role = sys.argv[5] if len(sys.argv) > 5 else "worker"
 serena_cmd = sys.argv[6] if len(sys.argv) > 6 else ""
 serena_project = sys.argv[7] if len(sys.argv) > 7 else project_path
+reasoning_effort = sys.argv[8] if len(sys.argv) > 8 else "xhigh"
 
 # Top-level config lines (role instructions + model instructions)
 top_level_lines = [
     'model_instructions_file = "agent-instructions.md"',
+    'model_reasoning_effort = ' + json.dumps(reasoning_effort),
     'developer_instructions = """You are a ' + role + ' agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly."""',
 ]
 top_level_block = "\n".join(top_level_lines)
@@ -836,25 +838,37 @@ if os.path.exists(config_file):
     with open(config_file, "r") as f:
         content_str = f.read()
 
-    # Remove old model_instructions_file lines
+    # Remove old model_instructions_file / model_reasoning_effort lines
     content_str = re.sub(r'^model_instructions_file\s*=.*\n?', '', content_str, flags=re.MULTILINE)
+    content_str = re.sub(r'^model_reasoning_effort\s*=.*\n?', '', content_str, flags=re.MULTILINE)
 
     # Remove old developer_instructions (triple-quoted multi-line)
     content_str = re.sub(r'^developer_instructions\s*=\s*""".*?"""\s*\n?', '', content_str, flags=re.MULTILINE | re.DOTALL)
     # Remove old developer_instructions (single-line)
     content_str = re.sub(r'^developer_instructions\s*=\s*"[^"]*"\s*\n?', '', content_str, flags=re.MULTILINE)
 
-    # Filter out [mcp_servers.moe] and [mcp_servers.moe.env] sections
+    # Filter out the sections this writer owns and re-emits: [mcp_servers.moe],
+    # [mcp_servers.moe.env], [mcp_servers.serena]. Serena SUBtables (e.g.
+    # [mcp_servers.serena.tools.*], user-authored per-tool config) are kept while
+    # Serena is installed, but must be stripped when it is not: an orphaned
+    # [mcp_servers.serena.*] with no parent transport makes codex reject the
+    # whole config ("invalid transport in mcp_servers.serena").
+    def strips(header):
+        if header.startswith("[mcp_servers.moe]") or header.startswith("[mcp_servers.moe.env]"):
+            return True
+        if header.startswith("[mcp_servers.serena]"):
+            return True
+        if not serena_cmd and header.startswith("[mcp_servers.serena."):
+            return True
+        return False
+
     lines = content_str.splitlines(True)
     cleaned = []
     skip = False
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("[mcp_servers.moe]") or stripped.startswith("[mcp_servers.moe.env]") or stripped.startswith("[mcp_servers.serena]"):
-            skip = True
-            continue
-        if skip and stripped.startswith("[") and not stripped.startswith("[mcp_servers.moe") and not stripped.startswith("[mcp_servers.serena]"):
-            skip = False
+        if stripped.startswith("["):
+            skip = strips(stripped)
         if not skip:
             cleaned.append(line)
 
@@ -1300,8 +1314,7 @@ fi
 
 # Resolve Claude model for this role.
 # Precedence: --model flag -> project.json settings.models.<role> -> per-role default.
-# All roles -> Opus 4.8 (planning/review/impl quality + 1M ctx for long task
-# histories on reopens). Override per role via project.json settings.models.{role}.
+# All roles -> Sonnet 5. Override per role via project.json settings.models.{role}.
 RESOLVED_MODEL="$MODEL"
 if [ -z "$RESOLVED_MODEL" ] && [ -f "$PROJECT_JSON" ] && [ -n "$PYTHON_CMD" ]; then
     RESOLVED_MODEL=$("$PYTHON_CMD" -c "
@@ -1315,15 +1328,13 @@ except Exception:
 " "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
 fi
 if [ -z "$RESOLVED_MODEL" ]; then
-    # All roles default to Opus 4.8 -- matches moe-agent.ps1. The projects this
-    # wrapper runs against are large, deeply-coupled stacks where the
-    # planning/review/implementation quality difference dominates the per-token
-    # cost difference. Override per role via project.json settings.models.{role}.
+    # All roles default to Sonnet 5 -- matches moe-agent.ps1. Launched with
+    # --effort max below. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
-        architect) RESOLVED_MODEL="claude-opus-4-8" ;;
-        worker)    RESOLVED_MODEL="claude-opus-4-8" ;;
-        qa)        RESOLVED_MODEL="claude-opus-4-8" ;;
-        governor)  RESOLVED_MODEL="claude-opus-4-8" ;;
+        architect) RESOLVED_MODEL="claude-sonnet-5" ;;
+        worker)    RESOLVED_MODEL="claude-sonnet-5" ;;
+        qa)        RESOLVED_MODEL="claude-sonnet-5" ;;
+        governor)  RESOLVED_MODEL="claude-sonnet-5" ;;
     esac
 fi
 if [ -n "$RESOLVED_MODEL" ]; then

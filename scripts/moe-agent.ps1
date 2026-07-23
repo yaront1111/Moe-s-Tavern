@@ -507,15 +507,13 @@ if ($projConfig -and $projConfig.settings.PSObject.Properties['enableAgentTeams'
 
 # Resolve the Claude model for this role.
 # Precedence: -Model flag → .moe/project.json settings.models.<role> → per-role default.
-# All roles default to Opus 4.8: the projects this wrapper runs against are
-# large, deeply-coupled stacks where the planning/review/implementation
-# quality difference dominates the per-token cost difference. Override per
-# role via project.json settings.models.{role} if a cheaper model suffices.
+# All roles default to Sonnet 5, launched with --effort max below. Override
+# per role via project.json settings.models.{role}.
 $defaultModels = @{
-    architect = "claude-opus-4-8"
-    worker    = "claude-opus-4-8"
-    qa        = "claude-opus-4-8"
-    governor  = "claude-opus-4-8"
+    architect = "claude-sonnet-5"
+    worker    = "claude-sonnet-5"
+    qa        = "claude-sonnet-5"
+    governor  = "claude-sonnet-5"
 }
 $resolvedModel = ""
 if (-not [string]::IsNullOrWhiteSpace($Model)) {
@@ -608,8 +606,10 @@ if ($cliType -eq "codex") {
         # Build top-level config (role instructions + model instructions)
         $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
+        $codexReasoningEffort = if ($env:MOE_CODEX_REASONING_EFFORT) { $env:MOE_CODEX_REASONING_EFFORT } else { "xhigh" }
         $topLevelConfig = @"
 model_instructions_file = "agent-instructions.md"
+model_reasoning_effort = "$codexReasoningEffort"
 developer_instructions = """`nYou are a $Role agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
 "@
 
@@ -643,26 +643,31 @@ args = ["start-mcp-server", "--context", "codex", "--project", "$serenaProjectFo
             # Merge: remove existing moe MCP sections and moe-managed top-level keys
             $rawContent = Get-Content -Path $codexConfigFile -Raw
 
-            # Remove old model_instructions_file lines
+            # Remove old model_instructions_file / model_reasoning_effort lines
             $rawContent = $rawContent -replace '(?m)^model_instructions_file\s*=.*\r?\n?', ''
+            $rawContent = $rawContent -replace '(?m)^model_reasoning_effort\s*=.*\r?\n?', ''
 
             # Remove old developer_instructions (triple-quoted multi-line)
             $rawContent = $rawContent -replace '(?s)(?m)^developer_instructions\s*=\s*""".*?"""\s*\r?\n?', ''
             # Remove old developer_instructions (single-line)
             $rawContent = $rawContent -replace '(?m)^developer_instructions\s*=\s*"[^"]*"\s*\r?\n?', ''
 
-            # Filter out [mcp_servers.moe] and [mcp_servers.moe.env] sections line-by-line
+            # Filter out the sections this writer owns and re-emits: [mcp_servers.moe],
+            # [mcp_servers.moe.env], [mcp_servers.serena]. Serena SUBtables (e.g.
+            # [mcp_servers.serena.tools.*], user-authored per-tool config) are kept
+            # while Serena is installed, but must be stripped when it is not: an
+            # orphaned [mcp_servers.serena.*] with no parent transport makes codex
+            # reject the whole config ("invalid transport in mcp_servers.serena").
+            $serenaInstalled = -not [string]::IsNullOrEmpty($serenaTomlBlock)
             $lines = $rawContent -split '\r?\n'
             $cleaned = @()
             $skip = $false
             foreach ($line in $lines) {
                 $stripped = $line.Trim()
-                if ($stripped -match '^\[mcp_servers\.moe\]' -or $stripped -match '^\[mcp_servers\.moe\.env\]' -or $stripped -match '^\[mcp_servers\.serena\]') {
-                    $skip = $true
-                    continue
-                }
-                if ($skip -and $stripped.StartsWith('[') -and $stripped -notmatch '^\[mcp_servers\.moe(\]|\.env\])' -and $stripped -notmatch '^\[mcp_servers\.serena\]') {
-                    $skip = $false
+                if ($stripped.StartsWith('[')) {
+                    $skip = ($stripped -match '^\[mcp_servers\.moe(\]|\.env\])') -or
+                            ($stripped -match '^\[mcp_servers\.serena\]') -or
+                            ((-not $serenaInstalled) -and $stripped -match '^\[mcp_servers\.serena\.')
                 }
                 if (-not $skip) {
                     $cleaned += $line
