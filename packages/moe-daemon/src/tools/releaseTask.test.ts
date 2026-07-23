@@ -86,7 +86,7 @@ describe('moe.release_task', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('clears assignedWorkerId, sets owning worker IDLE, and routes WORKING→BACKLOG', async () => {
+  it('clears assignedWorkerId, sets owning worker IDLE, and keeps WORKING claimable in place', async () => {
     writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
     writeWorker({ id: 'worker-a', currentTaskId: 'task-1', status: 'CODING' });
     await state.load();
@@ -96,13 +96,14 @@ describe('moe.release_task', () => {
 
     expect(result.success).toBe(true);
     expect(result.previousWorkerId).toBe('worker-a');
-    // Release now routes the task to a claimable column (WORKING→BACKLOG with no
-    // completed steps) instead of stranding it WORKING-but-unassigned.
-    expect(result.status).toBe('BACKLOG');
+    // WORKING stays WORKING-unassigned — that is the column workers claim
+    // (statuses:["WORKING"]); routing to BACKLOG would strand the task in a
+    // human-gated column no agent can pick up.
+    expect(result.status).toBe('WORKING');
 
     const task = state.getTask('task-1')!;
     expect(task.assignedWorkerId).toBeNull();
-    expect(task.status).toBe('BACKLOG');
+    expect(task.status).toBe('WORKING');
 
     const worker = state.getWorker('worker-a')!;
     expect(worker.currentTaskId).toBeNull();
@@ -138,11 +139,8 @@ describe('moe.release_task', () => {
     expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
   });
 
-  it('repairs a WORKING-but-unassigned orphan (e.g. left by deleteWorker) instead of leaving it stuck', async () => {
-    // Simulates the state a task is left in when its owning worker gets
-    // deleted/purged out from under it: assignedWorkerId cleared, status
-    // still WORKING — invisible to claim_next_task, which filters by status
-    // before checking claimability.
+  it('leaves a WORKING-but-unassigned task in place (already claimable) and routes all-steps-done to REVIEW', async () => {
+    // WORKING-unassigned is the state workers claim from — no repair needed.
     writeTask({ assignedWorkerId: null, status: 'WORKING' });
     await state.load();
 
@@ -150,8 +148,24 @@ describe('moe.release_task', () => {
     const result = await tool.handler({ taskId: 'task-1' }, state) as Record<string, unknown>;
 
     expect(result.success).toBe(true);
-    expect(result.status).toBe('BACKLOG');
-    expect(state.getTask('task-1')!.status).toBe('BACKLOG');
+    expect(result.status).toBe('WORKING');
+    expect(state.getTask('task-1')!.status).toBe('WORKING');
+
+    // The one repair that still applies: every step COMPLETED → hand to QA
+    // instead of letting a worker re-claim a task with nothing left to do.
+    writeTask({
+      id: 'task-all-done',
+      assignedWorkerId: null,
+      status: 'WORKING',
+      implementationPlan: [
+        { stepId: 's1', description: 'a', status: 'COMPLETED', affectedFiles: [] },
+      ],
+    });
+    await state.load();
+    const repaired = await tool.handler({ taskId: 'task-all-done' }, state) as Record<string, unknown>;
+    expect(repaired.success).toBe(true);
+    expect(repaired.status).toBe('REVIEW');
+    expect(state.getTask('task-all-done')!.status).toBe('REVIEW');
   });
 
   it('is a strict no-op on an unassigned DONE task (must NOT resurrect it to BACKLOG)', async () => {
@@ -221,7 +235,7 @@ describe('moe.release_task', () => {
     expect(result.priorHandoffCount).toBe(1);
 
     const task = state.getTask('task-1')!;
-    expect(task.status).toBe('BACKLOG');
+    expect(task.status).toBe('WORKING');
     expect(task.priorHandoffs).toHaveLength(1);
     expect(task.priorHandoffs![0].whatIsDone).toBe('wired the new endpoint');
     expect(task.priorHandoffs![0].releasedBy).toBe('worker-recovering');

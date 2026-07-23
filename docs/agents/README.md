@@ -9,16 +9,20 @@ Moe uses a multi-agent workflow where specialized AI agents handle different pha
 ```mermaid
 graph LR
     H[Human] -->|creates tasks| B[BACKLOG]
-    B -->|claims| A[Architect]
-    A -->|plans| P[PLANNING]
-    P -->|submits| AA[AWAITING_APPROVAL]
+    B -->|human moves| P[PLANNING]
+    P -->|claims| A[Architect]
+    A -->|submits plan| AA[AWAITING_APPROVAL]
     AA -->|human approves| W[WORKING]
     W -->|claims| WK[Worker]
     WK -->|implements| R[REVIEW]
     R -->|claims| RV[Reviewer]
-    RV -->|approves| D[DONE]
-    RV -->|reopens| B
+    RV -->|qa_approve| D[DONE]
+    RV -->|qa_reject| W
 ```
+
+Agents claim only PLANNING (architect), WORKING (worker), and REVIEW
+(reviewer/QA) — `claim_next_task` rejects every other column. BACKLOG,
+AWAITING_APPROVAL, and DONE are human-gated.
 
 ## Agent Roles
 
@@ -32,15 +36,15 @@ graph LR
 
 ```
 BACKLOG → PLANNING → AWAITING_APPROVAL → WORKING → REVIEW → DONE
-                ↑                                      │
-                └──────────── (reopen) ────────────────┘
+                                            ↑         │
+                                            └(qa_reject)┘
 ```
 
 ## Human Oversight
 
 Humans interact with Moe through:
 - **JetBrains Plugin**: Visual board, task creation, plan approval/rejection
-- **Direct file editing**: `.moe/tasks/*.json` files
+- **`moe.*` MCP tools / `scripts/moe-call.sh`**: never edit `.moe/` files by hand — the daemon is the sole writer of runtime state
 
 Key human touchpoints:
 1. **Task Creation**: Define tasks with clear Definition of Done

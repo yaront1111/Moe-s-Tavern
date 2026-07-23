@@ -53,11 +53,14 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
       }
 
       // When the worker is NOT retrying, it no longer owns its task — release any
-      // active task it still holds (route to a claimable column) BEFORE nulling
-      // its pointer. Otherwise the task is stranded WORKING/assigned to a now-IDLE
-      // worker that nothing can free — a permanent orphan. Mirrors the
-      // blocked-timeout release in StateManager.checkBlockedTimeouts. MCP handlers
-      // run under the state mutex, so the worker + task writes stay atomic.
+      // active task it still holds BEFORE nulling its pointer. Otherwise the task
+      // is stranded WORKING/assigned to a now-IDLE worker that nothing can free —
+      // a permanent orphan. Deliberately 'requeue' (the default), NOT the
+      // blocked-timeout sweep's 'park': unblock_worker means someone explicitly
+      // resolved the blocker, so the task goes straight back into its role's
+      // claim pool. The sweep parks precisely because nobody resolved it. MCP
+      // handlers run under the state mutex, so the worker + task writes stay
+      // atomic.
       const releasedTaskIds: string[] = [];
       if (!params.retryTask) {
         for (const owned of state.getActiveTasksAssignedToWorker(params.workerId)) {

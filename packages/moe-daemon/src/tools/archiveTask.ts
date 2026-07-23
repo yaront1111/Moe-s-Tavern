@@ -6,7 +6,8 @@ import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 /**
  * Resting statuses from which a ticket can be shelved. In-flight states
  * (PLANNING / AWAITING_APPROVAL / WORKING) are deliberately excluded — a worker
- * may own the task; move it to BACKLOG or release it first.
+ * may own the task; move it to BACKLOG first (set_task_status — release_task
+ * keeps a WORKING task in the WORKING column, so releasing is not enough).
  */
 export const ARCHIVABLE_FROM: TaskStatus[] = ['BACKLOG', 'REVIEW', 'DONE'];
 
@@ -42,7 +43,7 @@ export function archiveTaskTool(_state: StateManager): ToolDefinition {
       if (!ARCHIVABLE_FROM.includes(task.status)) {
         throw notAllowed(
           'archive task',
-          `Task is ${task.status} (in-flight). Archive is only allowed from ${ARCHIVABLE_FROM.join(', ')}. Move it to BACKLOG or release it first.`
+          `Task is ${task.status} (in-flight). Archive is only allowed from ${ARCHIVABLE_FROM.join(', ')}. Move it to BACKLOG first via moe.set_task_status (release_task keeps a WORKING task in the WORKING column).`
         );
       }
 

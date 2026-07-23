@@ -211,8 +211,9 @@ describe('governance control-plane features', () => {
       }, state) as { priorHandoffCount: number; warning?: string };
       expect(releaseResult.priorHandoffCount).toBe(1);
       expect(releaseResult.warning).toBeUndefined();
-      // Release routes WORKING (steps not all done) → BACKLOG so a peer can claim it.
-      expect(state.getTask('task-h')!.status).toBe('BACKLOG');
+      // Release keeps WORKING (steps not all done) in place, unassigned — the
+      // exact state the next worker's statuses:["WORKING"] claim picks up.
+      expect(state.getTask('task-h')!.status).toBe('WORKING');
 
       const histTool = getHandoffHistoryTool(state);
       const hist = await histTool.handler({ taskId: 'task-h' }, state) as {
@@ -223,11 +224,11 @@ describe('governance control-plane features', () => {
       expect(hist.priorHandoffs[0].pitfalls).toBe('Watch shared mutable state');
       expect(hist.priorHandoffs[0].releasedBy).toBe('worker-a');
 
-      // Next worker claiming the released task (now in BACKLOG) gets a recommendation
+      // Next worker claiming the released task (still WORKING) gets a recommendation
       const claim = claimNextTaskTool(state);
       const claimResult = await claim.handler({
         workerId: 'worker-b',
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-h',
       }, state) as {
         handoffHint?: string;

@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, missingRequired, invalidInput } from '../util/errors.js';
+import { AGENT_CLAIMABLE_STATUSES } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 
@@ -56,11 +57,19 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
 
       // wait_for_task requires both workerId and statuses. Only emit the hint
-      // when we can populate them; otherwise omit nextAction to avoid a guaranteed-to-throw suggestion.
+      // when we can populate them; otherwise omit nextAction to avoid a
+      // guaranteed-to-throw suggestion. Same trap on the statuses value:
+      // wait_for_task only accepts agent-claimable statuses, so echoing a
+      // human-gated one (e.g. AWAITING_APPROVAL while the architect still
+      // holds the task) would also be guaranteed to throw — map it to the
+      // pool the owner's role actually waits on.
+      const waitStatuses = (AGENT_CLAIMABLE_STATUSES as readonly string[]).includes(task.status)
+        ? [task.status]
+        : [task.status === 'AWAITING_APPROVAL' ? 'PLANNING' : 'WORKING'];
       const nextAction = task.assignedWorkerId
         ? {
             tool: 'moe.wait_for_task',
-            args: { workerId: task.assignedWorkerId, statuses: [task.status] },
+            args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
             reason: 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.',
             recommendedSkill: recommendSkillFor('worker', 'task_blocked')
           }

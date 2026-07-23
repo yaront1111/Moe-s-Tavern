@@ -540,11 +540,17 @@ export class StateManager {
         // currentTaskId. Otherwise the task stays WORKING/assigned to a
         // now-IDLE worker: stale cleanup can't run (the worker still "owns"
         // active work) and no other worker can claim it — a permanent orphan.
+        // Context 'park': a blocked-timeout means nobody unblocked this worker
+        // for the whole window — the blocker is almost certainly environmental,
+        // so requeueing the task would hand the next agent the same wall
+        // (claim → block → time out → release → claim…, an infinite thrash
+        // loop). Park in-flight tasks (PLANNING/WORKING/REVIEW → BACKLOG) for
+        // human triage instead; un-park via set_task_status.
         for (const owned of this.getTasksAssignedToWorker(worker.id)) {
           if (ACTIVE_ASSIGNMENT_STATUSES.has(owned.status)) {
             await this.updateTask(owned.id, {
               assignedWorkerId: null,
-              status: nextStatusForRelease(owned),
+              status: nextStatusForRelease(owned, 'park'),
             }, 'WORKER_TIMEOUT');
           }
         }
@@ -2662,13 +2668,13 @@ export class StateManager {
       }
 
       // Clear assignedWorkerId on tasks referencing this worker, routing status
-      // via nextStatusForRelease (same as purgeAllWorkers). Leaving status
-      // untouched strands a WORKING task WORKING-but-unassigned: claim_next_task
-      // filters by status before checking claimability, so it becomes invisible
-      // to every claimer until a daemon restart's purgeAllWorkers repairs it.
-      // Route through updateTask (not a hand-rolled write) so TASK_UPDATED is
-      // emitted — boards refresh and parked wait_for_task waiters wake for the
-      // newly claimable task.
+      // via nextStatusForRelease (same as purgeAllWorkers): WORKING stays
+      // WORKING-unassigned (exactly what workers claim — the launcher status
+      // maps are worker→WORKING, architect→PLANNING, qa→REVIEW), or → REVIEW
+      // when every step is done so finished work goes to QA, not back to a
+      // worker. Route through updateTask (not a hand-rolled write) so
+      // TASK_UPDATED is emitted — boards refresh and parked wait_for_task
+      // waiters wake for the newly claimable task.
       for (const task of Array.from(this.tasks.values())) {
         if (task.assignedWorkerId !== workerId) continue;
         try {
@@ -2745,11 +2751,13 @@ export class StateManager {
       for (const task of this.tasks.values()) {
         if (task.assignedWorkerId && this.isTaskAssignedToMissingWorker(task)) {
           const previousWorkerId = task.assignedWorkerId;
-          // Route the status too — stripping only assignedWorkerId leaves an
-          // in-flight WORKING task stranded WORKING-but-unassigned, which the
-          // claim path skips (it filters by status first). nextStatusForRelease
-          // sends WORKING → BACKLOG (or REVIEW if all steps are done) so the
-          // orphaned task is actually claimable after a restart.
+          // Route the status too via nextStatusForRelease: WORKING stays
+          // WORKING-unassigned — that IS the claimable state for workers
+          // (their claim filter is statuses:["WORKING"]) — or → REVIEW when
+          // every step is done, handing finished work to QA. After a daemon
+          // restart the relaunched fleet re-claims these tasks and resumes
+          // from the plan's step statuses (a crash release records no
+          // handoff note) instead of stalling in a human-gated column.
           const updated = {
             ...task,
             assignedWorkerId: null,

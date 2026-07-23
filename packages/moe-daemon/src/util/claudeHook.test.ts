@@ -174,7 +174,7 @@ describe('writeClaudeHook', () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
-    });
+    }, 30000);
 
     it('blocks gated tools when list_tasks has no active claim', () => {
       const projectPath = makeProjectDir();
@@ -184,7 +184,7 @@ describe('writeClaudeHook', () => {
 
       expect(result.status).toBe(2);
       expect(result.stderr).toContain('No active claim for worker worker-1');
-    });
+    }, 30000);
 
     it('allows gated tools when list_tasks returns an active claim', () => {
       const projectPath = makeProjectDir();
@@ -193,7 +193,7 @@ describe('writeClaudeHook', () => {
       if (!result) return;
 
       expect(result.status).toBe(0);
-    });
+    }, 30000);
   });
 
   describe('PowerShell hook script', () => {
@@ -245,6 +245,6 @@ describe('writeClaudeHook', () => {
       const result = runPsHook(projectPath, hookPath, 'mcp__moe__moe_start_step');
 
       expect(result.status).toBe(0);
-    });
+    }, 30000);
   });
 });

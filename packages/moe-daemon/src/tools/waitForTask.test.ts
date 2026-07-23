@@ -197,7 +197,7 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
 
     const tool = waitForTaskTool(state);
     const result = await tool.handler(
-      { statuses: ['BACKLOG'], workerId: 'worker-1', timeoutMs: 1000 },
+      { statuses: ['REVIEW'], workerId: 'worker-1', timeoutMs: 1000 },
       state
     ) as Record<string, unknown>;
 

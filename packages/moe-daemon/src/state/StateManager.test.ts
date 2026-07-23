@@ -1308,6 +1308,35 @@ describe('StateManager', () => {
       expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBe('worker-active');
     });
 
+    it('blocked-timeout PARKS the WORKING task in BACKLOG (human triage, not requeue)', async () => {
+      // The one release path that must NOT keep the task worker-claimable:
+      // nobody unblocked this worker for the whole window, so the blocker is
+      // almost certainly environmental — requeueing would claim-thrash the
+      // next worker into the same wall.
+      stateManager = new StateManager({
+        projectPath: testDir,
+        staleWorkerTimeoutMs: 60 * 60 * 1000,
+        blockedTimeoutMs: 1,
+      });
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-blocked' });
+      createTestWorker({
+        id: 'worker-blocked',
+        currentTaskId: 'task-test123',
+        status: 'BLOCKED',
+        lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.checkBlockedTimeouts();
+
+      const task = stateManager.getTask('task-test123')!;
+      expect(task.status).toBe('BACKLOG');
+      expect(task.assignedWorkerId).toBeNull();
+      expect(stateManager.getWorker('worker-blocked')?.status).toBe('IDLE');
+    });
+
     it('releases a REVIEW task from a stale owner so another QA can claim it', async () => {
       // reviewStaleTimeoutMs defaults to staleWorkerTimeoutMs (1ms here).
       stateManager = new StateManager({
@@ -1425,10 +1454,11 @@ describe('StateManager', () => {
 
       const purgedTask = stateManager.getTask('task-test123');
       expect(purgedTask?.assignedWorkerId).toBeNull();
-      // An in-flight WORKING task with no completed steps must be routed back to
-      // BACKLOG (not left stranded WORKING-but-unassigned, which the claim path
-      // skips because it filters by status first).
-      expect(purgedTask?.status).toBe('BACKLOG');
+      // An in-flight WORKING task stays WORKING-unassigned after the startup
+      // purge — that IS the claimable state for workers (statuses:["WORKING"]),
+      // so the relaunched fleet re-claims and resumes it instead of stalling
+      // in the human-gated BACKLOG column.
+      expect(purgedTask?.status).toBe('WORKING');
       const events = stateManager.getActivityLog(10);
       expect(events.some((event) =>
         event.event === 'WORKER_DISCONNECTED' &&
@@ -1601,10 +1631,9 @@ describe('StateManager', () => {
       expect(stateManager.getWorker('worker-to-delete')).toBeNull();
     });
 
-    it('deleteWorker routes a WORKING task to BACKLOG instead of stranding it WORKING-but-unassigned', async () => {
-      // claim_next_task filters candidates by status before checking
-      // claimability, so a WORKING task with no assignee is invisible to
-      // every claimer until something routes it to a claimable status.
+    it('deleteWorker keeps a WORKING task in place, unassigned and claimable', async () => {
+      // WORKING-unassigned is exactly what workers claim (statuses:["WORKING"]);
+      // routing to BACKLOG would strand the task in a human-gated column.
       setupMoeFolder();
       createTestEpic();
       createTestTask({ assignedWorkerId: 'worker-to-delete', status: 'WORKING' });
@@ -1623,7 +1652,7 @@ describe('StateManager', () => {
 
       const task = stateManager.getTask('task-test123')!;
       expect(task.assignedWorkerId).toBeNull();
-      expect(task.status).toBe('BACKLOG');
+      expect(task.status).toBe('WORKING');
       expect(stateManager.isTaskClaimable(task)).toBe(true);
     });
 

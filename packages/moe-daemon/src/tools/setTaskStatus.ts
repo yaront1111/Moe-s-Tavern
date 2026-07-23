@@ -27,7 +27,10 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // stale tickets can be shelved out of context — not from in-flight states
   // (PLANNING / AWAITING_APPROVAL / WORKING) where a worker may own the task;
   // move those to BACKLOG first. ARCHIVED → BACKLOG/WORKING un-archives.
-  BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
+  // BACKLOG → REVIEW is the un-park path: the blocked-timeout sweep parks
+  // in-flight tasks (including REVIEW) in BACKLOG, and a human restoring a
+  // parked review must be able to send it straight back to the QA queue.
+  BACKLOG: ['PLANNING', 'WORKING', 'REVIEW', 'ARCHIVED'],
   PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],

@@ -25,7 +25,7 @@ Claim the next prioritized task for a role.
    | Role | Tool | Args |
    |---|---|---|
    | architect | `moe.claim_next_task` | `{ statuses: ["PLANNING"], workerId }` |
-   | worker | `moe.claim_next_task` | `{ statuses: ["WORKING", "BACKLOG"], workerId }` |
+   | worker | `moe.claim_next_task` | `{ statuses: ["WORKING"], workerId }` |
    | qa | `moe.claim_next_task` | `{ statuses: ["REVIEW"], workerId }` |
    | governor | `moe.enter_governance` | `{ workerId }` |
 

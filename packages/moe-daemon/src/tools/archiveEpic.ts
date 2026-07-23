@@ -43,7 +43,7 @@ export function archiveEpicTool(_state: StateManager): ToolDefinition {
           'archive epic',
           `Epic "${params.epicId}" has ${blocking.length} in-flight task(s) (${blocking
             .map((t) => `${t.id}:${t.status}`)
-            .join(', ')}). Release or move them to BACKLOG first.`
+            .join(', ')}). Move them to BACKLOG first via moe.set_task_status (release_task keeps a WORKING task in the WORKING column, so releasing does not make it archivable).`
         );
       }
 

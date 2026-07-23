@@ -384,12 +384,13 @@ describe('MoeWebSocketServer Integration', () => {
       }));
 
       const parsed = await nextTaskUpdated(nextMessage);
-      // No steps done → released WORKING task routes to BACKLOG, unassigned.
-      expect(parsed.payload.status).toBe('BACKLOG');
+      // No steps done → released WORKING task stays WORKING, unassigned —
+      // immediately re-claimable by the next worker.
+      expect(parsed.payload.status).toBe('WORKING');
       expect(parsed.payload.assignedWorkerId).toBeNull();
 
       const stored = state.getTask('task-1');
-      expect(stored?.status).toBe('BACKLOG');
+      expect(stored?.status).toBe('WORKING');
       expect(stored?.assignedWorkerId).toBeNull();
       const worker = state.getWorker('w-rel');
       expect(worker?.currentTaskId).toBeNull();

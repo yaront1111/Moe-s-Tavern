@@ -7,14 +7,19 @@ The Reviewer agent performs QA, writes/runs tests, and approves or reopens compl
 - Claim tasks in REVIEW status
 - Review implemented code changes
 - Run existing tests and write new unit tests
-- Approve tasks (move to DONE) or reopen (back to BACKLOG)
+- Approve tasks (`moe.qa_approve` → DONE) or reject (`moe.qa_reject` → back to WORKING)
+
+Never move a REVIEW task back to BACKLOG — BACKLOG is a human-triage column no
+agent claims, so a rejected task sent there is stranded until a human
+re-triages it. `moe.qa_reject` routes it to WORKING with structured
+`rejectionDetails` the worker acts on directly.
 
 ## Status Transitions
 
 ```mermaid
 graph LR
-    R[REVIEW] -->|approve| D[DONE]
-    R -->|reopen| B[BACKLOG]
+    R[REVIEW] -->|qa_approve| D[DONE]
+    R -->|qa_reject| W[WORKING]
 ```
 
 ## MCP Tools Used
@@ -23,7 +28,8 @@ graph LR
 |------|---------|
 | `moe.claim_next_task` | Claim tasks with `statuses: ["REVIEW"]` |
 | `moe.get_context` | Get task details and implementation plan |
-| `moe.set_task_status` | Set status to DONE or BACKLOG |
+| `moe.qa_approve` | Approve: REVIEW → DONE |
+| `moe.qa_reject` | Reject: REVIEW → WORKING, with `rejectionDetails` |
 
 ## Workflow
 
@@ -41,10 +47,10 @@ sequenceDiagram
     RV->>RV: Write new unit tests
 
     alt All checks pass
-        RV->>M: moe.set_task_status({taskId, status: "DONE"})
+        RV->>M: moe.qa_approve({taskId})
     else Issues found
-        RV->>M: moe.set_task_status({taskId, status: "BACKLOG", reason: "..."})
-        M-->>W: Task reopened with reason
+        RV->>M: moe.qa_reject({taskId, reason, rejectionDetails})
+        M-->>W: Task reopened (WORKING) with rejectionDetails
     end
 ```
 
@@ -99,26 +105,34 @@ class UserServiceTest {
 }
 ```
 
-## Approval vs Reopen
+## Approve vs Reject
 
-**Approve (DONE)** when:
+**Approve (`moe.qa_approve` → DONE)** when:
 - All Definition of Done criteria are met
 - Tests pass and cover the changes
 - Code quality is acceptable
 
-**Reopen (BACKLOG)** when:
+**Reject (`moe.qa_reject` → WORKING)** when:
 - Definition of Done not fully met
 - Tests fail or are missing
 - Significant bugs found
 - Security issues discovered
 
-When reopening, always provide a clear reason:
+When rejecting, always provide structured details the worker can act on:
 
 ```typescript
-moe.set_task_status({
+moe.qa_reject({
   taskId: "task-abc123",
-  status: "BACKLOG",
-  reason: "Missing unit tests for error handling in UserService.createUser"
+  reason: "Missing unit tests for error handling in UserService.createUser",
+  rejectionDetails: {
+    failedDodItems: ["Unit tests cover error paths"],
+    issues: [{
+      type: "test_failure",
+      description: "createUser has no test for the invalid-email path",
+      file: "src/services/UserService.ts",
+      line: 42
+    }]
+  }
 })
 ```
 
@@ -137,15 +151,15 @@ When you have a task:
 5. Check all DoD criteria are met
 
 If all checks pass:
-  - Call moe.set_task_status({taskId, status: "DONE"})
+  - Call moe.qa_approve({taskId})
 
 If issues found:
-  - Call moe.set_task_status({taskId, status: "BACKLOG", reason: "<specific issues>"})
+  - Call moe.qa_reject({taskId, reason: "<summary>", rejectionDetails: {failedDodItems: [...], issues: [...]}})
 ```
 
 ## Tips
 
-- Be specific in reopen reasons - help the worker fix issues
+- Be specific in rejection details - help the worker fix issues
 - Focus on functionality first, style second
 - Don't reopen for minor style issues - note them but approve
 - Ensure tests are maintainable, not just present

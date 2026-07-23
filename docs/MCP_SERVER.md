@@ -467,10 +467,12 @@ Return the next BACKLOG task by order.
 
 Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`. Assigns `assignedWorkerId` if provided.
 
+**Agent-claimable columns only:** `statuses` must be a subset of `PLANNING` (architect) / `WORKING` (worker) / `REVIEW` (qa) — matching the launcher status maps in `scripts/moe-agent.{ps1,sh}`. Any other value (`BACKLOG`, `AWAITING_APPROVAL`, `DONE`, `ARCHIVED`) is rejected with `INVALID_INPUT`: those columns are human-gated with no agent tool surface, so a claim there could only wedge the worker (assignment succeeds, status never transitions, `start_step`/`submit_plan`/`qa_*` all reject). This applies to explicit `taskId` claims too. To move a task out of a human-gated column, a human or governor uses `set_task_status`. The same restriction applies to `wait_for_task`'s `statuses`.
+
 **Parameters:**
 ```typescript
 {
-  statuses: string[],
+  statuses: string[],              // subset of PLANNING | WORKING | REVIEW
   epicId?: string,
   workerId?: string,
   replaceExisting?: boolean,       // Take over from existing worker
@@ -543,12 +545,14 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 **Parameters:**
 ```typescript
 {
-  statuses: string[],   // Required: task statuses to watch for (must be non-empty)
+  statuses: string[],   // Required, non-empty, subset of PLANNING | WORKING | REVIEW
   workerId: string,     // Required: your worker ID (used for cleanup on disconnect)
   epicId?: string,      // Optional epic filter
   timeoutMs?: number    // Max wait in ms (default 300000, clamped to 1000–600000)
 }
 ```
+
+`statuses` is restricted to the agent-claimable columns — the same vocabulary as `claim_next_task`. Waiting on a human-gated column (`BACKLOG`, `AWAITING_APPROVAL`, `DONE`, `ARCHIVED`) is rejected: the waiter would either sleep forever or wake into a claim that is itself rejected.
 
 **Returns:**
 ```typescript
@@ -585,6 +589,7 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 
 **Errors:**
 - `[MISSING_REQUIRED] Missing required field: statuses` — `statuses` absent or empty
+- `[INVALID_INPUT] statuses` — any status outside `PLANNING`/`WORKING`/`REVIEW`
 - `[MISSING_REQUIRED] Missing required field: workerId`
 
 ---
@@ -604,7 +609,10 @@ Set task status (optionally with a reopen reason).
 ```
 
 The valid transitions allow `ARCHIVED` from any resting status — `BACKLOG`,
-`REVIEW`, or `DONE` — and `ARCHIVED → BACKLOG/WORKING` to un-archive. In-flight
+`REVIEW`, or `DONE` — and `ARCHIVED → BACKLOG/WORKING` to un-archive.
+`BACKLOG → PLANNING/WORKING/REVIEW` are all legal: `set_task_status` is the
+un-park path for tasks the blocked-timeout sweep routed to `BACKLOG` (including
+parked reviews, hence `BACKLOG → REVIEW`). In-flight
 states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to
 `ARCHIVED`. For archiving, prefer the dedicated `moe.archive_task` /
 `moe.archive_epic` tools below.
@@ -814,7 +822,7 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId` and routes the task to a claimable column via `nextStatusForRelease`: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff.
+Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker).
 
 **Parameters:**
 ```typescript
@@ -845,7 +853,7 @@ Release a task from its assigned worker (clears `assignedWorkerId` and routes th
 ```
 
 **Side effects:**
-- Sets `task.assignedWorkerId = null` and routes `task.status` via `nextStatusForRelease`. If the task was already unassigned but stuck WORKING (the one status invisible to claimers when unassigned), the call repairs the status the same way — and still records the `handoffNote` instead of discarding it.
+- Sets `task.assignedWorkerId = null` and routes `task.status` via `nextStatusForRelease` (WORKING stays WORKING; all-steps-done → REVIEW). If the task was already unassigned, the only repair applied is the all-steps-done → REVIEW routing (WORKING-unassigned is already the claimable state for workers) — and the call still records the `handoffNote` instead of discarding it.
 - **DONE/ARCHIVED tasks are a strict no-op** (any `handoffNote` is ignored with a warning): release must never resurrect finished work into a claimable column.
 - Clears `needsHumanReview` when set — `release_task` is one of the documented human unpark paths for a task parked by the `qa_reject` hard cap; after release it re-enters the QA queue.
 - When `handoffNote` is provided, builds a `HandoffNote` (with `releasedBy`, `releasedAt`, optional `reason`) and **prepends** it to `task.priorHandoffs` (newest-first, capped at 20).
@@ -898,7 +906,7 @@ List all registered workers with presence derived from `lastActivityAt`. **Displ
 
 ### moe.deregister_worker
 
-Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING→BACKLOG, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
+Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING stays WORKING-unassigned, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
 
 **Parameters:**
 ```typescript

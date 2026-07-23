@@ -202,16 +202,29 @@ describe('defensive batch', () => {
       expect(state.getTask('task-x')!.assignedWorkerId).toBe('w-new');
     });
 
-    it('release routing promotes an all-steps-COMPLETED WORKING task to REVIEW, not BACKLOG', async () => {
+    it('release routing promotes an all-steps-COMPLETED WORKING task to REVIEW and requeues unfinished WORKING in place', async () => {
       const allDone = { id: 'task-done', status: 'WORKING' as const, assignedWorkerId: 'w-fin', implementationPlan: [
         { stepId: 's1', description: 'a', status: 'COMPLETED' as const, affectedFiles: [] },
         { stepId: 's2', description: 'b', status: 'COMPLETED' as const, affectedFiles: [] },
       ] };
       expect(nextStatusForRelease(allDone)).toBe('REVIEW');
-      expect(nextStatusForRelease({ ...allDone, implementationPlan: [{ stepId: 's1', description: 'a', status: 'PENDING' as const, affectedFiles: [] }] })).toBe('BACKLOG');
-      expect(nextStatusForRelease({ status: 'WORKING', implementationPlan: [] })).toBe('BACKLOG');
+      // Unfinished WORKING stays WORKING (requeue, the default): workers claim
+      // ONLY the WORKING column, so BACKLOG would strand the task human-side.
+      expect(nextStatusForRelease({ ...allDone, implementationPlan: [{ stepId: 's1', description: 'a', status: 'PENDING' as const, affectedFiles: [] }] })).toBe('WORKING');
+      expect(nextStatusForRelease({ status: 'WORKING', implementationPlan: [] })).toBe('WORKING');
       expect(nextStatusForRelease({ status: 'PLANNING', implementationPlan: [] })).toBe('PLANNING');
       expect(nextStatusForRelease({ status: 'REVIEW', implementationPlan: [] })).toBe('REVIEW');
+      // 'park' (blocked-timeout sweep only) deliberately pulls the task out
+      // of EVERY agent claim pool for human triage — anti-thrash. That covers
+      // all three in-flight agent columns, all-steps-done included (the env
+      // blocker would hit QA just the same).
+      expect(nextStatusForRelease({ status: 'WORKING', implementationPlan: [] }, 'park')).toBe('BACKLOG');
+      expect(nextStatusForRelease(allDone, 'park')).toBe('BACKLOG');
+      expect(nextStatusForRelease({ status: 'PLANNING', implementationPlan: [] }, 'park')).toBe('BACKLOG');
+      expect(nextStatusForRelease({ status: 'REVIEW', implementationPlan: [] }, 'park')).toBe('BACKLOG');
+      // AWAITING_APPROVAL is already human-gated — park must not drop the
+      // pending plan back to BACKLOG.
+      expect(nextStatusForRelease({ status: 'AWAITING_APPROVAL', implementationPlan: [] }, 'park')).toBe('AWAITING_APPROVAL');
 
       // End-to-end through deregister: a dead worker that finished every step
       // hands the work to QA (REVIEW) rather than discarding it to BACKLOG.
@@ -239,7 +252,8 @@ describe('defensive batch', () => {
       expect(r1.releasedCount).toBe(1);
       expect(r1.alreadyDead).toBe(false);
       expect(state.getTask('task-d')!.assignedWorkerId).toBeNull();
-      expect(state.getTask('task-d')!.status).toBe('BACKLOG');
+      // Requeued in place: WORKING-unassigned is what the next worker claims.
+      expect(state.getTask('task-d')!.status).toBe('WORKING');
       expect(state.getWorker('w-1')!.status).toBe('DEAD');
 
       // Repeat call is a no-op.
@@ -291,7 +305,9 @@ describe('defensive batch', () => {
 
       const t = state.getTask('task-ub')!;
       expect(t.assignedWorkerId).toBeNull();
-      expect(t.status).toBe('BACKLOG');
+      // Requeue, not park: the human just RESOLVED the blocker, so the task
+      // goes straight back into the worker claim pool (WORKING-unassigned).
+      expect(t.status).toBe('WORKING');
       expect(state.isTaskClaimable(t)).toBe(true);
       expect(state.getWorker('w-ub')!.status).toBe('IDLE');
       expect(state.getWorker('w-ub')!.currentTaskId).toBeNull();

@@ -1072,11 +1072,13 @@ describe('MCP Tools', () => {
   });
 
   describe('moe.claim_next_task', () => {
+    // Fixtures use WORKING (the worker claim column): BACKLOG is human-gated
+    // and no longer agent-claimable — see the vocabulary tests below.
     beforeEach(async () => {
       setupMoeFolder();
       createEpic();
-      createTask({ id: 'task-1', status: 'BACKLOG', order: 2 });
-      createTask({ id: 'task-2', status: 'BACKLOG', order: 1 });
+      createTask({ id: 'task-1', status: 'WORKING', order: 2 });
+      createTask({ id: 'task-2', status: 'WORKING', order: 1 });
       createTask({ id: 'task-3', status: 'PLANNING' });
       await state.load();
     });
@@ -1084,7 +1086,7 @@ describe('MCP Tools', () => {
     it('claims next task by status', async () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
       }, state) as { hasNext: boolean; task: { id: string } };
 
       expect(result.hasNext).toBe(true);
@@ -1094,7 +1096,7 @@ describe('MCP Tools', () => {
     it('keeps claim response lean and defers full context to get_context', async () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         workerId: 'worker-lean',
       }, state) as {
         hasNext: boolean;
@@ -1137,7 +1139,7 @@ describe('MCP Tools', () => {
     it('assigns workerId to claimed task', async () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         workerId: 'worker-1',
       }, state) as { task: { assignedWorkerId: string | null } };
 
@@ -1152,7 +1154,7 @@ describe('MCP Tools', () => {
       // task-2 and LEAVE worker-other on its own task — never yank a bystander.
       createTask({
         id: 'task-active-worker',
-        status: 'BACKLOG',
+        status: 'WORKING',
         assignedWorkerId: 'worker-other',
         order: 99,
       });
@@ -1165,7 +1167,7 @@ describe('MCP Tools', () => {
 
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         workerId: 'worker-replacement',
         replaceExisting: true,
       }, state) as { task: { id: string; assignedWorkerId: string | null } };
@@ -1179,13 +1181,13 @@ describe('MCP Tools', () => {
     });
 
     it('taskId + replaceExisting takes over THAT task from its live owner and idles them', async () => {
-      createTask({ id: 'task-takeover', status: 'BACKLOG', assignedWorkerId: 'worker-incumbent', order: 5 });
+      createTask({ id: 'task-takeover', status: 'WORKING', assignedWorkerId: 'worker-incumbent', order: 5 });
       createWorker({ id: 'worker-incumbent', status: 'READING_CONTEXT', currentTaskId: 'task-takeover' });
       await state.load();
 
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-takeover',
         workerId: 'worker-new',
         replaceExisting: true,
@@ -1246,10 +1248,10 @@ describe('MCP Tools', () => {
     it('claims from multiple statuses', async () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['PLANNING', 'BACKLOG'],
+        statuses: ['PLANNING', 'WORKING'],
       }, state) as { task: { id: string } };
 
-      // task-2 (BACKLOG, order 1) comes before task-3 (PLANNING, order 1)
+      // task-2 (WORKING, order 1) comes before task-3 (PLANNING, order 1)
       expect(result.task).toBeDefined();
     });
 
@@ -1260,14 +1262,14 @@ describe('MCP Tools', () => {
 
     it('returns hasNext=false when no matching tasks', async () => {
       const tool = claimNextTaskTool(state);
-      const result = await tool.handler({ statuses: ['DONE'], workerId: 'worker-none' }, state) as {
+      const result = await tool.handler({ statuses: ['REVIEW'], workerId: 'worker-none' }, state) as {
         hasNext: boolean;
         nextAction: { tool: string; args: { statuses: string[]; workerId: string } };
       };
       expect(result.hasNext).toBe(false);
       expect(Object.keys(result).sort()).toEqual(['hasNext', 'nextAction'].sort());
       expect(result.nextAction.tool).toBe('moe.wait_for_task');
-      expect(result.nextAction.args.statuses).toEqual(['DONE']);
+      expect(result.nextAction.args.statuses).toEqual(['REVIEW']);
       expect(result.nextAction.args.workerId).toBe('worker-none');
     });
 
@@ -1309,7 +1311,7 @@ describe('MCP Tools', () => {
     it('omits reopenWarning when task was not reopened', async () => {
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         workerId: 'worker-normal',
       }, state) as {
         hasNext: boolean;
@@ -1328,7 +1330,7 @@ describe('MCP Tools', () => {
       // task-2 has lower order so default claim picks it; with taskId we want task-1 instead.
       const tool = claimNextTaskTool(state);
       const result = await tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-1',
         workerId: 'worker-direct',
       }, state) as { hasNext: boolean; task: { id: string; assignedWorkerId: string } };
@@ -1343,9 +1345,9 @@ describe('MCP Tools', () => {
 
     it('rejects taskId when task is not in any of the requested statuses', async () => {
       const tool = claimNextTaskTool(state);
-      // task-3 is PLANNING; we ask for BACKLOG only
+      // task-3 is PLANNING; we ask for WORKING only
       await expect(tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-3',
       }, state)).rejects.toThrow(/PLANNING/);
     });
@@ -1353,21 +1355,53 @@ describe('MCP Tools', () => {
     it('rejects taskId for unknown task', async () => {
       const tool = claimNextTaskTool(state);
       await expect(tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-nope',
       }, state)).rejects.toThrow(/not found|NOT_FOUND/i);
     });
 
     it('rejects taskId already assigned to someone else without replaceExisting', async () => {
-      createTask({ id: 'task-locked', status: 'BACKLOG', assignedWorkerId: 'worker-other', order: 99 });
+      createTask({ id: 'task-locked', status: 'WORKING', assignedWorkerId: 'worker-other', order: 99 });
       createWorker({ id: 'worker-other', status: 'READING_CONTEXT', currentTaskId: 'task-locked' });
       await state.load();
       const tool = claimNextTaskTool(state);
       await expect(tool.handler({
-        statuses: ['BACKLOG'],
+        statuses: ['WORKING'],
         taskId: 'task-locked',
         workerId: 'worker-thief',
       }, state)).rejects.toThrow(/already assigned/);
+    });
+
+    it('rejects human-gated statuses (BACKLOG/AWAITING_APPROVAL/DONE/ARCHIVED) — ranked and by taskId', async () => {
+      const tool = claimNextTaskTool(state);
+      // Ranked claim on a human-gated column
+      await expect(tool.handler({
+        statuses: ['BACKLOG'],
+        workerId: 'worker-vocab',
+      }, state)).rejects.toThrow(/not agent-claimable/);
+      // Mixed arrays are rejected too — one bad status poisons the claim
+      await expect(tool.handler({
+        statuses: ['WORKING', 'BACKLOG'],
+        workerId: 'worker-vocab',
+      }, state)).rejects.toThrow(/not agent-claimable/);
+      // Explicit-taskId claim of a BACKLOG task (the px4swarm wedge:
+      // assignment used to succeed with the status stuck in BACKLOG, then
+      // start_step rejected with INVALID_STATE forever)
+      createTask({ id: 'task-backlog-wedge', status: 'BACKLOG', order: 50 });
+      await state.load();
+      await expect(tool.handler({
+        statuses: ['BACKLOG'],
+        taskId: 'task-backlog-wedge',
+        workerId: 'worker-vocab',
+      }, state)).rejects.toThrow(/not agent-claimable/);
+      // Nothing got assigned along the way
+      expect(state.getTask('task-backlog-wedge')?.assignedWorkerId).toBeNull();
+      for (const bad of ['AWAITING_APPROVAL', 'DONE', 'ARCHIVED']) {
+        await expect(tool.handler({
+          statuses: [bad],
+          workerId: 'worker-vocab',
+        }, state)).rejects.toThrow(/not agent-claimable/);
+      }
     });
   });
 

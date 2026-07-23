@@ -21,36 +21,71 @@ export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boole
 }
 
 /**
+ * How a release should route the task:
+ *   - 'requeue' (default): put the task back where its own role's agents can
+ *     claim it. Used by crash cleanup (startup purge, deleteWorker), graceful
+ *     deregister, claim takeover of a dead owner, and manual release_task.
+ *   - 'park': pull the task OUT of every agent claim pool (PLANNING, WORKING,
+ *     and REVIEW all route to BACKLOG) for human triage. Used ONLY by the
+ *     blocked-timeout sweep: the blocker is usually environmental (missing
+ *     prereq, broken toolchain), so requeueing would make the next agent —
+ *     whatever its role — claim it, hit the same wall, block, time out, and
+ *     release again — an infinite claim-thrash loop burning tokens.
+ */
+export type ReleaseContext = 'requeue' | 'park';
+
+/**
  * Decide which status a released task should rest in. The task is currently
- * held by a worker — when we strip the assignment, route it to a sensible
- * claimable column based on what the worker was doing:
+ * held by a worker — when we strip the assignment, route it based on what the
+ * worker was doing:
+ * requeue (default):
  *   - PLANNING          → PLANNING          (next architect picks it up)
  *   - AWAITING_APPROVAL → AWAITING_APPROVAL (human still owns approval)
  *   - REVIEW            → REVIEW            (next QA picks it up)
  *   - WORKING           → REVIEW if every step is already COMPLETED (don't
- *                         discard a dead worker's finished work — hand to QA),
- *                         otherwise BACKLOG (next worker picks it up)
+ *                         discard a dead worker's finished work — hand to QA);
+ *                         otherwise stay WORKING so the next worker claims it
+ *                         and resumes from the plan's step statuses (plus any
+ *                         priorHandoffs an explicit release recorded). Workers
+ *                         claim ONLY the WORKING column — BACKLOG is a
+ *                         human-triage column no agent claims, so routing
+ *                         there strands the task until a human re-triages it.
+ * park (blocked-timeout sweep only):
+ *   - PLANNING / WORKING / REVIEW → BACKLOG. Every in-flight agent column is
+ *                         an agent claim pool under the claim vocabulary, and
+ *                         an environmental blocker thrashes whichever pool
+ *                         the task returns to — so park pulls it out of ALL
+ *                         of them for human triage. Un-park via
+ *                         set_task_status (BACKLOG → PLANNING/WORKING/REVIEW
+ *                         are all legal transitions).
+ *   - AWAITING_APPROVAL → AWAITING_APPROVAL (already human-gated; moving it
+ *                         to BACKLOG would silently drop the pending plan).
+ * Both contexts:
  *   - DONE / ARCHIVED   → unchanged. Terminal statuses must never be routed
  *                         back to a claimable column: a stale assignee on a
  *                         finished task (explicit-status claim, git-pulled
  *                         .moe/tasks from another machine) would otherwise be
  *                         "released" into BACKLOG and the fleet would redo
  *                         completed work. Release only strips the assignee.
- * Anything else falls back to BACKLOG.
+ * Anything else falls back to BACKLOG (unknown status → human triage).
  *
  * This is the ONLY definition of release routing — every release path
  * (checkBlockedTimeouts, deregister, manual release) routes through here.
  */
-export function nextStatusForRelease(task: Pick<Task, 'status' | 'implementationPlan'>): TaskStatus {
+export function nextStatusForRelease(
+  task: Pick<Task, 'status' | 'implementationPlan'>,
+  context: ReleaseContext = 'requeue'
+): TaskStatus {
   switch (task.status) {
     case 'PLANNING':
-      return 'PLANNING';
+      return context === 'park' ? 'BACKLOG' : 'PLANNING';
     case 'AWAITING_APPROVAL':
       return 'AWAITING_APPROVAL';
     case 'REVIEW':
-      return 'REVIEW';
+      return context === 'park' ? 'BACKLOG' : 'REVIEW';
     case 'WORKING':
-      return allStepsCompleted(task) ? 'REVIEW' : 'BACKLOG';
+      if (context === 'park') return 'BACKLOG';
+      return allStepsCompleted(task) ? 'REVIEW' : 'WORKING';
     case 'DONE':
       return 'DONE';
     case 'ARCHIVED':
@@ -77,13 +112,14 @@ export interface ReleaseResult {
 export async function releaseWorkerTasks(
   state: StateManager,
   workerId: string,
-  reason: string
+  reason: string,
+  context: ReleaseContext = 'requeue'
 ): Promise<ReleaseResult[]> {
   const released: ReleaseResult[] = [];
   for (const task of state.tasks.values()) {
     if (task.assignedWorkerId !== workerId) continue;
     const prevStatus = task.status;
-    const nextStatus = nextStatusForRelease(task);
+    const nextStatus = nextStatusForRelease(task, context);
     try {
       await state.updateTask(
         task.id,

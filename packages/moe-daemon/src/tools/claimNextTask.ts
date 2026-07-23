@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
@@ -16,11 +17,15 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.claim_next_task',
-    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided.',
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated.',
     inputSchema: {
       type: 'object',
       properties: {
-        statuses: { type: 'array', items: { type: 'string' } },
+        statuses: {
+          type: 'array',
+          items: { type: 'string', enum: [...AGENT_CLAIMABLE_STATUSES] },
+          description: 'Columns to claim from. Only PLANNING/WORKING/REVIEW are agent-claimable.'
+        },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
@@ -70,6 +75,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             };
           }
         }
+
+        // Reject non-agent-claimable columns up front (after the governor
+        // redirect so a confused governor still gets the gentler nudge). This
+        // covers BOTH the ranked pool and the explicit-taskId path: without it,
+        // claiming a BACKLOG task "succeeds" (assignment set, status untouched)
+        // and permanently wedges the worker — no tool acts on BACKLOG, and
+        // one-task-per-worker blocks every other claim until a release.
+        assertAgentClaimableStatuses(statuses);
 
         // One task per worker: a worker already holding an active task
         // (PLANNING/WORKING/REVIEW) must finish or release it before claiming

@@ -31,7 +31,7 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and routes it to a claimable column: WORKING→BACKLOG, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool instead, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -107,15 +107,14 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
             };
           }
 
-          // The task is already unassigned, but a WORKING task may be stuck
-          // (e.g. its worker got deleted/purged before this call landed) —
-          // claim_next_task filters by status before checking claimability, so
-          // a WORKING-but-unassigned task is invisible to every claimer until
-          // something repairs the status. Only WORKING needs this; every other
-          // non-terminal status is already claimable where it stands. Also
-          // persist the caller's handoffNote instead of silently discarding it,
-          // and clear needsHumanReview — release_task is one of the documented
-          // human unpark paths for a qa_reject-capped task (see schema.ts).
+          // The task is already unassigned. WORKING-but-unassigned is a
+          // perfectly claimable state (workers claim statuses:["WORKING"]), so
+          // the only repair left is the all-steps-done case: route finished
+          // work to REVIEW so QA picks it up instead of a worker re-claiming a
+          // task with nothing left to do. Also persist the caller's
+          // handoffNote instead of silently discarding it, and clear
+          // needsHumanReview — release_task is one of the documented human
+          // unpark paths for a qa_reject-capped task (see schema.ts).
           const correctedStatus = task.status === 'WORKING' ? nextStatusForRelease(task) : task.status;
           const unparking = task.needsHumanReview === true;
           if (correctedStatus === task.status && !normalizedHandoff && !unparking) {
@@ -163,10 +162,10 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           };
         }
 
-        // Build the update payload. Route the task to a claimable column via the
-        // single release-routing helper (same as the auto/deregister paths), so
-        // a released task always lands somewhere a peer can pick it up rather
-        // than stranded in WORKING-but-unassigned.
+        // Build the update payload. Route via the single release-routing
+        // helper (same as the auto/deregister paths): WORKING stays WORKING
+        // (unassigned = claimable by the next worker), all-steps-done → REVIEW,
+        // PLANNING/REVIEW/AWAITING_APPROVAL stay put.
         const updates: Record<string, unknown> = {
           assignedWorkerId: null,
           status: nextStatusForRelease(task),

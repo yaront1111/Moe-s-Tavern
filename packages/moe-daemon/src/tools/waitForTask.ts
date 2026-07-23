@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
+import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { logger } from '../util/logger.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -143,7 +144,11 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        statuses: { type: 'array', items: { type: 'string' }, description: 'Task statuses to watch for' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string', enum: [...AGENT_CLAIMABLE_STATUSES] },
+          description: 'Task statuses to watch for. Only PLANNING/WORKING/REVIEW are agent-claimable — waiting on a human-gated column would wake into a claim that is rejected.'
+        },
         workerId: { type: 'string', description: 'Your worker ID (used for cleanup on disconnect)' },
         epicId: { type: 'string', description: 'Optional epic filter' },
         timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' }
@@ -157,6 +162,9 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       if (statuses.length === 0) {
         throw missingRequired('statuses');
       }
+      // Same vocabulary as claim_next_task: a waiter on a human-gated column
+      // would either sleep forever or wake into a claim that is rejected.
+      assertAgentClaimableStatuses(statuses);
       const workerId = params.workerId;
       if (!workerId) {
         throw missingRequired('workerId');
