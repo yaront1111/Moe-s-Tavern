@@ -807,6 +807,12 @@ top_level_block = "\n".join(top_level_lines)
 # json.dumps -- JSON strings are valid TOML basic strings, so this escapes
 # Windows backslashes and embedded quotes instead of injecting raw text into the
 # TOML (which a backslash path or a quote would otherwise corrupt).
+# Codex's default MCP startup timeout is 30s, which the proxy can exceed while
+# it waits for a supervised daemon (re)start to rewrite daemon.json.
+try:
+    startup_timeout_sec = int(os.environ.get("MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC", "120"))
+except ValueError:
+    startup_timeout_sec = 120
 moe_block_lines = [
     "",
     "[mcp_servers.moe]",
@@ -814,11 +820,17 @@ moe_block_lines = [
 ]
 if proxy_args:
     moe_block_lines.append('args = ' + json.dumps([proxy_args]))
+moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)
 moe_block_lines.extend([
     "",
     "[mcp_servers.moe.env]",
     'MOE_PROJECT_PATH = ' + json.dumps(project_path),
 ])
+# Persist a pre-set daemon host override (WSL cross-boundary runs). The
+# discovered-at-runtime case is handled by the post-discovery upsert in the
+# main flow -- daemon host probing runs after this writer.
+if os.environ.get("MOE_DAEMON_HOST"):
+    moe_block_lines.append('MOE_DAEMON_HOST = ' + json.dumps(os.environ["MOE_DAEMON_HOST"]))
 moe_block = "\n".join(moe_block_lines)
 
 # Build the serena MCP server TOML block (LSP code intelligence + memory, pinned
@@ -1142,6 +1154,51 @@ if [ "$NO_START_DAEMON" = false ]; then
     else
         echo -e "${GREEN}[OK]${NC} Daemon already running"
     fi
+fi
+
+# Persist the discovered cross-boundary daemon host into the codex MCP config.
+# The codex writer runs BEFORE daemon host discovery, so a WSL launch would
+# otherwise leave [mcp_servers.moe.env] without MOE_DAEMON_HOST and the proxy
+# dialing loopback whenever codex doesn't forward the wrapper's environment to
+# spawned MCP servers. Idempotent; no-op when MOE_DAEMON_HOST is unset
+# (same-host daemon) or the config doesn't exist.
+if [ "$CLI_TYPE" = "codex" ] && [ -n "${MOE_DAEMON_HOST:-}" ] && [ -f "$PROJECT/.codex/config.toml" ]; then
+    $PYTHON_CMD - "$PROJECT/.codex/config.toml" "$MOE_DAEMON_HOST" << 'PYEOF'
+import sys, re, json
+
+config_file, daemon_host = sys.argv[1], sys.argv[2]
+with open(config_file, "r") as f:
+    lines = f.read().splitlines(True)
+
+entry = 'MOE_DAEMON_HOST = ' + json.dumps(daemon_host) + "\n"
+out, in_env, done = [], False, False
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("["):
+        if in_env and not done:
+            if out and not out[-1].endswith("\n"):
+                out[-1] += "\n"
+            out.append(entry)
+            done = True
+        in_env = stripped == "[mcp_servers.moe.env]"
+        out.append(line)
+        continue
+    if in_env and not done and re.match(r'^MOE_DAEMON_HOST\s*=', stripped):
+        out.append(entry)
+        done = True
+        continue
+    out.append(line)
+if in_env and not done:
+    if out and not out[-1].endswith("\n"):
+        out[-1] += "\n"
+    out.append(entry)
+    done = True
+
+if done:
+    with open(config_file, "w") as f:
+        f.write("".join(out))
+    print(f"[OK] Codex MCP config: MOE_DAEMON_HOST={daemon_host}")
+PYEOF
 fi
 
 # Auto-join role's default team (required for chat_send to accept the workerId)

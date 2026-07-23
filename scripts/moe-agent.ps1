@@ -613,15 +613,25 @@ model_reasoning_effort = "$codexReasoningEffort"
 developer_instructions = """`nYou are a $Role agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
 "@
 
-        # Build the moe MCP server TOML block
+        # Build the moe MCP server TOML block. Codex's default MCP startup
+        # timeout is 30s, which the proxy can exceed while it waits for a
+        # supervised daemon (re)start to rewrite daemon.json.
+        $codexMcpStartupTimeout = 120
+        if ($env:MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC -match '^\d+$') {
+            $codexMcpStartupTimeout = [int]$env:MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC
+        }
+        # Persist a daemon host override so the spawned proxy dials the right
+        # address even if codex doesn't forward the wrapper's environment.
+        $moeDaemonHostLine = if ($env:MOE_DAEMON_HOST) { "`nMOE_DAEMON_HOST = `"$($env:MOE_DAEMON_HOST)`"" } else { "" }
         $moeTomlBlock = @"
 
 [mcp_servers.moe]
 command = "node"
 args = ["$proxyScriptForToml"]
+startup_timeout_sec = $codexMcpStartupTimeout
 
 [mcp_servers.moe.env]
-MOE_PROJECT_PATH = "$projectPathForToml"
+MOE_PROJECT_PATH = "$projectPathForToml"$moeDaemonHostLine
 "@
 
         # Build the serena MCP server TOML block (LSP code intelligence + memory,
