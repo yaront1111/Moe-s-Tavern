@@ -14,16 +14,52 @@ export interface DaemonInfoReadResult {
   retryable: boolean;
 }
 
-function canonicalProjectPath(projectPath: string): string {
-  return path.resolve(projectPath);
+/**
+ * Reduce a project path to a form comparable across the Windows/WSL boundary.
+ * A Windows daemon records `D:\projexts\app` in daemon.json while a WSL-side
+ * proxy resolves the same directory as `/mnt/d/projexts/app`; both reduce to
+ * `d:/projexts/app`. Paths without a drive-letter equivalent keep the old
+ * behavior (resolve; case-insensitive only on win32).
+ */
+export function comparableProjectPath(projectPath: string): string {
+  const raw = projectPath.trim();
+
+  // Both special forms are detected on the RAW string: path.resolve would
+  // mangle a Windows-drive path on Linux (treated as relative) and a /mnt
+  // path on Windows (prefixed with the cwd drive).
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) {
+    return normalizeWindowsDrivePath(raw);
+  }
+  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
+  if (wslMatch) {
+    const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
+    return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
+  }
+
+  const resolved = path.resolve(raw);
+  if (/^[a-zA-Z]:[\\/]/.test(resolved)) {
+    return normalizeWindowsDrivePath(resolved);
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeWindowsDrivePath(drivePath: string): string {
+  return path.win32.normalize(drivePath)
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 function isSameProjectPath(a: string, b: string): boolean {
-  const left = canonicalProjectPath(a);
-  const right = canonicalProjectPath(b);
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return comparableProjectPath(a) === comparableProjectPath(b);
+}
+
+/**
+ * Host the proxy connects to. Defaults to loopback; MOE_DAEMON_HOST overrides
+ * for cross-boundary setups (WSL agent -> Windows daemon bound to 0.0.0.0).
+ */
+export function getDaemonHost(): string {
+  return process.env.MOE_DAEMON_HOST || '127.0.0.1';
 }
 
 function isValidPort(port: unknown): port is number {

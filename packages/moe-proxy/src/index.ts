@@ -5,7 +5,7 @@
 // =============================================================================
 
 import WebSocket from 'ws';
-import { getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
+import { getDaemonHost, getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
 
 // Reconnect configuration
 // Keep retrying for a generous wall-clock window rather than a fixed attempt
@@ -320,7 +320,7 @@ function connect(projectPath: string): void {
   // Ensure any lingering socket and handlers are torn down before reconnecting.
   closeWebSocket();
 
-  const ws = new WebSocket(`ws://127.0.0.1:${info.port}/mcp`);
+  const ws = new WebSocket(`ws://${getDaemonHost()}:${info.port}/mcp`);
   currentWebSocket = ws;
 
   ws.on('open', () => {

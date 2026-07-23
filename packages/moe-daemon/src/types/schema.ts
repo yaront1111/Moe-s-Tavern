@@ -555,6 +555,8 @@ export interface DaemonInfo {
   pid: number;
   startedAt: string;
   projectPath: string;
+  /** Present only when the daemon listens beyond loopback (e.g. '0.0.0.0' for WSL agents). */
+  bindHost?: string;
 }
 
 export interface PlanningNotes {

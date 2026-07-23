@@ -49,12 +49,24 @@ function parseArgs() {
   const projectIndex = args.indexOf('--project');
   const portIndex = args.indexOf('--port');
   const nameIndex = args.indexOf('--name');
+  const hostIndex = args.indexOf('--host');
 
   const projectPath = projectIndex >= 0 ? args[projectIndex + 1] : process.env.MOE_PROJECT_PATH || process.cwd();
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : undefined;
   const name = nameIndex >= 0 ? args[nameIndex + 1] : undefined;
+  const host = hostIndex >= 0 ? args[hostIndex + 1] : process.env.MOE_BIND_HOST || undefined;
 
-  return { command, projectPath, port, name };
+  return { command, projectPath, port, name, host };
+}
+
+const DEFAULT_BIND_HOST = '127.0.0.1';
+
+/**
+ * Address local probes (port scans, readiness checks) should connect to for a
+ * given bind host. Wildcard binds include loopback; a specific address does not.
+ */
+function probeHostFor(bindHost: string): string {
+  return bindHost === '0.0.0.0' || bindHost === '::' ? DEFAULT_BIND_HOST : bindHost;
 }
 
 function daemonInfoPath(projectPath: string): string {
@@ -188,7 +200,7 @@ function releaseLock(projectPath: string): void {
   }
 }
 
-function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEOUT_MS): Promise<boolean> {
+function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEOUT_MS, host: string = DEFAULT_BIND_HOST): Promise<boolean> {
   return new Promise((resolve) => {
     const startTime = Date.now();
     const check = () => {
@@ -214,7 +226,7 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
           setTimeout(check, PORT_CHECK_INTERVAL_MS);
         }
       });
-      socket.connect(port, '127.0.0.1');
+      socket.connect(port, host);
     };
     check();
   });
@@ -227,7 +239,7 @@ function probeDaemonHealth(info: DaemonInfo, expectedProjectPath: string, timeou
 
   return new Promise((resolve) => {
     const req = http.request({
-      hostname: '127.0.0.1',
+      hostname: info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST,
       port: info.port,
       path: '/health',
       method: 'GET',
@@ -339,21 +351,21 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function findAvailablePort(preferred: number): Promise<number> {
+async function findAvailablePort(preferred: number, host: string = DEFAULT_BIND_HOST): Promise<number> {
   for (let i = 0; i < PORT_RANGE; i += 1) {
     const port = preferred + i;
-    const available = await isPortAvailable(port);
+    const available = await isPortAvailable(port, host);
     if (available) return port;
   }
   throw new Error('No available port found');
 }
 
-function isPortAvailable(port: number): Promise<boolean> {
+function isPortAvailable(port: number, host: string = DEFAULT_BIND_HOST): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.unref();
     server.on('error', () => resolve(false));
-    server.listen({ port, host: '127.0.0.1' }, () => {
+    server.listen({ port, host }, () => {
       server.close(() => resolve(true));
     });
   });
@@ -449,7 +461,8 @@ function writeGlobalConfig(): void {
   }
 }
 
-async function startDaemon(projectPath: string, preferredPort?: number): Promise<void> {
+async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  const host = bindHost || DEFAULT_BIND_HOST;
   const existing = readDaemonInfo(projectPath);
   const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
   if (existingValidation.valid && existingValidation.info) {
@@ -483,7 +496,7 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   let port: number;
   let state: StateManager;
   try {
-    port = await findAvailablePort(preferredPort || DEFAULT_PORT);
+    port = await findAvailablePort(preferredPort || DEFAULT_PORT, host);
     state = new StateManager({ projectPath });
     await state.load();
     await state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
@@ -565,11 +578,11 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
   await new Promise<void>((resolve, reject) => {
     httpServer.once('listening', resolve);
     httpServer.once('error', reject);
-    httpServer.listen(port, '127.0.0.1');
+    httpServer.listen(port, host);
   });
 
   // Verify port is actually accepting connections
-  const portReady = await waitForPortListening(port, PORT_READY_TIMEOUT_MS);
+  const portReady = await waitForPortListening(port, PORT_READY_TIMEOUT_MS, probeHostFor(host));
   if (!portReady) {
     logger.error({ port }, 'Server started but port not accepting connections');
     releaseLock(projectPath);
@@ -600,7 +613,8 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     port,
     pid: process.pid,
     startedAt: new Date().toISOString(),
-    projectPath
+    projectPath,
+    ...(host !== DEFAULT_BIND_HOST ? { bindHost: host } : {})
   };
 
   // Write daemon.json only after port is confirmed listening
@@ -706,12 +720,12 @@ async function startDaemon(projectPath: string, preferredPort?: number): Promise
     // Don't shutdown on unhandled rejections, just log
   });
 
-  logger.info({ projectPath, port }, 'Moe daemon running');
+  logger.info({ projectPath, port, host }, 'Moe daemon running');
   logger.info({ endpoint: `ws://localhost:${port}/ws` }, 'WebSocket');
   logger.info({ endpoint: `ws://localhost:${port}/mcp` }, 'MCP bridge');
 }
 
-async function superviseDaemon(projectPath: string, preferredPort?: number): Promise<void> {
+async function superviseDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
   // Check if daemon is already running
   const existing = readDaemonInfo(projectPath);
   const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
@@ -728,6 +742,9 @@ async function superviseDaemon(projectPath: string, preferredPort?: number): Pro
   const childArgs = ['_run', '--project', projectPath];
   if (preferredPort !== undefined) {
     childArgs.push('--port', String(preferredPort));
+  }
+  if (bindHost !== undefined) {
+    childArgs.push('--host', bindHost);
   }
 
   let restartTimestamps: number[] = [];
@@ -978,15 +995,15 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 }
 
 async function main() {
-  const { command, projectPath, port, name } = parseArgs();
+  const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
     case 'start':
-      await superviseDaemon(projectPath, port);
+      await superviseDaemon(projectPath, port, host);
       break;
     case '_run':
       // Internal: called by supervisor to run the actual daemon process
-      await startDaemon(projectPath, port);
+      await startDaemon(projectPath, port, host);
       break;
     case 'stop':
       await stopDaemon(projectPath);
@@ -996,7 +1013,7 @@ async function main() {
       break;
     case 'init':
       initProject(projectPath, name);
-      await superviseDaemon(projectPath, port);
+      await superviseDaemon(projectPath, port, host);
       break;
     case 'doctor': {
       const result = await runDoctor(projectPath);
@@ -1008,7 +1025,7 @@ async function main() {
       break;
     }
     default:
-      logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--name <name>]');
+      logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }

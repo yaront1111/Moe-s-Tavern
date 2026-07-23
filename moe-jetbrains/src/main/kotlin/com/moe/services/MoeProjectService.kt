@@ -21,6 +21,7 @@ import com.moe.util.MoeJson
 import com.moe.util.MoeProjectInitializer
 import com.moe.util.MoeDaemonRegistrationTracker
 import com.moe.util.MoeProjectRegistry
+import com.moe.util.TerminalAgentLauncher
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -1338,17 +1339,24 @@ class MoeProjectService @JvmOverloads constructor(
         }
 
         val installed = resolveInstalledDaemonCommand(basePath)
+        val hostSuffix = if (TerminalAgentLauncher.isWslAgentsEnabled(project)) " --host 0.0.0.0" else ""
         if (installed != null) {
-            return installed
+            return installed + hostSuffix
         }
 
-        return "moe-daemon start --project \"$basePath\""
+        return "moe-daemon start --project \"$basePath\"$hostSuffix"
     }
 
     private fun buildDirectDaemonCommand(basePath: String): List<String>? {
         val script = resolveLocalDaemonScript(basePath) ?: return null
         val node = resolveNodeExecutable() ?: "node"
-        return listOf(node, script.absolutePath, "start", "--project", basePath)
+        val command = mutableListOf(node, script.absolutePath, "start", "--project", basePath)
+        // WSL agent mode: agents inside WSL can't reach a loopback-only listener,
+        // so bind all interfaces (moe-agent.sh probes for the reachable address).
+        if (TerminalAgentLauncher.isWslAgentsEnabled(project)) {
+            command += listOf("--host", "0.0.0.0")
+        }
+        return command
     }
 
     private fun resolveLocalDaemonScript(basePath: String): File? {

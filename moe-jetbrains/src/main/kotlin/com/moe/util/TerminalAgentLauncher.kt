@@ -63,7 +63,8 @@ object TerminalAgentLauncher {
         val script: ResolvedScript,
         val manager: Any,
         val envOverrides: Map<String, String>,
-        val agentCommand: String
+        val agentCommand: String,
+        val wslAgents: Boolean = false
     )
 
     private val roleTabNames = mapOf(
@@ -89,6 +90,7 @@ object TerminalAgentLauncher {
     private const val LAST_PROVIDER_KEY = "moe.lastUsedProvider"
     private const val CUSTOM_COMMAND_KEY = "moe.customAgentCommand"
     private const val TEAM_MODE_KEY = "moe.teamModeEnabled"
+    private const val WSL_AGENTS_KEY = "moe.wslAgentsEnabled"
 
     fun getLastUsedProvider(project: Project): AgentProvider {
         val stored = PropertiesComponent.getInstance(project).getValue(LAST_PROVIDER_KEY, AgentProvider.CLAUDE.name)
@@ -118,6 +120,31 @@ object TerminalAgentLauncher {
         PropertiesComponent.getInstance(project).setValue(TEAM_MODE_KEY, enabled)
     }
 
+    /**
+     * WSL agent mode (Windows IDE only): launch agents via moe-agent.sh with
+     * /mnt/<drive>/ paths so they run as genuine Linux processes inside the
+     * user's WSL terminal profile. Requires the daemon to listen beyond
+     * loopback (the daemon spawner passes --host 0.0.0.0 when this is on);
+     * moe-agent.sh discovers the reachable host and exports MOE_DAEMON_HOST.
+     */
+    fun isWslAgentsEnabled(project: Project): Boolean =
+        SystemInfo.isWindows && PropertiesComponent.getInstance(project).getBoolean(WSL_AGENTS_KEY, false)
+
+    fun setWslAgentsEnabled(project: Project, enabled: Boolean) {
+        PropertiesComponent.getInstance(project).setValue(WSL_AGENTS_KEY, enabled)
+    }
+
+    /**
+     * D:\projexts\app (or D:/projexts/app) -> /mnt/d/projexts/app.
+     * Paths without a drive letter are returned unchanged.
+     */
+    internal fun toWslPath(path: String): String {
+        val normalized = path.replace('\\', '/')
+        val match = Regex("^([A-Za-z]):/?(.*)$").find(normalized) ?: return path
+        val (drive, rest) = match.destructured
+        return if (rest.isEmpty()) "/mnt/${drive.lowercase()}" else "/mnt/${drive.lowercase()}/$rest"
+    }
+
     fun resolveAgentCommand(project: Project, provider: AgentProvider): String {
         return if (provider == AgentProvider.CUSTOM) {
             getCustomCommand(project).ifEmpty { "claude" }
@@ -132,7 +159,8 @@ object TerminalAgentLauncher {
             return null
         }
 
-        val script = resolveAgentScript(basePath) ?: run {
+        val wslAgents = isWslAgentsEnabled(project)
+        val script = resolveAgentScript(basePath, preferBash = wslAgents) ?: run {
             Messages.showErrorDialog(
                 project,
                 "Agent script not found. Install Moe and start the daemon once to register the install path.",
@@ -163,14 +191,14 @@ object TerminalAgentLauncher {
         val resolvedCommand = agentCommand ?: MoeProjectService.getInstance(project)
             .getState()?.project?.settings?.agentCommand ?: "claude"
 
-        return AgentContext(basePath, script, manager, envOverrides, resolvedCommand)
+        return AgentContext(basePath, script, manager, envOverrides, resolvedCommand, wslAgents)
     }
 
     private fun launchRole(project: Project, ctx: AgentContext, role: String, codexExec: Boolean = false) {
         val tabName = roleTabNames[role] ?: "Moe $role"
         val defaultTeamName = project.name.takeIf { it.isNotBlank() } ?: "Moe Team"
         val teamName = if (isTeamModeEnabled(project)) defaultTeamName else null
-        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec)
+        val command = buildCommand(ctx.basePath, role, ctx.script, ctx.envOverrides, ctx.agentCommand, teamName, codexExec, ctx.wslAgents)
         try {
             val widget = createTerminalWidget(ctx.manager, ctx.basePath, tabName)
             if (widget != null) {
@@ -234,12 +262,76 @@ object TerminalAgentLauncher {
         envOverrides: Map<String, String>,
         agentCommand: String,
         teamName: String? = null,
-        codexExec: Boolean = false
+        codexExec: Boolean = false,
+        wslAgents: Boolean = false
     ): String {
+        if (wslAgents) {
+            return when (script.kind) {
+                // Genuine Linux run: bash script + /mnt/<drive>/ paths, typed into
+                // the user's WSL terminal profile.
+                ScriptKind.BASH -> buildWslBashCommand(
+                    basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec
+                )
+                // Graceful degrade when only the .ps1 exists: run it on the Windows
+                // side via WSL interop, with bash-safe escaping so the line survives
+                // being typed into a bash prompt.
+                ScriptKind.POWERSHELL -> bashWrapPowerShell(
+                    buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec)
+                )
+            }
+        }
         return when (script.kind) {
             ScriptKind.POWERSHELL -> buildPowerShellCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec)
-            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file, envOverrides, agentCommand, teamName, codexExec)
+            ScriptKind.BASH -> buildBashCommand(basePath, role, script.file.absolutePath, envOverrides, agentCommand, teamName, codexExec)
         }
+    }
+
+    private fun buildWslBashCommand(
+        basePath: String,
+        role: String,
+        scriptPath: String,
+        envOverrides: Map<String, String>,
+        agentCommand: String,
+        teamName: String? = null,
+        codexExec: Boolean = false
+    ): String = buildBashCommand(
+        toWslPath(basePath),
+        role,
+        toWslPath(scriptPath),
+        envOverrides.mapValues { (_, v) -> toWslPath(v) },
+        agentCommand,
+        teamName,
+        codexExec
+    )
+
+    internal fun buildWslBashCommandForTest(
+        basePath: String,
+        role: String,
+        scriptPath: String,
+        envOverrides: Map<String, String>,
+        agentCommand: String,
+        teamName: String? = null,
+        codexExec: Boolean = false
+    ): String = buildWslBashCommand(basePath, role, scriptPath, envOverrides, agentCommand, teamName, codexExec)
+
+    /**
+     * Convert a `powershell -NoProfile ... -Command "..."` line (backtick-escaped
+     * for a PowerShell host) into one that survives a bash prompt: interop needs
+     * the .exe suffix, and bash double quotes eat `$`, backticks, and `"` unless
+     * backslash-escaped. The PowerShell-level backtick escaping is first undone,
+     * then re-escaped for bash.
+     */
+    internal fun bashWrapPowerShell(psLine: String): String {
+        val prefix = "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+        if (!psLine.startsWith(prefix) || !psLine.endsWith("\"")) return psLine
+        val inner = psLine.removePrefix(prefix).removeSuffix("\"")
+            .replace("`\"", "\"").replace("`\$", "\$")
+        val bashEscaped = inner
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\$", "\\\$")
+            .replace("`", "\\`")
+        return "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$bashEscaped\""
     }
 
     private fun buildPowerShellCommand(
@@ -320,14 +412,14 @@ object TerminalAgentLauncher {
     private fun buildBashCommand(
         basePath: String,
         role: String,
-        script: File,
+        scriptPath: String,
         envOverrides: Map<String, String>,
         agentCommand: String,
         teamName: String? = null,
         codexExec: Boolean = false
     ): String {
         val projectArg = shQuote(basePath)
-        val scriptArg = shQuote(script.absolutePath)
+        val scriptArg = shQuote(scriptPath)
         val commandArg = shQuote(agentCommand)
         val envPrefix = if (envOverrides.isNotEmpty()) {
             envOverrides.entries.joinToString(" ") { (key, value) ->
@@ -472,8 +564,8 @@ object TerminalAgentLauncher {
         return null
     }
 
-    private fun resolveAgentScript(basePath: String): ResolvedScript? {
-        val preferred = if (SystemInfo.isWindows) {
+    private fun resolveAgentScript(basePath: String, preferBash: Boolean = false): ResolvedScript? {
+        val preferred = if (SystemInfo.isWindows && !preferBash) {
             listOf(
                 "scripts/moe-agent.ps1" to ScriptKind.POWERSHELL,
                 "scripts/moe-agent.sh" to ScriptKind.BASH

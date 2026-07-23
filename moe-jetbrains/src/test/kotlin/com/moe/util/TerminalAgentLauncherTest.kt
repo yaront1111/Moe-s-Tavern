@@ -1,5 +1,6 @@
 package com.moe.util
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -112,5 +113,61 @@ class TerminalAgentLauncherTest {
         )
 
         assertFalse(command.contains("MOE_NO_PRINT_MODE"))
+    }
+
+    @Test
+    fun `toWslPath translates drive-letter paths and leaves others alone`() {
+        assertEquals("/mnt/d/projexts/px4swarm", TerminalAgentLauncher.toWslPath("D:\\projexts\\px4swarm"))
+        assertEquals("/mnt/d/projexts/px4swarm", TerminalAgentLauncher.toWslPath("D:/projexts/px4swarm"))
+        assertEquals(
+            "/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/plugins/moe-jetbrains/daemon/index.js",
+            TerminalAgentLauncher.toWslPath("C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\plugins\\moe-jetbrains\\daemon\\index.js")
+        )
+        assertEquals("/mnt/c", TerminalAgentLauncher.toWslPath("C:\\"))
+        assertEquals("/home/user/project", TerminalAgentLauncher.toWslPath("/home/user/project"))
+        assertEquals("codex", TerminalAgentLauncher.toWslPath("codex"))
+    }
+
+    @Test
+    fun `WSL bash command uses mnt paths for project, script, and env overrides`() {
+        val command = TerminalAgentLauncher.buildWslBashCommandForTest(
+            basePath = "D:\\projexts\\px4swarm",
+            role = "worker",
+            scriptPath = "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.1\\plugins\\moe-jetbrains\\scripts\\moe-agent.sh",
+            envOverrides = mapOf(
+                "MOE_DAEMON_PATH" to "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.1\\plugins\\moe-jetbrains\\daemon\\index.js",
+                "MOE_PROXY_PATH" to "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.1\\plugins\\moe-jetbrains\\proxy\\index.js"
+            ),
+            agentCommand = "codex",
+            teamName = "px4swarm"
+        )
+
+        assertTrue(command.contains("bash '/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.1/plugins/moe-jetbrains/scripts/moe-agent.sh'"))
+        assertTrue(command.contains("--project '/mnt/d/projexts/px4swarm'"))
+        assertTrue(command.contains("MOE_DAEMON_PATH='/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js'"))
+        assertTrue(command.contains("MOE_PROXY_PATH='/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.1/plugins/moe-jetbrains/proxy/index.js'"))
+        assertTrue(command.contains("--team 'px4swarm'"))
+        assertTrue(command.contains("--command 'codex'"))
+        assertFalse(command.contains("C:\\"))
+        assertFalse(command.contains("D:\\"))
+    }
+
+    @Test
+    fun `bashWrapPowerShell produces a bash-safe interop line`() {
+        val psLine = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\projexts\\px4swarm",
+            role = "worker",
+            scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = mapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js"),
+            agentCommand = "codex"
+        )
+        val wrapped = TerminalAgentLauncher.bashWrapPowerShell(psLine)
+
+        assertTrue(wrapped.startsWith("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \""))
+        // bash double quotes require \$ so PowerShell (not bash) expands $env:
+        assertTrue(wrapped.contains("\\\$env:MOE_DAEMON_PATH"))
+        // no PowerShell backtick escapes may survive — bash treats ` as command substitution
+        assertFalse(wrapped.contains("`\$"))
+        assertFalse(wrapped.contains("`\""))
     }
 }

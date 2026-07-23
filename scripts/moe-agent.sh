@@ -953,13 +953,35 @@ GEMINIEOF
     fi
 fi
 
+# HTTP /health probe against a daemon endpoint. Used when a PID check cannot
+# answer liveness (a Windows daemon's PID is invisible inside WSL).
+probe_daemon_health() {
+    local host="$1"
+    local port="$2"
+    $PYTHON_CMD -c "
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen('http://%s:%s/health' % (sys.argv[1], sys.argv[2]), timeout=3) as r:
+        d = json.load(r)
+    sys.exit(0 if d.get('status') == 'healthy' else 1)
+except Exception:
+    sys.exit(1)
+" "$host" "$port" 2>/dev/null
+}
+
+# Default gateway of a NAT-mode WSL distro = the Windows host.
+wsl_gateway_host() {
+    ip route show default 2>/dev/null | awk '{print $3; exit}'
+}
+
 # Start daemon if needed
 if [ "$NO_START_DAEMON" = false ]; then
     DAEMON_INFO="$MOE_DIR/daemon.json"
     RUNNING=false
+    FOREIGN_DAEMON=false
 
     if [ -f "$DAEMON_INFO" ]; then
-        # Try to read PID from daemon.json
+        # Try to read PID/port/projectPath from daemon.json
         # NOTE: Uses sys.argv[1] instead of string interpolation to safely handle
         # paths containing single quotes, double quotes, or spaces.
         PID_OUTPUT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('pid', ''))" "$DAEMON_INFO" 2>&1)
@@ -973,7 +995,51 @@ if [ "$NO_START_DAEMON" = false ]; then
             PID="$PID_OUTPUT"
         fi
 
-        if [ -n "$PID" ]; then
+        DAEMON_PORT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('port', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+        DAEMON_PROJECT=$($PYTHON_CMD -c "import json,sys; print(json.load(open(sys.argv[1])).get('projectPath', ''))" "$DAEMON_INFO" 2>/dev/null || echo "")
+
+        # daemon.json written by a Windows-side daemon while we run under
+        # WSL/Linux: its PID is invisible here, so kill -0 would misread a live
+        # daemon as stale, delete its discovery file, and spawn a duplicate
+        # daemon onto the same .moe/. Detect via the projectPath form and
+        # answer liveness over HTTP instead.
+        if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "cygwin" && "$DAEMON_PROJECT" =~ ^[A-Za-z]:[\\/] ]]; then
+            FOREIGN_DAEMON=true
+        fi
+
+        if [ "$FOREIGN_DAEMON" = true ]; then
+            if [ -z "$DAEMON_PORT" ]; then
+                echo -e "${RED}[ERROR]${NC} daemon.json (Windows daemon) has no port; cannot probe it from this environment"
+                exit 1
+            fi
+            # Candidate hosts: explicit override, loopback (mirrored networking),
+            # then the WSL default gateway (NAT mode, daemon bound to 0.0.0.0).
+            DAEMON_HOST_CANDIDATES=""
+            [ -n "${MOE_DAEMON_HOST:-}" ] && DAEMON_HOST_CANDIDATES="$MOE_DAEMON_HOST"
+            DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES 127.0.0.1"
+            if is_wsl; then
+                GW=$(wsl_gateway_host)
+                [ -n "$GW" ] && DAEMON_HOST_CANDIDATES="$DAEMON_HOST_CANDIDATES $GW"
+            fi
+            for CANDIDATE in $DAEMON_HOST_CANDIDATES; do
+                if probe_daemon_health "$CANDIDATE" "$DAEMON_PORT"; then
+                    export MOE_DAEMON_HOST="$CANDIDATE"
+                    echo -e "${GREEN}[OK]${NC} Windows-side daemon reachable at $CANDIDATE:$DAEMON_PORT (cross-boundary)"
+                    RUNNING=true
+                    break
+                fi
+            done
+            if [ "$RUNNING" = false ]; then
+                echo -e "${RED}[ERROR]${NC} daemon.json points at a Windows-side daemon ($DAEMON_PROJECT, port $DAEMON_PORT) that is not reachable from here (tried:$DAEMON_HOST_CANDIDATES)."
+                echo -e "${YELLOW}Fix options:${NC}"
+                echo "  - Restart the daemon listening beyond loopback: --host 0.0.0.0 (or MOE_BIND_HOST=0.0.0.0)"
+                echo "  - Allow inbound TCP $DAEMON_PORT from the WSL subnet in Windows Defender Firewall"
+                echo "  - Or set MOE_DAEMON_HOST to the address the daemon is reachable at"
+                echo "Refusing to touch daemon.json or start a second daemon over the same .moe/."
+                echo "If the Windows daemon is genuinely gone, delete $DAEMON_INFO manually and re-run."
+                exit 1
+            fi
+        elif [ -n "$PID" ]; then
             # Validate PID is numeric
             if ! [[ "$PID" =~ ^[0-9]+$ ]]; then
                 echo -e "${YELLOW}[WARN]${NC} Invalid PID in daemon.json: '$PID' (not numeric)"

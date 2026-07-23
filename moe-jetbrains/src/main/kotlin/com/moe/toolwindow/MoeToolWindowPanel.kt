@@ -162,6 +162,34 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         }
                     }
                     popup.add(teamCheckbox)
+
+                    if (com.intellij.openapi.util.SystemInfo.isWindows) {
+                        val wslCheckbox = object : JCheckBoxMenuItem(
+                            MoeBundle.message("moe.panel.agentsMenu.wslAgents"),
+                            TerminalAgentLauncher.isWslAgentsEnabled(project)
+                        ) {
+                            override fun doClick(pressTime: Int) {
+                                isSelected = !isSelected
+                                TerminalAgentLauncher.setWslAgentsEnabled(project, isSelected)
+                                // The bind host only changes on daemon start, so rebind now.
+                                // NOTE: a daemon restart purges worker records and releases
+                                // their tasks — flip this before launching agents, not mid-fleet.
+                                NotificationGroupManager.getInstance()
+                                    .getNotificationGroup("Moe Notifications")
+                                    .createNotification(
+                                        MoeBundle.message(
+                                            if (isSelected) "moe.panel.agentsMenu.wslAgents.on"
+                                            else "moe.panel.agentsMenu.wslAgents.off"
+                                        ),
+                                        NotificationType.INFORMATION
+                                    )
+                                    .notify(project)
+                                service.restartDaemon()
+                            }
+                        }
+                        popup.add(wslCheckbox)
+                    }
+
                     popup.add(JSeparator())
 
                     fun launchWithProvider(role: String?, provider: TerminalAgentLauncher.AgentProvider) {

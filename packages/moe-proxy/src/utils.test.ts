@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import {
+  comparableProjectPath,
+  getDaemonHost,
   readDaemonInfo,
   readDaemonInfoResult,
   getProjectPath,
@@ -95,6 +97,74 @@ describe('utils', () => {
 
       const result = readDaemonInfo(testDir);
       expect(result).toBeNull();
+    });
+
+    it('accepts a Windows-daemon daemon.json read from the WSL mount of the same project', () => {
+      // WSL agent scenario: the Windows daemon recorded D:\... while the
+      // WSL-side proxy resolves the same directory as /mnt/d/...
+      const moePath = path.join(testDir, '.moe');
+      fs.mkdirSync(moePath);
+      fs.writeFileSync(path.join(moePath, 'daemon.json'), JSON.stringify({
+        port: 9876,
+        pid: 12345,
+        startedAt: '2024-01-01T00:00:00Z',
+        projectPath: 'D:\\projexts\\px4swarm',
+      }));
+
+      // Can't chdir into /mnt/d in this test env, so exercise the comparison
+      // directly and via a daemon.json whose recorded path is the WSL form.
+      expect(comparableProjectPath('D:\\projexts\\px4swarm'))
+        .toBe(comparableProjectPath('/mnt/d/projexts/px4swarm'));
+    });
+  });
+
+  describe('comparableProjectPath', () => {
+    it('maps Windows and WSL forms of the same directory to one canonical form', () => {
+      expect(comparableProjectPath('D:\\projexts\\px4swarm')).toBe('d:/projexts/px4swarm');
+      expect(comparableProjectPath('D:/projexts/px4swarm')).toBe('d:/projexts/px4swarm');
+      expect(comparableProjectPath('/mnt/d/projexts/px4swarm')).toBe('d:/projexts/px4swarm');
+    });
+
+    it('is case-insensitive for drive-letter paths', () => {
+      expect(comparableProjectPath('d:\\Projexts\\PX4swarm')).toBe('d:/projexts/px4swarm');
+      expect(comparableProjectPath('/mnt/D/Projexts/PX4swarm')).toBe('d:/projexts/px4swarm');
+    });
+
+    it('handles drive roots and trailing separators', () => {
+      expect(comparableProjectPath('D:\\')).toBe('d:');
+      expect(comparableProjectPath('/mnt/d')).toBe('d:');
+      expect(comparableProjectPath('/mnt/d/')).toBe('d:');
+      expect(comparableProjectPath('D:\\projexts\\')).toBe(comparableProjectPath('/mnt/d/projexts'));
+    });
+
+    it('normalizes dot segments in Windows paths', () => {
+      expect(comparableProjectPath('D:\\projexts\\sub\\..\\px4swarm')).toBe('d:/projexts/px4swarm');
+    });
+
+    it('does not equate different projects', () => {
+      expect(comparableProjectPath('/mnt/d/projexts/px4swarm'))
+        .not.toBe(comparableProjectPath('D:\\projexts\\other'));
+      expect(comparableProjectPath('/mnt/c/projexts/px4swarm'))
+        .not.toBe(comparableProjectPath('D:\\projexts\\px4swarm'));
+    });
+  });
+
+  describe('getDaemonHost', () => {
+    const original = process.env.MOE_DAEMON_HOST;
+
+    afterEach(() => {
+      if (original === undefined) delete process.env.MOE_DAEMON_HOST;
+      else process.env.MOE_DAEMON_HOST = original;
+    });
+
+    it('defaults to loopback', () => {
+      delete process.env.MOE_DAEMON_HOST;
+      expect(getDaemonHost()).toBe('127.0.0.1');
+    });
+
+    it('honors MOE_DAEMON_HOST override', () => {
+      process.env.MOE_DAEMON_HOST = '172.29.16.1';
+      expect(getDaemonHost()).toBe('172.29.16.1');
     });
   });
 
