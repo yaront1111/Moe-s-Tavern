@@ -97,7 +97,9 @@ cleanup_temp() {
     # release. WORKER_ID/PROJECT are set later in the script but read here at
     # exit time.
     if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
-        "$SCRIPT_DIR/moe-call.sh" deregister_worker \
+        # Via bash, not direct exec: bundled copies can lose the exec bit
+        # (e.g. a bundler writeFile), which would silently skip deregister.
+        bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
             "{\"workerId\":\"$WORKER_ID\",\"reason\":\"terminal_closed\"}" \
             --project "$PROJECT" >/dev/null 2>&1 || true
     fi
@@ -287,13 +289,16 @@ parse_command_into_argv() {
     local line="$1"
     local python_bin="${PYTHON_CMD:-python3}"
     if command -v "$python_bin" &> /dev/null; then
-        # NUL-separated so argv elements containing whitespace survive read.
+        # \x1f-separated so argv elements containing whitespace survive read.
+        # NOT NUL: bash command substitution strips NUL bytes, which merged all
+        # tokens and left COMMAND_BIN empty (launch exec'd "" -> ": command not
+        # found").
         local parsed
         parsed=$("$python_bin" -c 'import shlex,sys
 for t in shlex.split(sys.argv[1], posix=True):
-    sys.stdout.write(t + "\0")' "$line" 2>/dev/null) || return 1
+    sys.stdout.write(t + "\x1f")' "$line" 2>/dev/null) || return 1
         COMMAND_ARGV=()
-        while IFS= read -r -d "" tok; do
+        while IFS= read -r -d $'\x1f' tok; do
             COMMAND_ARGV+=("$tok")
         done <<< "$parsed"
         COMMAND_BIN="${COMMAND_ARGV[0]:-}"
@@ -417,6 +422,10 @@ echo -e "${GREEN}[OK]${NC} Using python3: $PYTHON_CMD"
 # inline args are split correctly via shlex (the initial parse during
 # CLI-type detection may have hit the no-python fallback).
 parse_command_into_argv "$COMMAND"
+if [ -z "$COMMAND_BIN" ]; then
+    echo -e "${RED}[ERROR]${NC} Could not parse --command '$COMMAND' into a binary; refusing to launch an empty command."
+    exit 1
+fi
 
 # Read install path from ~/.moe/config.json
 get_moe_install_path() {
@@ -1976,6 +1985,15 @@ PYEOF
         SYSTEM_APPEND="$SYSTEM_APPEND Start by claiming the next task for your role."
     fi
 
+    # Tool-name mapping, stated once in the stable (cache-friendly) prefix:
+    # role docs and prompts write moe.<name> as shorthand, but the wire-level
+    # MCP tool is moe_<name> on the server named "moe" -- without this line
+    # every fresh per-task session burns a discovery round-trip re-learning
+    # the prefix.
+    SYSTEM_APPEND="$SYSTEM_APPEND
+
+Tool naming: moe.<name> in docs/prompts is shorthand for MCP tool moe_<name> on the server named 'moe' (Claude Code exposes it as mcp__moe__moe_<name>, e.g. moe.submit_plan -> mcp__moe__moe_submit_plan). Serena tools are on the server named 'serena'. If tool schemas are deferred, batch-load every tool you need in ONE ToolSearch select call - do not guess tool names."
+
     # Append approval mode
     if [ -n "$APPROVAL_MODE" ]; then
         SYSTEM_APPEND="$SYSTEM_APPEND
@@ -2059,9 +2077,33 @@ except Exception:
 " <<< "$PREFLIGHT_TASK_UNREAD" 2>/dev/null || echo 0)
         fi
 
+        # Bounded Serena memory-name preload, read straight off disk (no Serena
+        # call). The corpus grows unbounded on long-running projects (1700+
+        # files observed), so never inline the full list: total count, names
+        # containing THIS task id (prior handoffs), and the 20 most recently
+        # updated. Names only -- the agent pulls content via Serena read_memory.
+        # SERENA_PROJECT is exported by ensure_mcp_config; fall back to PROJECT
+        # if that path was skipped.
+        MEMORIES_DIR="${SERENA_PROJECT:-$PROJECT}/.serena/memories"
+        MEM_TOTAL=0
+        MEM_TASK_NAMES="none"
+        MEM_RECENT_NAMES="none"
+        if [ -d "$MEMORIES_DIR" ]; then
+            MEM_TOTAL=$(find "$MEMORIES_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d '[:space:]')
+            [ -n "$MEM_TOTAL" ] || MEM_TOTAL=0
+            if [ "$MEM_TOTAL" -gt 0 ] 2>/dev/null; then
+                if [ -n "$PREFLIGHT_TASK_ID" ]; then
+                    MEM_TASK_NAMES=$(cd "$MEMORIES_DIR" && ls -1 -- *.md 2>/dev/null | grep -F -- "$PREFLIGHT_TASK_ID" | sed 's/\.md$//' | tr '\n' ' ' | sed 's/ *$//' || true)
+                    [ -n "$MEM_TASK_NAMES" ] || MEM_TASK_NAMES="none"
+                fi
+                MEM_RECENT_NAMES=$(cd "$MEMORIES_DIR" && ls -1t -- *.md 2>/dev/null | head -20 | sed 's/\.md$//' | tr '\n' ' ' | sed 's/ *$//' || true)
+                [ -n "$MEM_RECENT_NAMES" ] || MEM_RECENT_NAMES="none"
+            fi
+        fi
+
         DYNAMIC_CONTEXT="# Pre-flight Complete (runtime-injected -- do not repeat)
 You ARE: $ROLE agent, workerId=$WORKER_ID.
-The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; use Serena (list_memories / read_memory) to pick up prior knowledge for this task/area. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
+The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; prior-knowledge memory names are preloaded in <inbox> - read the relevant ones via Serena read_memory. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
 
 DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
 
@@ -2075,7 +2117,9 @@ $PREFLIGHT_CONTEXT
 unread_general=$PREFLIGHT_GENERAL_COUNT
 unread_task=$PREFLIGHT_TASK_COUNT
 mentions=$PREFLIGHT_ROUTED_MENTIONS_COUNT (see <routed_mentions> below if > 0)
-memory=use Serena list_memories / read_memory for prior knowledge on this task/area
+memory_total=$MEM_TOTAL Serena memories (content via read_memory; names below are preloaded from disk - call list_memories only if they don't cover your area)
+memory_this_task=$MEM_TASK_NAMES
+memory_recent=$MEM_RECENT_NAMES
 </inbox>
 
 <pending_questions>
@@ -2132,13 +2176,13 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             # per-task content; system prompt stays stable for cache hits.
             case $ROLE in
                 architect)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings), then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings), then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 worker)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
                 qa)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern), and call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern), and call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
                     ;;
             esac
             if [ "$PREFLIGHT_IS_RESUME" = true ] && [ -n "$PROMPT_BODY" ]; then
@@ -2394,14 +2438,15 @@ try:
     d = json.loads(sys.stdin.read())
     for t in d.get('tasks', []):
         if t.get('id') == sys.argv[1]:
-            # NUL-separated so we don't collide with whitespace in fields.
-            sys.stdout.write((t.get('status') or '') + '\0' + str(t.get('reopenCount') or 0) + '\0')
+            # \x1f-separated so we don't collide with whitespace in fields
+            # (NOT NUL: command substitution strips NUL bytes).
+            sys.stdout.write((t.get('status') or '') + '\x1f' + str(t.get('reopenCount') or 0) + '\x1f')
             break
 except Exception:
     pass
 " "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_STATE" 2>/dev/null || echo "")
-            { IFS= read -r -d '' FINAL_STATUS
-              IFS= read -r -d '' FINAL_REOPEN_COUNT
+            { IFS= read -r -d $'\x1f' FINAL_STATUS
+              IFS= read -r -d $'\x1f' FINAL_REOPEN_COUNT
             } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
             FINAL_STATUS="${FINAL_STATUS:-}"
             FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"

@@ -1,4 +1,4 @@
-import { cp, rm, mkdir, stat, readdir } from 'fs/promises';
+import { cp, rm, mkdir, stat, readdir, readFile, writeFile, chmod } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -91,6 +91,9 @@ async function main() {
     await mkdir(distOut, { recursive: true });
     await copyDir(asset.dist, distOut);
     await copyDir(asset.deps, depsOut, { excludeBin: true });
+    // Both dists are ESM; without "type": "module" beside them only
+    // node >= 22.7 (ESM syntax auto-detection) can run the .js files.
+    await cp(path.join(path.dirname(asset.dist), 'package.json'), path.join(distOut, 'package.json'));
   }
 
   // Copy agent scripts
@@ -100,7 +103,17 @@ async function main() {
   for (const script of agentScripts) {
     const src = path.join(repoRoot, 'scripts', script);
     if (await exists(src)) {
-      await cp(src, path.join(scriptsOut, script));
+      const dest = path.join(scriptsOut, script);
+      if (script.endsWith('.sh')) {
+        // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
+        const text = await readFile(src, 'utf8');
+        await writeFile(dest, text.replace(/\r\n/g, '\n'));
+        // writeFile creates the dest with default 0644; keep the source's exec
+        // bit (moe-agent.sh's EXIT trap executes moe-call.sh directly).
+        await chmod(dest, (await stat(src)).mode);
+      } else {
+        await cp(src, dest);
+      }
     }
   }
 

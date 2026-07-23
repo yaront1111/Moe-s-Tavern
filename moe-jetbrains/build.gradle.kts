@@ -145,11 +145,26 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
         into("$pluginContentRoot/proxy/node_modules")
         exclude("**/.bin/**")
     }
+    // Ship each package.json next to its dist: both dists are ESM, and without
+    // "type": "module" beside them only node >= 22.7 (ESM syntax auto-detection)
+    // can run the .js files. A WSL distro's node 18/20 fails with "Cannot use
+    // import statement outside a module" on every proxy RPC.
+    from(repoRoot.resolve("packages/moe-daemon/package.json")) {
+        into("$pluginContentRoot/daemon")
+    }
+    from(repoRoot.resolve("packages/moe-proxy/package.json")) {
+        into("$pluginContentRoot/proxy")
+    }
     from(bundledAgentScript) {
         into("$pluginContentRoot/scripts")
     }
     from(bundledAgentScriptSh) {
         into("$pluginContentRoot/scripts")
+        // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
+        filter(
+            mapOf("eol" to org.apache.tools.ant.filters.FixCrLfFilter.CrLf.newInstance("lf")),
+            org.apache.tools.ant.filters.FixCrLfFilter::class.java,
+        )
     }
     from(bundledRoleDocs) {
         into("$pluginContentRoot/docs/roles")

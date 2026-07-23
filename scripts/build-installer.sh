@@ -95,6 +95,14 @@ PROXY_DEST="$ASSETS_DIR/moe-proxy"
 rm -rf "$PROXY_DEST"
 cp -r "$ROOT_DIR/packages/moe-proxy/dist" "$PROXY_DEST"
 
+# Both dists are ESM with bare-specifier imports: without package.json
+# ("type": "module") node < 22.7 can't even parse them, and without
+# node_modules no node version can resolve ws/chokidar/pino.
+cp "$ROOT_DIR/packages/moe-daemon/package.json" "$DAEMON_DEST/package.json"
+cp "$ROOT_DIR/packages/moe-proxy/package.json" "$PROXY_DEST/package.json"
+cp -r "$ROOT_DIR/packages/moe-daemon/node_modules" "$DAEMON_DEST/node_modules"
+cp -r "$ROOT_DIR/packages/moe-proxy/node_modules" "$PROXY_DEST/node_modules"
+
 # Add helper start script for daemon
 cat > "$DAEMON_DEST/start-daemon.sh" << 'SCRIPT'
 #!/bin/bash

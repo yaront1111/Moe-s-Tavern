@@ -53,6 +53,14 @@ if (Test-Path $proxyDest) { Remove-Item -Recurse -Force $proxyDest }
 Copy-Item "$root\packages\moe-daemon\dist" $daemonDest -Recurse
 Copy-Item "$root\packages\moe-proxy\dist" $proxyDest -Recurse
 
+# Both dists are ESM with bare-specifier imports: without package.json
+# ("type": "module") node < 22.7 can't even parse them, and without
+# node_modules no node version can resolve ws/chokidar/pino.
+Copy-Item "$root\packages\moe-daemon\package.json" $daemonDest
+Copy-Item "$root\packages\moe-proxy\package.json" $proxyDest
+Copy-Item "$root\packages\moe-daemon\node_modules" (Join-Path $daemonDest "node_modules") -Recurse -Exclude ".bin"
+Copy-Item "$root\packages\moe-proxy\node_modules" (Join-Path $proxyDest "node_modules") -Recurse -Exclude ".bin"
+
 # Add a helper start script for daemon
 $startScript = @"
 param([string]$ProjectPath)

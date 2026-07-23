@@ -1111,6 +1111,11 @@ $systemAppendPre = "Role: $Role. Always use Moe MCP tools. "
 if ($AutoClaim) {
     $systemAppendPre += "Start by claiming the next task for your role."
 }
+# Tool-name mapping, stated once in the stable (cache-friendly) prefix: role
+# docs and prompts write moe.<name> as shorthand, but the wire-level MCP tool
+# is moe_<name> on the server named "moe" — without this line every fresh
+# per-task session burns a discovery round-trip re-learning the prefix.
+$systemAppendPre += "`n`nTool naming: moe.<name> in docs/prompts is shorthand for MCP tool moe_<name> on the server named 'moe' (Claude Code exposes it as mcp__moe__moe_<name>, e.g. moe.submit_plan -> mcp__moe__moe_submit_plan). Serena tools are on the server named 'serena'. If tool schemas are deferred, batch-load every tool you need in ONE ToolSearch select call - do not guess tool names."
 if ($approvalMode) {
     $systemAppendPre += "`n`n# Project Settings`nApproval mode: $approvalMode"
 }
@@ -1444,10 +1449,32 @@ do {
         }
         $mentionsCount = if ($preflightRoutedMentions) { $preflightRoutedMentions.Count } else { 0 }
 
+        # Bounded Serena memory-name preload, read straight off disk (no Serena
+        # call). The corpus grows unbounded on long-running projects (1700+
+        # files observed), so never inline the full list: total count, names
+        # containing THIS task id (prior handoffs), and the 20 most recently
+        # updated. Names only — the agent pulls content via Serena read_memory.
+        $memoriesDir = Join-Path $serenaProject ".serena/memories"
+        $memTotal = 0
+        $memTaskNames = @()
+        $memRecentNames = @()
+        if (Test-Path $memoriesDir) {
+            $memFiles = @(Get-ChildItem -Path $memoriesDir -Filter *.md -File -ErrorAction SilentlyContinue)
+            $memTotal = $memFiles.Count
+            if ($memTotal -gt 0) {
+                if ($preflightTaskId) {
+                    $memTaskNames = @($memFiles | Where-Object { $_.BaseName -like "*$preflightTaskId*" } | ForEach-Object { $_.BaseName })
+                }
+                $memRecentNames = @($memFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 20 | ForEach-Object { $_.BaseName })
+            }
+        }
+        $memTaskLine = if ($memTaskNames.Count -gt 0) { $memTaskNames -join " " } else { "none" }
+        $memRecentLine = if ($memRecentNames.Count -gt 0) { $memRecentNames -join " " } else { "none" }
+
         $dynamicContext += @"
 # Pre-flight Complete (runtime-injected — do not repeat)
 You ARE: $Role agent, workerId=$WorkerId.
-The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; use Serena (list_memories / read_memory) to pick up prior knowledge for this task/area. Routed mentions tagging you are listed verbatim further down — those are mandatory replies before any other planned tool call.
+The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; prior-knowledge memory names are preloaded in <inbox> - read the relevant ones via Serena read_memory. Routed mentions tagging you are listed verbatim further down — those are mandatory replies before any other planned tool call.
 
 DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
 
@@ -1461,7 +1488,9 @@ $ctxJson
 unread_general=$generalCount
 unread_task=$taskCount
 mentions=$mentionsCount (see <routed_mentions> below if > 0)
-memory=use Serena list_memories / read_memory for prior knowledge on this task/area
+memory_total=$memTotal Serena memories (content via read_memory; names below are preloaded from disk - call list_memories only if they don't cover your area)
+memory_this_task=$memTaskLine
+memory_recent=$memRecentLine
 </inbox>
 
 <pending_questions>
@@ -1568,9 +1597,9 @@ $mentionsJson
     $claimPromptBody = $null
     if ($AutoClaim -and $preflightOk) {
         $claimPromptBody = switch ($Role) {
-            "architect" { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate; the wrapper will respawn you on the next PLANNING task. Do NOT call moe.wait_for_task — the wrapper handles polling between sessions." }
-            "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
-            "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge for this task/area with Serena list_memories / read_memory. Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
+            "architect" { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate; the wrapper will respawn you on the next PLANNING task. Do NOT call moe.wait_for_task — the wrapper handles polling between sessions." }
+            "worker"    { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
+            "qa"        { "Task $preflightTaskId is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session." }
         }
         if ($claimPromptBody -and $preflightIsResume) {
             # A previous CLI session died while holding this task (see the
