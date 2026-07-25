@@ -18,7 +18,7 @@ import { atomicWriteText } from './atomicWrite.js';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=da51e10b1521 -->
+  'architect.md': `<!-- moe-generated: sha=e7d9ec2dbdab -->
 
 # Architect
 
@@ -32,6 +32,12 @@ You turn a task description, rails, and Definition of Done into an ordered imple
 
 ## Plan-mode heuristics
 Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs.
+
+## Breaking down an epic
+Slicing an epic into tasks is a separate pass from planning one task's steps — load \`moe-epic-breakdown\` before \`moe.create_task\`, and \`moe-planning\` later, per task.
+
+## Verification budget
+Concentrate the gate; do not smear it. One verification step and one adversarial-review step per task, both at the end — never after each implementation step. Mid-epic tasks plan focused tests on their own slice and move; the epic's **final** task owns full regression, integration coverage, the docs sweep, and the whole-epic adversarial pass. When decomposing a big epic, create that hardening task explicitly. Exception: shared types, schema, wire protocol, or migrations get full regression at any position. Details in \`moe-planning\`.
 
 ## Conversational planning
 
@@ -53,7 +59,7 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
-  'architect.reference.md': `<!-- moe-generated: sha=4cc7254d0592 -->
+  'architect.reference.md': `<!-- moe-generated: sha=bbb60a02bce5 -->
 
 # Architect — Reference
 
@@ -75,6 +81,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 
 | Phase | Skill | When to load |
 |-------|-------|--------------|
+| Slicing an epic into tasks | \`moe-epic-breakdown\` | Before \`moe.create_task\` on an epic — a separate pass from planning one task |
 | Drafting the plan | \`moe-planning\` | After \`moe.get_context\`, every PLANNING task |
 | Naming symbols / referencing existing code | \`explore-before-assume\` | Before referencing a function, model, attribute, constant |
 | Step-level granularity inside the plan | \`writing-plans\` | Companion to \`moe-planning\` for fine-grained steps |

@@ -18,6 +18,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 
 | Phase | Skill | When to load |
 |-------|-------|--------------|
+| Slicing an epic into tasks | `moe-epic-breakdown` | Before `moe.create_task` on an epic — a separate pass from planning one task |
 | Drafting the plan | `moe-planning` | After `moe.get_context`, every PLANNING task |
 | Naming symbols / referencing existing code | `explore-before-assume` | Before referencing a function, model, attribute, constant |
 | Step-level granularity inside the plan | `writing-plans` | Companion to `moe-planning` for fine-grained steps |

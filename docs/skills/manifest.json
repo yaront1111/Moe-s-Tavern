@@ -2,8 +2,14 @@
   "version": 1,
   "skills": [
     {
+      "name": "moe-epic-breakdown",
+      "description": "Turn an epic into an ordered set of tasks before planning any of them: where to cut seams, sizing, ordering, per-task DoD, and the mandatory final integration-and-hardening task.",
+      "role": "architect",
+      "triggeredBy": ["epic with no tasks yet", "before moe.create_task", "re-slicing an epic's remaining work"]
+    },
+    {
       "name": "moe-planning",
-      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work.",
+      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
       "role": "architect",
       "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
     },
@@ -45,7 +51,7 @@
     },
     {
       "name": "regression-check",
-      "description": "Run the broader test suite (not just new tests) before complete_task. Goal: zero regressions, evidence-based summary.",
+      "description": "Run the test suite the plan named before complete_task — narrow for a mid-epic task, full for the epic's final task. Goal: zero regressions, evidence-based summary.",
       "role": "worker",
       "triggeredBy": ["before complete_task"]
     },
