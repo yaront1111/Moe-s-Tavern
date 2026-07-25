@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=205172b780eb -->
+
 # ROS 2 Skill: Pre-flight & Introspection Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:

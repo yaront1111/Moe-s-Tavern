@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=999929f66af9 -->
+
 # ROS 2 Skill: Motion Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:

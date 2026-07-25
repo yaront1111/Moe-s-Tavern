@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=c5e04cdb2823
 name: ros2-skill
 description: "Controls and monitors ROS 2 robots directly via rclpy CLI. Use for ANY ROS 2 robot task: topics (subscribe, publish, capture images, find by type), services (list, call), actions (list, send goals), parameters (get, set, presets), nodes, lifecycle management, controllers (ros2_control), Nav2 navigation (go, cancel, status, waypoints, initial-pose), diagnostics, battery, system health checks, TF frames, bags, logs, and more. When in doubt, use this skill — it covers the full ROS 2 operation surface. Never tell the user you cannot do something ROS 2-related without checking this skill first."
 version: "1.0.8"

@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=c6941a67b3e0 -->
+
 # Source
 
 Vendored from [`obra/superpowers`](https://github.com/obra/superpowers).

@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=aff1fb76a93a
 name: system-design
 description: Use when designing for scale, availability, or distribution — load balancing, caching, sharding, replication, CAP trade-offs, microservices, or any high-availability/high-throughput architecture decision.
 domain: software-design

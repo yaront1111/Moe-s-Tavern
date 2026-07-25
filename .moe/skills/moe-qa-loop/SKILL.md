@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=661b86fa27fb
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -17,12 +18,22 @@ For each task in `REVIEW`:
 2. **Read the diff.** `git diff main...HEAD` (or against the task's base). Read it adversarially — see the `adversarial-self-review` skill for the checklist.
 3. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
 4. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (`assertEquals('expected', actual)`, not `assert(actual)`)? Are edge cases covered or only the happy path?
-5. **Run the regression suite if you can.** If the worker's `complete_step` summaries don't include test counts, run the suite yourself.
+5. **Run the regression suite if you can.** If the worker's `complete_step` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
+
+## Review depth follows the task's position in its epic
+
+Plans deliberately concentrate the heavy verification at the **end of an epic**, not on every task. Review against what *this* task promised, not against the epic's finish line.
+
+- **Mid-epic task** (sibling tasks come after it — check `moe.list_tasks {epicId}` and compare `order`): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
+- **Epic-final / hardening task, or a task with no epic siblings**: this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
+- **Any task touching shared types, schema, wire protocol, or migrations**: full regression evidence regardless of position.
+
+Still reject at any position for: a DoD item with no code, tests that pass when the code does nothing, scope creep beyond the plan, an unhandled error path, or a `complete_step` claim that doesn't hold when re-run. Lean scope is not lower quality.
 
 ## Approve when
 
 - Every DoD item has clear evidence in the diff.
-- Tests cover the new behavior (happy path + at least one edge case).
+- Tests cover the new behavior (happy path + at least one edge case) at the depth the plan called for.
 - No obvious adversarial-review red flags (concurrency, null-deref, missing cleanup).
 - The diff scope matches the plan's scope. No drift, no surprise refactors.
 
@@ -31,7 +42,7 @@ Call `moe.qa_approve` with a one-line `summary` noting what you verified.
 ## Reject when
 
 - A DoD item has no corresponding code change.
-- Tests are missing or only check the happy path.
+- Tests are missing or only check the happy path (for *this* task's behavior — see the depth section above before demanding system-wide coverage from a mid-epic task).
 - The diff does something the plan didn't promise (scope creep / surprise refactor).
 - An adversarial-review red flag is present and ignored.
 - A claim made in `complete_step` (e.g., "all tests pass") doesn't hold when re-run.

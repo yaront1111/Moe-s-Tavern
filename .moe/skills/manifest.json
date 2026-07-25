@@ -1,9 +1,16 @@
 {
+  "moeGeneratedSha": "34ceccc7c8f6",
   "version": 1,
   "skills": [
     {
+      "name": "moe-epic-breakdown",
+      "description": "Turn an epic into an ordered set of tasks before planning any of them: where to cut seams, sizing, ordering, per-task DoD, and the mandatory final integration-and-hardening task.",
+      "role": "architect",
+      "triggeredBy": ["epic with no tasks yet", "before moe.create_task", "re-slicing an epic's remaining work"]
+    },
+    {
       "name": "moe-planning",
-      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work.",
+      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
       "role": "architect",
       "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
     },
@@ -18,12 +25,6 @@
       "description": "Vendored from superpowers. Multi-step plan structure with checkpoints; output format aligns with moe.submit_plan step lists.",
       "role": "architect",
       "triggeredBy": ["before moe.submit_plan"]
-    },
-    {
-      "name": "brainstorming",
-      "description": "Vendored from superpowers. Socratic questions to refine vague requirements before any plan is written.",
-      "role": "architect",
-      "triggeredBy": ["task with sparse acceptanceCriteria"]
     },
     {
       "name": "test-driven-development",
@@ -51,7 +52,7 @@
     },
     {
       "name": "regression-check",
-      "description": "Run the broader test suite (not just new tests) before complete_task. Goal: zero regressions, evidence-based summary.",
+      "description": "Run the test suite the plan named before complete_task — narrow for a mid-epic task, full for the epic's final task. Goal: zero regressions, evidence-based summary.",
       "role": "worker",
       "triggeredBy": ["before complete_task"]
     },
@@ -71,12 +72,6 @@
       "name": "using-git-worktrees",
       "description": "Vendored from superpowers. Isolated workspace per feature so parallel workers don't step on each other's .moe/ state.",
       "role": "architect|worker",
-      "triggeredBy": ["manual invoke"]
-    },
-    {
-      "name": "dispatching-parallel-agents",
-      "description": "Vendored from superpowers. Fan-out for 2+ independent tasks with no shared state or sequential dependencies.",
-      "role": "architect",
       "triggeredBy": ["manual invoke"]
     },
     {

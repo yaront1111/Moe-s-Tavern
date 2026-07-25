@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=bdf1e9749457
 name: adversarial-self-review
 description: Use before calling moe.complete_step on the final step of a task, and again before moe.complete_task. Forces you to read your own diff as an attacker, not an author. Catches concurrency bugs, null-deref, embarrassing assumptions before QA does.
 when_to_use: Worker, on the final step of a task, before complete_step or complete_task.
@@ -12,6 +13,8 @@ You wrote the code. Now read it like someone who wants to break it.
 ## The setup
 
 Run `git diff` (or `git diff main...HEAD` if you've committed). Print the diff. Read it top to bottom *not* as the author who knows what was intended, but as a hostile reviewer who assumes nothing.
+
+This runs **once per task**, at the end — not after each step. On a mid-epic task, the diff you review is your own task's. On the epic's **final** task, widen it to the whole epic's diff: that's the pass that has to catch what the individual slices couldn't see about each other.
 
 ## The checklist (run all of them, every time)
 

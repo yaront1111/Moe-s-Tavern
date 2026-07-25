@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=43b4b5978d2b -->
+
 # ROS 2 Skill: Reference Tables
 
 > **This file is part of a split rule set.** The full rule set spans five files:

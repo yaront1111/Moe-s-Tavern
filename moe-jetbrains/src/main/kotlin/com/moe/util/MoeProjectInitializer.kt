@@ -16,6 +16,13 @@ object MoeProjectInitializer {
 
     private val GENERATED_MARKER = Regex("^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*-->")
 
+    // YAML-comment form used for frontmatter docs (SKILL.md, subagent defs),
+    // where an HTML comment above the `---` delimiter would break the loader.
+    private val FRONTMATTER_MARKER = Regex("^---\\r?\\n#\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*\\r?\\n")
+
+    // JSON has no comment syntax, so manifest.json carries its marker as a key.
+    private val JSON_MARKER = Regex("\"moeGeneratedSha\"\\s*:\\s*\"([a-f0-9]{6,64})\"")
+
     fun initializeProject(path: String, projectName: String? = null) {
         val root = File(path)
         val moeDir = File(root, ".moe")
@@ -104,18 +111,58 @@ object MoeProjectInitializer {
         return "<!-- moe-generated: sha=${sha12(trimmed)} -->\n\n$trimmed"
     }
 
+    /**
+     * Stamps a markdown skill file, mirroring the daemon's
+     * generate-skill-files.ts `stampSkillFile` byte for byte. SKILL.md leads
+     * with YAML frontmatter and the loaders need `---` on line 1, so the marker
+     * goes inside the frontmatter as a YAML comment. Non-markdown assets are
+     * returned unchanged (they stay create-only — no marker to compare).
+     */
+    internal fun stampSkillFile(relName: String, rawContent: String): String {
+        // ONLY the top-level skills manifest gets the JSON marker. Never stamp by
+        // extension: a skill can vendor its own .json data files (ros2-skill ships
+        // robot profiles) and injecting a key into those corrupts real payloads.
+        if (relName == "manifest.json") return stampJsonMarker(rawContent)
+        if (!relName.endsWith(".md")) return rawContent
+        val trimmed = rawContent.replace("\r\n", "\n").trimEnd()
+        val sha = sha12(trimmed)
+        if (trimmed.startsWith("---\n")) {
+            return "---\n# moe-generated: sha=$sha\n${trimmed.substring(4)}"
+        }
+        return "<!-- moe-generated: sha=$sha -->\n\n$trimmed"
+    }
+
+    /**
+     * Mirrors generate-skill-files.ts `stampJsonMarker`: injects the marker as a
+     * top-level key textually after the opening brace. Textual injection, not
+     * parse-and-reserialize — the daemon must produce the same bytes, and no two
+     * JSON serializers agree on spacing. Unexpected shapes stay unstamped (and
+     * therefore create-only, which is the safe direction).
+     */
+    private fun stampJsonMarker(rawContent: String): String {
+        val trimmed = rawContent.replace("\r\n", "\n").trimEnd()
+        if (!trimmed.startsWith("{\n")) return trimmed
+        return "{\n  \"moeGeneratedSha\": \"${sha12(trimmed)}\",\n${trimmed.substring(2)}"
+    }
+
     private fun sha12(s: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) }.substring(0, 12)
     }
+
+    /** Marker sha in either the HTML-comment or YAML-frontmatter form, or null when unmarked. */
+    private fun markerSha(content: String): String? =
+        GENERATED_MARKER.find(content)?.groupValues?.get(1)
+            ?: FRONTMATTER_MARKER.find(content)?.groupValues?.get(1)
+            ?: JSON_MARKER.find(content)?.groupValues?.get(1)
 
     /**
      * True when both contents carry a moe-generated marker and the shas differ
      * (i.e. the bundled copy is a different vendored version than what's on disk).
      */
     internal fun shouldUpgradeGeneratedDoc(onDisk: String, stamped: String): Boolean {
-        val diskSha = GENERATED_MARKER.find(onDisk)?.groupValues?.get(1) ?: return false
-        val bundledSha = GENERATED_MARKER.find(stamped)?.groupValues?.get(1) ?: return false
+        val diskSha = markerSha(onDisk) ?: return false
+        val bundledSha = markerSha(stamped) ?: return false
         return diskSha != bundledSha
     }
 
@@ -182,13 +229,19 @@ object MoeProjectInitializer {
      * Mirrors the daemon's writeSkillFiles() — copies SKILL.md / SOURCE.md per
      * skill directory, plus manifest.json and LICENSE-VENDORED.md.
      *
+     * Markdown files and manifest.json get sha-marker upgrade semantics (create
+     * if missing, overwrite when the bundled marker differs, preserve unmarked
+     * user edits), so an edited skill actually reaches projects that were
+     * initialized before the edit. Other vendored assets stay create-only.
+     *
      * Skip-if-exists per file so user customizations survive.
      */
-    fun syncSkills(moeDir: File) {
+    @JvmOverloads
+    fun syncSkills(moeDir: File, bundledDir: File? = null) {
         val skillsDir = File(moeDir, "skills")
         if (!skillsDir.exists()) skillsDir.mkdirs()
 
-        val bundled = locateBundledDir("docs/skills")
+        val bundled = bundledDir ?: locateBundledDir("docs/skills")
         if (bundled == null) {
             // The bundled daemon's writeSkillFiles() will still scaffold .moe/skills/
             // from its embedded SKILL_FILES, so this is a soft warning, not a failure.
@@ -199,17 +252,30 @@ object MoeProjectInitializer {
         // Copy nested skill directories + their files (SKILL.md, SOURCE.md).
         for (entry in bundled.listFiles().orEmpty()) {
             if (entry.isDirectory) {
-                val targetDir = File(skillsDir, entry.name)
-                if (!targetDir.exists()) targetDir.mkdirs()
-                for (file in entry.listFiles().orEmpty()) {
-                    if (file.isFile) {
-                        val target = File(targetDir, file.name)
-                        if (!target.exists()) target.writeText(file.readText())
-                    }
-                }
-            } else if (entry.isFile && (entry.name == "manifest.json" || entry.name == "LICENSE-VENDORED.md")) {
-                val target = File(skillsDir, entry.name)
-                if (!target.exists()) target.writeText(entry.readText())
+                syncSkillDir(entry, File(skillsDir, entry.name))
+            } else if (entry.isFile && (entry.name == "LICENSE-VENDORED.md" || entry.name == "manifest.json")) {
+                writeGeneratedDoc(File(skillsDir, entry.name), stampSkillFile(entry.name, entry.readText()))
+            }
+        }
+    }
+
+    /**
+     * Recursive copy of one bundled skill directory, preserving nested assets
+     * (e.g. cpp/templates/) the way the daemon's SKILL_FILES map does.
+     */
+    private fun syncSkillDir(source: File, targetDir: File) {
+        if (!targetDir.exists()) targetDir.mkdirs()
+        for (file in source.listFiles().orEmpty()) {
+            if (file.isDirectory) {
+                syncSkillDir(file, File(targetDir, file.name))
+                continue
+            }
+            if (!file.isFile) continue
+            val target = File(targetDir, file.name)
+            if (file.name.endsWith(".md")) {
+                writeGeneratedDoc(target, stampSkillFile(file.name, file.readText()))
+            } else if (!target.exists()) {
+                target.writeText(file.readText())
             }
         }
     }

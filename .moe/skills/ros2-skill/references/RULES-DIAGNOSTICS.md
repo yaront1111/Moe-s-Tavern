@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=b8c82708ed96 -->
+
 # ROS 2 Skill: Diagnostics & Verification Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:

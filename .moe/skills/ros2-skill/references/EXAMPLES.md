@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=400d859ed5f4 -->
+
 # ROS 2 Skill — Examples
 
 Practical, copy-ready examples for every command group. All commands output JSON. Replace placeholder names (shown in `<ANGLE_BRACKETS>`) with values **resolved from the profile (Path A) or, only if the profile is absent or missing the field, discovered from the live graph (Path B)** — never hardcode topic, node, service, action, or frame names.

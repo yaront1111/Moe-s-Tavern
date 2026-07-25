@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=bf1df322eab5
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
 when_to_use: Architect during planning before naming symbols in implementationPlan; worker on first start_step before editing unfamiliar code.

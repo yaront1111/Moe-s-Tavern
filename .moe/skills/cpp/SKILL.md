@@ -1,4 +1,5 @@
 ---
+# moe-generated: sha=014ad5bd2e4f
 name: cpp
 description: Use when writing, reviewing, or debugging modern C++ (C++11 and beyond) — .cpp/.cc/.cxx/.h/.hpp files, CMake builds, smart pointers, RAII, move semantics, templates, STL, or concurrency.
 domain: programming-languages

@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=37edc81e802c -->
+
 # ROS 2 Skill — CLI Reference
 
 > **Note:** The CLI is intended for debugging and development only. Normal usage is through the chat interface or messaging gateway of your AI agent platform (e.g. nanobot, OpenClaw) — not by running `ros2_cli.py` directly.

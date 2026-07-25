@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=2dbea33088b9 -->
+
 # ROS 2 Skill: Core Agent Behaviour Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:

@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=98198ba38a54 -->
+
 # C++ Templates
 
 CMake build configuration templates for modern C++ projects.

@@ -89,6 +89,125 @@ class MoeProjectInitializerTest {
         assertEquals(tampered, target.readText())
     }
 
+    // Skill files lead with YAML frontmatter, so the marker has to live INSIDE
+    // the frontmatter — an HTML comment above `---` breaks the skill loader.
+    // Format is pinned to the daemon's generate-skill-files.ts stampSkillFile:
+    // both writers stamp the same bytes or they ping-pong overwrites.
+    @Test
+    fun `stampSkillFile puts the marker inside YAML frontmatter`() {
+        val raw = "---\nname: moe-planning\n---\n\nBody text.\n"
+        val stamped = MoeProjectInitializer.stampSkillFile("SKILL.md", raw)
+        val sha = Regex("^---\\n# moe-generated: sha=([a-f0-9]{12})\\n").find(stamped)?.groupValues?.get(1)
+        assertTrue("marker must be line 2, inside the frontmatter: $stamped", sha != null)
+        // The marker is injected into the existing frontmatter, not stacked on top
+        // of a second opener — two `---` total (open + close), same as the source.
+        assertEquals("---\n# moe-generated: sha=$sha\nname: moe-planning\n---\n\nBody text.", stamped)
+    }
+
+    @Test
+    fun `stampSkillFile uses the HTML marker for non-frontmatter markdown`() {
+        val stamped = MoeProjectInitializer.stampSkillFile("SOURCE.md", "hello")
+        assertEquals("<!-- moe-generated: sha=2cf24dba5fb0 -->\n\nhello", stamped)
+    }
+
+    @Test
+    fun `stampSkillFile leaves non-markdown assets untouched`() {
+        val raw = "cmake_minimum_required(VERSION 3.20)\n"
+        assertEquals(raw, MoeProjectInitializer.stampSkillFile("CMakeLists.txt", raw))
+    }
+
+    @Test
+    fun `shouldUpgradeGeneratedDoc reads the frontmatter marker form too`() {
+        val bundled = MoeProjectInitializer.stampSkillFile("SKILL.md", "---\nname: x\n---\n\nnew")
+        val staleOnDisk = "---\n# moe-generated: sha=000000000000\nname: x\n---\n\nold"
+        val unmarkedOnDisk = "---\nname: x\n---\n\nmy own edit"
+
+        assertTrue(MoeProjectInitializer.shouldUpgradeGeneratedDoc(staleOnDisk, bundled))
+        assertFalse(MoeProjectInitializer.shouldUpgradeGeneratedDoc(unmarkedOnDisk, bundled))
+        assertFalse(MoeProjectInitializer.shouldUpgradeGeneratedDoc(bundled, bundled))
+    }
+
+    @Test
+    fun `syncSkills upgrades a stale skill and preserves a customized one`() {
+        val moeDir = File(tempDir(), ".moe").apply { mkdirs() }
+        val bundledSkills = File(tempDir(), "docs/skills").apply { mkdirs() }
+        File(bundledSkills, "moe-planning").mkdirs()
+        File(bundledSkills, "moe-planning/SKILL.md").writeText("---\nname: moe-planning\n---\n\nNEW BODY")
+        File(bundledSkills, "custom-skill").mkdirs()
+        File(bundledSkills, "custom-skill/SKILL.md").writeText("---\nname: custom-skill\n---\n\nBUNDLED")
+
+        // Pre-seed: one stale Moe-generated skill, one the user has edited.
+        File(moeDir, "skills/moe-planning").mkdirs()
+        File(moeDir, "skills/moe-planning/SKILL.md")
+            .writeText("---\n# moe-generated: sha=000000000000\nname: moe-planning\n---\n\nOLD BODY")
+        File(moeDir, "skills/custom-skill").mkdirs()
+        val userEdited = "---\nname: custom-skill\n---\n\nMY OWN NOTES"
+        File(moeDir, "skills/custom-skill/SKILL.md").writeText(userEdited)
+
+        MoeProjectInitializer.syncSkills(moeDir, bundledSkills)
+
+        assertTrue(File(moeDir, "skills/moe-planning/SKILL.md").readText().contains("NEW BODY"))
+        assertEquals(userEdited, File(moeDir, "skills/custom-skill/SKILL.md").readText())
+    }
+
+    @Test
+    fun `stampSkillFile injects a JSON marker key for manifest json`() {
+        val raw = "{\n  \"version\": 1,\n  \"skills\": []\n}\n"
+        val stamped = MoeProjectInitializer.stampSkillFile("manifest.json", raw)
+        val sha = Regex("\"moeGeneratedSha\": \"([a-f0-9]{12})\"").find(stamped)?.groupValues?.get(1)
+        assertTrue("expected a marker key: $stamped", sha != null)
+        assertEquals(
+            "{\n  \"moeGeneratedSha\": \"$sha\",\n  \"version\": 1,\n  \"skills\": []\n}",
+            stamped
+        )
+    }
+
+    // Regression: stamping JSON by extension would inject "moeGeneratedSha" into
+    // a skill's vendored data payload (ros2-skill ships robot profiles). Only the
+    // top-level skills manifest may carry the marker.
+    @Test
+    fun `stampSkillFile leaves skill-vendored json data untouched`() {
+        val profile = "{\n  \"schema_version\": 1,\n  \"robot_name\": \"lekiwi\"\n}\n"
+        assertEquals(profile, MoeProjectInitializer.stampSkillFile("lekiwi_profile.json", profile))
+    }
+
+    @Test
+    fun `syncSkills upgrades a stale manifest and preserves an unmarked one`() {
+        val bundledSkills = File(tempDir(), "docs/skills").apply { mkdirs() }
+        File(bundledSkills, "manifest.json").writeText("{\n  \"version\": 2,\n  \"skills\": []\n}")
+
+        val staleDir = File(tempDir(), ".moe").apply { mkdirs() }
+        File(staleDir, "skills").mkdirs()
+        File(staleDir, "skills/manifest.json")
+            .writeText("{\n  \"moeGeneratedSha\": \"000000000000\",\n  \"version\": 1,\n  \"skills\": []\n}")
+        MoeProjectInitializer.syncSkills(staleDir, bundledSkills)
+        assertTrue(File(staleDir, "skills/manifest.json").readText().contains("\"version\": 2"))
+
+        val customDir = File(tempDir(), ".moe").apply { mkdirs() }
+        File(customDir, "skills").mkdirs()
+        val custom = "{\n  \"version\": 1,\n  \"skills\": []\n}"
+        File(customDir, "skills/manifest.json").writeText(custom)
+        MoeProjectInitializer.syncSkills(customDir, bundledSkills)
+        assertEquals(custom, File(customDir, "skills/manifest.json").readText())
+    }
+
+    @Test
+    fun `syncSkills copies nested skill assets`() {
+        val moeDir = File(tempDir(), ".moe").apply { mkdirs() }
+        val bundledSkills = File(tempDir(), "docs/skills").apply { mkdirs() }
+        File(bundledSkills, "cpp/templates").mkdirs()
+        File(bundledSkills, "cpp/SKILL.md").writeText("---\nname: cpp\n---\n\nBody")
+        File(bundledSkills, "cpp/templates/CMakeLists.txt").writeText("cmake_minimum_required(VERSION 3.20)")
+
+        MoeProjectInitializer.syncSkills(moeDir, bundledSkills)
+
+        assertTrue(File(moeDir, "skills/cpp/SKILL.md").exists())
+        assertEquals(
+            "cmake_minimum_required(VERSION 3.20)",
+            File(moeDir, "skills/cpp/templates/CMakeLists.txt").readText()
+        )
+    }
+
     @Test
     fun `initializeProject does not clobber an existing project json`() {
         val root = tempDir()

@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=d6e059116bbb -->
+
 # Command Reference
 
 Full reference for all `ros2_cli.py` commands with arguments, options, ROS 2 CLI equivalents, and output examples.

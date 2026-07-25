@@ -14,6 +14,7 @@ import { atomicWriteText } from './atomicWrite.js';
  */
 export const SKILL_FILES: Record<string, string> = {
   'adversarial-self-review/SKILL.md': `---
+# moe-generated: sha=bdf1e9749457
 name: adversarial-self-review
 description: Use before calling moe.complete_step on the final step of a task, and again before moe.complete_task. Forces you to read your own diff as an attacker, not an author. Catches concurrency bugs, null-deref, embarrassing assumptions before QA does.
 when_to_use: Worker, on the final step of a task, before complete_step or complete_task.
@@ -27,6 +28,8 @@ You wrote the code. Now read it like someone who wants to break it.
 ## The setup
 
 Run \`git diff\` (or \`git diff main...HEAD\` if you've committed). Print the diff. Read it top to bottom *not* as the author who knows what was intended, but as a hostile reviewer who assumes nothing.
+
+This runs **once per task**, at the end — not after each step. On a mid-epic task, the diff you review is your own task's. On the epic's **final** task, widen it to the whole epic's diff: that's the pass that has to catch what the individual slices couldn't see about each other.
 
 ## The checklist (run all of them, every time)
 
@@ -76,6 +79,7 @@ Tests verify behavior you thought to write. Adversarial review catches behavior 
 
 Doc-only changes, single-line config tweaks, trivial typo fixes. For anything touching logic, IO, or state — run the full checklist. It takes three minutes and prevents the kind of bug that costs three days.`,
   'cpp/SKILL.md': `---
+# moe-generated: sha=014ad5bd2e4f
 name: cpp
 description: Use when writing, reviewing, or debugging modern C++ (C++11 and beyond) — .cpp/.cc/.cxx/.h/.hpp files, CMake builds, smart pointers, RAII, move semantics, templates, STL, or concurrency.
 domain: programming-languages
@@ -941,7 +945,9 @@ install(TARGETS \${PROJECT_NAME}_lib
 install(DIRECTORY include/
     DESTINATION \${CMAKE_INSTALL_INCLUDEDIR}
 )`,
-  'cpp/templates/README.md': `# C++ Templates
+  'cpp/templates/README.md': `<!-- moe-generated: sha=98198ba38a54 -->
+
+# C++ Templates
 
 CMake build configuration templates for modern C++ projects.
 
@@ -1084,6 +1090,7 @@ The template enables \`compile_commands.json\` export for IDE support:
 ln -s build/compile_commands.json .
 \`\`\``,
   'explore-before-assume/SKILL.md': `---
+# moe-generated: sha=bf1df322eab5
 name: explore-before-assume
 description: Use before referencing any function, model, method, relationship, constant, or import in a plan or implementation. Verifies things actually exist in the codebase before building on top of them. Eliminates an entire class of hallucinated-API bugs.
 when_to_use: Architect during planning before naming symbols in implementationPlan; worker on first start_step before editing unfamiliar code.
@@ -1135,9 +1142,95 @@ If you're an architect: bake the verified symbol names into the step \`descripti
 ## When to skip
 
 Trivial doc edits, comment changes, formatting-only steps. If you're not naming a symbol, you don't need to verify one.`,
+  'moe-epic-breakdown/SKILL.md': `---
+# moe-generated: sha=d8741ba0b7be
+name: moe-epic-breakdown
+description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
+when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
+allowed-tools: Read, Grep, Glob, WebFetch
+---
+
+# Moe Epic Breakdown
+
+Your job: turn one epic into an ordered set of tasks a fleet can execute mostly in parallel, without stepping on each other and without any single task being unreviewable.
+
+This is the layer **above** \`moe-planning\`. Breakdown decides *what the tasks are*; \`moe-planning\` decides *what the steps inside one task are*. Don't do both in one pass — you'll produce tasks shaped like steps.
+
+## Before you cut anything
+
+1. Read \`epic.description\`, \`epic.architectureNotes\`, and \`epicRails\`. The rails constrain the seams: a rail like "all auth endpoints under /api/auth/" is telling you where a boundary already exists.
+2. \`moe.list_tasks {epicId}\` — the epic may already be partly sliced. Never duplicate an existing task; extend or re-order instead.
+3. Explore the actual code before naming a seam (\`explore-before-assume\`). A breakdown built on a module that doesn't exist produces N tasks that all get reopened.
+
+## Where to cut
+
+Cut on **seams that already exist in the code**, in this order of preference:
+
+1. **Module / package boundary** — daemon vs proxy vs plugin. Best seam: independent test suites, independent review.
+2. **Layer boundary within a module** — schema/state → tool → wire → UI. Natural dependency order falls out for free.
+3. **Contract boundary** — one task defines and lands the type/tool/endpoint, later tasks consume it. The producer goes first and its DoD includes the contract being *usable*, not just *declared*.
+4. **Vertical slice of behavior** — one complete user-visible capability end to end. Use when the layers are too entangled to cut horizontally; costs parallelism, buys shippability.
+
+Anti-seams — do **not** cut here:
+
+- **By phase of work.** "Write tests" / "write code" / "write docs" as separate tasks is a step list wearing a task costume. Each task owns its own tests.
+- **By file.** Files move. A task scoped to a file becomes a merge conflict with a plan attached.
+- **By agent convenience.** Splitting so three workers are busy, when the second and third can't start until the first lands, just adds handoff cost.
+
+## Sizing
+
+Target: a task a competent worker finishes in **one session**, producing a diff a reviewer can hold in their head.
+
+| Signal | Action |
+|---|---|
+| DoD has more than ~6 items | Split it |
+| Touches 3+ packages | Split on the package seam, unless it's a single mechanical rename |
+| The title needs the word "and" | Usually two tasks — check whether the halves can land independently |
+| It can't be described without describing another unfinished task | Merge them, or make the dependency explicit via \`order\` |
+| Under ~30 minutes of real work | Merge it into its neighbour; per-task overhead (claim, plan, review) exceeds the work |
+
+## Ordering and dependencies
+
+\`order\` is the only dependency signal the runtime has — there is no dependency graph in the schema. So:
+
+- Producers before consumers. If task B imports what task A creates, A gets the lower \`order\`.
+- State the dependency in plain text in B's \`description\` ("depends on the \`SkillMarker\` type from task-…"), because nothing enforces it. A worker who claims B early needs to be able to see that.
+- Prefer orderings where the first 2–3 tasks are genuinely independent — that's what lets a fleet parallelize at all.
+- Tasks land in \`BACKLOG\` and are human-gated into \`PLANNING\`; ordering is advice to the human and to the governor, not a lock.
+
+## What every task must carry
+
+- **\`definitionOfDone\`**: verifiable claims, not intentions. "moe.list_tasks returns tasks filtered by epicId" — not "epic filtering works."
+- **Its own tests.** Every task tests its own behavior. This is not deferred to the final task.
+- **\`taskRails\`** only where this task needs a constraint the epic rails don't already impose.
+- **Enough \`description\`** that a worker who has read neither the epic nor the sibling tasks can start.
+
+## End the epic with an integration-and-hardening task
+
+Always create one, at the highest \`order\`, unless the epic is 1–2 tasks total. It exists because verification is concentrated, not smeared — see \`moe-planning\`'s "Where the gate goes". Mid-epic tasks prove their own slice with focused tests and move on; this task is where the epic actually gets gated.
+
+Its DoD covers what no individual slice could see:
+
+- Full regression across every package the epic touched, green, with numbers.
+- Integration / end-to-end coverage of the epic's whole flow — the first point at which that flow exists to be tested.
+- The docs sweep for the epic (held back from the individual tasks so the same file isn't re-edited five times).
+- An adversarial pass over the **whole epic diff**, looking for what the slices got wrong about each other: contracts drifted between producer and consumer, duplicated helpers, a migration that works alone but not in sequence, error paths that only fail in combination.
+- Any deferred cleanup the mid-epic tasks explicitly parked.
+
+If the epic touched shared types, schema, wire protocol, or migrations, say so in this task's description — those get full regression at *every* position, and this task confirms the whole set still composes.
+
+## When not to break down
+
+- The epic is one coherent change (a single bug, one config surface). Make it one task and go.
+- Requirements are ambiguous enough that the seams are guesses — \`moe.report_blocked\`, or ask the human in the REPL. A wrong breakdown is more expensive than a late one: every task inherits the bad seam.
+
+## Handoff
+
+Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
+# moe-generated: sha=1b7e2b94e005
 name: moe-planning
-description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop) with rules for when to skip phases on trivial tasks.
+description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
 allowed-tools: Read, Grep, Glob, WebFetch
 ---
@@ -1145,6 +1238,27 @@ allowed-tools: Read, Grep, Glob, WebFetch
 # Moe Planning — 8-Phase Plan Template
 
 Your job: turn the task in front of you into an implementation plan that a worker can execute without guessing. Use the 8 phases below as the **default skeleton** for the steps you submit via \`moe.submit_plan\`. Skip phases that genuinely don't apply — but skip *consciously*, not by accident.
+
+## Where the gate goes — read this before drafting steps
+
+Verification is a real cost. Paying it on every step of every task is how a 12-task epic turns into work that is 80% ceremony. Concentrate it instead:
+
+- **Inside a task: the gate is at the end, not on every step.** A step is *implement the thing + write the tests for the thing it changed*. There is exactly **one** adversarial self-review step, and it is the last one. The regression run happens **once**, before \`moe.complete_task\`. Never emit a "verify" / "review" / "run the suite" step after each implementation step.
+- **Inside an epic: the gate is on the last task, not on every task.** Mid-epic tasks build their slice, prove that slice with focused tests, and hand off. The epic's **final** task is where the full-system check lives: full suite, cross-package integration, docs sweep, adversarial pass over the whole epic diff.
+
+So when you decompose a big epic, **end it with an explicit integration-and-hardening task** (\`moe.create_task\` with the highest \`order\`). That task owns the epic's end-to-end verification, its documentation, and its "would I be embarrassed if this shipped" pass. Everything before it stays lean and moves. Decomposing an epic is its own pass with its own skill — \`moe-epic-breakdown\`; this skill starts once the tasks exist and you're planning one of them.
+
+"Lean" does **not** mean sloppy. Mid-epic tasks still write real tests for their own behavior, still handle errors, still get reviewed by QA. Lean means their tests are scoped to what *they* changed and their verification command is the targeted suite, not the whole system.
+
+### Verification depth by epic position
+
+| Task position | Tests to plan | Verification step to plan |
+|---|---|---|
+| Mid-epic (any task that isn't the last) | Focused unit tests for the behavior this task changes | The one package's suite, or the single test file — name it, keep it narrow |
+| Epic-final, or a standalone task with no epic siblings | The above, plus integration / end-to-end covering the epic's whole flow | Full regression across every affected package + adversarial review of the epic diff |
+| Any position, if the task touches shared types, schema, wire protocol, or migrations | Whatever the change needs | Full regression regardless of position — these break things outside the task's blast radius |
+
+If you can't tell where the task sits, \`moe.list_tasks {epicId}\` and compare \`order\` against the siblings. No epic siblings → treat it as epic-final.
 
 ## The 8 phases
 
@@ -1157,17 +1271,19 @@ Don't reference a function, model, method, relationship, or constant you haven't
 ### Phase 3 — Plan tests first
 For every behavior change, name the test that proves it. Use mutation-resistant assertions: \`assertEquals('completed', $r->status)\` not \`assert($r)\`. Tests that pass when code does nothing are worse than no tests. If the skill \`test-driven-development\` is available, reference it for the worker.
 
+Scope the tests to *this* task's behavior. Don't plan end-to-end or full-system tests on a mid-epic task — those belong to the epic's final task, where the whole flow actually exists to be tested.
+
 ### Phase 4 — Plan the minimum implementation
 Each step does one thing. No clever abstractions. No "while we're here." Scope creep is a bug that looks like progress.
 
-### Phase 5 — Plan the regression check
-Name the broader test suite the worker will run before \`moe.complete_task\`. If unit tests aren't enough (e.g., integration / smoke), say so explicitly.
+### Phase 5 — Plan the regression check, sized to position
+Name the suite the worker runs **once**, before \`moe.complete_task\` — and size it per the table above. Mid-epic: the narrow suite covering this task's slice. Epic-final, standalone, or shared-surface change: the broader suite, named explicitly (which packages, which command). One verification step per task, never one per implementation step.
 
 ### Phase 6 — Plan the documentation
-Inline comments only where the *why* is non-obvious. Changelog entry if user-visible. Update \`docs/\` if any contract changes.
+Inline comments only where the *why* is non-obvious. Changelog entry if user-visible. Update \`docs/\` if any contract changes. On a big epic, hold the docs sweep for the final task rather than re-editing the same doc from every task in the epic — unless this task alone changes a contract someone else is about to build against.
 
-### Phase 7 — Plan the adversarial review
-Every plan should end with one explicit "self-review" step that runs the checklist:
+### Phase 7 — Plan the adversarial review — one, at the end
+Every plan ends with **exactly one** explicit "self-review" step, and it is the final step of the task. Not one per implementation step. On a mid-epic task it is scoped to this task's own diff; on the epic's final task it sweeps the whole epic diff. The checklist:
 - What if this runs twice concurrently?
 - What if input is null / empty / negative / huge?
 - What assumptions am I making that could be wrong?
@@ -1178,7 +1294,7 @@ The worker's job ends at \`moe.complete_task\`. The QA agent reviews and may cal
 
 ## How phases map to plan steps
 
-One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. Always:
+One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set \`affectedFiles\` tight per step.
 - Map every Definition-of-Done item to at least one step.
@@ -1192,7 +1308,9 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 |-----------|------------------|
 | Doc-only / typo / config tweak | Phases 1, 4, 6 |
 | Bug fix, narrow scope, has repro | Phases 1, 3, 4, 5, 7 |
-| New feature, single subsystem | Phases 1, 2, 3, 4, 5, 6, 7 |
+| Mid-epic slice of a larger epic | Phases 1, 2, 3, 4, plus a **narrow** 5 — the epic's final task carries full-scope 5, 6, and 7 |
+| New feature, single subsystem (no epic siblings) | Phases 1, 2, 3, 4, 5, 6, 7 |
+| Epic-final integration / hardening task | All 8, with 5 and 7 at full-system scope across the epic diff |
 | Cross-cutting refactor / migration | All 8 phases, multiple steps in 4 |
 | Reopened (\`reopenCount > 0\`) | All 8, plus a Phase 0 "address rejectionDetails" step |
 
@@ -1209,6 +1327,7 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
+# moe-generated: sha=661b86fa27fb
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -1227,12 +1346,22 @@ For each task in \`REVIEW\`:
 2. **Read the diff.** \`git diff main...HEAD\` (or against the task's base). Read it adversarially — see the \`adversarial-self-review\` skill for the checklist.
 3. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
 4. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (\`assertEquals('expected', actual)\`, not \`assert(actual)\`)? Are edge cases covered or only the happy path?
-5. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself.
+5. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
+
+## Review depth follows the task's position in its epic
+
+Plans deliberately concentrate the heavy verification at the **end of an epic**, not on every task. Review against what *this* task promised, not against the epic's finish line.
+
+- **Mid-epic task** (sibling tasks come after it — check \`moe.list_tasks {epicId}\` and compare \`order\`): the bar is "this slice works and is proven by focused tests." Do **not** reject it for lacking end-to-end coverage, full-suite output, or docs the plan assigned to a later task. That work isn't missing; it's scheduled.
+- **Epic-final / hardening task, or a task with no epic siblings**: this is the real gate. Full regression evidence, integration coverage of the epic's whole flow, docs, and a clean adversarial pass are all in scope — and their absence *is* a reject.
+- **Any task touching shared types, schema, wire protocol, or migrations**: full regression evidence regardless of position.
+
+Still reject at any position for: a DoD item with no code, tests that pass when the code does nothing, scope creep beyond the plan, an unhandled error path, or a \`complete_step\` claim that doesn't hold when re-run. Lean scope is not lower quality.
 
 ## Approve when
 
 - Every DoD item has clear evidence in the diff.
-- Tests cover the new behavior (happy path + at least one edge case).
+- Tests cover the new behavior (happy path + at least one edge case) at the depth the plan called for.
 - No obvious adversarial-review red flags (concurrency, null-deref, missing cleanup).
 - The diff scope matches the plan's scope. No drift, no surprise refactors.
 
@@ -1241,7 +1370,7 @@ Call \`moe.qa_approve\` with a one-line \`summary\` noting what you verified.
 ## Reject when
 
 - A DoD item has no corresponding code change.
-- Tests are missing or only check the happy path.
+- Tests are missing or only check the happy path (for *this* task's behavior — see the depth section above before demanding system-wide coverage from a mid-epic task).
 - The diff does something the plan didn't promise (scope creep / surprise refactor).
 - An adversarial-review red flag is present and ignored.
 - A claim made in \`complete_step\` (e.g., "all tests pass") doesn't hold when re-run.
@@ -1274,6 +1403,7 @@ If the diff is large or touches an unfamiliar subsystem, before deciding:
 
 If after that you still can't tell — \`moe.add_comment\` on the task asking the worker a specific clarifying question. Don't reject for ambiguity; reject for defect.`,
   'receiving-code-review/SKILL.md': `---
+# moe-generated: sha=bf686851e3e5
 name: receiving-code-review
 description: Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation
 ---
@@ -1358,7 +1488,9 @@ When you receive a QA rejection:
 5. **After fixes, run regression-check** and put actual results in your \`moe.complete_task\` summary.
 
 Never include performative gratitude in \`moe.add_comment\`. State what you changed.`,
-  'receiving-code-review/SOURCE.md': `# Source
+  'receiving-code-review/SOURCE.md': `<!-- moe-generated: sha=203d69c9deac -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -1373,15 +1505,26 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed the GitHub Thread Replies section (Moe's review channel is \`moe.add_comment\`, not GitHub PR threads — captured in the integration footer).
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`regression-check\` follow-up.`,
   'regression-check/SKILL.md': `---
+# moe-generated: sha=bd6cbf72fd97
 name: regression-check
-description: Use before moe.complete_task. Runs the broader test suite (not just the tests you added) to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
+description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
 allowed-tools: Bash, Read
 ---
 
 # Regression Check
 
-Before \`moe.complete_task\`, run the broader suite. The goal is zero regressions. Finding out now is cheap; finding out from a \`qa_reject\` is expensive.
+Before \`moe.complete_task\` — **once, not after every step** — run the suite the plan named. The goal is zero regressions. Finding out now is cheap; finding out from a \`qa_reject\` is expensive.
+
+## How wide, though?
+
+The plan sizes this deliberately; don't silently upgrade it.
+
+- **Mid-epic task** (there are sibling tasks after this one in the epic): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
+- **Epic-final task, or a task with no epic siblings**: run the full thing. Every affected package, plus whatever integration/smoke the plan named.
+- **Any task that touched shared types, schema, wire protocol, or a migration**: full suite regardless of position. These break code outside your blast radius, and the epic's final task is too late to find out.
+
+Unsure of your position? \`moe.list_tasks {epicId}\` and compare \`order\`. No siblings after you → treat it as epic-final.
 
 ## What to run
 
@@ -1405,9 +1548,9 @@ If a project has a \`test:all\` or \`npm run check\` script, prefer that — it 
 - **Failures in tests you did touch?** Either the test is wrong or the code is wrong. Fix one.
 - **Flake?** Run it again. If it's still red on the second run, it's not flake, it's a bug.
 
-## What "broader" means
+## What "broader" means — when you're in the full-scope case
 
-It's tempting to run only the tests in the package you edited. Don't. Cross-package dependencies are exactly where regressions hide. Specifically:
+Once you're in the full-scope case above, it's tempting to still run only the tests in the package you edited. Don't. Cross-package dependencies are exactly where regressions hide. Specifically:
 
 - Type changes in \`schema.ts\` ripple through every tool and the plugin.
 - Migrations affect \`load()\` for every existing \`.moe/\`.
@@ -1418,7 +1561,7 @@ It's tempting to run only the tests in the package you edited. Don't. Cross-pack
 - Doc-only changes (formatter / spell-check is enough).
 - Pure addition of a new file that nothing imports yet.
 
-For everything else, run it. The 90 seconds you save by skipping is the 4 hours you spend on a \`qa_reject\` round trip.
+For everything else, run *something* — narrow or full per the sizing above. Skipping entirely is what turns 90 saved seconds into a 4-hour \`qa_reject\` round trip.
 
 ## What to put in the complete_step / complete_task summary
 
@@ -2201,7 +2344,9 @@ Be specific. Not "tests pass" — "342 / 342 tests pass; ran \`npm test\` in moe
     }
   }
 }`,
-  'ros2-skill/AGENTS.md': `# ros2-skill Agent Instructions
+  'ros2-skill/AGENTS.md': `<!-- moe-generated: sha=5ffb49412532 -->
+
+# ros2-skill Agent Instructions
 
 You are a ROS 2 agent running on a ROS 2 robot. Your primary purpose is to interact with and operate the robot using ROS 2 tools. You are not a general-purpose assistant — you are an embedded robotics agent. Be concise, accurate, and technical.
 
@@ -2921,7 +3066,9 @@ The skill uses progressive disclosure — start here, go deeper only if needed:
 | \`references/EXAMPLES.md\` | Practical walkthroughs (move N metres, capture image, etc.) |
 | \`SKILL.md\` | Skill overview and capability summary |
 | \`CHANGELOG.md\` | Version history with new features and fixes |`,
-  'ros2-skill/CHANGELOG.md': `# Changelog
+  'ros2-skill/CHANGELOG.md': `<!-- moe-generated: sha=15eafb154a3d -->
+
+# Changelog
 
 All notable changes to ros2-skill will be documented in this file.
 
@@ -3496,7 +3643,9 @@ For the original ros-skill (ROS 1 + ROS 2 via rosbridge), see: [ros-skill](https
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.`,
-  'ros2-skill/README.md': `# ROS 2 Skill
+  'ros2-skill/README.md': `<!-- moe-generated: sha=7cfa1c6bf95e -->
+
+# ROS 2 Skill
 
 ![Status](https://img.shields.io/badge/Status-Active-green) [![Repo](https://img.shields.io/badge/Repo-adityakamath%2Fros2--skill-purple?style=flat&logo=github&logoSize=auto)](https://github.com/adityakamath/ros2-skill) [![Blog](https://img.shields.io/badge/Blog-kamathrobotics.com-darkorange?style=flat&logo=hashnode&logoSize=auto)](https://kamathrobotics.com) [![Ask DeepWiki (Experimental)](https://deepwiki.com/badge.svg)](https://deepwiki.com/adityakamath/ros2-skill) ![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat&logo=python&logoColor=white) ![Static Badge](https://img.shields.io/badge/License-Apache%202.0-blue)
 
@@ -3643,7 +3792,9 @@ Current version: **v1.0.5**. See [CHANGELOG.md](CHANGELOG.md) for the full histo
 ---
 
 Adapted from [ros-skill](https://github.com/lpigeon/ros-skill) by [@lpigeon](https://github.com/lpigeon).`,
-  'ros2-skill/references/CLI.md': `# ROS 2 Skill — CLI Reference
+  'ros2-skill/references/CLI.md': `<!-- moe-generated: sha=37edc81e802c -->
+
+# ROS 2 Skill — CLI Reference
 
 > **Note:** The CLI is intended for debugging and development only. Normal usage is through the chat interface or messaging gateway of your AI agent platform (e.g. nanobot, OpenClaw) — not by running \`ros2_cli.py\` directly.
 
@@ -3733,7 +3884,9 @@ python3 scripts/ros2_cli.py --timeout 30 --retries 3 lifecycle get /camera_drive
 \`\`\`
 
 See [\`EXAMPLES.md\`](EXAMPLES.md) for practical usage examples including image capture and Discord integration.`,
-  'ros2-skill/references/COMMANDS.md': `# Command Reference
+  'ros2-skill/references/COMMANDS.md': `<!-- moe-generated: sha=d6e059116bbb -->
+
+# Command Reference
 
 Full reference for all \`ros2_cli.py\` commands with arguments, options, ROS 2 CLI equivalents, and output examples.
 
@@ -8454,7 +8607,9 @@ Maps user intent phrases to the correct ros2-skill command sequence. When a phra
 **Note:** \`ROS_DOMAIN_ID\` defaults to \`0\` and is user-configurable. If the graph looks unexpectedly large (too many unrecognised nodes), a domain collision with another system is likely — check with \`echo $ROS_DOMAIN_ID\` and verify the expected value with the user.
 
 **Setting \`ROS_DOMAIN_ID\` — important limitation:** \`export ROS_DOMAIN_ID=X\` in a subprocess does not propagate to the parent shell. The agent cannot persistently change this value for future \`ros2_cli.py\` calls — each call inherits the environment it was launched with. To apply a different domain ID for a single command, prefix it: \`ROS_DOMAIN_ID=42 python3 {baseDir}/scripts/ros2_cli.py topics list\`. For a persistent change, the user must set the variable in their shell before launching the agent.`,
-  'ros2-skill/references/EXAMPLES.md': `# ROS 2 Skill — Examples
+  'ros2-skill/references/EXAMPLES.md': `<!-- moe-generated: sha=400d859ed5f4 -->
+
+# ROS 2 Skill — Examples
 
 Practical, copy-ready examples for every command group. All commands output JSON. Replace placeholder names (shown in \`<ANGLE_BRACKETS>\`) with values **resolved from the profile (Path A) or, only if the profile is absent or missing the field, discovered from the live graph (Path B)** — never hardcode topic, node, service, action, or frame names.
 
@@ -9157,7 +9312,9 @@ python3 scripts/ros2_cli.py --retries 3 lifecycle get <NODE_NAME>
 # Combine: 10 s per attempt, 3 total attempts
 python3 scripts/ros2_cli.py --timeout 10 --retries 3 services call <SERVICE_NAME> '{}'
 \`\`\``,
-  'ros2-skill/references/RULES-CORE.md': `# ROS 2 Skill: Core Agent Behaviour Rules
+  'ros2-skill/references/RULES-CORE.md': `<!-- moe-generated: sha=2dbea33088b9 -->
+
+# ROS 2 Skill: Core Agent Behaviour Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:
 > - **RULES-CORE.md** ← you are here — general agent conduct, applies to every command
@@ -9581,7 +9738,9 @@ Agent does (for movement):
      Distance/angle specified + no odom → publish-sequence, notify user (open loop)
      No distance/angle → publish-sequence with stop
 \`\`\``,
-  'ros2-skill/references/RULES-DIAGNOSTICS.md': `# ROS 2 Skill: Diagnostics & Verification Rules
+  'ros2-skill/references/RULES-DIAGNOSTICS.md': `<!-- moe-generated: sha=b8c82708ed96 -->
+
+# ROS 2 Skill: Diagnostics & Verification Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:
 > - [RULES-CORE.md](RULES-CORE.md) — general agent conduct, applies to every command
@@ -9759,7 +9918,9 @@ Any error related to a tmux session or component container follows this recovery
 |-------|----------|
 | Service not found | 1. Verify service exists: \`services list\`<br>2. Check service type: \`services type <service>\` |
 | Action goal rejected | 1. Check action details for goal requirements<br>2. Verify robot is in correct state |`,
-  'ros2-skill/references/RULES-MOTION.md': `# ROS 2 Skill: Motion Rules
+  'ros2-skill/references/RULES-MOTION.md': `<!-- moe-generated: sha=999929f66af9 -->
+
+# ROS 2 Skill: Motion Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:
 > - [RULES-CORE.md](RULES-CORE.md) — general agent conduct, applies to every command
@@ -10328,7 +10489,9 @@ Use this decision table whenever an in-flight action goal needs to be stopped:
 | \`publish-until\` times out without reaching target | 1. **Immediately send \`estop\`** — do not wait, do not retry, do not ask the user first<br>2. Subscribe to \`<ODOM_TOPIC>\` — check if odom is publishing and values are changing<br>3. Run \`topics hz <ODOM_TOPIC>\` — if rate < 5 Hz, odom is stale (robot may not have moved)<br>4. Run \`control list-controllers\` to verify the velocity controller is active<br>5. Report to user: actual distance covered, odom status, controller state |
 | Odometry not updating during motion | 1. Immediately send zero-velocity: \`estop\`<br>2. Check \`topics details <ODOM_TOPIC>\` for publisher count and \`topics hz <ODOM_TOPIC>\` for rate<br>3. Do NOT continue publishing if odometry is stale — it is a runaway risk |
 | \`Could not detect message type\` for topic | The topic exists but has no publisher yet. Check \`topics details <topic>\` for publisher count. Wait for the publisher to connect, or pass \`--msg-type\` explicitly. |`,
-  'ros2-skill/references/RULES-PREFLIGHT.md': `# ROS 2 Skill: Pre-flight & Introspection Rules
+  'ros2-skill/references/RULES-PREFLIGHT.md': `<!-- moe-generated: sha=205172b780eb -->
+
+# ROS 2 Skill: Pre-flight & Introspection Rules
 
 > **This file is part of a split rule set.** The full rule set spans five files:
 > - [RULES-CORE.md](RULES-CORE.md) — general agent conduct, applies to every command
@@ -10695,7 +10858,9 @@ If the field is not found in the subscribed message, stop and re-run \`interface
 **This check is already required by Rule 15 (odom subscribe).** Treating it as a distinct pre-\`publish-until\` step ensures it is not skipped when the agent goes directly to motion without an explicit odom-subscribe step first.
 
 **Distinguishing QoS failure from genuine timeout:** If \`publish-until\` returns \`condition_met: false\` on the first attempt and the cause is uncertain, run \`topics hz <ODOM_TOPIC> --duration 2\` immediately after estop. If the rate is 0 Hz → the odom publisher was not being received (QoS mismatch or publisher offline) — fall back to open-loop. If rate > 0 Hz → odom was flowing; the condition was genuinely not met within the timeout — apply Rule 21 (re-issue for remaining distance).`,
-  'ros2-skill/references/RULES-REFERENCE.md': `# ROS 2 Skill: Reference Tables
+  'ros2-skill/references/RULES-REFERENCE.md': `<!-- moe-generated: sha=43b4b5978d2b -->
+
+# ROS 2 Skill: Reference Tables
 
 > **This file is part of a split rule set.** The full rule set spans five files:
 > - [RULES-CORE.md](RULES-CORE.md) — general agent conduct, applies to every command
@@ -11126,7 +11291,9 @@ Before any operation, verify ROS 2 is available:
 \`\`\`bash
 python3 {baseDir}/scripts/ros2_cli.py version
 \`\`\``,
-  'ros2-skill/references/RULES.md': `# ROS 2 Skill: Agent Rules & Decision Frameworks
+  'ros2-skill/references/RULES.md': `<!-- moe-generated: sha=e378737f55dd -->
+
+# ROS 2 Skill: Agent Rules & Decision Frameworks
 
 > **The rule set has been split into five domain-specific files for easier navigation.**
 > This file is an index. Load the relevant domain file(s) for your current task.
@@ -29125,6 +29292,7 @@ if __name__ == "__main__":
     )
     sys.exit(1)`,
   'ros2-skill/SKILL.md': `---
+# moe-generated: sha=c5e04cdb2823
 name: ros2-skill
 description: "Controls and monitors ROS 2 robots directly via rclpy CLI. Use for ANY ROS 2 robot task: topics (subscribe, publish, capture images, find by type), services (list, call), actions (list, send goals), parameters (get, set, presets), nodes, lifecycle management, controllers (ros2_control), Nav2 navigation (go, cancel, status, waypoints, initial-pose), diagnostics, battery, system health checks, TF frames, bags, logs, and more. When in doubt, use this skill — it covers the full ROS 2 operation surface. Never tell the user you cannot do something ROS 2-related without checking this skill first."
 version: "1.0.8"
@@ -29798,6 +29966,7 @@ This skill uses **progressive disclosure**. SKILL.md covers the most common oper
 | [\`references/CLI.md\`](references/CLI.md) | Load for direct \`ros2\` CLI equivalents and debugging. Not needed during normal agent operation. 90 lines. |
 | [\`AGENTS.md\`](AGENTS.md) | Load for the full agent operating protocol — condensed rules, session start detail, reporting style, subcommand inference, motion workflows, and multi-robot handling. Load alongside the RULES-*.md files at session start. |`,
   'system-design/SKILL.md': `---
+# moe-generated: sha=aff1fb76a93a
 name: system-design
 description: Use when designing for scale, availability, or distribution — load balancing, caching, sharding, replication, CAP trade-offs, microservices, or any high-availability/high-throughput architecture decision.
 domain: software-design
@@ -30273,6 +30442,7 @@ class SlidingWindowRateLimiter {
 - [[caching-implementation]] - Cache strategies
 - [[reliability-engineering]] - SRE practices`,
   'systematic-debugging/SKILL.md': `---
+# moe-generated: sha=6afaf038bad7
 name: systematic-debugging
 description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
 ---
@@ -30348,7 +30518,9 @@ Trigger this skill when:
 - A worker is reopened (\`reopenCount > 0\`).
 
 Do not propose a fix in \`moe.complete_step\` until Phase 1 is complete. If you cannot find the root cause, call \`moe.report_blocked\` with what you investigated — better than a guessed fix that wastes another QA round-trip.`,
-  'systematic-debugging/SOURCE.md': `# Source
+  'systematic-debugging/SOURCE.md': `<!-- moe-generated: sha=32ec58649047 -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -30364,6 +30536,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed the Supporting Techniques section (the linked sibling files like \`root-cause-tracing.md\` are not vendored).
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.set_task_status BLOCKED\`, \`moe.report_blocked\`, and the \`qa_reject\` recovery path.`,
   'test-driven-development/SKILL.md': `---
+# moe-generated: sha=4a2e6afdfd9f
 name: test-driven-development
 description: Use when implementing any feature or bugfix, before writing implementation code
 ---
@@ -30435,7 +30608,9 @@ If you can't tick all boxes, you skipped TDD — start over.
 - Apply this discipline within each \`moe.start_step\` → implement → \`moe.complete_step\` cycle on test-touching steps.
 - The architect should plan the failing test as a separate step before the implementation step (see \`moe-planning\` Phase 3).
 - Before \`moe.complete_task\`, pair with \`verification-before-completion\` — capture the actual test-run output (count + pass/fail) in your \`complete_step\` summary so QA has evidence rather than a claim.`,
-  'test-driven-development/SOURCE.md': `# Source
+  'test-driven-development/SOURCE.md': `<!-- moe-generated: sha=5f0f7537497c -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -30449,6 +30624,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed the \`## Testing Anti-Patterns\` reference (linked to a sibling file not vendored).
 - Appended \`## Moe integration\` footer pointing to \`moe.start_step\` / \`moe.complete_step\` flow and the \`verification-before-completion\` skill.`,
   'using-git-worktrees/SKILL.md': `---
+# moe-generated: sha=18079c55020a
 name: using-git-worktrees
 description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - creates isolated git worktrees with smart directory selection and safety verification
 ---
@@ -30650,7 +30826,9 @@ In Moe specifically:
 - **Branch naming:** Use the project's \`branchPattern\` from \`project.settings\` (default \`moe/{epicId}/{taskId}\`). The wrapper pre-flight already creates a branch by this convention; if you're entering a worktree, use the same name so QA can find your work.
 - **Don't worktree the \`.moe/\` folder.** The daemon owns \`.moe/\` for the project root — workers in worktrees still talk to the same daemon over the same \`daemon.json\`. Operate on the worktree's source tree, not on a duplicate \`.moe/\`.
 - **After completion:** the wrapper post-flight handles commits + branch cleanup. If you created an extra worktree manually, clean it up with \`git worktree remove <path>\`.`,
-  'using-git-worktrees/SOURCE.md': `# Source
+  'using-git-worktrees/SOURCE.md': `<!-- moe-generated: sha=948cf070a550 -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -30666,6 +30844,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed Jesse-specific quote attributions ("Per Jesse's rule…").
 - Appended \`## Moe integration\` footer covering branch naming, the \`.moe/\` folder relationship, and post-flight cleanup.`,
   'verification-before-completion/SKILL.md': `---
+# moe-generated: sha=7ddca7bac558
 name: verification-before-completion
 description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
 ---
@@ -30816,7 +30995,9 @@ This skill is the gate before \`moe.complete_step\` (final step) and \`moe.compl
 3. Capture the actual output (test count + pass count, exit code) in the \`summary\` field on \`moe.complete_step\` / \`moe.complete_task\`.
 
 QA reviews the summary. A summary that says "all tests pass" with no numbers is a \`qa_reject\` waiting to happen — for good reason. Pair this skill with \`regression-check\` for what to run, and \`adversarial-self-review\` for what else to look at before claiming done.`,
-  'verification-before-completion/SOURCE.md': `# Source
+  'verification-before-completion/SOURCE.md': `<!-- moe-generated: sha=368479271640 -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -30829,6 +31010,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed two upstream phrases that referenced specific personal-history quotes ("I don't believe you", "you'll be replaced") — the principle stands without the specifics.
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.complete_step\` / \`moe.complete_task\` and pointing at sibling skills (\`regression-check\`, \`adversarial-self-review\`).`,
   'writing-plans/SKILL.md': `---
+# moe-generated: sha=acf74d861c0b
 name: writing-plans
 description: Use when you have a spec or requirements for a multi-step task, before touching code
 ---
@@ -30916,7 +31098,9 @@ In Moe, the architect's plan becomes \`implementationPlan.steps\` via \`moe.subm
 - **Run commands** → in \`description\` ("Run X, expect Y")
 
 Use \`moe-planning\` for the higher-level 8-phase template; use this skill for inside-the-step granularity.`,
-  'writing-plans/SOURCE.md': `# Source
+  'writing-plans/SOURCE.md': `<!-- moe-generated: sha=c6941a67b3e0 -->
+
+# Source
 
 Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 
@@ -30937,11 +31121,18 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
  * lean "Available Skills" section into the system prompt.
  */
 export const SKILL_MANIFEST = `{
+  "moeGeneratedSha": "34ceccc7c8f6",
   "version": 1,
   "skills": [
     {
+      "name": "moe-epic-breakdown",
+      "description": "Turn an epic into an ordered set of tasks before planning any of them: where to cut seams, sizing, ordering, per-task DoD, and the mandatory final integration-and-hardening task.",
+      "role": "architect",
+      "triggeredBy": ["epic with no tasks yet", "before moe.create_task", "re-slicing an epic's remaining work"]
+    },
+    {
       "name": "moe-planning",
-      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work.",
+      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
       "role": "architect",
       "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
     },
@@ -30983,7 +31174,7 @@ export const SKILL_MANIFEST = `{
     },
     {
       "name": "regression-check",
-      "description": "Run the broader test suite (not just new tests) before complete_task. Goal: zero regressions, evidence-based summary.",
+      "description": "Run the test suite the plan named before complete_task — narrow for a mid-epic task, full for the epic's final task. Goal: zero regressions, evidence-based summary.",
       "role": "worker",
       "triggeredBy": ["before complete_task"]
     },
@@ -31030,7 +31221,9 @@ export const SKILL_MANIFEST = `{
  * Content for .moe/skills/LICENSE-VENDORED.md, auto-generated from
  * docs/skills/LICENSE-VENDORED.md. Records attribution for vendored skills.
  */
-export const SKILL_LICENSE = `# Vendored Skill Attribution
+export const SKILL_LICENSE = `<!-- moe-generated: sha=02daac70477d -->
+
+# Vendored Skill Attribution
 
 This directory contains skills adapted from upstream open-source projects. Each vendored skill keeps its original content largely intact, with a small \`## Moe integration\` section appended at the bottom (and, in some cases, light vocabulary adjustments to reference Moe's MCP tools).
 
@@ -31085,10 +31278,47 @@ The following skills were authored fresh for Moe and are licensed under the proj
 - \`regression-check/\`
 - \`moe-qa-loop/\``;
 
+const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
+// YAML-comment form used for frontmatter docs (SKILL.md), where an HTML comment
+// above the `---` delimiter would break the skill loader.
+const FRONTMATTER_MARKER_RE = /^---\r?\n#\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*\r?\n/;
+// JSON has no comments, so manifest.json carries its marker as a top-level key.
+const JSON_MARKER_RE = /"moeGeneratedSha"\s*:\s*"([a-f0-9]{6,64})"/;
+
+function markerSha(content: string): string | null {
+  const m =
+    content.match(GENERATED_MARKER_RE) ||
+    content.match(FRONTMATTER_MARKER_RE) ||
+    content.match(JSON_MARKER_RE);
+  return m ? m[1] : null;
+}
+
+/**
+ * Returns true when the on-disk file is a Moe-generated skill doc whose marker
+ * sha differs from the bundled copy's — i.e. this daemon ships a newer version.
+ *
+ * False in every other case:
+ *   - no marker on disk → user-customized, preserve it
+ *   - marker matches → up to date, no write needed
+ *   - malformed marker → treat as user content
+ */
+function shouldUpgradeSkillFile(onDisk: string, bundled: string): boolean {
+  const diskSha = markerSha(onDisk);
+  const bundledSha = markerSha(bundled);
+  if (!diskSha || !bundledSha) return false;
+  return diskSha !== bundledSha;
+}
+
 /**
  * Writes the curated skill pack into an existing .moe directory.
- * Skips files that already exist (idempotent — safe to backfill onto
- * existing projects).
+ *
+ * - Missing files are created.
+ * - Markdown files carrying a stale `moe-generated: sha=<X>` marker are
+ *   OVERWRITTEN — this is the upgrade path that lets edited skills actually
+ *   reach projects that were initialized before the edit.
+ * - Files without a marker are left alone (user customizations; deleting the
+ *   marker line opts a file out of future auto-upgrades).
+ * - Non-markdown assets (vendored templates etc.) stay create-only.
  */
 export function writeSkillFiles(moePath: string): void {
   const skillsDir = path.join(moePath, 'skills');
@@ -31105,18 +31335,30 @@ export function writeSkillFiles(moePath: string): void {
     }
     if (!fs.existsSync(fullPath)) {
       atomicWriteText(fullPath, content);
+      continue;
+    }
+    const onDisk = fs.readFileSync(fullPath, 'utf-8');
+    if (shouldUpgradeSkillFile(onDisk, content)) {
+      atomicWriteText(fullPath, content);
     }
   }
 
-  // Write manifest (skip if already exists — user may have customized).
+  // Write manifest (same marker semantics — its marker is a JSON key, so a
+  // user who strips "moeGeneratedSha" pins their customized manifest).
   const manifestPath = path.join(skillsDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
+    atomicWriteText(manifestPath, SKILL_MANIFEST);
+  } else if (shouldUpgradeSkillFile(fs.readFileSync(manifestPath, 'utf-8'), SKILL_MANIFEST)) {
     atomicWriteText(manifestPath, SKILL_MANIFEST);
   }
 
   // Write attribution.
   const licensePath = path.join(skillsDir, 'LICENSE-VENDORED.md');
-  if (!fs.existsSync(licensePath) && SKILL_LICENSE) {
-    atomicWriteText(licensePath, SKILL_LICENSE);
+  if (SKILL_LICENSE) {
+    if (!fs.existsSync(licensePath)) {
+      atomicWriteText(licensePath, SKILL_LICENSE);
+    } else if (shouldUpgradeSkillFile(fs.readFileSync(licensePath, 'utf-8'), SKILL_LICENSE)) {
+      atomicWriteText(licensePath, SKILL_LICENSE);
+    }
   }
 }

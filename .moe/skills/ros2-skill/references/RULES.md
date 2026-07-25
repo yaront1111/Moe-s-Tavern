@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=e378737f55dd -->
+
 # ROS 2 Skill: Agent Rules & Decision Frameworks
 
 > **The rule set has been split into five domain-specific files for easier navigation.**

@@ -1,3 +1,5 @@
+<!-- moe-generated: sha=15eafb154a3d -->
+
 # Changelog
 
 All notable changes to ros2-skill will be documented in this file.
