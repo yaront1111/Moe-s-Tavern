@@ -249,7 +249,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
             echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
-            echo "  --model MODEL            Claude model override (default: all roles = sonnet-5)"
+            echo "  --model MODEL            Claude model override (default: all roles = opus-5)"
             echo "  --help, -h               Show this help"
             echo ""
             echo "Examples:"
@@ -1371,7 +1371,7 @@ fi
 
 # Resolve Claude model for this role.
 # Precedence: --model flag -> project.json settings.models.<role> -> per-role default.
-# All roles -> Sonnet 5. Override per role via project.json settings.models.{role}.
+# All roles -> Opus 5. Override per role via project.json settings.models.{role}.
 RESOLVED_MODEL="$MODEL"
 if [ -z "$RESOLVED_MODEL" ] && [ -f "$PROJECT_JSON" ] && [ -n "$PYTHON_CMD" ]; then
     RESOLVED_MODEL=$("$PYTHON_CMD" -c "
@@ -1385,13 +1385,13 @@ except Exception:
 " "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
 fi
 if [ -z "$RESOLVED_MODEL" ]; then
-    # All roles default to Sonnet 5 -- matches moe-agent.ps1. Launched with
+    # All roles default to Opus 5 -- matches moe-agent.ps1. Launched with
     # --effort max below. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
-        architect) RESOLVED_MODEL="claude-sonnet-5" ;;
-        worker)    RESOLVED_MODEL="claude-sonnet-5" ;;
-        qa)        RESOLVED_MODEL="claude-sonnet-5" ;;
-        governor)  RESOLVED_MODEL="claude-sonnet-5" ;;
+        architect) RESOLVED_MODEL="claude-opus-5" ;;
+        worker)    RESOLVED_MODEL="claude-opus-5" ;;
+        qa)        RESOLVED_MODEL="claude-opus-5" ;;
+        governor)  RESOLVED_MODEL="claude-opus-5" ;;
     esac
 fi
 if [ -n "$RESOLVED_MODEL" ]; then

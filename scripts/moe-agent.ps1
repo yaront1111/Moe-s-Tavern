@@ -44,8 +44,8 @@
     # opt-in (JetBrains opts the worker in for hands-on coding sessions).
     [switch]$Interactive,
 
-    # Explicit model override (e.g. "claude-opus-4-8", "claude-sonnet-4-6").
-    # When empty, the launcher picks a per-role default — all roles → Opus 4.8.
+    # Explicit model override (e.g. "claude-sonnet-5", "claude-opus-4-8").
+    # When empty, the launcher picks a per-role default — all roles → Opus 5.
     # Per-project overrides via .moe/project.json settings.models.{role}. Only
     # applies to the `claude` CLI; codex/gemini pick their own model.
     [string]$Model = ""
@@ -507,13 +507,13 @@ if ($projConfig -and $projConfig.settings.PSObject.Properties['enableAgentTeams'
 
 # Resolve the Claude model for this role.
 # Precedence: -Model flag → .moe/project.json settings.models.<role> → per-role default.
-# All roles default to Sonnet 5, launched with --effort max below. Override
+# All roles default to Opus 5, launched with --effort max below. Override
 # per role via project.json settings.models.{role}.
 $defaultModels = @{
-    architect = "claude-sonnet-5"
-    worker    = "claude-sonnet-5"
-    qa        = "claude-sonnet-5"
-    governor  = "claude-sonnet-5"
+    architect = "claude-opus-5"
+    worker    = "claude-opus-5"
+    qa        = "claude-opus-5"
+    governor  = "claude-opus-5"
 }
 $resolvedModel = ""
 if (-not [string]::IsNullOrWhiteSpace($Model)) {
