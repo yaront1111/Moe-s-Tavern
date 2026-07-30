@@ -11,8 +11,77 @@
     "Root npm run lint passes (role docs untouched or within cap)"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Before writing the gate tests, synchronize to the latest shared epic state and verify every order-1 through order-9 deliverable is actually present (not merely planned): `pacePerStepMs` budget seeding, append-only collision filtering, `ImplementationStep.newFiles` path validation, handoff disk-state capture/claim flag, refusal-cascade parking, freshest-architect blocked routing, amendment persistence/tool registration/effective descriptions, burst-aware `chat_wait`, and `consolidationBranch` enforcement. Re-read the current symbols and existing tests rather than copying the archived tag or stale sibling plans. If a prerequisite is still absent because its sibling is genuinely in flight, do not duplicate its implementation; report the sequencing blocker through Moe and resume this final gate only after the feature lands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create a dedicated composition suite and add the first cross-feature integration test around the real `submitPlanTool`/StateManager path. In one deterministic test flow, configure TURBO mode, a custom `pacePerStepMs`, and low-but-nonrejecting `taskSizing` warning thresholds; create one real project-relative file and reference one missing file. First assert that submitting the missing path without `newFiles` rejects with the teaching error naming the path and the `newFiles` remedy while leaving the task unmodified. Then resubmit the same multi-step plan with the missing path declared in `newFiles`, and assert the persisted plan retains `newFiles`, the absent explicit budget is seeded as `stepCount * pacePerStepMs`, and the size warning is persisted/returned. Exact assertions must ensure removing any one of the budget, path, or size gates breaks the test, while existing files pass unchanged and the test performs all filesystem setup/cleanup within its temporary project.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "In the same suite, add the second cross-feature integration test for one release/human-unpark/claim flow using the real `releaseTaskTool` and `claimNextTaskTool`. Freeze time; seed two recent qualifying empty-progress handoffs; mock only the disk-signature boundary to return a release signature and then a different claim signature; perform the third assigned-worker empty-progress release and assert it persists the newest handoff/disk signature, idles the prior worker, returns `cascadeTriggered`, and parks the task in BACKLOG with the explanatory governor message. Simulate the documented human re-enable by moving the now-unassigned task back to WORKING, claim it with a new worker, and assert the response reports `staleHandoffDiskState: true` plus a re-verification hint while retaining the handoff history. Include error handling assertions that chat notification failure cannot undo the park and an undefined recomputation produces no false stale flag, without invoking a real git binary or leaving timers/mocks behind.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "If either composition test exposes a real interaction defect after all sibling features are present, make the smallest causal repair only in the owning current-main implementation: preserve submit ordering (rails/size before async path probes, then one atomic task update), keep path probes fail-open on infrastructure errors, keep disk subprocesses outside the state mutex, keep normal `nextStatusForRelease` behavior outside the refusal override, and decorate claim responses only after disk-state recomputation. Do not redesign or duplicate sibling features, broaden glob grammars, change settings defaults, or weaken teaching errors/test assertions to force green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/diskState.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Perform a line-by-line documentation sweep after all sibling docs edits have landed, updating only omissions or contradictions. In `docs/SCHEMA.md` verify canonical shapes/defaults for `pacePerStepMs`, `appendOnlyFiles`, `refusalCascadeAutoBacklog`, `consolidationBranch`, `ImplementationStep.newFiles`, `HandoffNote.diskState`, and `StepAmendment`/`amendments`/`activeAmendmentId`. In `docs/CONFIGURATION.md` verify every new setting's type, default, bounds/opt-out, replacement semantics, and examples. In `docs/MCP_SERVER.md` verify submit-plan budget/path teaching behavior, append-only/stale-handoff claim responses, disk capture/refusal cascade release responses, freshest-architect blocked routing, registered `moe.amend_plan_step` plus amendment-aware `complete_step`, `chat_wait` backlog/burst/`sinceId`/cursor semantics, and `complete_task.currentBranch` branch-policy warning/rejection behavior. Remove stale statements but do not edit role docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarially review the complete epic diff from the pre-feature epic filing commit `f785be3` through the final working tree, not just this task's additions. Inspect concurrency/mutex safety (especially git subprocess placement, `chat_wait` subscribe-before-drain and blocking cleanup, and single-update plan/release transitions), null/empty/malformed inputs and default-vs-explicit-false semantics, sanitizer persistence for every new step field, tool registration/role gates, bounded scans and cursor advancement only for delivered messages, and teaching-error quality (errors name the offending/expected values and concrete recovery). Verify no QA reopen counters or normal release routes were repurposed and no forbidden pattern was introduced. Record concrete findings and any narrow fixes in the eventual `moe.complete_task` summary under `concurrency`, `null/empty`, `teaching errors`, and `docs`; if review changes code or tests, rerun the final gates on the corrected bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/diskState.ts",
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts",
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Run the two final gates on the exact reviewed bytes. From the repository root run `npm run lint` (on Windows, use an environment with Git Bash available because the root linter is a bash script) and require exit 0. Then run the task's exact completion-evidence command `cd packages/moe-daemon && npm test`; require exit 0 for the entire daemon suite, including both new composition tests, with zero baseline regressions. Use the exact daemon command/output for `moe.complete_task.verification`, and include the root-lint result plus the structured whole-epic adversarial findings in the completion summary; failures must be fixed, not waived or hidden by narrowing the test selection.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,5 +94,36 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:30.592Z",
-  "updatedAt": "2026-07-30T21:42:30.592Z"
+  "updatedAt": "2026-07-30T22:27:40.693Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:25:00.240Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 9
+  },
+  "contextFetchedBy": [
+    "architect-4f3cb814"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:27:40.647Z",
+  "planningNotes": {
+    "approachesConsidered": "Adding assertions to one sibling's focused suite was rejected because each requested flow spans multiple tools/settings and needs an explicit composition boundary; a dedicated `governancePlaneV2.integration.test.ts` keeps the epic gate discoverable and avoids diluting mutation-resistant sibling tests. Using a real temporary git repository for the release/claim composition was rejected: `diskState.test.ts` already owns subprocess/parser coverage, while this test should deterministically prove the release and claim consumers compose by mocking only the signature boundary. Reimplementing missing sibling behavior in the final task was rejected because the epic is actively landing in a shared tree; the gate must detect integration defects, not create duplicate competing implementations. A documentation snapshot test was rejected as brittle; the required three-file semantic sweep plus full suite/root lint is the narrower production check.",
+    "codebaseInsights": "The epic base before feature work is filing commit `f785be3`, so the final adversarial review can compare the complete current diff against that point. `submit_plan` now composes existing plan-size enforcement with sibling budget/path changes, and its test must prove rejection leaves the task unchanged before a corrected resubmit exercises all successful outputs. Disk-state capture and refusal counting both extend `releaseTask.ts`, while stale-state comparison decorates `claimNextTask.ts`; a single release→human re-enable→claim test is the highest-value merge-conflict detector. The full daemon suite is the task's named evidence gate; root `npm run lint` is separately required by the DoD and needs Git Bash on Windows. The existing release/claim chat posts are best-effort and current tests use temporary StateManager fixtures, so the integration suite can stay daemon-free and deterministic.",
+    "risks": "The final task may be claimed before lower-order siblings have actually landed; treating absent features as code to recreate would cause shared-tree collisions, so the preflight must fail closed on sequencing. Vitest module mocks can leak across files if not restored; the dedicated suite must use hoisted mocks deliberately and reset timers/mocks in cleanup. The release test must simulate the human BACKLOG→WORKING gate explicitly—claiming BACKLOG directly would test an illegal lifecycle. A passing happy-path submit alone would not prove the missing-path gate, so the same test needs the initial rejection and corrected resubmit. Documentation is most vulnerable to stale claims about release parking, chat cursor behavior, amendment persistence, and missing-currentBranch handling. Global rails require literal error handling/test coverage and prohibit the listed unsafe patterns in plan/code text.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/util/affectedFiles.ts",
+      "packages/moe-daemon/src/util/diskState.ts",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-07-30T22:27:40.693Z"
 }

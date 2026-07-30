@@ -13,6 +13,8 @@
 // against the project root — the daemon doesn't know which subprojects the
 // agent considers canonical.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Task } from '../types/schema.js';
 import { invalidInput } from './errors.js';
 
@@ -25,9 +27,17 @@ const MAX_PATH_LEN = 500;
 // original casing.
 const CASE_INSENSITIVE_FS = process.platform === 'win32' || process.platform === 'darwin';
 
-function collisionKey(path: string): string {
-  return CASE_INSENSITIVE_FS ? path.toLowerCase() : path;
+/**
+ * Case-fold a normalized project-relative path for comparison. Exported so
+ * every consumer (collision detection here, the submit_plan existence gate)
+ * folds with the SAME platform rule instead of inventing a second one.
+ */
+export function pathKey(p: string): string {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
 }
+
+/** Internal alias kept for readability at the collision call sites. */
+const collisionKey = pathKey;
 
 /**
  * Canonicalize a single affected-file path. Throws `invalidInput` on shapes
@@ -98,6 +108,68 @@ export function normalizeAffectedFiles(raw: unknown, fieldName = 'affectedFiles'
 }
 
 /**
+ * Resolve normalized project-relative paths against the project root and return
+ * the ones that do NOT exist on disk, in input order.
+ *
+ * Fail-open by design — this backs a submit-time gate, so every uncertainty is
+ * resolved as "exists". Error handling rules:
+ *   - an empty / unreadable / non-directory `projectRoot` returns `[]` (the
+ *     daemon must never reject a plan just because it cannot see the tree)
+ *   - only a genuine ENOENT/ENOTDIR counts as missing; any other errno
+ *     (EACCES, ELOOP, EPERM, …) is treated as existing so a permission-
+ *     restricted tree cannot false-reject a correct plan
+ *   - an existing directory counts as existing
+ *
+ * A path that resolves outside the root is reported as missing (normalization
+ * already rejects traversal; this is a second, defensive line).
+ *
+ * Probes run concurrently — this is called under the state mutex, so it must
+ * never serialize N stat calls.
+ */
+export async function findMissingPaths(projectRoot: string, paths: string[]): Promise<string[]> {
+  if (!projectRoot || typeof projectRoot !== 'string' || paths.length === 0) return [];
+  let root: string;
+  try {
+    root = path.resolve(projectRoot);
+    const rootStat = await fs.promises.stat(root);
+    if (!rootStat.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+
+  // Dedupe with the shared case-folding rule, preserving first-seen order.
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const p of paths) {
+    const key = pathKey(p);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(p);
+  }
+
+  // A root that IS a filesystem root (`D:\`, `/`) already ends in a separator;
+  // appending another would make every real child fail the prefix test and
+  // false-reject the whole plan.
+  const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+
+  const results = await Promise.all(
+    candidates.map(async (p) => {
+      const resolved = path.resolve(root, p);
+      if (resolved !== root && !resolved.startsWith(rootPrefix)) return true;
+      try {
+        await fs.promises.access(resolved);
+        return false;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return code === 'ENOENT' || code === 'ENOTDIR';
+      }
+    })
+  );
+
+  return candidates.filter((_, idx) => results[idx]);
+}
+
+/**
  * Collect every affectedFile referenced by tasks currently in WORKING.
  * Filters out the candidate task (so claiming a task you released doesn't
  * report you as colliding with yourself).
@@ -144,14 +216,84 @@ export interface FileCollision {
 }
 
 /**
+ * Files every task appends to (changelogs, release notes). Overlapping on them
+ * is expected, not a conflict, so they never produce a collision warning —
+ * otherwise the warning fires on every claim and workers learn to ignore it.
+ * Overridable per-project via `settings.appendOnlyFiles`.
+ */
+export const DEFAULT_APPEND_ONLY_FILES: readonly string[] = Object.freeze(['CHANGELOG.md']);
+
+/**
+ * Compile an append-only glob into an anchored RegExp. Grammar is deliberately
+ * tiny (no dependency, no filesystem access — this runs under the claim mutex):
+ *   `**\/`  → zero or more leading directories
+ *   `**`   → anything, including `/`
+ *   `*`    → anything within ONE path segment
+ * Every other character is matched literally (regex punctuation escaped).
+ * Case folding follows the collision-key policy so `changelog.md` and
+ * `CHANGELOG.md` behave the same way here as they do for ownership.
+ */
+function appendOnlyPatternToRegExp(pattern: string): RegExp {
+  // Hand-edited settings may carry Windows separators / a leading `./`.
+  const normalized = pattern.replace(/\\/g, '/').replace(/^\.\//, '');
+  let source = '';
+  for (let i = 0; i < normalized.length; i++) {
+    const ch = normalized[i];
+    if (ch !== '*') {
+      source += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      continue;
+    }
+    if (normalized[i + 1] === '*') {
+      if (normalized[i + 2] === '/') {
+        source += '(?:[^/]+/)*'; // `**/` also matches zero directories
+        i += 2;
+      } else {
+        source += '.*';
+        i += 1;
+      }
+    } else {
+      source += '[^/]*';
+    }
+  }
+  return new RegExp(`^${source}$`, CASE_INSENSITIVE_FS ? 'i' : '');
+}
+
+function compileAppendOnlyMatchers(patterns: readonly string[]): RegExp[] {
+  // project.json is hand-editable, so a non-array survives to here despite
+  // validateSettingsUpdate. Iterating a string would compile one matcher per
+  // CHARACTER — fall back to the default instead of silently mangling it.
+  const source = Array.isArray(patterns) ? patterns : DEFAULT_APPEND_ONLY_FILES;
+  const matchers: RegExp[] = [];
+  for (const pattern of source) {
+    if (typeof pattern !== 'string') continue;
+    const trimmed = pattern.trim();
+    // Same bound settings validation applies, re-checked for hand-edited files.
+    if (trimmed.length === 0 || trimmed.length > MAX_PATH_LEN) continue;
+    matchers.push(appendOnlyPatternToRegExp(trimmed));
+  }
+  return matchers;
+}
+
+/**
  * Compute per-task file collisions for a candidate. Each entry pairs another
  * WORKING task id with the overlapping file list (sorted).
+ *
+ * `appendOnlyFiles` globs are dropped from the candidate's file set before
+ * ownership lookup, so they never reach the returned warning. Pass `[]` to
+ * report every overlap.
  */
 export function computeFileCollisions(
   candidate: Task,
-  tasks: Iterable<Task>
+  tasks: Iterable<Task>,
+  appendOnlyFiles: readonly string[] = DEFAULT_APPEND_ONLY_FILES
 ): FileCollision[] {
-  const candidateFiles = new Set(collectTaskAffectedFiles(candidate));
+  // Compiled once per computation — patterns are bounded by settings validation.
+  const appendOnlyMatchers = compileAppendOnlyMatchers(appendOnlyFiles);
+  const candidateFiles = new Set(
+    collectTaskAffectedFiles(candidate).filter(
+      (file) => !appendOnlyMatchers.some((matcher) => matcher.test(file))
+    )
+  );
   if (candidateFiles.size === 0) return [];
   const activeOwnership = collectActiveAffectedFiles(tasks, candidate.id);
   // Group hits by task

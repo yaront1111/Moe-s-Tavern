@@ -11,8 +11,50 @@
     "npx vitest run src/tools/chatWait.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "In `packages/moe-daemon/src/tools/chatWait.ts`, add the `sinceId` input and extract the backlog scan into one exported helper both entry and wake paths will share. Add `sinceId: { type: 'string', description: 'Explicit catch-up cursor: overrides the stored per-channel cursor' }` to the input schema and to the params type, validating it as a non-empty string when present. Add constants `PER_CHANNEL_SCAN_LIMIT = 50` and `MAX_BURST_MESSAGES = 100`. Export `async function collectChatBacklog(state, workerId, channelSet: Set<string> | null, explicitSinceId?: string)` returning `{ messages, cursorUpdates, fullyDrained, hasMore }`. Channel selection: the explicit `channelSet` when given; else every channel from `state.getChannels()` when `explicitSinceId` is set (an explicit catch-up must not be gated on unread bookkeeping that a reconnect already cleared); else the channels named by `state.getUnreadSummary(workerId)`. Per channel: `sinceId = explicitSinceId ?? worker.chatCursors?.[channelId]`, then `state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT })` inside its own try/catch so one unreadable channel is skipped instead of failing the tool (error handling requirement). Always drop messages whose `sender === workerId`. Apply NO mention/human filter here — the unread-summary path is already routed, the channelSet path is deliberately 'any message in my channels' (see the existing comment), and an explicit `sinceId` means the caller asked for everything. Merge, sort by `timestamp` then `id` for determinism, and cap at `MAX_BURST_MESSAGES` keeping the OLDEST slice (matching getMessages' forward-paging semantics, so repeated calls walk the backlog in order) with `hasMore: true` when anything was dropped. Compute `cursorUpdates` as the last delivered message id PER channel, and `fullyDrained` as the channels that had nothing dropped by the cap.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Rework the entry path in `packages/moe-daemon/src/tools/chatWait.ts` to subscribe BEFORE draining — this is the correctness core of the task. Today the unread backlog check runs before subscribing and is skipped entirely when `channels` is set (the code comments call out that any await before subscribing opens a lost-wakeup window). New order inside the returned Promise: (1) install the `state.subscribe` handler first, pushing every relevant `MESSAGE_CREATED` payload into a local `buffered: ChatMessage[]` array while a `settled` flag is false; (2) `await collectChatBacklog(...)` with the caller's `channelSet` and `sinceId`; (3) merge `buffered` into the drained list, de-duplicating by message id and re-sorting, then recompute `cursorUpdates` from the FINAL delivered list (last message per channel) so the cursor can never advance past something that was not returned; (4) if the merged list is non-empty, `cleanup()` and resolve with it; otherwise leave the subscription live and block as today. Wrap the drain in try/catch: on failure log a warning and fall through to blocking rather than failing the tool. Keep every existing behaviour intact — `blocking: true`, the cancel-existing-waiter block, the `activeChatWaiters` bookkeeping, the CHANNEL_DELETED abort, the timeout response shape, and the fire-and-forget heartbeat touch (it must stay un-awaited).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make the wake path drain the whole burst and persist cursors, in `packages/moe-daemon/src/tools/chatWait.ts`. When a relevant message arrives and the waiter has not settled: `cleanup()`, then re-run `collectChatBacklog` (cursors have not advanced, so the trigger message is normally included) and merge in anything already `buffered`. Safety net: if the trigger message id is absent from the drained list — possible if the MESSAGE_CREATED event is emitted before the JSONL append is visible to a re-read — append it explicitly, then recompute `cursorUpdates` from the final list. Wrap the whole wake handler body in try/catch and, on any failure, resolve with just the trigger message: a blocking tool that never resolves would park the caller for the full timeout and hold a `blocking: true` slot. Delivery bookkeeping, shared by both paths and applied ONLY to messages actually being returned: `await state.updateWorkerCursors(workerId, cursorUpdates)` when non-empty, then `state.clearUnread(workerId, ch)` for each channel in `fullyDrained` — both inside try/catch that logs and still returns the messages (a duplicate delivery on a failed cursor write is strictly better than a lost one). Extend the response with `hasMore` when the cap trimmed the burst and keep `hasMessage`, `messages`, `truncated` and the existing truncation `hint` exactly as they are.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create `packages/moe-daemon/src/tools/chatWait.test.ts` (no dedicated suite exists today). Harness: tmpdir `.moe` with `channels`/`messages`/`workers`/`teams`, a project, a registered worker, and channels created through the StateManager; post messages with `state.sendMessage`; always pass a short `timeoutMs` (e.g. 1000) and await the returned promise so no timer leaks between cases. Cover the DoD: (1) messages posted BEFORE the call are returned immediately — assert the promise resolves well under the timeout with `hasMessage: true` — for both the `channels: [...]` path and the no-filter unread path; (2) a burst of five messages across two watched channels posted before the call comes back in ONE response, ordered by timestamp; (3) burst on wake — start the wait, then post three messages, and assert all three come back in a single resolution rather than just the first; (4) `sinceId` overrides the stored cursor: seed a cursor at the newest message, pass `sinceId` of an older message, and assert the older messages are re-delivered; (5) cursor advance — after a delivery, `state.getWorker(id).chatCursors[channel]` equals the LAST delivered message id, and an immediately following `chat_wait` returns nothing new and blocks to timeout; (6) with the burst cap exceeded, `hasMore` is true, the cursor stops at the last DELIVERED message, and the next call returns the remainder; (7) the worker's own posts never wake it and never advance its cursor; (8) error handling — with `state.getMessages` stubbed to reject for one channel, the other channel's messages are still delivered, and with `updateWorkerCursors` stubbed to reject the messages are still returned; (9) unchanged behaviour — timeout returns `{ hasMessage: false, timedOut: true }`, a second `chat_wait` for the same worker cancels the first with `cancelled: true`, and deleting a watched channel resolves with the cancelled/error shape. Verification command: `npx vitest run src/tools/chatWait.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Repair the pre-existing chat_wait cases in `packages/moe-daemon/src/tools/tools.test.ts` and document the tool. Those cases (the 'fires on ANY message in subscribed channels' regression, the heartbeat-refresh case and the truncation case) were written against a wait that never backfilled: if their `setupChat()` fixture posts any message into the watched channel before the wait starts, the new entry drain now returns it immediately and the assertion about the later message breaks. Fix them by seeding the worker's cursor past the fixture messages (or by not posting fixture messages into the watched channel) — do NOT weaken what each case asserts; the ANY-message regression in particular must keep proving that a non-mentioning message wakes a channel-scoped waiter. In `docs/MCP_SERVER.md`, extend the `moe.chat_wait` contract: it now returns any unread backlog immediately instead of blocking, drains the full burst across watched channels in one response, accepts `sinceId` as an explicit catch-up override that bypasses stored cursors, advances per-channel cursors only for messages actually delivered, and reports `hasMore` when a burst exceeded the cap. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`; watch `WebSocketServer.test.ts` and `enterGovernance.test.ts`, which also exercise chat waiting.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,5 +67,31 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.878Z",
-  "updatedAt": "2026-07-30T21:42:29.878Z"
+  "updatedAt": "2026-07-30T22:25:26.252Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:22:55.327Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-6469484d"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:25:26.209Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Keeping the backlog check before the subscription and just widening it to the channelSet path — rejected: the file's own comments explain that awaiting before subscribing opens a lost-wakeup window, and widening the await would open it for exactly the governors this task is meant to protect. Subscribe-then-drain-then-merge is the standard fix and costs one buffer array. (2) Draining with a short 'burst settle' timer on wake (wait 200ms for stragglers) — rejected: it adds latency and nondeterminism to tests for a case the cursor already handles (anything that lands after the drain is unread and comes back immediately on the next call). (3) Applying the mention/human relevance filter to the sinceId catch-up path — rejected: stored messages carry RAW mention tokens (a group mention is stored as 'governors', not the workerId), so that filter would silently drop exactly the group pings a governor is catching up on. An explicit sinceId means 'give me everything since X'. (4) Advancing cursors optimistically before delivery — rejected outright: a failed write would then lose messages permanently.",
+    "codebaseInsights": "`state.getMessages(channel, { sinceId, limit })` has two distinct modes: a KNOWN sinceId pages FORWARD from the oldest unseen message (so repeated cursor-advancing reads walk the backlog in order), while an UNKNOWN/expired sinceId returns the most recent window as a resync — so a caller-supplied sinceId from one channel applied to another degrades to 'recent window', which is acceptable catch-up behaviour and should be documented, not special-cased. Cursor plumbing already exists and should be reused verbatim from `chatRead.ts`: `state.updateWorkerCursors(workerId, { [channelId]: messageId })` plus `state.clearUnread(workerId, channelId)`, and chat_read's 'omitted channels' logic is the precedent for not clearing unread on a channel whose messages were trimmed. Unread counts are incremented only for routed targets, which is why the existing backlog path can skip a relevance filter. `activeChatWaiters` is also consumed by disconnect cleanup in the WS server — its shape must not change.",
+    "risks": "1) LOST WAKEUP: any `await` between entering the handler and installing the subscription drops messages on the floor. Subscribe first, buffer, then drain. 2) UNRESOLVED PROMISE: this tool is `blocking: true`; a throw inside the subscribe callback or the wake-path drain would park the caller for the full timeout and hold a blocking slot — every new async path needs a try/catch that still resolves. 3) Cursor advance must be computed from the FINAL delivered list, after the buffer merge and the trigger-message safety net, or a capped burst will skip messages permanently. 4) The `blocking: true` flag and the `activeChatWaiters` bookkeeping are load-bearing fleet-wide (a non-blocking tool that parks freezes every other tool through the shared state mutex) — do not touch them. 5) Existing chat_wait cases live in `tools.test.ts`, not in a dedicated file; the new immediate-backfill behaviour can flip them from 'wake on the later message' to 'return the fixture message', so run the full suite and repair fixtures rather than assertions. 6) Do not add a settings key for the burst cap — the epic rail would then require four more touch points.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/tools.test.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 7200000
+  },
+  "planApprovedAt": "2026-07-30T22:25:26.252Z"
 }

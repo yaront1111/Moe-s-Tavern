@@ -4,7 +4,7 @@ import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
-import { computeFileCollisions } from '../util/affectedFiles.js';
+import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -319,7 +319,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // Compute file-collision warnings against every OTHER WORKING task.
       // Advisory only — never blocks the claim. We post a heads-up to
       // #workers if there's any overlap so peers can sync diffs.
-      const fileCollision = computeFileCollisions(task, state.tasks.values());
+      // Append-only files (CHANGELOG.md by default) are filtered out so the
+      // expected shared-file overlap doesn't drown the real ones. `??` — never
+      // `||` — because an explicit `[]` deliberately disables suppression.
+      const appendOnlyFiles = state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES;
+      const fileCollision = computeFileCollisions(task, state.tasks.values(), appendOnlyFiles);
       if (fileCollision.length > 0) {
         try {
           const summary = fileCollision

@@ -10,8 +10,60 @@
     "npx vitest run src/tools/completeTask.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the setting and validate it, per the epic rail's four-touch-point requirement (this step covers the first two). In `packages/moe-daemon/src/types/schema.ts`, add `consolidationBranch?: string;` to `ProjectSettings` near `qualityGate`, doc-commented: the branch (literal name or a `*` glob, e.g. `moe/work-*`) workers are expected to be on when they call `moe.complete_task`; empty or unset disables the check entirely; matching is case-sensitive because git branch names are. In `packages/moe-daemon/src/state/StateManager.ts` `validateSettingsUpdate`, add `'consolidationBranch'` to the `rejectUnknownFields` allowlist and validate it exactly like `qualityGate` does: `this.validateStringValue(input.consolidationBranch, 'consolidationBranch', { maxLength: 200, allowEmpty: true, trim: true })` — empty string is the documented off switch, and the 200-char cap bounds the pattern that gets compiled in the next step. Pull latest main first; sibling tasks are editing this function's neighbourhood.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create `packages/moe-daemon/src/util/branchPolicy.ts` with the matcher, kept separate from the tool so it is unit-testable and has exactly one definition. Export `matchesBranchPattern(branch: string, pattern: string): boolean`: return false for an empty branch or empty pattern; when the pattern has no `*`, compare with strict equality; otherwise escape EVERY regex metacharacter in the pattern first (`.` `+` `?` `^` `$` `{` `}` `(` `)` `|` `[` `]` `\\`), then replace the escaped `*` placeholders with `.*`, anchor with `^`/`$`, and test. Escaping before expanding is the whole point — a branch pattern like `release/v1.0-*` must not let `.` match any character, and an unescaped `(` would throw at compile time. Wrap the `new RegExp` in try/catch and return false on failure rather than throwing (error handling: a malformed pattern must not be able to crash `complete_task`). Also export `describeBranchPolicyFailure(branch, pattern): string` returning the teaching message body that names BOTH the branch the worker is on and the expected pattern, and tells them to switch to the sanctioned branch (or re-run the wrapper post-flight, which peels onto `moe/work-<date>`) and retry — keeping the wording in one place so the tool and its test cannot drift.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/branchPolicy.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create `packages/moe-daemon/src/util/branchPolicy.test.ts`. Cover `matchesBranchPattern`: exact literal match and mismatch; case sensitivity (`Main` does not match `main`); `moe/work-*` matching `moe/work-2026-07-31` and NOT matching `feature/moe/work-1` (anchoring) nor `moe/work` (the glob requires the prefix but `*` may match empty — assert the behaviour you implement and document it); a leading glob (`*-hotfix`); a pattern containing regex metacharacters (`release/v1.0-*` must not match `release/v1X0-a`); empty branch, empty pattern, and a pattern of only `*` (matches anything non-empty); and error handling — a pattern crafted to be an invalid regex if unescaped (e.g. `feat/(unclosed`) returns false for a non-equal branch and true for the identical literal, and never throws. Add one case per exported function for `describeBranchPolicyFailure` asserting both branch names appear in the message. Verification: `npx vitest run src/util/branchPolicy.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/branchPolicy.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Wire the check into `packages/moe-daemon/src/tools/completeTask.ts`. Add `currentBranch: { type: 'string', description: 'Branch the worker is on; enables the consolidationBranch policy check' }` to the input schema (still optional — wrappers that do not send it yet must keep working) and to the params type. Resolve the policy as `state.project?.settings?.consolidationBranch?.trim()`; when it is empty or unset, skip the whole block so unconfigured projects are completely unaffected. Place the check immediately AFTER `assertVerificationEvidence` and BEFORE the `state.updateTask` call so a rejection leaves the task untouched in WORKING. Three outcomes: (a) policy set and `currentBranch` provided and `matchesBranchPattern` true — proceed, and add `branchPolicy: { pattern, currentBranch, matched: true }` to the response; (b) policy set and `currentBranch` provided but not matching — throw a `MoeError` with code `CONSTRAINT_VIOLATION` whose message starts with `BRANCH-POLICY-FAIL:` followed by `describeBranchPolicyFailure(...)`, and whose data carries `{ currentBranch, expectedPattern }`; (c) policy set but `currentBranch` missing/empty — do NOT block (graceful wrapper rollout): post a one-line warning to `#governors` via `state.postToRoleChannel` inside its own try/catch, and return `branchPolicy: { pattern, matched: null, warning: 'currentBranch not reported — branch policy not enforced for this completion' }`. Leave verification enforcement, `filesModified` aggregation, the worker handoff, the activity log and `nextAction` untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Extend `packages/moe-daemon/src/tools/completeTask.test.ts` with a `describe('consolidationBranch policy')` block, reusing the existing harness and its `setupMoeFolder` settings override hook (add `consolidationBranch` where the test project settings are built). Cases: (1) policy `moe/work-*` with `currentBranch: 'moe/work-2026-07-31'` — the task moves to REVIEW and the response `branchPolicy.matched` is true; (2) the same policy with `currentBranch: 'main'` — rejects with a CONSTRAINT_VIOLATION MoeError whose message contains `BRANCH-POLICY-FAIL`, `main` and `moe/work-*`, AND the task is still `WORKING` with no `verification` persisted (assert via `state.getTask`, proving the throw happens before the update); (3) policy set, `currentBranch` omitted — the task still reaches REVIEW, the response carries the `branchPolicy.warning`, and a `postToRoleChannel` spy was called with `'governors'`; (4) `currentBranch` present as an empty/whitespace string behaves like case 3; (5) no `consolidationBranch` in settings — completion succeeds with NO `branchPolicy` key in the response and no governors post (spy call count 0), proving unconfigured projects are untouched; (6) error handling — with the governors post stubbed to reject, case 3 still completes successfully. Do not weaken any existing assertion in this suite. Verification command: `npx vitest run src/tools/completeTask.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Document the setting and the parameter, then regression-check. `docs/SCHEMA.md`: add `consolidationBranch?: string` to the `ProjectSettings` block, noting literal-or-glob, case-sensitive, empty/unset disables. `docs/CONFIGURATION.md`: add a `consolidationBranch` row to the Settings Reference table — description 'Branch workers must be on when calling moe.complete_task; mismatch rejects with BRANCH-POLICY-FAIL, a missing currentBranch only warns #governors', values 'Literal name or `*` glob, e.g. `moe/work-*`; unset/empty disables'. `docs/MCP_SERVER.md`: document the optional `currentBranch` input on `moe.complete_task` and the three outcomes, and state that the wrappers are unchanged by this task (they already peel onto `moe/work-<date>`), so reporting the branch is opt-in until a later task teaches them to send it. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`, and confirm `StateManager.test.ts`'s settings-validation cases still pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +76,34 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:30.241Z",
-  "updatedAt": "2026-07-30T21:42:30.241Z"
+  "updatedAt": "2026-07-30T22:26:53.175Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:25:31.809Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 9
+  },
+  "contextFetchedBy": [
+    "architect-6469484d"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:26:53.132Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Having the daemon read the current branch itself via git — rejected here: the daemon's cwd is the project root, but the WORKER may be running elsewhere (WSL, a worktree), so the branch the daemon sees is not necessarily the branch the worker committed on. Taking it as a reported parameter keeps the check honest and matches the spec. (A sibling task in this epic does add a git helper for handoff disk state — do not conflate the two.) (2) Blocking when `currentBranch` is absent — explicitly rejected by the DoD: the wrappers do not send it yet, so a hard failure would break every completion on rollout. Warn-only is the graceful path. (3) Supporting a comma-separated list of allowed patterns — deferred: one glob covers the `moe/work-<date>` scheme the wrappers actually produce, and a list doubles the parsing and test surface for no current need. (4) Converting the glob with a naive `pattern.replace('*', '.*')` — rejected: unescaped metacharacters silently widen the match (`v1.0-*`) or throw at compile time.",
+    "codebaseInsights": "`complete_task` is a pure validate-then-update handler: every assertion (`assertWorkerOwns`, `assertAllStepsCompleted`, `assertVerificationEvidence`) runs before the single `state.updateTask`, so adding the branch gate in that same pre-update band gives 'reject leaves the task untouched' for free — and the test should assert exactly that. `settings.qualityGate` is the precedent for a string setting whose empty value is the off switch, including its `validateStringValue(..., { allowEmpty: true, trim: true })` call — copy it rather than inventing new validation. Chat posting is best-effort everywhere (`postToRoleChannel` already swallows internally, but wrap anyway to match local style). The worker post-flight peels onto a shared `moe/work-<YYYY-MM-DD>` branch, which is why `moe/work-*` is the realistic pattern to document.",
+    "risks": "1) Glob-to-regex is the only real trap: escape metacharacters BEFORE expanding `*`, anchor both ends, and never let a malformed pattern throw out of the tool. 2) The rejection must happen before `updateTask` — a half-applied completion (task in REVIEW, worker still holding it) is much worse than a clean refusal. 3) Missing `currentBranch` must never block; the wrappers are out of scope for this task and will keep omitting it. 4) An empty-string `consolidationBranch` is the documented disable, so treat empty and unset identically — do not let `''` compile into a pattern that matches nothing and rejects every completion. 5) Case sensitivity is deliberate; do not lowercase either side. 6) Do not touch the JetBrains/VS Code settings dialogs — they expose a subset by design and adding a field there is a separate decision.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/enforcement.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 7200000
+  },
+  "planApprovedAt": "2026-07-30T22:26:53.175Z"
 }

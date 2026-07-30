@@ -135,10 +135,21 @@ interface ProjectSettings {
     autoCritique?: boolean;
   };
 
+  // moe.submit_plan seeds task.budget.wallClockMs = stepCount * pacePerStepMs when no explicit budget is passed; an existing budget is never overwritten.
+  pacePerStepMs?: number; // default: 900000 (15 min/step)
+
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
   // Example: { "REVIEW": 2 } limits review to 2 tasks at a time
   columnLimits?: Record<string, number>;
+
+  // Project-relative globs for files every task appends to. Claim-time
+  // fileCollision warnings ignore them, so shared changelogs don't drown the
+  // real overlaps. Literal paths, `*` (one segment) and `**` (across
+  // directories); forward slashes only. Omitted → ["CHANGELOG.md"]. A supplied
+  // array REPLACES that default (list CHANGELOG.md yourself to keep it), and
+  // [] disables suppression so every overlap is reported again.
+  appendOnlyFiles?: string[];         // default: ["CHANGELOG.md"]
 
   // Chat settings (all optional, defaults applied at runtime)
   chatEnabled?: boolean;              // default: true — enable/disable chat system
@@ -347,7 +358,8 @@ interface ImplementationStep {
   stepId: string;                // "step-1"
   description: string;           // "Create LoginForm component" (≤10000 chars; max 100 steps/plan)
   status: StepStatus;
-  affectedFiles: string[];       // project-relative paths; max 50/step
+  affectedFiles: string[];       // project-relative paths; max 50/step — must exist on disk
+  newFiles?: string[];           // paths this step CREATES; exempt from the existence check; max 50/step
   startedAt?: string;            // When step started
   completedAt?: string;          // When step finished
   note?: string;                 // Optional note from complete_step
@@ -441,6 +453,11 @@ type StepStatus =
 - Path separators are normalized to `/` and entries are deduplicated.
 - Max 50 entries per step; max 100 steps per plan; max 10000 chars per step description.
 - Overlap with another `WORKING` task's `affectedFiles` surfaces as a `fileCollision[]` warning on `moe.claim_next_task` — advisory only, never blocks the claim.
+- Every `affectedFiles` entry must **exist on disk** under the project root at submit time, or `moe.submit_plan` rejects the plan with `INVALID_INPUT` and lists the missing paths. This catches stale-doc plans (and package-relative paths like `src/x.ts` where the project root wants `packages/moe-daemon/src/x.ts`) at submit time instead of at step 1. The check fails open — an unreadable project root, or any stat error other than `ENOENT`/`ENOTDIR`, is treated as "exists".
+
+### `newFiles`
+
+`ImplementationStep.newFiles` (and the `moe.submit_plan` step input) declares the paths a step will **create**. Same normalization and 50-entry cap as `affectedFiles`. Declared paths are exempt from the existence check above, plan-wide — a file declared in step 1's `newFiles` may be cited in step 2's `affectedFiles`. They still count toward the plan-size distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so the exemption cannot be used to dodge either gate. The key is omitted from persisted steps when empty. Do not park files that already exist in `newFiles` to silence the gate — that hides a wrong path from the next worker and from collision detection.
 
 ### Task subtypes
 
@@ -507,7 +524,7 @@ interface HandoffNote {
  */
 interface TaskMetrics {
   plannedStepCount?: number;
-  plannedDistinctFileCount?: number;  // distinct affectedFiles across all plan steps
+  plannedDistinctFileCount?: number;  // distinct affectedFiles + newFiles across all plan steps
   executedStepCount?: number;
   reopenCount?: number;
   rejectCount?: number;

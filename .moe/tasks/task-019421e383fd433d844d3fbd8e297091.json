@@ -10,8 +10,119 @@
     "npx vitest run src/util/affectedFiles.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the feature-focused Vitest coverage first. Build small Task fixtures for pure collision tests, plus a temporary StateManager/claim fixture, and assert: the omitted third argument suppresses only the default CHANGELOG.md overlap while retaining real overlaps; literal, single-segment `*`, and recursive `**` patterns suppress matching canonical project-relative paths; regex metacharacters are treated literally; a custom list replaces rather than extends the default; and `[]` restores CHANGELOG.md collisions. Through `updateSettings` and `claimNextTaskTool`, also prove valid custom/empty arrays are persisted and used at claim time, while non-arrays, non-string/empty entries, absolute paths, and traversal patterns fail validation without partially changing settings. Keep assertions on the exact returned `fileCollision` entries so a no-op implementation cannot pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "note": "Added src/util/affectedFiles.test.ts: 24 cases covering default CHANGELOG.md suppression, literal/*/** glob semantics, regex-metachar escaping, anchoring, platform case policy, custom-list replacement, [] opt-out, settings canonicalization/validation rollback, and claim-time wiring. Fresh run is red as expected: `npx vitest run src/util/affectedFiles.test.ts` -> 22 failed | 2 passed (no DEFAULT_APPEND_ONLY_FILES export, setting not whitelisted).",
+      "startedAt": "2026-07-30T22:16:31.244Z",
+      "completedAt": "2026-07-30T22:19:02.436Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Extend the daemon settings contract with optional `appendOnlyFiles?: string[]` for backward-compatible persisted projects. Add it to `StateManager.validateSettingsUpdate`'s allowlist and validate it as a bounded string array using the existing settings validators, then canonicalize/deduplicate entries with the affected-file normalization rules so stored globs are non-empty, project-relative, traversal-free, and use forward slashes. Preserve an explicit empty array unchanged; omitted settings continue to receive the runtime default rather than being rewritten into old project files. For explicit error handling, reject invalid updates with the existing structured `invalidInput` path before constructing or writing the next ProjectSettings value, so validation failures cannot partially mutate memory or disk.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "ProjectSettings gains optional appendOnlyFiles?: string[] (documented: replaces default, [] disables). validateSettingsUpdate whitelists it and validates via validateStringArrayValue(100 items, 500 chars) + normalizeAffectedFiles for canonicalization/dedupe; both throw structured invalidInput before updateSettings builds/writes the next settings object, so failed updates leave memory and project.json untouched. Empty array preserved; omitted key never rewritten.",
+      "startedAt": "2026-07-30T22:19:05.977Z",
+      "completedAt": "2026-07-30T22:19:40.180Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement append-only matching in the current collision utility without changing collision ownership/grouping. Export `DEFAULT_APPEND_ONLY_FILES` as the immutable `['CHANGELOG.md']` default; compile anchored matchers once per collision computation with regex metacharacters escaped, `*` limited to one path segment, and `**` allowed across directories; preserve the existing Windows/macOS case-insensitive versus Linux case-sensitive collision policy. Extend `computeFileCollisions` with an optional readonly pattern argument defaulting to that constant, filter matching candidate paths before owner lookup, and leave sorting, displayed path casing, WORKING-only ownership, and real-overlap reporting unchanged. The matcher must perform no filesystem I/O or other blocking work under the claim mutex.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts"
+      ],
+      "note": "affectedFiles.ts: exported frozen DEFAULT_APPEND_ONLY_FILES=['CHANGELOG.md']; added appendOnlyPatternToRegExp (anchored, regex punctuation escaped, `*`=[^/]*, `**`=.*, `**/`=(?:[^/]+/)* so it also matches zero dirs, backslash/./ tolerated) + compileAppendOnlyMatchers (once per computation, no I/O). computeFileCollisions takes an optional readonly pattern list defaulting to the constant and filters candidate paths before ownership lookup; grouping, WORKING-only scoping, sorting and displayed casing untouched. Case folding follows the existing pathKey/CASE_INSENSITIVE_FS policy. Run: 22 passed | 2 failed (remaining 2 are the claim-wiring cases handled in step-4).",
+      "startedAt": "2026-07-30T22:19:42.418Z",
+      "completedAt": "2026-07-30T22:20:26.774Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Wire project configuration into claim-time warnings: import the append-only default, select `state.project.settings.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES` (nullish fallback is required so `[]` disables suppression), and pass it to `computeFileCollisions`. Keep collision reporting advisory and retain the existing post-to-channel error handling and response shape; do not redesign claim selection or collision detection.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "claimNextTask.ts imports DEFAULT_APPEND_ONLY_FILES and passes `state.project?.settings.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES` into computeFileCollisions (nullish, so [] disables suppression). Warning stays advisory: same response shape and the same try/catch error handling around postToRoleChannel. Full file green: npx vitest run src/util/affectedFiles.test.ts -> 24 passed (24).",
+      "startedAt": "2026-07-30T22:20:29.042Z",
+      "completedAt": "2026-07-30T22:20:49.733Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Document the setting contract in both required references. Add `appendOnlyFiles?: string[]` to the SCHEMA ProjectSettings shape and explain the `['CHANGELOG.md']` default, replacement semantics, and `[]` opt-out. Add the setting to CONFIGURATION's example/reference with project-relative forward-slash literal/`*`/`**` glob semantics and clarify that a custom array replaces the default, so users must include CHANGELOG.md themselves if they still want it suppressed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "docs/SCHEMA.md: appendOnlyFiles?: string[] added to the ProjectSettings shape with default [\"CHANGELOG.md\"], replacement semantics and the [] opt-out. docs/CONFIGURATION.md: added to the project.json example and the Settings Reference table with project-relative forward-slash literal/*/** semantics (`*` one segment, `**` crosses directories, `**/x` also matches root x) plus the explicit warning that a custom array replaces the default. Edits were surgical so parallel epic workers' doc changes stayed intact.",
+      "startedAt": "2026-07-30T22:20:52.716Z",
+      "completedAt": "2026-07-30T22:21:22.720Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Perform an adversarial diff review before the final run: verify omitted versus empty settings cannot be conflated; malformed settings follow the intended error handling path at update time without making a later claim fail; glob regex characters are escaped and matching is anchored; `*` cannot cross `/` while `**` can; normalized Windows separators and the existing platform case policy remain consistent; append-only paths never leak into returned/channel collision summaries; real collisions remain sorted; and the change adds no synchronous I/O or unrelated collision redesign. Correct any issue found before verification.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/util/affectedFiles.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "note": "Adversarial diff review found and fixed 3 hand-edited-project.json hazards (project.json is human-editable, so validateSettingsUpdate is not the only entry point): (1) a non-array appendOnlyFiles was iterated as a STRING, compiling one matcher per character — compileAppendOnlyMatchers now falls back to DEFAULT_APPEND_ONLY_FILES when !Array.isArray; (2) missing settings object would TypeError inside the claim — claimNextTask now uses state.project?.settings?.appendOnlyFiles ?? DEFAULT; (3) unbounded pattern length — entries over MAX_PATH_LEN (500) are skipped, matching the validator's bound. Added 3 regression tests (non-array fallback, non-string/over-long entries ignored, malformed persisted setting at claim time). Verified by re-reading the diff: omitted vs [] cannot conflate (?? everywhere, no truthiness), matching is anchored ^...$ with regex punctuation escaped, `*`=[^/]* cannot cross `/` while `**`=.* can, backslashes normalized, case flag follows pathKey policy, append-only paths cannot reach the returned array or the #workers summary (summary derives from it), real collisions still sorted by task then file, no new I/O or blocking work under the mutex, ownership/grouping untouched. Noted-not-fixed: validateStringArrayValue truncates >500-char entries instead of rejecting — existing settings convention (same as epicRails). Evidence: npx vitest run src/util/affectedFiles.test.ts -> 27 passed (27); npx tsc --noEmit clean; full regression npm test -> 48 files, 734 passed (734).",
+      "startedAt": "2026-07-30T22:21:39.323Z",
+      "completedAt": "2026-07-30T22:23:08.409Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "From `packages/moe-daemon`, run the exact required fresh verification command `npx vitest run src/util/affectedFiles.test.ts`. Do not submit completion unless it exits 0 and the output shows the new default, custom-glob, empty-array, validation, and claim-wiring cases passing; use this exact command/output as `moe.complete_task` evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "note": "Fresh run from packages/moe-daemon: `npx vitest run src/util/affectedFiles.test.ts` -> exit 0, Test Files 1 passed (1), Tests 27 passed (27). Verbose reporter confirms the required cases green: default CHANGELOG.md suppression, custom literal/*/**/**-prefix globs, regex-metachar escaping + anchoring, platform case policy, [] opt-out, settings canonicalization/persistence, all six validation-rejection cases with unchanged settings, and the three claim-wiring cases (absent setting, custom list, [] disabled) plus malformed-settings survival.",
+      "startedAt": "2026-07-30T22:23:10.778Z",
+      "completedAt": "2026-07-30T22:23:30.538Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +135,67 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:27.657Z",
-  "updatedAt": "2026-07-30T21:42:27.657Z"
+  "updatedAt": "2026-07-30T22:26:24.106Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:05:37.465Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 7,
+    "doneAt": "2026-07-30T22:26:24.106Z",
+    "wallClockMs": 1246641
+  },
+  "contextFetchedBy": [
+    "architect-4f3cb814",
+    "worker-08389c23",
+    "qa-891e690f"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:13:16.190Z",
+  "planningNotes": {
+    "approachesConsidered": "The archived tag was inspected only as a behavioral specification. Its optional setting, default constant, and `*`/`**` intent are retained, but its stale direct path lookup is not copied because current main uses platform-aware `collisionKey`. Hard-coding CHANGELOG.md was rejected because custom replacement and the explicit empty-array opt-out are required. Adding a third-party glob dependency was rejected because the supported grammar is only literal/`*`/`**`, the daemon currently has no glob dependency, and precompiled anchored matchers are smaller and avoid dependency churn. Filtering is kept at the candidate-file stage because that removes returned warning noise without redesigning active ownership collection.",
+    "codebaseInsights": "`computeFileCollisions` currently has one production caller, `claimNextTaskTool`, and compares ownership through `collisionKey`, which is case-insensitive on Windows/macOS and case-sensitive on Linux. Claims run inside `StateManager.runExclusive`, so matching must remain bounded and free of I/O. `ProjectSettings` lives in `packages/moe-daemon/src/types/schema.ts`; `StateManager.validateSettingsUpdate` rejects unknown keys and already provides bounded string-array validation. `normalizeAffectedFiles` supplies the existing project-relative, separator-normalizing, traversal-rejecting behavior suitable for glob strings containing `*`. There is no current `src/util/affectedFiles.test.ts`, so the required verification target must be created; existing collision integration coverage is in `tools/governanceFeatures.test.ts`, but the new feature test should directly cover utility behavior, settings validation, and claim wiring under the mandated command.",
+    "risks": "The main regression risk is using a truthy fallback that turns `[]` back into the default. Other risks are copying the archived branch's stale case-sensitive/direct-map behavior, letting `*` cross directory separators, failing to escape regex punctuation, accepting unsafe/non-canonical setting entries, or testing only the utility while forgetting the claim caller. Because the tool runs under the state mutex, patterns should be bounded by validation and compiled once per computation; no filesystem glob expansion is permitted. Invalid setting input must use existing error handling and leave state unchanged.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/affectedFiles.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/util/affectedFiles.test.ts",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "planApprovedAt": "2026-07-30T22:13:16.251Z",
+  "workStartedAt": "2026-07-30T22:16:31.244Z",
+  "reviewStartedAt": "2026-07-30T22:23:55.023Z",
+  "verification": {
+    "command": "npx vitest run src/util/affectedFiles.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  27 passed (27)\n   Duration  462ms (transform 144ms, setup 0ms, import 194ms, tests 179ms, environment 0ms)\nEXIT=0",
+    "reportedAt": "2026-07-30T22:23:55.023Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/affectedFiles.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/util/affectedFiles.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/SCHEMA.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "completedAt": "2026-07-30T22:26:24.106Z",
+  "reviewCompletedAt": "2026-07-30T22:26:24.106Z",
+  "reviewSummary": "Re-ran the required command myself from packages/moe-daemon: `npx vitest run src/util/affectedFiles.test.ts` -> 1 file / 27 tests passed, exit 0. Also `npx tsc --noEmit` clean and `npx vitest run src/tools/governanceFeatures.test.ts src/state/StateManager.test.ts` -> 132 passed (no regression in the existing collision/settings coverage). DoD verified against the diff, not the summary: (1) computeFileCollisions (affectedFiles.ts:285-316) filters candidate paths through compiled anchored matchers before the ownership lookup, so suppressed paths cannot reach the returned/channel warning; grouping, WORKING-only scoping and sorting are unchanged. (2) DEFAULT_APPEND_ONLY_FILES is a frozen ['CHANGELOG.md'] used as the parameter default, and claimNextTask.ts:325 reads `state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES` — nullish, so an explicit [] genuinely disables suppression (test asserts all three overlaps return). (3) appendOnlyFiles added to ProjectSettings (schema.ts), whitelisted in validateSettingsUpdate with validateStringArrayValue(100,500) + normalizeAffectedFiles, throwing before `next` is written (test proves memory AND project.json are unchanged after 6 invalid-input shapes), and documented in docs/SCHEMA.md + docs/CONFIGURATION.md incl. the replaces-default and [] semantics. Tests are mutation-resistant (exact toEqual on fileCollision entries) and cover edges: literal / `*` single-segment / `**` cross-dir / `**/` zero-dir, regex-metachar escaping, whole-path anchoring, platform case policy, backslash + non-array + non-string/over-long hand-edited settings. Scope matches the plan; the other hunks in schema.ts/StateManager.ts/SCHEMA.md (pacePerStepMs, newFiles) belong to sibling tasks in the shared tree, not to this one. No forbidden patterns, no I/O added under the claim mutex (matchers compiled once per computation)."
 }

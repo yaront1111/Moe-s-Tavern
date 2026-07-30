@@ -64,6 +64,12 @@ describe('lifecycle E2E', () => {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
+    // submit_plan rejects affectedFiles that don't exist under the project root
+    // unless declared in newFiles; these suites exercise the lifecycle, not the
+    // existence gate, so give their planned paths a real file on disk.
+    for (const file of ['a.ts', 'b.ts']) {
+      fs.writeFileSync(path.join(testDir, file), '');
+    }
   }
 
   function writeTask(overrides: Partial<Task> = {}): Task {

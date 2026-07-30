@@ -100,7 +100,8 @@ The `.moe/project.json` file contains project-specific settings.
     "speedModeDelayMs": 2000,
     "autoCreateBranch": true,
     "branchPattern": "moe/{epicId}/{taskId}",
-    "commitPattern": "feat({epicId}): {taskTitle}"
+    "commitPattern": "feat({epicId}): {taskTitle}",
+    "appendOnlyFiles": ["CHANGELOG.md", "docs/**/release-notes.md"]
   }
 }
 ```
@@ -119,6 +120,8 @@ The `.moe/project.json` file contains project-specific settings.
 | `qualityGate` | Shell command the worker wrapper runs before the post-flight auto-commit; non-zero exit blocks commit+push and posts the failure to the task | e.g. `"npm run lint && npx tsc --noEmit"`; unset/empty disables; `MOE_DISABLE_QUALITY_GATE=1` skips per-run |
 | `qualityGateScope` | When the gate runs: only on the epic's final task (highest `order` among siblings) or on every task | `epicFinal` (default) / `everyTask` |
 | `taskSizing` | Plan-size thresholds enforced by `moe.submit_plan` (warn past warn values, reject past max values; distinct files = union of step `affectedFiles`). `autoCritique: true` additionally auto-blocks warn-zone plans back to PLANNING in CONTROL mode when no governor is online (capped like governor critique blocks) | `{"warnSteps": 8, "maxSteps": 12, "warnDistinctFiles": 5, "maxDistinctFiles": 10, "autoCritique": false}` (defaults) |
+| `pacePerStepMs` | Wall-clock ms budgeted per plan step; `moe.submit_plan` seeds an absent task budget as `stepCount * pacePerStepMs` (an explicit budget arg or an existing task budget wins) | Milliseconds (default: 900000 = 15 min; valid 1000-86400000) |
+| `appendOnlyFiles` | Project-relative globs for files every task appends to; claim-time `fileCollision` warnings skip them so real overlaps stay visible. Forward slashes only; supports literal paths, `*` (matches within one path segment) and `**` (crosses directories, and `**/x` also matches `x` at the root). A supplied array **replaces** the default — include `CHANGELOG.md` yourself if you still want it suppressed; `[]` disables suppression entirely | `["CHANGELOG.md"]` (default), e.g. `["CHANGELOG.md", "docs/**/release-notes.md", "docs/*.md"]` |
 | `enableAgentTeams` | Claude Code subagents for spawned agents | `false` (default) / `true` |
 | `chatEnabled` | Agent chat system | `true` (default) / `false` |
 | `chatMaxAgentHops` | Max agent-to-agent mention hops | Number (default: 4) |

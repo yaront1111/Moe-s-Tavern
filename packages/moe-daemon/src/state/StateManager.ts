@@ -53,6 +53,7 @@ import { nextStatusForRelease } from './workerLifecycle.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
+import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -887,8 +888,10 @@ export class StateManager {
       'chatMaxAgentHops',
       'autoCommit',
       'taskSizing',
+      'pacePerStepMs',
       'qualityGate',
       'qualityGateScope',
+      'appendOnlyFiles',
     ], 'project setting');
 
     const next: ProjectSettings = { ...this.project.settings };
@@ -898,6 +901,10 @@ export class StateManager {
     }
     if (input.speedModeDelayMs !== undefined) {
       next.speedModeDelayMs = this.validateIntegerValue(input.speedModeDelayMs, 'speedModeDelayMs', 0, 60000);
+    }
+    if (input.pacePerStepMs !== undefined) {
+      // Avoid near-zero alert timing and typo-sized values that disable alerts.
+      next.pacePerStepMs = this.validateIntegerValue(input.pacePerStepMs, 'pacePerStepMs', 1000, 86400000);
     }
     if (input.autoCreateBranch !== undefined) {
       next.autoCreateBranch = this.validateBooleanValue(input.autoCreateBranch, 'autoCreateBranch');
@@ -937,6 +944,15 @@ export class StateManager {
     }
     if (input.qualityGateScope !== undefined) {
       next.qualityGateScope = this.validateEnumValue(input.qualityGateScope, 'qualityGateScope', ['epicFinal', 'everyTask'] as const);
+    }
+    if (input.appendOnlyFiles !== undefined) {
+      // Bounded string array first (shape + length), then the affected-file
+      // canonicalization so stored globs are project-relative, traversal-free
+      // and forward-slashed. Both throw `invalidInput` before `next` is handed
+      // back to updateSettings, so a bad list never reaches memory or disk.
+      // An explicit `[]` survives untouched — it disables suppression.
+      const entries = this.validateStringArrayValue(input.appendOnlyFiles, 'appendOnlyFiles', 100, 500);
+      next.appendOnlyFiles = normalizeAffectedFiles(entries, 'appendOnlyFiles');
     }
     if (input.taskSizing !== undefined) {
       const incoming = this.requirePlainObject(input.taskSizing, 'taskSizing');
@@ -1167,6 +1183,7 @@ export class StateManager {
         description: s.description.slice(0, 5000),
         status: (typeof s.status === 'string' && VALID_STEP_STATUSES.includes(s.status) ? s.status : 'PENDING') as StepStatus,
         affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [],
+        ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
         ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
         ...(typeof s.note === 'string' ? { note: s.note.slice(0, 5000) } : {}),
         ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),

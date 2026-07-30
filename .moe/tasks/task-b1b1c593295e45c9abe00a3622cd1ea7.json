@@ -10,8 +10,83 @@
     "npx vitest run src/tools/submitPlan.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the `pacePerStepMs` project setting and validate it. In `packages/moe-daemon/src/types/schema.ts`, add an optional `pacePerStepMs?: number` field to the `ProjectSettings` interface, placed next to `taskSizing`, with a doc comment: soft wall-clock milliseconds budgeted per plan step; `moe.submit_plan` multiplies it by the step count to seed `task.budget.wallClockMs` when the architect supplies no explicit budget; default 900000 (15 min/step). In `packages/moe-daemon/src/state/StateManager.ts`, `validateSettingsUpdate` (around line 872): add `'pacePerStepMs'` to the `rejectUnknownFields` allowlist array, and add `if (input.pacePerStepMs !== undefined) { next.pacePerStepMs = this.validateIntegerValue(input.pacePerStepMs, 'pacePerStepMs', 1000, 86400000); }` next to the `speedModeDelayMs` branch. Bounds rationale to put in a short comment: a floor of 1000ms (1s) prevents a near-zero pace from re-creating the exact bug this task fixes (alerts firing seconds into step 1), and a ceiling of 86400000ms (24h per step) keeps a typo from disabling budget alerts entirely. Do NOT touch the `taskSizing` or `columnLimits` branches. No changes to `util/budget.ts` warn/escalate machinery.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Added optional pacePerStepMs project setting and validated updates as integers in [1000, 86400000], with the allowlist updated. Verification: npx vitest run src/state/StateManager.test.ts -> 1 file, 112 tests passed.",
+      "startedAt": "2026-07-30T22:10:09.148Z",
+      "completedAt": "2026-07-30T22:10:48.534Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Cover the new setting validation with a test. In `packages/moe-daemon/src/state/StateManager.test.ts`, extend the existing `describe('updateSettings rollback semantics')` block (around line 475) following its established style: (a) `updateSettings({ pacePerStepMs: 600000 })` resolves and the returned project has `settings.pacePerStepMs === 600000`; (b) each of `0`, `-1`, `999` (below floor), `900000.5` (non-integer) and `86400001` (above ceiling) rejects with an error mentioning `pacePerStepMs` — assert via `await expect(...).rejects.toThrow('pacePerStepMs')`, matching the existing `speedModeDelayMs: -1` assertion style; (c) omitting `pacePerStepMs` from an update leaves any previously-persisted value untouched (the `{ ...this.project.settings }` merge). Run `npx vitest run src/state/StateManager.test.ts` and confirm green before moving on.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Added coverage for valid pace persistence and every invalid boundary/non-integer case. Verification: npx vitest run src/state/StateManager.test.ts -> 1 file, 118 tests passed.",
+      "startedAt": "2026-07-30T22:10:52.725Z",
+      "completedAt": "2026-07-30T22:11:34.284Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Seed the default budget in `packages/moe-daemon/src/tools/submitPlan.ts`. Export `export const PACE_PER_STEP_MS_DEFAULT = 15 * 60 * 1000;` next to `MAX_STEP_DESCRIPTION_CHARS`, plus a module-local `function resolvePacePerStepMs(settings: ProjectSettings): number` that returns the configured value only when it is a finite integer > 0 and falls back to the default otherwise (mirror the `positiveInt` guard in `util/planSize.ts` — this is the error handling for a hand-edited `project.json` that bypassed `validateSettingsUpdate`). In the handler, keep the existing explicit-budget block at line 311 exactly as-is (an explicit `wallClockMs` that is non-finite or <= 0 must STILL throw `invalidInput` — never silently fall through to seeding), and add an `else` path after it: when `updatePayload.budget` was not set by that block AND `task.budget?.wallClockMs` is not already a positive number, set `updatePayload.budget = { ...(task.budget ?? {}), wallClockMs: implementationPlan.length * resolvePacePerStepMs(project.settings) }`. Spreading the prior budget preserves any `warnedAt`/`escalatedAt` marks, consistent with `setTaskBudget.ts`. Resubmit policy (decided with the human, state it in a comment): an existing positive `budget.wallClockMs` is left untouched, so a human's `moe.set_task_budget` can never be clobbered by an architect resubmit. Also add `budget: (updatePayload.budget as { wallClockMs?: number } | undefined)?.wallClockMs ?? task.budget?.wallClockMs ?? null` to the returned object so the seeded cap is visible in the tool response. Import `ProjectSettings` as a type import.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "Added guarded per-step pace resolution, default budget seeding, explicit/existing-budget precedence, mark preservation, and response visibility. Verification: npx vitest run src/tools/submitPlan.test.ts -> 1 file, 22 tests passed.",
+      "startedAt": "2026-07-30T22:11:38.724Z",
+      "completedAt": "2026-07-30T22:12:32.469Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add budget-seeding tests in `packages/moe-daemon/src/tools/submitPlan.test.ts`. Add a new `describe('budget seeding')` block reusing the `plan-size gate` block's harness verbatim (`setupMoeFolder(settingsOverrides)`, `writeEpic`, `writeTask(overrides)`, `makeSteps`, tmpdir `beforeEach`/`afterEach` with `clearAllSpeedModeTimeouts()`; `approvalMode: 'TURBO'` so no timers linger). Cases: (1) no budget arg, no `pacePerStepMs` setting, 4 steps -> persisted task budget `wallClockMs === 4 * PACE_PER_STEP_MS_DEFAULT` (assert on `state.getTask('task-size')!.budget`, and on the tool response `budget` field); (2) `setupMoeFolder({ pacePerStepMs: 60000 })`, 3 steps -> `180000`; (3) explicit `budget: { wallClockMs: 12345 }` wins over the seeded default; (4) a task written with a pre-existing `budget: { wallClockMs: 999, warnedAt: '<iso>' }` keeps `999` and its `warnedAt` after a no-arg resubmit (re-plan does not clobber); (5) error handling — an explicit `budget: { wallClockMs: 0 }` and `{ wallClockMs: -5 }` each still reject with an `INVALID_INPUT` MoeError and leave the task budget unset; (6) a hand-edited bad setting (`setupMoeFolder({ pacePerStepMs: 0 })`) falls back to `PACE_PER_STEP_MS_DEFAULT`. Import `PACE_PER_STEP_MS_DEFAULT` from `./submitPlan.js`. Verification command for `moe.complete_task`: `npx vitest run src/tools/submitPlan.test.ts` (exit code 0).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Added budget-seeding coverage for default/configured pace, explicit and existing precedence, warning-mark preservation, invalid explicit budgets, response visibility, and raw invalid-setting fallback. Verification: npx vitest run src/tools/submitPlan.test.ts -> 1 file, 29 tests passed.",
+      "startedAt": "2026-07-30T22:12:36.043Z",
+      "completedAt": "2026-07-30T22:13:42.795Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Document the setting. In `docs/SCHEMA.md`, add `pacePerStepMs?: number; // default: 900000 (15 min/step)` to the `ProjectSettings` interface block (near `taskSizing`, around line 128) with a one-line comment saying `moe.submit_plan` seeds `task.budget.wallClockMs = stepCount * pacePerStepMs` when no explicit budget is passed, and that an existing budget is never overwritten. In `docs/CONFIGURATION.md`, add a `pacePerStepMs` row to the Settings Reference table (after the `taskSizing` row, around line 121): description `Wall-clock ms budgeted per plan step; moe.submit_plan seeds an absent task budget as stepCount * pacePerStepMs (an explicit budget arg or an existing task budget wins)`, values `Milliseconds (default: 900000 = 15 min; valid 1000-86400000)`. Do not restructure or reflow the surrounding tables. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit` to confirm no regressions before completing the task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Documented pacePerStepMs semantics, default, bounds, and precedence. Adversarial diff review covered concurrent submit serialization, malformed/empty/negative/non-finite inputs, resubmit side effects, and preservation of existing human budgets; strengthened persistence coverage. Verification: npm test -> 47 files, 695 tests passed; npx tsc --noEmit -> exit 0.",
+      "startedAt": "2026-07-30T22:13:53.284Z",
+      "completedAt": "2026-07-30T22:15:28.031Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +99,67 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:27.299Z",
-  "updatedAt": "2026-07-30T21:42:27.299Z"
+  "updatedAt": "2026-07-30T22:20:38.519Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:02:43.832Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5,
+    "doneAt": "2026-07-30T22:20:38.519Z",
+    "wallClockMs": 1074687
+  },
+  "contextFetchedBy": [
+    "architect-6469484d",
+    "worker-dac3dd8f",
+    "qa-891e690f"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:06:40.993Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Seeding inside util/budget.ts as part of maybeApplyBudgetWarnings — rejected, the task spec explicitly scopes budget.ts out and seeding belongs at plan time, not at warn time. (2) Adding a `source: 'seeded' | 'explicit'` provenance field to TaskBudget so re-plans could reseed only self-seeded budgets — rejected as schema creep; it would also force a matching change in setTaskBudget.ts. (3) Always reseeding on every resubmit — rejected by the human: it would silently overwrite a human's moe.set_task_budget on the next architect resubmit. Chosen rule: explicit arg > existing task budget > seeded default.",
+    "codebaseInsights": "submit_plan builds a single `updatePayload` object and does one `state.updateTask(...,'PLAN_SUBMITTED')`; the existing budget branch (line 311) spreads `task.budget` to preserve warnedAt/escalatedAt — setTaskBudget.ts does the same, so the seeding path must too. Settings defaults are NOT centralized: initProject.ts writes a partial settings object and each consumer resolves its own default in code (see positiveInt/resolveTaskSizing in util/planSize.ts) — follow that pattern rather than adding pacePerStepMs to initProject.ts. validateSettingsUpdate uses rejectUnknownFields with an explicit allowlist, so a new field is invisible (and rejected) until it is added to BOTH the allowlist array and a validate*Value branch. Note staleWorkerTimeoutMs/reviewStaleTimeoutMs exist in ProjectSettings and in this repo's .moe/project.json but are missing from that allowlist — do not 'fix' them here, it is out of scope.",
+    "risks": "1) Global rails require the literal phrases 'error handling' and 'test' in plan text and forbid 'eval(', 'innerHTML', 'dangerouslySetInnerHTML', '__proto__' — keep them out of code comments and test strings. 2) Do not let an invalid EXPLICIT budget arg fall through to seeding; the invalidInput throw at line 312 must stay reachable. 3) `budget: {}` (present but no wallClockMs) currently skips the explicit block — that case must seed, so key the else-branch on whether updatePayload.budget was actually set, not on `params.budget === undefined`. 4) submit_plan can run in SPEED/CONTROL mode in other tests; use TURBO in the new describe and keep clearAllSpeedModeTimeouts() in afterEach or timers leak across files. 5) The JetBrains/VS Code settings dialogs do not expose this field — deliberately out of scope, project.json edit only. 6) Fresh tasks have metrics.firstClaimAt set at claim, so a seeded budget starts counting from first claim, not from plan approval; that is the intended semantic, do not change it.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/planSize.ts",
+      "packages/moe-daemon/src/tools/setTaskBudget.ts",
+      "packages/moe-daemon/src/util/budget.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 5400000
+  },
+  "planApprovedAt": "2026-07-30T22:06:41.048Z",
+  "workStartedAt": "2026-07-30T22:10:09.148Z",
+  "reviewStartedAt": "2026-07-30T22:16:22.977Z",
+  "verification": {
+    "command": "npx vitest run src/tools/submitPlan.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  1 passed (1)\nTests  29 passed (29)\nDuration  786ms",
+    "reportedAt": "2026-07-30T22:16:22.977Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/StateManager.test.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "docs/SCHEMA.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "completedAt": "2026-07-30T22:20:38.519Z",
+  "reviewCompletedAt": "2026-07-30T22:20:38.519Z",
+  "reviewSummary": "Re-ran the task verification command myself: `npx vitest run src/tools/submitPlan.test.ts` -> 29/29 pass; also `npx vitest run src/state/StateManager.test.ts` -> 118/118 pass; `npx tsc --noEmit` exit 0. Diff read in full (7 files, +302/-3, two of which belong to other in-flight tasks). DoD1: submitPlan.ts:337-343 seeds budget = implementationPlan.length * resolvePacePerStepMs(project.settings); tests assert persisted 4 * PACE_PER_STEP_MS_DEFAULT and configured 3*60000=180000, plus the response budget field. DoD2: explicit block (submitPlan.ts:352-360) runs first and still throws INVALID_INPUT for 0/-5 without falling through to seeding (test asserts MoeError code + budget stays undefined); guard keys on `typeof params.budget.wallClockMs === 'number'` so `budget: {}` still seeds; an existing positive budget + warnedAt survives resubmit (toEqual on whole object), so set_task_budget cannot be clobbered; hand-edited pacePerStepMs:0 falls back to default. DoD3: pacePerStepMs added to ProjectSettings, to the rejectUnknownFields allowlist, and validated via validateIntegerValue(1000, 86400000); StateManager tests cover 0/-1/999/900000.5/86400001 rejects, a 600000 accept asserted on disk in project.json, and preservation across an unrelated update; documented in docs/SCHEMA.md and the docs/CONFIGURATION.md settings table with default, range and precedence. Epic rails met (type + validation + both docs, no new MCP tool, O(1) work under the mutex, tests next to touched files); no forbidden patterns; util/budget.ts untouched as scoped. Not attributable to this task: full daemon suite is currently red (30 failed / 689 passed) in lifecycle.e2e, tools.test, governanceFeatures.test and affectedFiles.test — every failure traces to two other WORKING tasks' uncommitted work in the shared tree (task-a006fed8 newFiles existence gate at submitPlan.ts:333 rejecting old fixtures, task-019421 appendOnlyFiles test landing before its allowlist entry). None touch budget seeding."
 }

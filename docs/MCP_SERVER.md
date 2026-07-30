@@ -221,7 +221,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 {
   taskId: string,
   workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
-  steps: { description: string; affectedFiles?: string[] }[],
+  steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[],
   planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? },
   budget?: { wallClockMs?: number }  // soft cap on first-claim → DONE
 }
@@ -229,11 +229,14 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 
 `affectedFiles` paths must be project-relative (no absolute paths, no `..` traversal); the daemon normalizes separators and deduplicates. At claim time, overlapping affectedFiles across WORKING tasks surface as a `fileCollision` warning on `moe.claim_next_task` — advisory only, the claim still succeeds.
 
+`newFiles` declares the paths a step will **create**. Same normalization and 50-entry cap as `affectedFiles`; the key is omitted from the persisted step when empty.
+
 **Notes:**
 - **Enforced rails:** Only `forbiddenPatterns` and global `requiredPatterns` are strictly enforced.
 - **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
-- **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` ≤50 entries.
+- **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` and `newFiles` ≤50 entries.
+- **Affected-path existence gate:** every `affectedFiles` entry must exist on disk under the project root, unless some step declares it in `newFiles`. A plan citing a path that exists nowhere is rejected with `INVALID_INPUT`, `context.missingPaths`, `context.projectRoot`, and a message teaching both fixes — correct the path (they are relative to the PROJECT ROOT, so `packages/moe-daemon/src/x.ts`, not `src/x.ts`) or declare files this task creates in that step's `newFiles`. The exemption is plan-wide, so a file created in step 1 may be cited by step 2. `newFiles` still count toward the distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so declaring a path new cannot dodge either gate. The check runs after the rails and plan-size gates, and fails open: an unreadable project root, or any stat error other than `ENOENT`/`ENOTDIR`, is treated as "exists".
 - **Plan-size gate:** oversized plans are rejected with `CONSTRAINT_VIOLATION` — more than 12 steps or more than 10 *distinct* affected files (union across steps) — with `suggestedAction` pointing at `moe.create_task` ("split the task"). Past the softer thresholds (8 steps / 5 distinct files) the response carries a `warnings: string[]` array instead. Thresholds configurable via `project.json` `settings.taskSizing { warnSteps, maxSteps, warnDistinctFiles, maxDistinctFiles }`.
 - `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
 - **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count, distinct-file count, any size warnings, a size rubric line, and a DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
@@ -241,7 +244,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, warnings?: string[], message }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, budget, warnings?: string[], message, nextAction }
 ```
 
 ---

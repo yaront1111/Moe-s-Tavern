@@ -1,14 +1,26 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import type { ProjectSettings } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
 import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
-import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
 import { assessPlanSize } from '../util/planSize.js';
 
 /** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
 export const MAX_STEP_DESCRIPTION_CHARS = 10000;
+export const PACE_PER_STEP_MS_DEFAULT = 15 * 60 * 1000;
+
+function resolvePacePerStepMs(settings: ProjectSettings): number {
+  const configured = settings.pacePerStepMs;
+  return typeof configured === 'number'
+    && Number.isFinite(configured)
+    && Number.isInteger(configured)
+    && configured > 0
+    ? configured
+    : PACE_PER_STEP_MS_DEFAULT;
+}
 
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
@@ -117,7 +129,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             type: 'object',
             properties: {
               description: { type: 'string' },
-              affectedFiles: { type: 'array', items: { type: 'string' } }
+              affectedFiles: { type: 'array', items: { type: 'string' } },
+              newFiles: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Paths this step will create; exempt from the existence check'
+              }
             },
             required: ['description'],
             additionalProperties: false
@@ -151,7 +168,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       const params = args as {
         taskId: string;
         workerId?: string;
-        steps: { description: string; affectedFiles?: string[] }[];
+        steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
         planningNotes?: {
           approachesConsidered?: string;
           codebaseInsights?: string;
@@ -184,7 +201,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       // Normalization happens up-front (before rails check) so the rail-text
       // built below sees canonical paths and the persisted plan matches what
       // the collision detector compares against.
-      const normalizedSteps: { description: string; affectedFiles: string[] }[] = [];
+      const normalizedSteps: { description: string; affectedFiles: string[]; newFiles: string[] }[] = [];
       for (let i = 0; i < params.steps.length; i++) {
         const step = params.steps[i];
         if (!step.description || typeof step.description !== 'string' || step.description.trim().length === 0) {
@@ -199,19 +216,37 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         if (step.affectedFiles && step.affectedFiles.length > 50) {
           throw invalidInput('steps', `Step ${i + 1} has too many affected files (max 50)`);
         }
+        if (step.newFiles !== undefined && !Array.isArray(step.newFiles)) {
+          throw invalidInput('steps', `Step ${i + 1} newFiles must be a string[]`);
+        }
+        if (step.newFiles && step.newFiles.length > 50) {
+          throw invalidInput('steps', `Step ${i + 1} has too many new files (max 50)`);
+        }
         const normalizedFiles = normalizeAffectedFiles(
           step.affectedFiles,
           `steps[${i}].affectedFiles`
         );
-        normalizedSteps.push({ description: step.description, affectedFiles: normalizedFiles });
+        // Same normalizer as affectedFiles, so absolute paths, drive letters
+        // and traversal are rejected for newFiles too.
+        const normalizedNewFiles = normalizeAffectedFiles(
+          step.newFiles,
+          `steps[${i}].newFiles`
+        );
+        normalizedSteps.push({
+          description: step.description,
+          affectedFiles: normalizedFiles,
+          newFiles: normalizedNewFiles
+        });
       }
 
       const epic = state.getEpic(task.epicId);
       const project = state.project;
       if (!project) throw notFound('Project', 'current');
 
+      // newFiles are part of the plan's file surface — fold them into the rail
+      // text so declaring a path as "new" can't smuggle it past a rail.
       const planText = normalizedSteps
-        .map((step) => `${step.description} ${step.affectedFiles.join(' ')}`)
+        .map((step) => `${step.description} ${step.affectedFiles.join(' ')} ${step.newFiles.join(' ')}`)
         .join(' ');
 
       const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
@@ -246,7 +281,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       // the architect splits the TASK instead of shipping a 5-hour plan.
       // Configurable via settings.taskSizing; runs after rails so a rail
       // violation (a correctness problem) surfaces before a sizing one.
-      const planSize = assessPlanSize(normalizedSteps, project.settings);
+      // Count newFiles toward the distinct-file total too (the Set inside
+      // countDistinctAffectedFiles dedupes a path listed in both), so the
+      // exemption can't be used to dodge the sizing cap either.
+      const planSize = assessPlanSize(
+        normalizedSteps.map((step) => ({ affectedFiles: [...step.affectedFiles, ...step.newFiles] })),
+        project.settings
+      );
       if (planSize.violation) {
         throw new MoeError(
           MoeErrorCode.CONSTRAINT_VIOLATION,
@@ -267,11 +308,56 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         );
       }
 
+      // Affected-path existence gate. Runs AFTER the size gate so a cheap
+      // size rejection never pays for disk I/O. Paths the plan declares as
+      // newFiles (anywhere in the plan) are exempt — a file created in step 1
+      // is legitimately cited as affected by step 2.
+      const exemptKeys = new Set<string>();
+      for (const step of normalizedSteps) {
+        for (const file of step.newFiles) exemptKeys.add(pathKey(file));
+      }
+      const existenceCandidates: string[] = [];
+      const candidateSeen = new Set<string>();
+      for (const step of normalizedSteps) {
+        for (const file of step.affectedFiles) {
+          const key = pathKey(file);
+          if (exemptKeys.has(key) || candidateSeen.has(key)) continue;
+          candidateSeen.add(key);
+          existenceCandidates.push(file);
+        }
+      }
+      const missingPaths = await findMissingPaths(state.projectPath, existenceCandidates);
+      if (missingPaths.length > 0) {
+        const shown = missingPaths.slice(0, 10).join(', ');
+        const extra = missingPaths.length > 10 ? ` (+${missingPaths.length - 10} more)` : '';
+        throw new MoeError(
+          MoeErrorCode.INVALID_INPUT,
+          `Plan cites affectedFiles that do not exist under the project root ${state.projectPath}: ${shown}${extra}. ` +
+            `Two fixes, pick the right one. (1) If the file ALREADY EXISTS, the path is wrong: affectedFiles paths are relative to the PROJECT ROOT, ` +
+            `not to a package subdirectory — write "packages/moe-daemon/src/x.ts", not "src/x.ts". Correct the path and resubmit. ` +
+            `(2) If this task will CREATE the file, list it in that step's "newFiles" array instead of (or in addition to) affectedFiles; ` +
+            `newFiles are exempt from this check and still count toward the plan-size distinct-file total. ` +
+            `Do NOT park files that already exist in "newFiles" just to silence this gate — that hides a wrong path from the next worker and from collision detection.`,
+          {
+            missingPaths,
+            projectRoot: state.projectPath,
+            suggestedAction: {
+              tool: 'moe.submit_plan',
+              reason: 'Correct the paths or declare the ones this task creates in step.newFiles, then resubmit.'
+            }
+          },
+          'INVALID_INPUT'
+        );
+      }
+
       const implementationPlan = normalizedSteps.map((step, idx) => ({
         stepId: `step-${idx + 1}`,
         description: step.description,
         status: 'PENDING' as const,
-        affectedFiles: step.affectedFiles
+        affectedFiles: step.affectedFiles,
+        // Omit the key entirely when unused so tasks that never declare a new
+        // file keep their current persisted JSON shape.
+        ...(step.newFiles.length > 0 ? { newFiles: step.newFiles } : {})
       }));
 
       // Carry forward existing metrics (firstClaimAt populated by claim path)
@@ -316,6 +402,15 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         updatePayload.budget = {
           ...(task.budget ?? {}),
           wallClockMs: params.budget.wallClockMs,
+        };
+      } else if (!(typeof task.budget?.wallClockMs === 'number'
+        && Number.isFinite(task.budget.wallClockMs)
+        && task.budget.wallClockMs > 0)) {
+        // A positive existing budget wins so an architect resubmit cannot
+        // clobber a human's moe.set_task_budget override.
+        updatePayload.budget = {
+          ...(task.budget ?? {}),
+          wallClockMs: implementationPlan.length * resolvePacePerStepMs(project.settings),
         };
       }
 
@@ -466,6 +561,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         status: finalStatus,
         stepCount: implementationPlan.length,
         distinctFileCount: planSize.distinctFileCount,
+        newFileCount: exemptKeys.size,
+        budget: (updatePayload.budget as { wallClockMs?: number } | undefined)?.wallClockMs
+          ?? task.budget?.wallClockMs
+          ?? null,
         ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),
         message,
         nextAction

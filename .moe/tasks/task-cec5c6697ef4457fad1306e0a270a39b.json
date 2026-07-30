@@ -10,8 +10,57 @@
     "npx vitest run src/tools/reportBlocked.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add one shared role-liveness lookup to `packages/moe-daemon/src/util/workerLiveness.ts` (the file whose own comment says 'do not re-implement this check inline' — today `checkStaleWorkers` and `submit_plan` each hand-roll their own version). Export `findFreshestLiveWorkerByRole(workers: Iterable<Worker>, teams: Iterable<Team>, role: string, opts?: { nowMs?: number; timeoutMs?: number; excludeWorkerIds?: string[] }): Worker | null`. Implementation: build a Set of team ids whose `role` matches, then keep workers whose `teamId` is in that Set — resolve membership through `worker.teamId`, NOT `team.memberIds`, because StateManager explicitly warns that a worker dropped from memberIds out-of-band still points at its team. Filter with the existing `isWorkerAlive(worker, nowMs, timeoutMs)` so DEAD workers and unparsable `lastActivityAt` values are excluded by the one canonical predicate; drop any id in `excludeWorkerIds`. Return the survivor with the greatest parsed `lastActivityAt`, tie-broken by lowest worker id so the result is deterministic; return `null` when none survive. Pure function, no StateManager import (that would create an import cycle) — keep it taking plain iterables. Default `nowMs` to `Date.now()` and `timeoutMs` to the module's `LIVENESS_TIMEOUT_MS`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create `packages/moe-daemon/src/util/workerLiveness.test.ts` (no test file exists for this module yet) covering both the existing predicate and the new lookup with plain object literals and an injected `nowMs` — no StateManager, no timers. Cases for `findFreshestLiveWorkerByRole`: (1) a single live architect is returned; (2) with three live architects the greatest `lastActivityAt` wins; (3) a worker on a team with a different role is never returned even when it is the freshest overall; (4) a worker whose `lastActivityAt` is older than the liveness window is skipped, and when that is the only architect the result is `null`; (5) a `DEAD` architect inside the window is skipped; (6) a worker with `teamId: null` or a `teamId` pointing at a missing team is skipped; (7) `excludeWorkerIds` removes a candidate, and excluding the only live architect yields `null`; (8) two architects with identical `lastActivityAt` resolve to the lexicographically lower id on repeated calls (determinism); (9) error handling — a malformed `lastActivityAt` string is treated as not-alive rather than throwing. Also keep/extend direct `isWorkerAlive` coverage for the boundary (exactly at the timeout is alive, one ms past is not). Verification: `npx vitest run src/util/workerLiveness.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Route the ping in `packages/moe-daemon/src/tools/reportBlocked.ts`. Import `findFreshestLiveWorkerByRole`. After `blockedMsg` is built, resolve the target: call the helper with `state.workers.values()`, `state.teams.values()`, role `'architect'`, and `excludeWorkerIds` containing `task.assignedWorkerId` and `params.workerId` — a blocked architect must never ping itself (the chat sender here is `system`, which takes the human routing path and therefore does NOT filter self-mentions for us). Build `mentionPrefix` = `@<architectId> ` when one is found, else `@governors ` (the MentionRouter resolves both forms: a bare worker id and the `governors` group). Posting changes, keeping every existing try/catch so chat never blocks the tool: leave the `postSystemMessage` call unprefixed (it currently forwards straight to the general channel, so prefixing it too would double-ping the same person in the same channel); prefix the `postToGeneral` copy with `mentionPrefix`; when an architect was found, additionally `postToRoleChannel('architects', mentionPrefix + blockedMsg)` and keep the existing `postToRoleChannel('governors', blockedMsg)` unprefixed so governors keep full visibility without being paged; when no architect was found, post the `@governors`-prefixed message to the governors channel instead of the plain one. Do not change the worker BLOCKED update, the reason validation, `waitStatuses`, or the existing `nextAction`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Expose the routing decision in the `moe.report_blocked` response (same file, `packages/moe-daemon/src/tools/reportBlocked.ts`) so the outcome is assertable and visible to a human reading the tool output: add `notified: { target: '<architectId>' | '@governors', via: 'freshest-live-architect' | 'governors-fallback' }` to the returned object, and reword `message` to name who was pinged (e.g. `Worker marked as blocked. Pinged architect-abc (freshest live architect).` / `Worker marked as blocked. No live architect — escalated to @governors.`). Keep `success`, `taskId`, `taskStatus`, `workerStatus` and the conditional `nextAction` exactly as they are today — existing callers key on those.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Create `packages/moe-daemon/src/tools/reportBlocked.test.ts` (none exists today). Harness: tmpdir + `.moe` subdirs including `channels`, `messages` and `teams`, a TURBO project, an epic, a WORKING task assigned to `worker-1`, then `state.load()`; register workers via `state.createWorker` and roles via `state.createTeam({ name, role })` + `state.addTeamMember`, and set each worker's freshness with `state.updateWorker(id, { lastActivityAt: <iso> })` (updateWorker honours an explicit `lastActivityAt`). Assert chat routing with `vi.spyOn(state, 'postToGeneral')` and `vi.spyOn(state, 'postToRoleChannel')` rather than reading message files. Cases: (1) one live architect — the general post starts with `@<architectId>`, an `architects` role-channel post carries the same prefix, and the response `notified.target` is that id; (2) three architects with different `lastActivityAt` — the freshest is mentioned; (3) a stale architect (older than the liveness window) plus a DEAD one — falls back to `@governors`, `notified.via === 'governors-fallback'`, and no `architects` post is made; (4) no architect team at all — same fallback; (5) the blocked worker IS the only live architect — fallback, no self-mention; (6) the governors channel still receives the message in every case; (7) error handling — with chat posting stubbed to reject, `report_blocked` still resolves successfully and still marks the worker BLOCKED; (8) unchanged behaviour — an empty/oversized `reason` still throws, and `nextAction` is still emitted for an assigned worker. Verification command: `npx vitest run src/tools/reportBlocked.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Document the routing and regression-check. In `docs/MCP_SERVER.md`, extend the `moe.report_blocked` contract (add one if the tool has no section yet): the daemon direct-mentions the architect with the freshest `lastActivityAt` inside the 120s liveness window, excluding the blocked worker itself; with no live architect it escalates to `@governors`; the response carries `notified: { target, via }`. Note that this changes only who is paged — liveness rules, task status and release routing are untouched. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`; pay attention to any existing suite that asserts on the general-channel text of a blocked message, since those strings now carry a mention prefix.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +73,31 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.140Z",
-  "updatedAt": "2026-07-30T21:42:29.140Z"
+  "updatedAt": "2026-07-30T22:20:07.733Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:17:47.737Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-6469484d"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:20:07.684Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Inlining the architect lookup in reportBlocked.ts — rejected: that would be the THIRD hand-rolled copy of 'live worker with role X' (checkStaleWorkers and submit_plan's governor lookup are the first two), and workerLiveness.ts already declares itself the single home for the predicate. (2) Putting the helper on StateManager — rejected: a pure function over iterables is trivially testable without a tmpdir project and avoids an import cycle. (3) Honouring the existing-but-unused `needsFrom` param as a routing override — deliberately deferred: it is unused today, the DoD says nothing about it, and making it steer the ping would collide with the 'freshest live architect' assertions. Worth a follow-up task. (4) Prefixing every posted copy with the mention — rejected: postSystemMessage forwards to the general channel, so the same person would be paged twice in one channel.",
+    "codebaseInsights": "MentionRouter resolves BOTH a bare worker id (lower-cased match against known ids) and the group forms @architects/@workers/@qa/@governors via team.role — so `@governors` is a real routable fallback, not just decorative text. All daemon-side posts use sender 'system', which takes routeHumanMessage: mentions are honoured, the hop counter is reset, and there is no self-mention filter (that filter only exists on the agent path) — hence the explicit exclude list. postSystemMessage(taskId, content) is currently just a forwarder to postToGeneral, so report_blocked already double-posts to general today; do not 'fix' that here, just don't compound it. Role membership should be read from worker.teamId (StateManager warns that team.memberIds can go stale out-of-band). state.workers and state.teams are Maps exposed on the StateManager instance.",
+    "risks": "1) Self-ping: an architect blocked on a PLANNING task is itself a live architect — without the exclude list the tool would page the blocked agent and dead-end the escalation. Test it explicitly. 2) Chat is best-effort everywhere in this codebase — every new post must stay inside its own try/catch; a chat failure must never fail report_blocked or skip the BLOCKED worker update. 3) The 120s liveness window is short and a busy architect can look stale — that is fine and in scope only as 'fall back to @governors'; do NOT touch isWorkerAlive or LIVENESS_TIMEOUT_MS (the task says liveness rules are out of scope). 4) Other suites may assert on the general-channel blocked-message text — run the full suite, not just the new file. 5) Do not add a settings key for the timeout; the epic rail would then demand four more touch points for no benefit.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/util/workerLiveness.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/state/StateManager.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 5400000
+  },
+  "planApprovedAt": "2026-07-30T22:20:07.733Z"
 }

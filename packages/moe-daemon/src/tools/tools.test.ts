@@ -77,6 +77,10 @@ describe('MCP Tools', () => {
     };
 
     fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
+    // submit_plan rejects affectedFiles that don't exist under the project root
+    // unless declared in newFiles; this suite exercises the tool contracts, not
+    // the existence gate, so give its planned paths a real file on disk.
+    fs.writeFileSync(path.join(testDir, 'file.ts'), '');
     return project;
   }
 

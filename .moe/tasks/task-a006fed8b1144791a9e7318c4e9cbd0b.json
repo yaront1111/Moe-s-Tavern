@@ -11,8 +11,104 @@
     "npx vitest run src/tools/submitPlan.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the `newFiles` field to the persisted step shape. In `packages/moe-daemon/src/types/schema.ts`, add `newFiles?: string[];` to `interface ImplementationStep` (after `affectedFiles`, around line 183) with a doc comment: paths this step will CREATE; they are exempt from the submit_plan on-disk existence check and count toward the plan-size distinct-file total exactly like affectedFiles. Optional so existing persisted tasks keep their shape.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Added optional newFiles?: string[] to ImplementationStep (schema.ts:184) with doc comment covering exemption from the existence check and inclusion in the plan-size distinct-file total. Verified sibling budget-seeding block is already present in submitPlan.ts working tree.",
+      "startedAt": "2026-07-30T22:16:15.879Z",
+      "completedAt": "2026-07-30T22:16:37.729Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the existence helper to `packages/moe-daemon/src/util/affectedFiles.ts` (its stated home: path normalization + cross-task checks). Export `pathKey(p: string): string` by renaming/exposing the existing module-private `collisionKey` (keep `collisionKey` working for the collision functions — one function, two names is fine, or just rename all call sites) so submit_plan can case-fold on Windows/macOS with the SAME rule. Add `export async function findMissingPaths(projectRoot: string, paths: string[]): Promise<string[]>`: (a) error handling / fail-open guard — if `projectRoot` is empty or is not an existing directory (`fs.promises.stat` + `isDirectory()`, wrapped in try/catch), return `[]` immediately, because the daemon must never reject a plan just because it cannot see the tree; (b) dedupe the input with `pathKey` while preserving first-seen order; (c) for each, `const resolved = path.resolve(projectRoot, p)` and defensively confirm it stays under the root (`resolved === root || resolved.startsWith(root + path.sep)`) — treat an escaping path as missing; (d) probe with `fs.promises.access(resolved)` inside try/catch, run the probes concurrently via `Promise.all` (never a synchronous loop — this runs under the state mutex); (e) count ONLY a genuine ENOENT/ENOTDIR as missing — any other errno (EACCES, ELOOP, EPERM) is treated as existing so a permission-restricted tree cannot false-reject; (f) an existing directory counts as existing. Return the missing paths in input order.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts"
+      ],
+      "note": "Exported pathKey (collisionKey is now an internal alias, so collision call sites are untouched and both names share one platform rule). Added async findMissingPaths(projectRoot, paths): fail-open guard on a missing/non-directory root, first-seen-order dedupe via pathKey, defensive under-root containment check, concurrent fs.promises.access probes via Promise.all, and error handling that counts only ENOENT/ENOTDIR as missing (EACCES/ELOOP/EPERM treated as existing). Directories count as existing.",
+      "startedAt": "2026-07-30T22:16:40.134Z",
+      "completedAt": "2026-07-30T22:17:13.195Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire the gate into `packages/moe-daemon/src/tools/submitPlan.ts`. NOTE: sibling task order 1 (budget seeding) edits this same file — pull latest main first and keep its budget block intact. (1) Input schema: add `newFiles: { type: 'array', items: { type: 'string' }, description: 'Paths this step will create; exempt from the existence check' }` to the step object properties, and add `newFiles?: string[]` to the handler's `params.steps` type. (2) In the per-step validation loop, mirror the affectedFiles handling: reject a non-array with `invalidInput`, reject more than 50 entries, then `normalizeAffectedFiles(step.newFiles, \\`steps[${i}].newFiles\\`)` — reusing that normalizer means absolute paths, drive letters and traversal are rejected for newFiles too. Push `newFiles` onto each entry of `normalizedSteps`. (3) Feed newFiles into the two existing gates so a declared new file cannot be used to dodge them: include them in the `planText` string used by `checkPlanRails`, and pass `affectedFiles: [...step.affectedFiles, ...step.newFiles]` into `assessPlanSize` (the Set inside `countDistinctAffectedFiles` dedupes any path present in both). (4) After the plan-size gate and before building `implementationPlan` (so a cheap size rejection never pays for disk I/O), build the exempt set = union of every step's newFiles keyed with `pathKey`, collect the union of every step's affectedFiles that is NOT in that set, and `await findMissingPaths(state.projectPath, candidates)`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "Wired newFiles through submitPlan: input schema property + params.steps type, per-step non-array/max-50 rejects reusing normalizeAffectedFiles under field name steps[i].newFiles, and newFiles pushed onto normalizedSteps. Fed them into both existing gates (planText for checkPlanRails; a [...affectedFiles, ...newFiles] projection into assessPlanSize) so the exemption cannot dodge rails or sizing. Collected the plan-wide exempt key set and the deduped non-exempt affectedFiles candidates and awaited findMissingPaths(state.projectPath, ...) after the size gate, before implementationPlan is built. Budget block left untouched.",
+      "startedAt": "2026-07-30T22:17:23.831Z",
+      "completedAt": "2026-07-30T22:18:07.607Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Finish `packages/moe-daemon/src/tools/submitPlan.ts`: the teaching rejection + persistence. When `findMissingPaths` returns a non-empty list, throw `new MoeError(MoeErrorCode.INVALID_INPUT, message, { missingPaths, projectRoot: state.projectPath, suggestedAction: { tool: 'moe.submit_plan', reason: 'Correct the paths or declare the ones this task creates in step.newFiles, then resubmit.' } }, 'INVALID_INPUT')`. The message must name the paths (list at most 10, then `+N more`) and teach BOTH fixes verbatim in substance: paths are relative to the PROJECT ROOT, not to a package subdirectory (so `packages/moe-daemon/src/x.ts`, not `src/x.ts`) — fix the path if the file already exists; and if this task will CREATE the file, list it in that step's `newFiles` array instead. Add an explicit warning not to park existing files in `newFiles` to silence the gate. Then persist: `implementationPlan` entries carry `...(step.newFiles.length > 0 ? { newFiles: step.newFiles } : {})` so untouched tasks keep their current JSON shape, and add `newFileCount` (total declared) to the tool's return object alongside `distinctFileCount`. Leave the rails check, the plan-size gate, `updatePayload`, the SPEED/TURBO/CONTROL branches and the `nextAction` block otherwise untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "Added the teaching MoeError(INVALID_INPUT): names up to 10 missing paths with a +N more suffix, states the project root, teaches both fixes (project-root-relative path correction with the packages/moe-daemon/src/x.ts vs src/x.ts example; declaring created files in step.newFiles), and warns against parking existing files in newFiles. Details carry missingPaths, projectRoot and the moe.submit_plan suggestedAction. Persisted newFiles conditionally so untouched tasks keep their JSON shape, and added newFileCount to the return object. Rails check, size gate, updatePayload, approval branches and nextAction untouched. npx tsc --noEmit clean.",
+      "startedAt": "2026-07-30T22:18:10.185Z",
+      "completedAt": "2026-07-30T22:18:36.242Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Test the gate in `packages/moe-daemon/src/tools/submitPlan.test.ts` and repair that file's existing fixtures. Add a `touch(rel: string)` helper (mkdir -p the parent, write an empty file under `testDir`). Repair first: the `plan-size gate` describe cites `a.ts`…`f.ts`, which do not exist on disk — make its `makeSteps` helper `touch` every file it hands out, so all existing size tests stay green without changing their assertions. Then add a `describe('affected-path existence gate')` reusing that harness (TURBO mode, `clearAllSpeedModeTimeouts()` in afterEach) covering: (1) a plan citing only touched paths passes and persists them unchanged; (2) a plan citing `src/missing.ts` with no `newFiles` rejects — assert the thrown `MoeError` has `code` INVALID_INPUT, its message contains both `src/missing.ts` and `newFiles`, and the task is still PLANNING with an empty `implementationPlan`; (3) the same plan with `newFiles: ['src/missing.ts']` passes and `state.getTask(...)!.implementationPlan[0].newFiles` contains it; (4) cross-step union — step 1 declares it in `newFiles`, step 2 cites it in `affectedFiles`, plan passes; (5) an existing DIRECTORY path passes; (6) `newFiles` inherits normalization rejects (`../leak.ts` throws /traversal/); (7) error handling / fail-open — call the imported `findMissingPaths` directly with a project root that does not exist and assert it returns `[]`. Verification command: `npx vitest run src/tools/submitPlan.test.ts`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Ran the suite before repairing to confirm the gate was live: 2 pre-existing plan-size tests failed on a.ts..f.ts, exactly as the plan predicted. Repaired via a touch() helper wired into the plan-size makeSteps (no assertion changed). Added describe('affected-path existence gate') with 11 tests: all-exist pass + unchanged persistence, missing-path reject (INVALID_INPUT, message names src/missing.ts and newFiles, does not name the valid sibling, context.missingPaths exact, task still PLANNING with empty implementationPlan), newFiles rescue (persisted + counted once toward distinctFileCount), cross-step union, existing directory, newFiles traversal/non-array rejects, newFiles counted toward the distinct-file hard cap, and four findMissingPaths error handling cases (absent root, root-is-a-file, empty root, order+dedupe).\n\nSCOPE ADDITION beyond the plan, required by DoD item 3: StateManager.sanitizeImplementationPlan strips unknown step keys, so newFiles never reached disk. Added a one-line passthrough mirroring modifiedFiles (StateManager.ts:1186) — the key is only emitted when present, so persisted shapes are unchanged.\n\nnpx vitest run src/tools/submitPlan.test.ts: 41 passed (41), exit 0.",
+      "startedAt": "2026-07-30T22:18:49.566Z",
+      "completedAt": "2026-07-30T22:20:27.147Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Repair the other suites that submit plans citing paths absent from their tmpdir fixtures, then document the field. In `packages/moe-daemon/src/tools/tools.test.ts` (the 'submits a valid plan' case cites `file.ts`), `packages/moe-daemon/src/tools/governanceFeatures.test.ts` (cites `src/foo.ts` in the normalization case, `a.ts`/`b.ts` in the metrics case) and `packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts` (cites `a.ts`/`b.ts`): create those files inside each suite's `setupMoeFolder`/`setupMoe` helper rather than adding `newFiles`, so assertions like `expect(stored.implementationPlan[0].affectedFiles).toEqual(['src/foo.ts'])` keep asserting exactly what they assert today. Do NOT weaken any existing assertion. Docs: add `newFiles?: string[]` to the `ImplementationStep` block in `docs/SCHEMA.md` and, in the `moe.submit_plan` contract section of `docs/MCP_SERVER.md`, document the step field plus the rejection behaviour (affectedFiles must exist under the project root unless declared in newFiles). Finally run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`, and fix any other fixture the new gate trips — the same create-the-file way.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Repaired all four suites the gate tripped by creating the files in each suite's setup helper — no assertion weakened, no newFiles added to their plans: tools.test.ts (file.ts), lifecycle.e2e.test.ts (a.ts/b.ts), governanceFeatures.test.ts (src/foo.ts, src/bar.ts, a.ts, b.ts). The fourth reported failure (util/affectedFiles.test.ts) needed no change — that file never calls submit_plan and passes in isolation; a sibling worker is editing this same tree in parallel (suite total moved 731 -> 734 -> 736 between my runs), which explains the transient failure.\n\nDocs: SCHEMA.md ImplementationStep gained newFiles plus a new `newFiles` section and an existence-gate bullet under affectedFiles validation; corrected plannedDistinctFileCount's description since it now counts newFiles too. MCP_SERVER.md submit_plan: step input type, a newFiles paragraph, an existence-gate bullet, and a corrected Returns line (newFileCount/budget/nextAction).\n\nADVERSARIAL REVIEW found and fixed a real defect: findMissingPaths built its containment prefix as `root + path.sep`, so a project root that IS a filesystem root (`D:\\`, `/`) already ends in a separator and every real child failed the prefix test — the gate would have false-rejected every plan for such a project. Fixed with a trailing-separator-aware rootPrefix and covered by a regression test that derives the drive root from the tmpdir, plus a test asserting a genuinely escaping path is still reported missing.\n\nAlso reviewed and accepted: throw happens before any updateTask so no partial write; probe count is bounded by the size gate, which runs first; JetBrains parses steps key-by-key (MoeJson.parseImplementationStep) so the added field cannot break plugin deserialization. Deviation to note: newFileCount is the DISTINCT case-folded count rather than a raw total, matching distinctFileCount semantics.\n\nEvidence: npx tsc --noEmit exit 0; npm test 48 files / 736 tests passed.",
+      "startedAt": "2026-07-30T22:20:31.437Z",
+      "completedAt": "2026-07-30T22:24:56.719Z"
+    }
+  ],
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,5 +121,71 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.024Z",
-  "updatedAt": "2026-07-30T21:42:28.024Z"
+  "updatedAt": "2026-07-30T22:30:26.223Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:12:09.238Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 6,
+    "doneAt": "2026-07-30T22:30:26.223Z",
+    "wallClockMs": 1096985
+  },
+  "contextFetchedBy": [
+    "architect-6469484d",
+    "worker-b9d4a381",
+    "qa-891e690f"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:15:36.341Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Fuzzy 'did you mean' suffix search over the repo when a path is missing — rejected: it means walking the tree (node_modules) on every submit, under the state mutex, for a hint the teaching error message already gives. (2) A settings kill-switch (validateAffectedFilePaths) — rejected: newFiles is already a per-plan escape hatch, and a new settings key would drag in the epic rail's four-touch-point requirement for no benefit. (3) Repairing the broken sibling suites by adding newFiles to their plans — rejected: it would make fixtures assert the exemption path instead of the normal path, and governanceFeatures' normalization test asserts the exact stored affectedFiles array. Creating the files in the tmpdir keeps every existing assertion honest. (4) Rejecting paths only when the whole plan is missing — rejected as unpredictable.",
+    "codebaseInsights": "normalizeAffectedFile (util/affectedFiles.ts) already rejects absolute paths, drive letters, traversal and >500 chars, and canonicalizes separators — so by the time the existence check runs, every path is a safe project-relative string; reuse the same normalizer for newFiles instead of writing a second validator. That module deliberately does NOT resolve against the project root ('the daemon doesn't know which subprojects the agent considers canonical') — this task is the first place that resolution happens, which is exactly why the error message has to say project-root-relative out loud. `state.projectPath` is a public readonly field on StateManager. Case folding for Windows/macOS already exists as the module-private collisionKey — expose it rather than inventing a second rule. submit_plan's gate order is rails -> plan size -> (new) existence; keeping I/O last means a size rejection costs no stat calls.",
+    "risks": "1) BLAST RADIUS: this gate breaks every existing test that submits a plan with affectedFiles against a tmpdir with no source tree — confirmed in submitPlan.test.ts (plan-size describe), tools.test.ts, governanceFeatures.test.ts and __e2e__/lifecycle.e2e.test.ts. enforcement.integration.test.ts submits without affectedFiles and is safe. Run the FULL daemon suite, not just submitPlan.test.ts. 2) Same-file collision: sibling task order 1 (budget seeding) edits submitPlan.ts — pull main before starting and preserve its budget block. 3) Real-agent false rejects come from package-relative paths (src/tools/x.ts while the project root is the repo) — the error message must name the project root and show the corrected form, or agents will 'fix' it by dumping existing files into newFiles. 4) Never let a stat error other than ENOENT/ENOTDIR reject a plan. 5) Do not make the check synchronous — tool handlers run under the global state mutex. 6) Global rails require the literal phrases 'error handling' and 'test' in plan text and forbid the four listed patterns — keep them out of new file names and comments.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/util/affectedFiles.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/util/planSize.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 7200000
+  },
+  "planApprovedAt": "2026-07-30T22:15:36.393Z",
+  "workStartedAt": "2026-07-30T22:16:15.879Z",
+  "reviewStartedAt": "2026-07-30T22:25:59.685Z",
+  "verification": {
+    "command": "npx vitest run src/tools/submitPlan.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  1 passed (1)\n      Tests  43 passed (43)\n   Duration  829ms\nexit=0\n\nAlso run fresh from packages/moe-daemon: npx tsc --noEmit -> exit 0; npm test -> Test Files 48 passed (48), Tests 736 passed (736).",
+    "reportedAt": "2026-07-30T22:25:59.685Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/util/affectedFiles.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/tools.test.ts",
+    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "completedAt": "2026-07-30T22:30:26.223Z",
+  "reviewCompletedAt": "2026-07-30T22:30:26.223Z",
+  "reviewSummary": "Re-ran in packages/moe-daemon: `npx vitest run src/tools/submitPlan.test.ts` -> 43 passed; `npx tsc --noEmit` -> exit 0; full `npm test` -> 48 files / 736 tests passed (no sibling red in the shared tree). Reviewed the diff, excluding the budget-seeding and appendOnlyFiles hunks that belong to sibling tasks. DoD1: test asserts stored affectedFiles toEqual input, newFiles undefined. DoD2: rejection test asserts MoeError INVALID_INPUT, message contains src/missing.ts + newFiles but not the valid src/a.ts, context.missingPaths toEqual ['src/missing.ts'], task still PLANNING with empty implementationPlan; message teaches both fixes (project-root-relative correction with the packages/moe-daemon/src/x.ts example, declare-in-newFiles) and warns against parking existing files there. DoD3: newFiles round-trips via state.getTask -> sanitizeImplementationPlan (StateManager.ts:1186 allow-list passthrough read directly; updateTask sanitizes at :2368 and writes that same object); cross-step create-in-1/cite-in-2 exemption covered; completeStep.ts:74 and reopen.ts:20 both spread ...step so the field survives step lifecycle and reopen. DoD4: newFiles folded into planText for checkPlanRails and into assessPlanSize (distinctFileCount 2 when a path is in both lists; 11-newFiles cap rejection); the four suites the gate tripped (submitPlan plan-size describe, tools.test.ts, governanceFeatures.test.ts, lifecycle.e2e.test.ts) were repaired by creating files in setup — no existing assertion weakened. Rails: no new settings key, no new MCP tool, probes are async Promise.all (no sync work under the state mutex), fail-open on missing/file/empty root and on non-ENOENT errno, filesystem-root prefix regression covered. Diff clean of eval(/innerHTML/dangerouslySetInnerHTML/__proto__. Nit, not blocking: the '+N more' truncation branch is untested and only reachable when taskSizing.maxDistinctFiles is raised above 10, since the size gate runs first."
 }

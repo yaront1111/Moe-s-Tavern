@@ -10,8 +10,74 @@
     "npx vitest run src/tools/releaseTask.test.ts passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Extend `releaseTask.test.ts` first with deterministic, mutation-resistant coverage using fixed system time and seeded newest-first `priorHandoffs`. Assert that two qualifying empty-progress handoffs plus a third assigned-worker release inside the inclusive 24-hour window yields `status: 'BACKLOG'`, `cascadeTriggered: true`, a cleared assignee/IDLE prior worker, preserved handoff history, and a governor system message naming the task, threshold, and human-triage action. Add negative cases proving a current handoff that reports concrete work, fewer than three qualifying releases, malformed/expired timestamps, a release without a handoff, and `refusalCascadeAutoBacklog: false` all preserve normal `nextStatusForRelease` routing. Exercise `StateManager.updateSettings` in the same required test target to prove booleans persist, non-booleans fail through existing error handling without partial mutation, and the default-on behavior applies when the key is absent.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the backward-compatible optional setting `refusalCascadeAutoBacklog?: boolean` to daemon `ProjectSettings`. Whitelist it in `StateManager.validateSettingsUpdate` and validate supplied values with `validateBooleanValue`; leave omission distinct from `false` so old project files default on at the release decision while an explicit false survives partial settings updates. Do not add unrelated task state or repurpose QA-owned `reopenCount`/`reopenReason`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement the bounded refusal classifier and cascade in `releaseTask.ts`, adapting the archived item to current-main release semantics rather than copying it. Define an empty-progress handoff conservatively from the persisted structured `whatIsDone` field (trimmed/case-folded exact `nothing`/`none`/`n/a`/`na`, plus `nothing…` or `no progress…` prefixes); missing handoffs and any positive work description do not count. On a real assigned-worker release only, prepend the current handoff as today, scan the capped handoff history for finite `releasedAt` timestamps within 24 hours of the current release, and when the third qualifying release is reached and `state.project.settings.refusalCascadeAutoBacklog !== false`, override only that release's normal computed status to `BACKLOG`. Keep ordinary releases routed by the unchanged `nextStatusForRelease`, keep DONE/ARCHIVED and already-unassigned behavior unchanged, and return `cascadeTriggered: true` only on the triggering call.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add the explanatory cascade notification and update the tool description without weakening release error handling. After the task/worker updates succeed, post a dedicated best-effort message to `#governors` stating that the task was parked after three empty-progress releases in 24 hours and requires human reprioritization; swallow notification failures exactly like existing release broadcasts so chat cannot roll back or fail the release. Keep the scan bounded by the existing 20-handoff cap, perform no filesystem/network work under `StateManager.runExclusive`, and do not modify `nextStatusForRelease` or other automatic/deregister release paths.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Document the behavior in every affected contract. Add the optional default-true boolean and opt-out meaning to `docs/SCHEMA.md` and the CONFIGURATION example/settings table. Update the existing `moe.release_task` contract in `docs/MCP_SERVER.md` to distinguish normal in-place release routing from the three-in-24h empty-progress BACKLOG park, define that qualification comes from structured `handoffNote.whatIsDone`, document the `cascadeTriggered` response flag and governor notification, and state that releases without a handoff cannot be counted because progress is unknown.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Perform an adversarial self-review before verification: check the threshold is exactly the third qualifying release; the window comparison is deterministic and ignores invalid/future/out-of-window timestamps; explicit false is not lost to defaulting; positive-progress and handoff-less releases never count; already-unassigned retries cannot manufacture refusals; normal WORKING→WORKING/complete→REVIEW routing and terminal no-ops are unchanged; the worker is still idled when a cascade parks the task; QA reopen counters are untouched; message-post failures remain non-fatal; and the bounded scan adds no long synchronous work under the state mutex. Correct any issue found before the final run.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "From `packages/moe-daemon`, run the exact required fresh verification command `npx vitest run src/tools/releaseTask.test.ts`. Do not call `moe.complete_task` unless it exits 0 and the output confirms the cascade, progress/window/opt-out negatives, settings-validation error handling, and all pre-existing release regression tests pass; submit this exact command and its fresh output as completion evidence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +90,35 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.777Z",
-  "updatedAt": "2026-07-30T21:42:28.777Z"
+  "updatedAt": "2026-07-30T22:19:54.463Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-30T22:16:01.783Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7
+  },
+  "contextFetchedBy": [
+    "architect-4f3cb814"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-30T22:19:54.412Z",
+  "planningNotes": {
+    "approachesConsidered": "The archived tag's item #4 was inspected as a behavioral spec. Its reuse of newest-first `priorHandoffs`, 24-hour threshold, default-on boolean, and conservative `whatIsDone` classifier is appropriate because current `release_task` already persists the only release-scoped progress evidence there. Adding a claim-time baseline or new refusal-history task field was rejected: it would expand into claim/schema migration work despite the task explicitly scoping counting to `releaseTask.ts`. Counting any task with zero globally completed steps was rejected because a later claimant can make zero new progress on a partially completed task. Hard-coding all releases to BACKLOG or changing `nextStatusForRelease` was rejected by the task rail. The archived updates to `reopenCount`/`reopenReason` are deliberately not carried forward because current main uses those fields for QA rejection caps and metrics.",
+    "codebaseInsights": "Current `releaseTaskTool` validates handoffs before the mutex, prepends them to `priorHandoffs` (capped at 20), computes assigned-release status with `nextStatusForRelease`, updates the former worker to IDLE, and treats channel posts as best-effort. DONE/ARCHIVED unassigned releases are strict no-ops; already-unassigned releases have a separate repair/handoff path and should not count as new claim refusals. `HandoffNote` already provides `whatIsDone`, `releasedAt`, and `releasedBy`, so no new task/history schema is needed. `ProjectSettings` is in `types/schema.ts`; `validateSettingsUpdate` already exposes `validateBooleanValue`. The existing `docs/MCP_SERVER.md` release contract currently says only humans/blocked-timeout can park tasks, so it must be corrected alongside the two epic-required settings docs.",
+    "risks": "The largest semantic risk is conflating no progress on the current claim with no completed steps over the task lifetime; using the release handoff avoids that and preserves partially completed tasks. Other risks are counting duplicate already-unassigned releases, treating missing handoffs as proof of no progress, off-by-one/window flakiness, using a truthy default that ignores explicit false, corrupting QA reopen counters by copying stale archived code, or letting a governor-channel failure fail a successful release. Tests should freeze time and assert exact status/response/message/state outcomes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/tools/releaseTask.test.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-07-30T22:19:54.463Z"
 }

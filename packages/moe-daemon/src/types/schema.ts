@@ -78,6 +78,12 @@ export interface ProjectSettings {
   /** Plan-size warn/reject thresholds for moe.submit_plan; see TaskSizingSettings. */
   taskSizing?: TaskSizingSettings;
   /**
+   * Soft wall-clock milliseconds budgeted per plan step. moe.submit_plan
+   * multiplies this by the step count to seed task.budget.wallClockMs when the
+   * architect supplies no explicit budget. default: 900000 (15 min/step).
+   */
+  pacePerStepMs?: number;
+  /**
    * Shell command (e.g. "npm run lint && npx tsc --noEmit") the worker
    * wrapper runs in the project directory before the post-flight auto-commit.
    * Non-zero exit blocks the commit/push and posts the failure to the task.
@@ -114,6 +120,15 @@ export interface ProjectSettings {
    * staleWorkerTimeoutMs.
    */
   reviewStaleTimeoutMs?: number;
+  /**
+   * Project-relative globs for files every task appends to (changelogs,
+   * release notes). Claim-time fileCollision warnings ignore them so real
+   * overlaps stay visible. Literal paths, `*` (one segment) and `**` (across
+   * directories) are supported; forward slashes only. Omitted → the runtime
+   * default DEFAULT_APPEND_ONLY_FILES (`['CHANGELOG.md']`); a supplied array
+   * REPLACES that default, and `[]` disables suppression entirely.
+   */
+  appendOnlyFiles?: string[];
 }
 
 export interface Project {
@@ -175,6 +190,13 @@ export interface ImplementationStep {
   description: string;
   status: StepStatus;
   affectedFiles: string[];
+  /**
+   * Paths this step will CREATE. They are exempt from the submit_plan on-disk
+   * existence check and count toward the plan-size distinct-file total exactly
+   * like affectedFiles. Optional so tasks persisted before this field keep
+   * their shape.
+   */
+  newFiles?: string[];
   startedAt?: string;
   completedAt?: string;
   note?: string;

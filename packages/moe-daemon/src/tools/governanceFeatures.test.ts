@@ -54,6 +54,13 @@ describe('governance control-plane features', () => {
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
+    // submit_plan rejects affectedFiles that don't exist under the project root
+    // unless declared in newFiles; these tests assert normalization and metrics,
+    // not the existence gate, so give their planned paths a real file on disk.
+    fs.mkdirSync(path.join(testDir, 'src'), { recursive: true });
+    for (const file of ['src/foo.ts', 'src/bar.ts', 'a.ts', 'b.ts']) {
+      fs.writeFileSync(path.join(testDir, file), '');
+    }
   }
 
   function writeEpic(): Epic {
