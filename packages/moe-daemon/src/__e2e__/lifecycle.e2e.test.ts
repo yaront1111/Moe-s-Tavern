@@ -136,7 +136,7 @@ describe('lifecycle E2E', () => {
     // 3. Worker steps + complete_task
     await workThroughSteps('task-e2e', 'worker-a');
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
+    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
     expect(state.getTask('task-e2e')!.status).toBe('REVIEW');
 
     // 4. QA claim + get_context + approve → DONE
@@ -144,7 +144,7 @@ describe('lifecycle E2E', () => {
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
     await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     const qaApprove = qaApproveTool(state);
-    await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1' }, state);
+    await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1', summary: 'verified DoD; re-ran verification command green' }, state);
 
     const final = state.getTask('task-e2e')!;
     expect(final.status).toBe('DONE');
@@ -171,7 +171,7 @@ describe('lifecycle E2E', () => {
     await workThroughSteps('task-e2e', 'worker-a');
 
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
+    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
 
     // QA claim + get_context + reject
     const claim = claimNextTaskTool(state);
@@ -194,12 +194,12 @@ describe('lifecycle E2E', () => {
     await state.updateTask('task-e2e', { contextFetchedBy: ['worker-a'] });
     expect(state.getTask('task-e2e')!.implementationPlan.every((s) => s.status === 'PENDING')).toBe(true);
     await workThroughSteps('task-e2e', 'worker-a');
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
+    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
 
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
     await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
     const qaApprove = qaApproveTool(state);
-    await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1' }, state);
+    await qaApprove.handler({ taskId: 'task-e2e', workerId: 'qa-1', summary: 'verified DoD; re-ran verification command green' }, state);
     expect(state.getTask('task-e2e')!.status).toBe('DONE');
     expect(state.getTask('task-e2e')!.metrics?.rejectCount).toBe(1);
     expect(state.getTask('task-e2e')!.rejectionHistory).toHaveLength(1);
@@ -219,7 +219,7 @@ describe('lifecycle E2E', () => {
     await approveAndClaimWorker('task-e2e', 'worker-a');
     await workThroughSteps('task-e2e', 'worker-a');
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a' }, state);
+    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
 
     const claim = claimNextTaskTool(state);
     const qaReject = qaRejectTool(state);

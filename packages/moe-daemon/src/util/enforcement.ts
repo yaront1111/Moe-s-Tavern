@@ -1,5 +1,5 @@
-import type { Task } from '../types/schema.js';
-import { MoeError, MoeErrorCode } from './errors.js';
+import type { Task, TaskVerification } from '../types/schema.js';
+import { MoeError, MoeErrorCode, invalidInput, missingRequired } from './errors.js';
 import { logger } from './logger.js';
 
 // Deprecation warning dedupe: we log at most once per (task, tool) pair per daemon
@@ -92,4 +92,64 @@ export function assertAllStepsCompleted(task: Task): void {
     { taskId: task.id, remaining, totalSteps: plan.length },
     'NOT_ALLOWED'
   );
+}
+
+/** Upper bound on verification.command — a payload guard, not a style limit. */
+export const MAX_VERIFICATION_COMMAND_CHARS = 500;
+/** verification.outputTail is truncated (not rejected) past this length. */
+export const MAX_VERIFICATION_OUTPUT_CHARS = 2000;
+
+const VERIFICATION_CONTRACT =
+  'moe.complete_task requires verification evidence: { command, exitCode, outputTail? }. ' +
+  'Run the verification command the plan named (fresh, in the foreground), then report the exact command, ' +
+  'its exit code (must be 0), and the tail of its output.';
+
+/**
+ * Validate + normalize the verification evidence required by complete_task.
+ * A non-zero exit code is rejected outright — completing a task on a failing
+ * verification is exactly the claim-without-evidence this gate exists to stop.
+ * Returns the object to persist (caller stamps reportedAt).
+ */
+export function assertVerificationEvidence(
+  verification: unknown
+): Omit<TaskVerification, 'reportedAt'> {
+  if (verification === undefined || verification === null) {
+    throw new MoeError(
+      MoeErrorCode.MISSING_REQUIRED,
+      `Missing required field: verification. ${VERIFICATION_CONTRACT}`,
+      { field: 'verification' },
+      'MISSING_REQUIRED'
+    );
+  }
+  if (typeof verification !== 'object' || Array.isArray(verification)) {
+    throw invalidInput('verification', `must be an object. ${VERIFICATION_CONTRACT}`);
+  }
+  const v = verification as { command?: unknown; exitCode?: unknown; outputTail?: unknown };
+  if (typeof v.command !== 'string' || v.command.trim().length === 0) {
+    throw missingRequired('verification.command');
+  }
+  if (v.command.length > MAX_VERIFICATION_COMMAND_CHARS) {
+    throw invalidInput('verification.command', `too long (max ${MAX_VERIFICATION_COMMAND_CHARS} chars)`);
+  }
+  if (typeof v.exitCode !== 'number' || !Number.isInteger(v.exitCode)) {
+    throw invalidInput('verification.exitCode', 'must be an integer exit code');
+  }
+  if (v.exitCode !== 0) {
+    throw invalidInput(
+      'verification.exitCode',
+      `verification command failed (exit ${v.exitCode}). Fix the failure and re-run the command before completing — do not complete a task on failing verification.`
+    );
+  }
+  if (v.outputTail !== undefined && typeof v.outputTail !== 'string') {
+    throw invalidInput('verification.outputTail', 'must be a string');
+  }
+  const outputTail =
+    typeof v.outputTail === 'string' && v.outputTail.length > 0
+      ? v.outputTail.slice(-MAX_VERIFICATION_OUTPUT_CHARS)
+      : undefined;
+  return {
+    command: v.command.trim(),
+    exitCode: v.exitCode,
+    ...(outputTail !== undefined ? { outputTail } : {}),
+  };
 }

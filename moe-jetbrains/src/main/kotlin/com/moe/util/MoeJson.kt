@@ -22,6 +22,7 @@ import com.moe.model.Task
 import com.moe.model.TaskBudget
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
+import com.moe.model.TaskVerification
 import com.moe.model.Team
 import com.moe.model.Worker
 
@@ -267,7 +268,10 @@ object MoeJson {
                 budget = parseTaskBudget(obj),
                 priorHandoffs = parseHandoffs(obj),
                 failedDodItems = parseFailedDodItems(obj),
-                planCritiqueResult = parsePlanCritiqueResult(obj)
+                planCritiqueResult = parsePlanCritiqueResult(obj),
+                planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
+                verification = parseVerification(obj),
+                reviewSummary = obj.getStringOrNull("reviewSummary")
             )
         }
     }
@@ -278,6 +282,7 @@ object MoeJson {
         val m = element.asJsonObject
         return TaskMetrics(
             plannedStepCount = m.getIntOrNull("plannedStepCount"),
+            plannedDistinctFileCount = m.getIntOrNull("plannedDistinctFileCount"),
             executedStepCount = m.getIntOrNull("executedStepCount"),
             reopenCount = m.getIntOrNull("reopenCount"),
             rejectCount = m.getIntOrNull("rejectCount"),
@@ -329,6 +334,19 @@ object MoeJson {
                 rejectedBy = f.getStringOrNull("rejectedBy")
             )
         }
+    }
+
+    private fun parseVerification(obj: JsonObject): TaskVerification? {
+        val element = obj.get("verification") ?: return null
+        if (element.isJsonNull || !element.isJsonObject) return null
+        val v = element.asJsonObject
+        val command = v.getStringOrNull("command") ?: return null
+        return TaskVerification(
+            command = command,
+            exitCode = v.getIntOrNull("exitCode"),
+            outputTail = v.getStringOrNull("outputTail"),
+            reportedAt = v.getStringOrNull("reportedAt")
+        )
     }
 
     private fun parsePlanCritiqueResult(obj: JsonObject): PlanCritiqueResult? {
@@ -411,7 +429,10 @@ object MoeJson {
             budget = parseTaskBudget(obj),
             priorHandoffs = parseHandoffs(obj),
             failedDodItems = parseFailedDodItems(obj),
-            planCritiqueResult = parsePlanCritiqueResult(obj)
+            planCritiqueResult = parsePlanCritiqueResult(obj),
+            planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
+            verification = parseVerification(obj),
+            reviewSummary = obj.getStringOrNull("reviewSummary")
         )
     }
 

@@ -886,6 +886,9 @@ export class StateManager {
       'chatEnabled',
       'chatMaxAgentHops',
       'autoCommit',
+      'taskSizing',
+      'qualityGate',
+      'qualityGateScope',
     ], 'project setting');
 
     const next: ProjectSettings = { ...this.project.settings };
@@ -922,6 +925,45 @@ export class StateManager {
     }
     if (input.autoCommit !== undefined) {
       next.autoCommit = this.validateBooleanValue(input.autoCommit, 'autoCommit');
+    }
+    if (input.qualityGate !== undefined) {
+      // A shell command the worker wrapper runs pre-commit (same trust model
+      // as agentCommand). Empty string disables the gate.
+      next.qualityGate = this.validateStringValue(input.qualityGate, 'qualityGate', {
+        maxLength: 500,
+        allowEmpty: true,
+        trim: true,
+      });
+    }
+    if (input.qualityGateScope !== undefined) {
+      next.qualityGateScope = this.validateEnumValue(input.qualityGateScope, 'qualityGateScope', ['epicFinal', 'everyTask'] as const);
+    }
+    if (input.taskSizing !== undefined) {
+      const incoming = this.requirePlainObject(input.taskSizing, 'taskSizing');
+      this.rejectUnknownFields(incoming, [
+        'warnSteps',
+        'maxSteps',
+        'warnDistinctFiles',
+        'maxDistinctFiles',
+        'autoCritique',
+      ], 'taskSizing setting');
+      const merged: NonNullable<ProjectSettings['taskSizing']> = { ...(next.taskSizing || {}) };
+      if (incoming.warnSteps !== undefined) {
+        merged.warnSteps = this.validateIntegerValue(incoming.warnSteps, 'taskSizing.warnSteps', 1, 100);
+      }
+      if (incoming.maxSteps !== undefined) {
+        merged.maxSteps = this.validateIntegerValue(incoming.maxSteps, 'taskSizing.maxSteps', 1, 100);
+      }
+      if (incoming.warnDistinctFiles !== undefined) {
+        merged.warnDistinctFiles = this.validateIntegerValue(incoming.warnDistinctFiles, 'taskSizing.warnDistinctFiles', 1, 100);
+      }
+      if (incoming.maxDistinctFiles !== undefined) {
+        merged.maxDistinctFiles = this.validateIntegerValue(incoming.maxDistinctFiles, 'taskSizing.maxDistinctFiles', 1, 100);
+      }
+      if (incoming.autoCritique !== undefined) {
+        merged.autoCritique = this.validateBooleanValue(incoming.autoCritique, 'taskSizing.autoCritique');
+      }
+      next.taskSizing = merged;
     }
     if (input.columnLimits !== undefined) {
       const incoming = this.requirePlainObject(input.columnLimits, 'columnLimits');

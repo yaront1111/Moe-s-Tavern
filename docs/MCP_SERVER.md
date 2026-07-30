@@ -183,6 +183,10 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
   epic: { id, title, description, architectureNotes, epicRails } | null,
   task: {
     id, title, description, definitionOfDone, taskRails, status, implementationPlan,
+    planSizeWarnings?: string[],        // present when the latest submit_plan drew warn-zone size warnings
+    verification: { command, exitCode, outputTail?, reportedAt } | null, // complete_task evidence — QA re-runs the command
+    filesModified: string[],            // union of per-step modifiedFiles/affectedFiles, captured at complete_task
+    rejectionHistory?: RejectionHistoryEntry[], // present when non-empty; 5 most recent, newest first
     comments: Array<{
       id: string,
       author: string,
@@ -230,12 +234,14 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 - **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
 - **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` ≤50 entries.
+- **Plan-size gate:** oversized plans are rejected with `CONSTRAINT_VIOLATION` — more than 12 steps or more than 10 *distinct* affected files (union across steps) — with `suggestedAction` pointing at `moe.create_task` ("split the task"). Past the softer thresholds (8 steps / 5 distinct files) the response carries a `warnings: string[]` array instead. Thresholds configurable via `project.json` `settings.taskSizing { warnSteps, maxSteps, warnDistinctFiles, maxDistinctFiles }`.
 - `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
-- **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count + DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
+- **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count, distinct-file count, any size warnings, a size rubric line, and a DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
+- **Warn-zone persistence + unsupervised size critique:** warn-zone warnings are persisted as `task.planSizeWarnings` (cleared by a compliant resubmit). With `settings.taskSizing.autoCritique: true`, CONTROL mode, and NO governor online, the daemon auto-blocks a warn-zone plan back to `PLANNING` (verdict recorded as `planCritiqueResult` by `moe-daemon-size-critic`, bounded by the same `critiqueBlockCount` cap as governor blocks; at the cap the task rests in `AWAITING_APPROVAL` with a `🛑 HUMAN DECISION REQUIRED` post). The response's `status` is then `"PLANNING"` and `nextAction` routes to a re-plan via `moe-epic-breakdown`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, message }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, warnings?: string[], message }
 ```
 
 ---
@@ -304,16 +310,30 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 
 ### moe.complete_task
 
-Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires task to be in `WORKING` status, caller to own the task, and every implementation step to be `COMPLETED`.
+Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires task to be in `WORKING` status, caller to own the task, every implementation step to be `COMPLETED`, and **verification evidence** from a fresh run of the plan's verification command.
 
 **Parameters:**
 ```typescript
-{ taskId: string, prLink?: string, summary?: string, workerId?: string }
+{
+  taskId: string,
+  verification: {          // REQUIRED — attestation of a fresh verification run
+    command: string,       // the exact command that was run (≤500 chars)
+    exitCode: number,      // must be 0 — a non-zero exit code is rejected
+    outputTail?: string    // tail of its output (kept to the last 2000 chars)
+  },
+  prLink?: string,
+  summary?: string,
+  workerId?: string
+}
 ```
+
+**Notes:**
+- Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
+- The evidence is persisted as `task.verification` (with `reportedAt`) and the union of per-step `modifiedFiles`/`affectedFiles` as `task.filesModified`; both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "REVIEW", stats: { stepsCompleted, filesModified, duration } }
+{ success: true, taskId, status: "REVIEW", stats: { stepsCompleted, totalSteps, filesModified, duration } }
 ```
 
 ---
@@ -678,8 +698,10 @@ Create a new task in an epic.
 
 **Returns:**
 ```typescript
-{ success: true, task }
+{ success: true, task, warnings?: string[] }
 ```
+
+`warnings` carries advisory task-shape feedback: empty `definitionOfDone` (a placeholder was substituted — give every task 3-7 mechanically checkable items), more than 7 DoD items (usually several tasks — split before planning), or a title containing "and" (often two tasks). Advisory only; the hard size gate lives in `moe.submit_plan`.
 
 ---
 
@@ -701,8 +723,14 @@ Create a new epic.
 
 **Returns:**
 ```typescript
-{ success: true, epic }
+{
+  success: true,
+  epic,
+  nextAction: { tool: "moe.create_task", args: { epicId }, reason, recommendedSkill: { name: "moe-epic-breakdown", reason } }
+}
 ```
+
+The `nextAction` steers the architect into the slicing pass (`moe-epic-breakdown`) before the first `moe.create_task` — small tasks (typically 10-30 per epic, ~30-60 human-minutes, 1-3 files each) ending with an integration-and-hardening task.
 
 ---
 
@@ -974,12 +1002,18 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 
 ### moe.qa_approve
 
-QA approves a task in REVIEW status, moving it to DONE.
+QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of what was verified — symmetric with `qa_reject`'s required `reason`, so DONE tasks carry an audit trail instead of a rubber stamp.
 
 **Parameters:**
 ```typescript
-{ taskId: string, summary?: string, workerId?: string }
+{
+  taskId: string,
+  summary: string,     // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
+  workerId?: string
+}
 ```
+
+The summary is persisted on the task as `reviewSummary`.
 
 **Returns:**
 ```typescript
@@ -988,6 +1022,7 @@ QA approves a task in REVIEW status, moving it to DONE.
 
 **Errors:**
 - `taskId is required`
+- `summary` missing/empty → `MISSING_REQUIRED` (checked after ownership/context guards)
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to approve`
 

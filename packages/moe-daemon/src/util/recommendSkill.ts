@@ -12,6 +12,7 @@
  * blocking, doesn't apply").
  *
  * Phases the daemon can detect from state machine position:
+ *   - architect, epic created (slicing pass ahead)      → moe-epic-breakdown
  *   - architect, fresh PLANNING task                    → moe-planning
  *   - architect, before submit_plan                     → writing-plans
  *   - worker,    on first start_step (unfamiliar code)  → explore-before-assume
@@ -50,6 +51,7 @@ export type { SkillRecommendation } from '../types/schema.js';
 export type Role = 'architect' | 'worker' | 'qa';
 
 export type SkillTrigger =
+  | 'epic_breakdown'           // architect, epic just created — slicing pass before create_task
   | 'planning_entry'           // architect, fresh PLANNING task
   | 'before_submit_plan'       // architect, plan drafted
   | 'first_start_step'         // worker, opening a step
@@ -63,6 +65,7 @@ export type SkillTrigger =
 
 const TABLE: Record<Role, Partial<Record<SkillTrigger, SkillRecommendation>>> = {
   architect: {
+    epic_breakdown:     { name: 'moe-epic-breakdown',            reason: 'You just created an epic. Load this before create_task — it decides where to cut and how small: many small tasks (1-3 files, under an hour each), not a few big ones. Oversized plans get rejected downstream.' },
     planning_entry:     { name: 'moe-planning',                  reason: 'You are starting a fresh PLANNING task. Load this before drafting the plan — it is the plan structure the runtime expects. Do not skip it as trivial.' },
     before_submit_plan: { name: 'writing-plans',                 reason: 'You are about to call submit_plan. Load this first so the plan is complete and reviewable.' },
   },

@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=d8741ba0b7be
+# moe-generated: sha=6bd5a3cd8ed6
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -33,17 +33,39 @@ Anti-seams — do **not** cut here:
 - **By file.** Files move. A task scoped to a file becomes a merge conflict with a plan attached.
 - **By agent convenience.** Splitting so three workers are busy, when the second and third can't start until the first lands, just adds handoff cost.
 
-## Sizing
+## Sizing — hard numbers, not vibes
 
-Target: a task a competent worker finishes in **one session**, producing a diff a reviewer can hold in their head.
+Target: **≤60 minutes of human-equivalent work per task** — aim for ~30 (≈10–30 min of agent runtime). One self-contained deliverable: a function, a test file, a review. One noun per title: one model, one service, one endpoint. The evidence is one-sided — agents are ~90%+ reliable on 30-minute tasks and a coin flip on 5-hour ones, and review defect-discovery collapses past 400 changed LOC (see `docs/roles/architect.reference.md` → "Why small tasks").
+
+| Dimension | Target | Ceiling |
+|---|---|---|
+| Human-equivalent time | ~30 min | 60 min |
+| Files touched | 1–3 | >5 distinct files warns, >10 rejects at `moe.submit_plan` |
+| Plan steps | ≤8 | >8 warns, >12 rejects at `moe.submit_plan` |
+| DoD items | 3–7, each mechanically checkable | >7 draws a `moe.create_task` warning |
+| Net changed LOC | ≤200 | >400 is QA grounds for reject-as-oversized |
+
+The daemon enforces this downstream (thresholds tunable via `project.json` `settings.taskSizing`): `moe.submit_plan` hard-rejects oversized plans with `CONSTRAINT_VIOLATION`. An undersliced epic doesn't save work — it bounces back here for re-slicing after the architect has already burned a planning pass. **Recalibrate your count upward:** an epic that feels like 2–3 tasks is almost always 10–30 small ones. Foundational/contract tasks first, then vertical slices, ending with the integration-and-hardening task.
+
+Secondary split/merge signals:
 
 | Signal | Action |
 |---|---|
-| DoD has more than ~6 items | Split it |
+| DoD needs more than 7 items | Split it |
 | Touches 3+ packages | Split on the package seam, unless it's a single mechanical rename |
-| The title needs the word "and" | Usually two tasks — check whether the halves can land independently |
+| The title needs the word "and" | Usually two tasks — `create_task` warns on it; check whether the halves can land independently |
 | It can't be described without describing another unfinished task | Merge them, or make the dependency explicit via `order` |
 | Under ~30 minutes of real work | Merge it into its neighbour; per-task overhead (claim, plan, review) exceeds the work |
+
+### SPIDR — the split procedure
+
+When any cap above is exceeded, split with **SPIDR**. Try each letter in order; take the first that yields independently-landable pieces:
+
+- **S**pike — carve the unknown into its own research task whose deliverable is a written decision, not code.
+- **P**ath — split by workflow path: happy path first, each error/edge path its own task.
+- **I**nterface — split by surface: one task per endpoint, CLI flag, tool, UI entry point.
+- **D**ata — split by data variation: core shape first; each extra format, migration, or edge dataset later.
+- **R**ules — split by business rule: land the permissive version, tighten one rule per follow-up task.
 
 ## Ordering and dependencies
 
@@ -52,14 +74,24 @@ Target: a task a competent worker finishes in **one session**, producing a diff 
 - Producers before consumers. If task B imports what task A creates, A gets the lower `order`.
 - State the dependency in plain text in B's `description` ("depends on the `SkillMarker` type from task-…"), because nothing enforces it. A worker who claims B early needs to be able to see that.
 - Prefer orderings where the first 2–3 tasks are genuinely independent — that's what lets a fleet parallelize at all.
+- **File-disjoint tasks are the only ones parallel-claimable.** Overlapping `affectedFiles` across WORKING tasks surface as claim-time `fileCollision` warnings. Cut so concurrent-track tasks touch disjoint files; when two tasks must touch the same file, that's a sequencing decision (`order`), not something to talk workers through.
 - Tasks land in `BACKLOG` and are human-gated into `PLANNING`; ordering is advice to the human and to the governor, not a lock.
 
 ## What every task must carry
 
-- **`definitionOfDone`**: verifiable claims, not intentions. "moe.list_tasks returns tasks filtered by epicId" — not "epic filtering works."
+- **`definitionOfDone`**: 3–7 items, every one mechanically checkable — a command to run or a test to pass. DoD items double as the worker's stopping conditions. "moe.list_tasks returns tasks filtered by epicId, proven by the new vitest cases" — not "epic filtering works."
 - **Its own tests.** Every task tests its own behavior. This is not deferred to the final task.
 - **`taskRails`** only where this task needs a constraint the epic rails don't already impose.
-- **Enough `description`** that a worker who has read neither the epic nor the sibling tasks can start.
+- **A four-element `description`** a worker who has read neither the epic nor the sibling tasks can start from: (1) the objective, (2) the concrete deliverable that exists when it's done, (3) explicit NOT-in-scope boundaries, (4) the exact verification command that proves it done. The worker runs that command fresh and submits its result as `moe.complete_task` verification evidence — a task without a named command stalls at completion.
+
+## Separate test authorship from implementation
+
+Agents that own their tests are observed deleting or weakening them when the tests get in the way; held-out tests remove the incentive (separated authorship scores dramatically better on SWE-bench-style evals with near-zero test-hacking). For behavior-heavy slices, cut the pair:
+
+1. A **test-authoring task** at the lower `order`: deliverable is committed acceptance tests for the behavior — red or `.skip`-marked, mutation-resistant assertions, named files. Its DoD: "tests exist, express the acceptance criteria, and fail (or are skipped) against current code."
+2. The **implementation task** right after it: DoD includes "the tests from task-<id> pass **unchanged**" — QA rejects on sight if the diff touches those test files (the moe-qa-loop test-integrity check enforces this).
+
+Skip the pair for trivial slices (config, docs, mechanical renames) — two claim/review cycles cost more than the risk. One test-authoring task can also cover several small sibling implementations when they share a surface.
 
 ## End the epic with an integration-and-hardening task
 

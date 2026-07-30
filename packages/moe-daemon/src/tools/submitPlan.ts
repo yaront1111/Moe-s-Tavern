@@ -1,9 +1,11 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
 import { checkPlanRails } from '../util/rails.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { assessPlanSize } from '../util/planSize.js';
 
 /** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
 export const MAX_STEP_DESCRIPTION_CHARS = 10000;
@@ -239,6 +241,32 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         );
       }
 
+      // Plan-size gate: oversized tasks fail at coin-flip rates and grind QA —
+      // warn past the soft thresholds, hard-reject past the max thresholds so
+      // the architect splits the TASK instead of shipping a 5-hour plan.
+      // Configurable via settings.taskSizing; runs after rails so a rail
+      // violation (a correctness problem) surfaces before a sizing one.
+      const planSize = assessPlanSize(normalizedSteps, project.settings);
+      if (planSize.violation) {
+        throw new MoeError(
+          MoeErrorCode.CONSTRAINT_VIOLATION,
+          `${planSize.violation}. This task is too big for one worker session — do NOT merge steps to dodge the cap; split the work. ` +
+            `Load the moe-epic-breakdown skill and cut along SPIDR axes (Spike/Path/Interface/Data/Rules): ` +
+            `create smaller sibling tasks via moe.create_task (each <=${planSize.thresholds.warnSteps} steps, 1-3 files, one self-contained deliverable), ` +
+            `then resubmit a narrow plan for task ${task.id} covering only its slice.`,
+          {
+            stepCount: planSize.stepCount,
+            distinctFileCount: planSize.distinctFileCount,
+            thresholds: planSize.thresholds,
+            suggestedAction: {
+              tool: 'moe.create_task',
+              reason: 'Split this task into smaller siblings (moe-epic-breakdown / SPIDR), then resubmit a narrow plan for this one.'
+            }
+          },
+          'CONSTRAINT_VIOLATION'
+        );
+      }
+
       const implementationPlan = normalizedSteps.map((step, idx) => ({
         stepId: `step-${idx + 1}`,
         description: step.description,
@@ -247,12 +275,19 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       }));
 
       // Carry forward existing metrics (firstClaimAt populated by claim path)
-      // but refresh plannedStepCount whenever a new plan lands.
+      // but refresh the plan-size counters whenever a new plan lands.
       const existingMetrics = task.metrics ?? {};
-      const updatedMetrics = { ...existingMetrics, plannedStepCount: implementationPlan.length };
+      const updatedMetrics = {
+        ...existingMetrics,
+        plannedStepCount: implementationPlan.length,
+        plannedDistinctFileCount: planSize.distinctFileCount,
+      };
 
       const updatePayload: Record<string, unknown> = {
         implementationPlan,
+        // Persist warn-zone size warnings so boards/governors see size pressure
+        // without reading chat; a compliant resubmit clears them.
+        planSizeWarnings: planSize.warnings.length > 0 ? planSize.warnings : undefined,
         // A freshly-submitted plan supersedes any prior attempt's step ids — clear
         // stepsCompleted so it can't carry stale 'step-N' ids onto the new plan
         // (request_replan already does this; submit_plan is the other fresh-plan boundary).
@@ -322,8 +357,13 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           const dodSummary = dodList.length > 0
             ? dodList.map((d) => `• ${d.slice(0, 120)}`).join('\n')
             : '(no DoD items)';
+          const sizeWarningLines = planSize.warnings.length > 0
+            ? `⚠️ ${planSize.warnings.join('\n⚠️ ')}\n`
+            : '';
           const summary = `📋 Plan ready for critique — ${task.title} (${task.id})\n`
-            + `Steps: ${implementationPlan.length}\n`
+            + `Steps: ${implementationPlan.length} | Distinct files: ${planSize.distinctFileCount}\n`
+            + sizeWarningLines
+            + `Size rubric: block when steps > ${planSize.thresholds.maxSteps} or files > ${planSize.thresholds.maxDistinctFiles}; scrutinize anything past ${planSize.thresholds.warnSteps} steps / ${planSize.thresholds.warnDistinctFiles} files — oversized tasks should be split (SPIDR), not line-edited.\n`
             + `DoD:\n${dodSummary}\n`
             + `Call moe.submit_plan_critique { taskId: "${task.id}", verdict: "pass" | "block", concerns? } to weigh in.`;
           await state.postToRoleChannel('governors', summary);
@@ -333,6 +373,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // task is parked awaiting critique. Active = registered with team
         // role 'governor'. We use a separate update to avoid clobbering the
         // status transition's worker-clearing logic.
+        let governorOnline = false;
         try {
           const governors: string[] = [];
           for (const team of state.teams.values()) {
@@ -342,7 +383,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
               if (w) governors.push(memberId);
             }
           }
-          if (governors.length > 0) {
+          governorOnline = governors.length > 0;
+          if (governorOnline) {
             await state.updateTask(task.id, {
               pendingPlanCritique: {
                 criticWorkerId: governors[0],
@@ -351,15 +393,66 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             });
           }
         } catch { /* never block tool */ }
+
+        // Unsupervised size critique (opt-in, settings.taskSizing.autoCritique):
+        // with no governor online there is nobody to block a warn-zone plan
+        // before the human sees it, so the daemon itself files the critique —
+        // reusing the governor block machinery and its cap so architect ↔
+        // daemon can't loop forever. At the cap the task rests in
+        // AWAITING_APPROVAL (human-gated) with a loud banner instead.
+        if (!governorOnline && planSize.warnings.length > 0 && project.settings.taskSizing?.autoCritique === true) {
+          const blockCount = task.critiqueBlockCount ?? 0;
+          const concerns = planSize.warnings;
+          const concernText = concerns.map((c) => `• ${c}`).join('\n');
+          if (blockCount < MAX_CRITIQUE_BLOCKS_DEFAULT) {
+            try {
+              await state.updateTask(task.id, {
+                status: 'PLANNING',
+                critiqueBlockCount: blockCount + 1,
+                planCritiqueResult: {
+                  verdict: 'block',
+                  reviewedBy: 'moe-daemon-size-critic',
+                  reviewedAt: new Date().toISOString(),
+                  concerns,
+                },
+                pendingPlanCritique: undefined,
+                reopenReason: `Plan auto-blocked as oversized (no governor online): ${concerns.join(' | ').slice(0, 500)}`,
+              }, 'TASK_UPDATED');
+              finalStatus = 'PLANNING';
+              message = 'Plan auto-blocked as oversized (size critic; no governor online). Split the task and resubmit a narrower plan.';
+              try {
+                await state.postToRoleChannel(
+                  'architects',
+                  `🚫 plan auto-blocked on ${task.id} (${task.title}) by the daemon size critic — flipped to PLANNING (block ${blockCount + 1}/${MAX_CRITIQUE_BLOCKS_DEFAULT}).\nConcerns:\n${concernText}`
+                );
+              } catch { /* never block tool */ }
+            } catch { /* never block tool — plan stays AWAITING_APPROVAL on failure */ }
+          } else {
+            try {
+              await state.postToRoleChannel(
+                'architects',
+                `🛑 HUMAN DECISION REQUIRED — ${task.id} (${task.title}) is still oversized after ${MAX_CRITIQUE_BLOCKS_DEFAULT} size-critic blocks. Not auto-flipping again; it rests in AWAITING_APPROVAL for a human to approve or re-plan.\nConcerns:\n${concernText}`
+              );
+            } catch { /* never block tool */ }
+          }
+        }
       }
 
       // If plan is already active (TURBO), the architect is done — point them at
-      // the next PLANNING task. Otherwise point them at check_approval.
+      // the next PLANNING task. Auto-blocked plans route back to a re-plan.
+      // Otherwise point them at check_approval.
       const nextAction = finalStatus === 'WORKING'
         ? {
             tool: 'moe.wait_for_task',
             args: { statuses: ['PLANNING'], workerId: params.workerId },
             reason: 'Plan auto-approved (TURBO). Record any reusable planning insight with Serena write_memory, then block until the next PLANNING task arrives.'
+          }
+        : finalStatus === 'PLANNING'
+        ? {
+            tool: 'moe.claim_next_task',
+            args: { statuses: ['PLANNING'], taskId: task.id, workerId: params.workerId },
+            reason: 'Plan auto-blocked as oversized. Re-claim the task, split it (create smaller sibling tasks), and resubmit a narrower plan.',
+            recommendedSkill: { name: 'moe-epic-breakdown', reason: 'The size critic blocked this plan. Load this and split along SPIDR axes before resubmitting.' }
           }
         : {
             tool: 'moe.check_approval',
@@ -372,6 +465,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         taskId: task.id,
         status: finalStatus,
         stepCount: implementationPlan.length,
+        distinctFileCount: planSize.distinctFileCount,
+        ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),
         message,
         nextAction
       };

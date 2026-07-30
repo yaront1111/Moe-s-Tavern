@@ -247,8 +247,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
-            echo "  --interactive            Force Claude into interactive TUI (default: on for architect)"
-            echo "  --no-interactive         Reserved for parity with PowerShell --print mode (no effect on bash today)"
+            echo "  --interactive            Force Claude into interactive TUI (default: on for architect/governor)"
+            echo "  --no-interactive         Force one-shot --print mode (default for worker/qa; fresh CLI per task)"
             echo "  --model MODEL            Claude model override (default: all roles = opus-5)"
             echo "  --help, -h               Show this help"
             echo ""
@@ -1605,6 +1605,38 @@ announce_push_failure() {
     return 0
 }
 
+# announce_gate_failure TASK_ID GATE_CMD GATE_RC GATE_OUT
+# Best-effort loud, daemon-visible warning that settings.qualityGate failed and
+# the auto-commit+push were skipped for a task that has already flipped to
+# REVIEW. Posts to #general via chat_send and attaches the tail of the gate
+# output to the task via add_comment so QA/humans can see WHY without digging
+# through wrapper logs. Always returns 0 so it never aborts the loop.
+announce_gate_failure() {
+    local task_id="$1"
+    local gate_cmd="$2"
+    local gate_rc="$3"
+    local gate_out="$4"
+    local msg="🚫 PUSH-BLOCKED: qualityGate failed for task $task_id: $gate_cmd (exit $gate_rc)"
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+    fi
+    # Last ~50 lines only (and cap the bytes): add_comment rejects content over
+    # 10k chars and a failing build's full output can be huge.
+    local out_tail content
+    out_tail=$(printf '%s\n' "$gate_out" | tail -50 | tail -c 8000)
+    content="$msg
+
+$out_tail"
+    moe_rpc add_comment \
+        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$task_id" "$WORKER_ID" "$content" 2>/dev/null)" \
+        > /dev/null 2>&1 || true
+    return 0
+}
+
 FIRST_RUN=true
 
 # Consecutive-resume tracking for the alreadyAssigned resume path (pre-flight
@@ -2276,6 +2308,16 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         echo ""
     fi
 
+    # One-shot (--print) sessions exit the moment the model ends its turn,
+    # killing any background jobs with the process — and the wrapper loop, not
+    # the model, owns claiming the next task. Override the wait_for_task chain
+    # baked into the role bodies above and forbid ending the turn "to wait".
+    # Governor is excluded: its prompt is a chat_wait loop, not a finish-and-
+    # stop task (and governors default to interactive anyway).
+    if [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ]; then
+        PROMPT_BODY="$PROMPT_BODY CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Run verification in the foreground or poll it to completion. Do NOT call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
+    fi
+
     # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
     # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
     if [ -n "$PROMPT_BODY" ]; then
@@ -2465,22 +2507,110 @@ $PROMPT_BODY"
             CACHE_ARGS=(--exclude-dynamic-system-prompt-sections)
         fi
 
+        # Per-task one-shot mode (parity with moe-agent.ps1). --print runs
+        # claude non-interactively: the model executes tool calls until it
+        # produces an end_turn without a tool call, then the process exits —
+        # combined with the polling loop this caps each CLI invocation at one
+        # task and resets context (and standards-compliance decay) per task.
+        # Workers/QA default to it; architect/governor default to interactive;
+        # --interactive / --no-interactive override (see INTERACTIVE above).
+        # stream-json + the parser below keep tool activity visible — without
+        # it --print is silent for minutes during tool phases, which is
+        # indistinguishable from a hang.
+        PRINT_ARGS=()
+        if [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; then
+            PRINT_ARGS=(--print --permission-mode bypassPermissions --output-format stream-json --include-partial-messages --verbose)
+        fi
+
+        # Inline stream-json pretty-printer for --print mode (mirrors the
+        # PowerShell launcher's parser): terse per-event lines for init /
+        # tool_use / text / rate-limit / result; non-JSON lines pass through.
+        STREAM_JSON_PARSER=$(cat <<'PYEOF'
+import json, sys
+tool_json = ''
+in_text = False
+def w(s):
+    sys.stdout.write(s); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.rstrip('\n')
+    if not line.strip():
+        continue
+    try:
+        evt = json.loads(line)
+    except Exception:
+        w(line + '\n'); continue
+    t = evt.get('type')
+    if t == 'system' and evt.get('subtype') == 'init':
+        w('  [init] %d tools, %d MCP server(s), model=%s\n' % (len(evt.get('tools') or []), len(evt.get('mcp_servers') or []), evt.get('model')))
+    elif t == 'stream_event':
+        e = evt.get('event') or {}
+        et = e.get('type')
+        if et == 'content_block_start':
+            cb = e.get('content_block') or {}
+            if cb.get('type') == 'tool_use':
+                tool_json = ''
+                in_text = False
+                w('  -> %s' % cb.get('name'))
+            elif cb.get('type') == 'text':
+                in_text = True
+                w('  ')
+            else:
+                in_text = False
+        elif et == 'content_block_delta':
+            d = e.get('delta') or {}
+            if d.get('type') == 'text_delta':
+                w(d.get('text') or '')
+            elif d.get('type') == 'input_json_delta':
+                tool_json += d.get('partial_json') or ''
+        elif et == 'content_block_stop':
+            if tool_json:
+                j = tool_json if len(tool_json) <= 140 else tool_json[:140] + '...'
+                w(' %s\n' % j)
+                tool_json = ''
+            elif in_text:
+                w('\n')
+                in_text = False
+    elif t == 'rate_limit_event':
+        rl = evt.get('rate_limit_info') or {}
+        tag = 'OVERAGE' if rl.get('isUsingOverage') else rl.get('status')
+        w('  [rate-limit %s %s]\n' % (tag, rl.get('rateLimitType')))
+    elif t == 'result':
+        dur = evt.get('duration_ms')
+        dur_s = ('%.1fs' % (dur / 1000.0)) if dur else '?'
+        w('  [result] turns=%s dur=%s stop=%s\n' % (evt.get('num_turns'), dur_s, evt.get('stop_reason')))
+PYEOF
+)
+
         if [ "$AUTO_CLAIM" = true ]; then
-            echo "Starting ${CLI_TYPE} with auto-claim..."
+            if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
+                echo "Starting ${CLI_TYPE} with auto-claim (one-shot --print)..."
+            else
+                echo "Starting ${CLI_TYPE} with auto-claim (interactive TUI)..."
+            fi
             echo ""
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "$PROMPT")
-
-            CLI_EXIT_CODE=$?
+            if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
+                # Pipe through the parser; the subshell's exit (the CLI's) is
+                # PIPESTATUS[0] — the parser's own status is irrelevant.
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$PYTHON_CMD" -u -c "$STREAM_JSON_PARSER"
+                CLI_EXIT_CODE=${PIPESTATUS[0]}
+            else
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "$PROMPT")
+                CLI_EXIT_CODE=$?
+            fi
 
             set -e
         else
             set +e
 
-            (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)
-
-            CLI_EXIT_CODE=$?
+            if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | "$PYTHON_CMD" -u -c "$STREAM_JSON_PARSER"
+                CLI_EXIT_CODE=${PIPESTATUS[0]}
+            else
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)
+                CLI_EXIT_CODE=$?
+            fi
 
             set -e
         fi
@@ -2499,25 +2629,45 @@ $PROMPT_BODY"
         POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' 2>/dev/null || echo "")
         FINAL_STATUS=""
         FINAL_REOPEN_COUNT="0"
+        IS_EPIC_FINAL="true"
         if [ -n "$POSTFLIGHT_STATE" ]; then
             PARSED_POSTFLIGHT=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
-    for t in d.get('tasks', []):
+    tasks = d.get('tasks', [])
+    for t in tasks:
         if t.get('id') == sys.argv[1]:
+            # Epic-final = highest 'order' among this epic's tasks (ties count).
+            # Drives the qualityGate scope: the epic's integration-and-hardening
+            # task owns the full gate; mid-epic tasks stay lean. Missing epicId
+            # or unparsable orders default to final (gate on the safe side).
+            epic_final = 'true'
+            epic_id = t.get('epicId')
+            if epic_id:
+                try:
+                    my_order = float(t.get('order') or 0)
+                    sibling_max = max(
+                        (float(s.get('order') or 0) for s in tasks if s.get('epicId') == epic_id),
+                        default=my_order,
+                    )
+                    epic_final = 'true' if my_order >= sibling_max else 'false'
+                except Exception:
+                    epic_final = 'true'
             # \x1f-separated so we don't collide with whitespace in fields
             # (NOT NUL: command substitution strips NUL bytes).
-            sys.stdout.write((t.get('status') or '') + '\x1f' + str(t.get('reopenCount') or 0) + '\x1f')
+            sys.stdout.write((t.get('status') or '') + '\x1f' + str(t.get('reopenCount') or 0) + '\x1f' + epic_final + '\x1f')
             break
 except Exception:
     pass
 " "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_STATE" 2>/dev/null || echo "")
             { IFS= read -r -d $'\x1f' FINAL_STATUS
               IFS= read -r -d $'\x1f' FINAL_REOPEN_COUNT
+              IFS= read -r -d $'\x1f' IS_EPIC_FINAL
             } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
             FINAL_STATUS="${FINAL_STATUS:-}"
             FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
+            IS_EPIC_FINAL="${IS_EPIC_FINAL:-true}"
         fi
 
         # Auto-commit + push on worker completion. Runs when:
@@ -2544,6 +2694,67 @@ except Exception:
             if [ "$AUTO_COMMIT" = "true" ]; then
                 if git -C "$PROJECT" rev-parse --git-dir > /dev/null 2>&1; then
                     echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true)...${NC}"
+
+                    # Quality gate: settings.qualityGate is an optional shell
+                    # command (lint/typecheck/tests) that must pass before the
+                    # post-flight may commit+push. The task already flipped to
+                    # REVIEW, so a failing gate can't un-transition it -- it
+                    # blocks the ship instead: no commit, no push, loud announce
+                    # (chat + task comment with the output tail so QA rejects
+                    # with evidence), and the worker loop hard-stops -- same
+                    # rationale as the branch-safety stop below: looping on with
+                    # uncommitted edits would let the next task's `git add -A`
+                    # absorb them. Opt out per-run via MOE_DISABLE_QUALITY_GATE=1.
+                    QUALITY_GATE=""
+                    QUALITY_GATE_SCOPE="epicFinal"
+                    if [ "${MOE_DISABLE_QUALITY_GATE:-0}" != "1" ]; then
+                        QUALITY_GATE=$($PYTHON_CMD -c "
+import json, os, sys
+p = os.path.join(sys.argv[1], 'project.json')
+try:
+    d = json.load(open(p))
+    v = (d.get('settings') or {}).get('qualityGate')
+    print(v.strip() if isinstance(v, str) else '')
+except Exception:
+    print('')
+" "$MOE_DIR" 2>/dev/null || echo "")
+                        QUALITY_GATE_SCOPE=$($PYTHON_CMD -c "
+import json, os, sys
+p = os.path.join(sys.argv[1], 'project.json')
+try:
+    d = json.load(open(p))
+    v = (d.get('settings') or {}).get('qualityGateScope')
+    print(v if v in ('epicFinal', 'everyTask') else 'epicFinal')
+except Exception:
+    print('epicFinal')
+" "$MOE_DIR" 2>/dev/null || echo "epicFinal")
+                    fi
+                    # The full gate is deliberately NOT per-task: verification is
+                    # concentrated on the epic's final integration-and-hardening
+                    # task (same doctrine as the skills). Mid-epic tasks already
+                    # carry their narrow plan-named verification via complete_task.
+                    if [ -n "$QUALITY_GATE" ] && [ "$QUALITY_GATE_SCOPE" = "epicFinal" ] && [ "$IS_EPIC_FINAL" != "true" ]; then
+                        echo -e "${BLUE}[info]${NC} qualityGate deferred: task $PREFLIGHT_TASK_ID is mid-epic (scope=epicFinal; the epic-final task runs the full gate)."
+                        QUALITY_GATE=""
+                    fi
+                    if [ -n "$QUALITY_GATE" ]; then
+                        echo -e "${BLUE}Post-flight: quality gate: $QUALITY_GATE${NC}"
+                        # Capture output AND exit code separately (same pattern as
+                        # the commit below) so `set -e` can't abort on a failing gate.
+                        if GATE_OUT=$(cd "$PROJECT" && bash -c "$QUALITY_GATE" 2>&1); then
+                            GATE_RC=0
+                        else
+                            GATE_RC=$?
+                        fi
+                        if [ "$GATE_RC" -ne 0 ]; then
+                            echo "$GATE_OUT" | tail -15
+                            echo -e "${YELLOW}[WARN]${NC} qualityGate failed (exit $GATE_RC); skipping commit+push for task $PREFLIGHT_TASK_ID."
+                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID left uncommitted -- stopping the worker loop so its edits aren't absorbed by the next task's git add -A."
+                            announce_gate_failure "$PREFLIGHT_TASK_ID" "$QUALITY_GATE" "$GATE_RC" "$GATE_OUT"
+                            break
+                        fi
+                        echo -e "${GREEN}[OK]${NC} qualityGate passed."
+                    fi
 
                     # Never commit/push directly to main or master. If the worker
                     # finished on the default branch, peel off onto a shared Moe

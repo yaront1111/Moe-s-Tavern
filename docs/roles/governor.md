@@ -61,6 +61,8 @@ Never combine 4 and 5 in a single move without the human's nod. A release-and-re
 
 When the project is in `CONTROL` approval mode, `moe.submit_plan` now also cross-posts a `📋 Plan ready for critique` banner to `#governors` listing the task title, step count, and DoD. Read the plan via `moe.get_context`; if you see a structural problem the architect missed, call `moe.submit_plan_critique { taskId, verdict: 'block', concerns: [...] }`. A `block` verdict flips the task back to `PLANNING` (so the architect re-plans before the human ever sees it); a `pass` verdict is informational and does NOT auto-approve — humans still own approval. Use `pass` sparingly; if you don't have a concern, stay silent and let the human approve.
 
+**Size rubric.** Verdict `block` when the plan has >12 steps or >10 distinct `affectedFiles` — the daemon rejects these at `submit_plan`, so one that slipped past (custom `taskSizing` thresholds, older daemon) is an automatic block. Scrutinize 9–12 steps or 6–10 distinct files hard: the daemon has already warned, and a plan in that band usually hides two tasks. For an oversized task the concern is always "split via SPIDR — load `moe-epic-breakdown`", never line edits to the plan; splitting is the architect's job, not yours.
+
 ## Mention Response Protocol
 
 When tagged (`@governor`, `@governors`, `@all`, or direct ID), reply via `moe.chat_send` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.

@@ -111,6 +111,30 @@ interface ProjectSettings {
   // no Claude/Codex attribution is added. Set false to disable.
   autoCommit?: boolean;          // default: true
 
+  // Optional shell command the worker wrapper runs before the post-flight
+  // auto-commit (e.g. "npm run lint && npx tsc --noEmit"). Non-zero exit
+  // blocks commit+push and posts the failure to the task. Empty/unset
+  // disables. Per-run env override: MOE_DISABLE_QUALITY_GATE=1.
+  qualityGate?: string;
+
+  // When the gate runs. 'epicFinal' (default): only on the epic's final task
+  // (highest order among siblings) — verification stays concentrated and
+  // mid-epic tasks stay lean. 'everyTask': every worker completion.
+  qualityGateScope?: 'epicFinal' | 'everyTask';
+
+  // Plan-size thresholds enforced by moe.submit_plan: warn past the warn
+  // values, hard-reject past the max values. Distinct files = union of
+  // affectedFiles across all steps.
+  taskSizing?: {
+    warnSteps?: number;          // default: 8
+    maxSteps?: number;           // default: 12
+    warnDistinctFiles?: number;  // default: 5
+    maxDistinctFiles?: number;   // default: 10
+    // CONTROL mode + no governor online: auto-block warn-zone plans back to
+    // PLANNING (reuses the critique block machinery + its cap). Default false.
+    autoCritique?: boolean;
+  };
+
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
   // Example: { "REVIEW": 2 } limits review to 2 tasks at a time
@@ -274,6 +298,20 @@ interface Task {
   maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)
   priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
   priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
+
+  // Plan-size warnings from the latest submit_plan (warn-zone only; cleared
+  // when a compliant plan lands) — lets boards/governors see size pressure.
+  planSizeWarnings?: string[];
+
+  // Completion evidence (set by moe.complete_task; surfaced to QA via get_context)
+  verification?: {
+    command: string;             // Exact verification command the worker ran
+    exitCode: number;            // Always 0 (non-zero is rejected at complete_task)
+    outputTail?: string;         // Last ≤2000 chars of its output
+    reportedAt: string;          // ISO timestamp
+  };
+  filesModified?: string[];      // Union of per-step modifiedFiles/affectedFiles
+  reviewSummary?: string;        // What QA verified at approval — set by qa_approve (required there)
 
   // Governance / metrics
   metrics?: TaskMetrics;                        // Lifecycle counters
@@ -469,6 +507,7 @@ interface HandoffNote {
  */
 interface TaskMetrics {
   plannedStepCount?: number;
+  plannedDistinctFileCount?: number;  // distinct affectedFiles across all plan steps
   executedStepCount?: number;
   reopenCount?: number;
   rejectCount?: number;

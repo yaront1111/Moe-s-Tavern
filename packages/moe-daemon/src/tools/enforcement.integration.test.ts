@@ -153,8 +153,8 @@ describe('Phase 3 enforcement integration flow', () => {
       throw new Error('expected throw');
     } catch (err) { expectNotAllowed(err); }
 
-    // Owner completes the task.
-    await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1' }, state);
+    // Owner completes the task (with the required verification evidence).
+    await completeTask.handler({ taskId: 'task-1', workerId: 'worker-1', verification: { command: 'npm test', exitCode: 0 } }, state);
     expect(state.getTask('task-1')?.status).toBe('REVIEW');
 
     // Assign a QA worker and validate QA ownership.
@@ -167,7 +167,7 @@ describe('Phase 3 enforcement integration flow', () => {
     // qa_approve before the QA worker has fetched context is rejected — the
     // review must actually read the task (DoD/rails) before signing off.
     try {
-      await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
+      await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'verified DoD; re-ran verification command green' }, state);
       throw new Error('expected throw');
     } catch (err) {
       expectNotAllowed(err);
@@ -176,7 +176,7 @@ describe('Phase 3 enforcement integration flow', () => {
 
     // QA fetches context, then approves.
     await ctx.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
-    await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1' }, state);
+    await qaApprove.handler({ taskId: 'task-1', workerId: 'qa-1', summary: 'verified DoD; re-ran verification command green' }, state);
     expect(state.getTask('task-1')?.status).toBe('DONE');
     expect(state.getTask('task-1')?.stepsCompleted).toEqual(['step-1', 'step-2']);
   });

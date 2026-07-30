@@ -102,7 +102,12 @@ switch (tool) {
     break;
   }
   case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
-  case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
+  case 'list_tasks': ok({ tasks: [
+    { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
+    ...(process.env.FAKE_SIBLING_ORDER
+      ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
+      : [])
+  ] }); break;
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -196,6 +201,46 @@ if [ ! -f "$CLI_ARGS_FILE" ] || ! grep -Fq 'RESUME: you are workerId qa-postflig
   echo "Expected CLI to be launched with a RESUME prompt" >&2
   exit 1
 fi
+# QA defaults to one-shot --print mode (ps1 parity): the CLI argv must carry
+# --print, and the prompt must carry the one-shot session warning.
+if ! grep -Fqx -- '--print' "$CLI_ARGS_FILE"; then
+  cat "$CLI_ARGS_FILE" >&2 || true
+  echo "Expected worker/qa CLI to be launched with --print by default" >&2
+  exit 1
+fi
+if ! grep -Fq 'CRITICAL (one-shot session)' "$CLI_ARGS_FILE"; then
+  cat "$CLI_ARGS_FILE" >&2 || true
+  echo "Expected one-shot session warning in the CLI prompt" >&2
+  exit 1
+fi
+
+# --interactive forces the TUI: no --print in argv.
+: > "$CLI_ARGS_FILE"
+set +e
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 20s \
+  "$WRAPPER" \
+  --project "$PROJECT_DIR" \
+  --worker-id qa-postflight \
+  --role qa \
+  --team Smoke \
+  --no-start-daemon \
+  --command "$FAKE_CLI" \
+  --interactive \
+  --no-loop \
+  --poll-interval 0 \
+  >"$TMP_DIR/wrapper-interactive.out" 2>&1
+interactive_code=$?
+set -e
+if [ "$interactive_code" -ne 0 ]; then
+  cat "$TMP_DIR/wrapper-interactive.out" >&2 || true
+  echo "Interactive wrapper exited with $interactive_code" >&2
+  exit 1
+fi
+if grep -Fqx -- '--print' "$CLI_ARGS_FILE"; then
+  cat "$CLI_ARGS_FILE" >&2 || true
+  echo "--interactive must NOT pass --print" >&2
+  exit 1
+fi
 
 # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no moe.*
 # calls of its own for the CLI's whole runtime, so a long silent step (a
@@ -252,6 +297,139 @@ fi
 if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   echo "Heartbeat sidecar kept pinging ($count_after_wait calls) after the wrapper exited ($count_at_exit at exit) - stop_heartbeat_sidecar cleanup failed" >&2
   exit 1
+fi
+
+# --- Quality gate (settings.qualityGate): the post-flight runs the configured
+# command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat
+# message; passing gate => commit lands; MOE_DISABLE_QUALITY_GATE=1 => gate
+# skipped even when the command would fail. Requires git in PATH. ---
+if command -v git >/dev/null 2>&1; then
+  make_gate_project() {
+    # $1 = dir, $2 = qualityGate command (raw string, JSON-escaped here)
+    local dir="$1" gate_cmd="$2"
+    mkdir -p "$dir/.moe/messages"
+    "$NODE_FOR_TEST" -e 'const [d,g]=process.argv.slice(1);require("fs").writeFileSync(d, JSON.stringify({id:"proj-gate",name:"postflight-gate",settings:{qualityGate:g}})+"\n");' \
+      "$dir/.moe/project.json" "$gate_cmd"
+    : > "$dir/.moe/messages/chan-general.jsonl"
+    git -C "$dir" init -q
+    git -C "$dir" config user.email moe@test.local
+    git -C "$dir" config user.name "Moe Test"
+    echo seed > "$dir/seed.txt"
+    git -C "$dir" add seed.txt >/dev/null
+    git -C "$dir" commit -qm init >/dev/null
+    # Leave a dirty file for the post-flight `git add -A` to pick up.
+    echo dirty > "$dir/work.txt"
+  }
+
+  run_gate_wrapper() {
+    # $1 = project dir, $2 = output file, extra env via caller
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS=REVIEW timeout 30s \
+      "$WRAPPER" \
+      --project "$1" \
+      --worker-id worker-gate \
+      --role worker \
+      --team Smoke \
+      --no-start-daemon \
+      --command /bin/true \
+      --no-loop \
+      --poll-interval 0 \
+      >"$2" 2>&1
+  }
+
+  # Case 1: failing gate blocks the commit and announces PUSH-BLOCKED.
+  GATE_FAIL_DIR="$TMP_DIR/gate-fail"
+  make_gate_project "$GATE_FAIL_DIR" "exit 3"
+  set +e
+  run_gate_wrapper "$GATE_FAIL_DIR" "$TMP_DIR/wrapper-gate-fail.out"
+  gate_fail_code=$?
+  set -e
+  if [ "$gate_fail_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-fail.out" >&2 || true
+    echo "Gate-fail wrapper exited with $gate_fail_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'qualityGate failed (exit 3)' "$TMP_DIR/wrapper-gate-fail.out"; then
+    cat "$TMP_DIR/wrapper-gate-fail.out" >&2 || true
+    echo "Expected qualityGate failure log not found" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_FAIL_DIR" rev-list --count HEAD)" -ne 1 ]; then
+    echo "Failing qualityGate must block the auto-commit (found extra commits)" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'PUSH-BLOCKED: qualityGate failed for task task-postflight' "$GATE_FAIL_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$GATE_FAIL_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    echo "Expected PUSH-BLOCKED chat message not found" >&2
+    exit 1
+  fi
+
+  # Case 2: passing gate lets the commit land (on the peeled moe/work-* branch).
+  GATE_PASS_DIR="$TMP_DIR/gate-pass"
+  make_gate_project "$GATE_PASS_DIR" "exit 0"
+  set +e
+  run_gate_wrapper "$GATE_PASS_DIR" "$TMP_DIR/wrapper-gate-pass.out"
+  gate_pass_code=$?
+  set -e
+  if [ "$gate_pass_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-pass.out" >&2 || true
+    echo "Gate-pass wrapper exited with $gate_pass_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'qualityGate passed' "$TMP_DIR/wrapper-gate-pass.out"; then
+    cat "$TMP_DIR/wrapper-gate-pass.out" >&2 || true
+    echo "Expected qualityGate pass log not found" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_PASS_DIR" rev-list --count HEAD)" -ne 2 ]; then
+    cat "$TMP_DIR/wrapper-gate-pass.out" >&2 || true
+    echo "Passing qualityGate should allow the auto-commit (expected 2 commits)" >&2
+    exit 1
+  fi
+
+  # Case 3: MOE_DISABLE_QUALITY_GATE=1 skips a gate that would fail.
+  GATE_SKIP_DIR="$TMP_DIR/gate-skip"
+  make_gate_project "$GATE_SKIP_DIR" "exit 7"
+  set +e
+  MOE_DISABLE_QUALITY_GATE=1 run_gate_wrapper "$GATE_SKIP_DIR" "$TMP_DIR/wrapper-gate-skip.out"
+  gate_skip_code=$?
+  set -e
+  if [ "$gate_skip_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-skip.out" >&2 || true
+    echo "Gate-skip wrapper exited with $gate_skip_code" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_SKIP_DIR" rev-list --count HEAD)" -ne 2 ]; then
+    cat "$TMP_DIR/wrapper-gate-skip.out" >&2 || true
+    echo "MOE_DISABLE_QUALITY_GATE=1 should skip the gate and allow the commit" >&2
+    exit 1
+  fi
+
+  # Case 4: mid-epic task (a sibling with higher order exists) defers the gate
+  # under the default scope=epicFinal — a failing gate command must NOT block
+  # the commit because it never runs.
+  GATE_MID_DIR="$TMP_DIR/gate-midepic"
+  make_gate_project "$GATE_MID_DIR" "exit 9"
+  set +e
+  FAKE_SIBLING_ORDER=99 run_gate_wrapper "$GATE_MID_DIR" "$TMP_DIR/wrapper-gate-midepic.out"
+  gate_mid_code=$?
+  set -e
+  if [ "$gate_mid_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-midepic.out" >&2 || true
+    echo "Gate-midepic wrapper exited with $gate_mid_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'qualityGate deferred' "$TMP_DIR/wrapper-gate-midepic.out"; then
+    cat "$TMP_DIR/wrapper-gate-midepic.out" >&2 || true
+    echo "Expected mid-epic qualityGate deferral log not found" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_MID_DIR" rev-list --count HEAD)" -ne 2 ]; then
+    cat "$TMP_DIR/wrapper-gate-midepic.out" >&2 || true
+    echo "Mid-epic task should commit without running the gate (scope=epicFinal)" >&2
+    exit 1
+  fi
+else
+  echo "SKIP qualityGate cases: git not available"
 fi
 
 echo "PASS postflight.sh"

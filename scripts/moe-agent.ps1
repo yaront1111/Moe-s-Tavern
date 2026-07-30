@@ -2028,6 +2028,11 @@ $mentionsJson
         # commit-message wording in the auto-commit block below).
         $finalStatus = $null
         $finalReopenCount = 0
+        # Epic-final = highest 'order' among this epic's tasks (ties count).
+        # Drives the qualityGate scope: the epic's integration-and-hardening
+        # task owns the full gate; mid-epic tasks stay lean. Missing epicId
+        # or unparsable orders default to final (gate on the safe side).
+        $isEpicFinal = $true
         $listResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{}
         if ($listResp -and $listResp.tasks) {
             $matched = $listResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
@@ -2035,6 +2040,19 @@ $mentionsJson
                 $finalStatus = $matched.status
                 if ($matched.PSObject.Properties['reopenCount'] -and $matched.reopenCount) {
                     $finalReopenCount = [int]$matched.reopenCount
+                }
+                if ($matched.PSObject.Properties['epicId'] -and $matched.epicId) {
+                    try {
+                        $myOrder = 0.0
+                        if ($null -ne $matched.order) { $myOrder = [double]$matched.order }
+                        $siblingMax = ($listResp.tasks |
+                            Where-Object { $_.epicId -eq $matched.epicId } |
+                            ForEach-Object { if ($null -ne $_.order) { [double]$_.order } else { 0.0 } } |
+                            Measure-Object -Maximum).Maximum
+                        if ($null -ne $siblingMax -and $myOrder -lt $siblingMax) { $isEpicFinal = $false }
+                    } catch {
+                        $isEpicFinal = $true
+                    }
                 }
             }
         }
@@ -2049,6 +2067,8 @@ $mentionsJson
         # Commits use the user's configured git identity (no Claude attribution).
         if ($Role -eq "worker" -and $finalStatus -eq "REVIEW") {
             $autoCommit = $true
+            $qualityGate = ""
+            $qualityGateScope = "epicFinal"
             $projJsonPath = Join-Path $moeDir "project.json"
             if (Test-Path $projJsonPath) {
                 try {
@@ -2057,9 +2077,26 @@ $mentionsJson
                         # Explicit `false` disables; any other value keeps default (true).
                         if ($cfg.settings.autoCommit -eq $false) { $autoCommit = $false }
                     }
+                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['qualityGate']) {
+                        # Optional pre-commit gate command; empty/non-string disables.
+                        $qg = $cfg.settings.qualityGate
+                        if ($qg -is [string]) { $qualityGate = $qg.Trim() }
+                    }
+                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['qualityGateScope']) {
+                        if ($cfg.settings.qualityGateScope -eq 'everyTask') { $qualityGateScope = 'everyTask' }
+                    }
                 } catch {
                     # Malformed project.json — fall through with default true.
                 }
+            }
+            if ($env:MOE_DISABLE_QUALITY_GATE -eq '1') { $qualityGate = "" }
+            # The full gate is deliberately NOT per-task: verification is
+            # concentrated on the epic's final integration-and-hardening task
+            # (same doctrine as the skills). Mid-epic tasks already carry their
+            # narrow plan-named verification via complete_task.
+            if ($qualityGate -and $qualityGateScope -ne 'everyTask' -and -not $isEpicFinal) {
+                Write-Host "[info] qualityGate deferred: task $preflightTaskId is mid-epic (scope=epicFinal; the epic-final task runs the full gate)." -ForegroundColor Cyan
+                $qualityGate = ""
             }
             if ($autoCommit) {
                 & git -C $projectPath rev-parse --git-dir 2>$null | Out-Null
@@ -2079,6 +2116,55 @@ $mentionsJson
                     $prevGitEAP = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
+
+                    # Quality gate: settings.qualityGate is an optional shell
+                    # command (lint/typecheck/tests) that must pass before the
+                    # post-flight may commit+push. The task already flipped to
+                    # REVIEW, so a failing gate can't un-transition it — it
+                    # blocks the ship instead: no commit, no push, loud announce
+                    # (chat + task comment with the output tail so QA rejects
+                    # with evidence), and the worker loop hard-stops so the
+                    # uncommitted edits can't be absorbed by the next task's
+                    # `git add -A` (same rationale as the bash wrapper). Opt out
+                    # per-run via MOE_DISABLE_QUALITY_GATE=1.
+                    if ($qualityGate) {
+                        Write-Host "Post-flight: quality gate: $qualityGate" -ForegroundColor Cyan
+                        Push-Location $projectPath
+                        try {
+                            $gateOut = (& $env:ComSpec /d /s /c $qualityGate 2>&1 | Out-String)
+                            $gateRc = $LASTEXITCODE
+                        } finally {
+                            Pop-Location
+                        }
+                        if ($gateRc -ne 0) {
+                            ($gateOut -split "`n" | Select-Object -Last 15) | ForEach-Object { Write-Host "  $_" }
+                            Write-Host "[WARN] qualityGate failed (exit $gateRc); skipping commit+push for task $preflightTaskId." -ForegroundColor Yellow
+                            Write-Host "[WARN] task $preflightTaskId left uncommitted — stopping the worker loop so its edits aren't absorbed by the next task's git add -A." -ForegroundColor Yellow
+                            $gateMsg = "🚫 PUSH-BLOCKED: qualityGate failed for task ${preflightTaskId}: $qualityGate (exit $gateRc)"
+                            if ($generalChannelId) {
+                                try {
+                                    Invoke-MoeRpc -Tool "chat_send" -Args @{
+                                        channel  = $generalChannelId
+                                        workerId = $WorkerId
+                                        content  = $gateMsg
+                                    } | Out-Null
+                                } catch {}
+                            }
+                            # Attach the output tail to the task so QA rejects with
+                            # evidence (add_comment caps content at 10k chars).
+                            try {
+                                $tailLines = (($gateOut -split "`n" | Select-Object -Last 50) -join "`n")
+                                if ($tailLines.Length -gt 8000) { $tailLines = $tailLines.Substring($tailLines.Length - 8000) }
+                                Invoke-MoeRpc -Tool "add_comment" -Args @{
+                                    taskId   = $preflightTaskId
+                                    workerId = $WorkerId
+                                    content  = "$gateMsg`n`n$tailLines"
+                                } | Out-Null
+                            } catch {}
+                            break
+                        }
+                        Write-Host "[OK] qualityGate passed." -ForegroundColor Green
+                    }
 
                     # Never commit/push directly to main or master. If the worker
                     # finished on the default branch, peel off onto a shared Moe

@@ -68,7 +68,27 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         createdBy: params.createdBy || 'WORKER'
       });
 
-      return { success: true, task };
+      // Advisory sizing feedback at creation time — the hard gate lives in
+      // submit_plan (step/file counts are only machine-visible there), but
+      // surfacing shape problems now is cheaper than bouncing a plan later.
+      const warnings: string[] = [];
+      const dodCount = params.definitionOfDone?.filter((d) => typeof d === 'string' && d.trim().length > 0).length ?? 0;
+      if (dodCount === 0) {
+        warnings.push(
+          'definitionOfDone is empty (a placeholder was substituted). Give every task 3-7 mechanically checkable items — a command to run or a test to pass — so the worker has a stopping condition and QA has a rubric.'
+        );
+      } else if (dodCount > 7) {
+        warnings.push(
+          `definitionOfDone has ${dodCount} items (target 3-7). A DoD this wide usually means the task is several tasks — split it (moe-epic-breakdown / SPIDR) before planning; oversized plans are rejected at submit_plan.`
+        );
+      }
+      if (/\band\b/i.test(params.title)) {
+        warnings.push(
+          'Title contains "and" — often two tasks wearing one title. Split unless the halves genuinely cannot land independently.'
+        );
+      }
+
+      return { success: true, task, ...(warnings.length > 0 ? { warnings } : {}) };
     }
   };
 }

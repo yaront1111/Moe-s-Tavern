@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { EpicStatus } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
+import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function createEpicTool(_state: StateManager): ToolDefinition {
   return {
@@ -43,7 +44,18 @@ export function createEpicTool(_state: StateManager): ToolDefinition {
         order: params.order
       });
 
-      return { success: true, epic };
+      return {
+        success: true,
+        epic,
+        // Breakdown is where task sizing is decided — surface the slicing
+        // skill at the moment the epic exists, before the first create_task.
+        nextAction: {
+          tool: 'moe.create_task',
+          args: { epicId: epic.id },
+          reason: 'Slice this epic into small tasks — typically 10-30, each one self-contained deliverable (about 30-60 human-minutes, 1-3 files, DoD of 3-7 runnable checks) — and end with an integration-and-hardening task.',
+          recommendedSkill: recommendSkillFor('architect', 'epic_breakdown')
+        }
+      };
     }
   };
 }

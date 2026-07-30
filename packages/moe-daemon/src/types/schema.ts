@@ -41,6 +41,29 @@ export interface GlobalRails {
   customRules: string[];
 }
 
+/**
+ * Plan-size thresholds enforced by moe.submit_plan. Oversized plans are the
+ * leading cause of QA-reject churn (frontier models' 80%-reliability horizon
+ * is ~30-60 human-minutes), so the daemon warns past the warn thresholds and
+ * hard-rejects past the max thresholds with "split the task" guidance.
+ * Distinct-file counts are the union of affectedFiles across all steps.
+ */
+export interface TaskSizingSettings {
+  warnSteps?: number;          // default: 8
+  maxSteps?: number;           // default: 12
+  warnDistinctFiles?: number;  // default: 5
+  maxDistinctFiles?: number;   // default: 10
+  /**
+   * CONTROL mode only: when true and NO governor is online, submit_plan
+   * auto-blocks warn-zone plans (over warnSteps/warnDistinctFiles but under
+   * the hard caps) back to PLANNING with "split the task" concerns, reusing
+   * the governor-critique block machinery and its MAX_CRITIQUE_BLOCKS cap.
+   * Default false — with a human or governor reviewing plans, the warnings
+   * on the response/banner are their signal instead.
+   */
+  autoCritique?: boolean;
+}
+
 export interface ProjectSettings {
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
   speedModeDelayMs: number;
@@ -52,6 +75,22 @@ export interface ProjectSettings {
   columnLimits?: Record<string, number>;
   chatEnabled?: boolean;              // default: true
   chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
+  /** Plan-size warn/reject thresholds for moe.submit_plan; see TaskSizingSettings. */
+  taskSizing?: TaskSizingSettings;
+  /**
+   * Shell command (e.g. "npm run lint && npx tsc --noEmit") the worker
+   * wrapper runs in the project directory before the post-flight auto-commit.
+   * Non-zero exit blocks the commit/push and posts the failure to the task.
+   * Empty/unset disables the gate. Env override: MOE_DISABLE_QUALITY_GATE=1.
+   */
+  qualityGate?: string;
+  /**
+   * When the gate runs. 'epicFinal' (default): only on the epic's final task
+   * (highest order among siblings) — verification is concentrated, mid-epic
+   * tasks stay lean and rely on their plan-named complete_task verification.
+   * 'everyTask': the gate runs on every worker task completion.
+   */
+  qualityGateScope?: 'epicFinal' | 'everyTask';
   /**
    * Auto-commit + push on worker `complete_task`. When true (default), the
    * agent wrapper runs `git add -A && git commit && git push` on the current
@@ -210,6 +249,8 @@ export interface HandoffNote {
  */
 export interface TaskMetrics {
   plannedStepCount?: number;
+  /** Distinct affectedFiles across all plan steps — refreshed with each submit_plan. */
+  plannedDistinctFileCount?: number;
   executedStepCount?: number;
   reopenCount?: number;
   rejectCount?: number;
@@ -256,6 +297,21 @@ export interface PlanCritiqueResult {
   concerns?: string[];
   reviewedBy: string;
   reviewedAt: string;
+}
+
+/**
+ * Verification evidence required by moe.complete_task: the exact command the
+ * worker ran to prove the task done, its exit code (must be 0), and the tail
+ * of its output. Persisted on the task and surfaced to QA via get_context so
+ * rejections can be anchored to evidence instead of the worker's say-so.
+ * This is attestation, not execution — the daemon never runs the command
+ * (tool dispatch is serialized on the global state mutex); QA re-runs it.
+ */
+export interface TaskVerification {
+  command: string;
+  exitCode: number;
+  outputTail?: string;
+  reportedAt: string; // ISO
 }
 
 /**
@@ -346,6 +402,8 @@ export interface Task {
   completedAt?: string;
   reviewStartedAt?: string;
   reviewCompletedAt?: string;
+  /** What QA verified at approval (commands re-run, DoD items checked) — set by qa_approve. */
+  reviewSummary?: string;
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
@@ -355,6 +413,20 @@ export interface Task {
    * Surfaced to the next claimer via `moe.get_handoff_history`.
    */
   priorHandoffs?: HandoffNote[];
+  /**
+   * Plan-size warnings from the latest submit_plan (warn-zone only — plans past
+   * the hard caps are rejected outright). Cleared when a compliant plan lands.
+   * Persisted so boards/governors can see size pressure without reading chat.
+   */
+  planSizeWarnings?: string[];
+  /** Verification evidence submitted with complete_task; see TaskVerification. */
+  verification?: TaskVerification;
+  /**
+   * Union of per-step modifiedFiles (falling back to affectedFiles) captured
+   * at complete_task, so QA sees the changed-file set without depending on
+   * the worker having volunteered it per step.
+   */
+  filesModified?: string[];
   /** Auto-populated lifecycle metrics; see TaskMetrics. */
   metrics?: TaskMetrics;
   /** Soft wall-clock budget on first-claim → DONE; see TaskBudget. */

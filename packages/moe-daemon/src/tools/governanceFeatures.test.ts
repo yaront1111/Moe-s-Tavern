@@ -306,13 +306,13 @@ describe('governance control-plane features', () => {
         // Advance time, complete_task → REVIEW, qa_approve → DONE
         vi.setSystemTime(new Date('2026-05-15T01:00:00.000Z'));
         const completeTask = completeTaskTool(state);
-        await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a' }, state);
+        await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
 
         // QA claim and approve (simulate QA get_context so the context guard passes)
         await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-m' }, state);
         await state.updateTask('task-m', { contextFetchedBy: ['worker-a', 'qa-1'] });
         const qaApprove = qaApproveTool(state);
-        await qaApprove.handler({ taskId: 'task-m', workerId: 'qa-1' }, state);
+        await qaApprove.handler({ taskId: 'task-m', workerId: 'qa-1', summary: 'verified DoD; re-ran verification command green' }, state);
 
         const finalMetrics = state.getTask('task-m')!.metrics!;
         expect(finalMetrics.doneAt).toBe('2026-05-15T01:00:00.000Z');

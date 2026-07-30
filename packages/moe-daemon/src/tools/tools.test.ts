@@ -698,7 +698,7 @@ describe('MCP Tools', () => {
 
     it('moves task to REVIEW', async () => {
       const tool = completeTaskTool(state);
-      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+      const result = await tool.handler({ taskId: 'task-1', verification: { command: 'npm test', exitCode: 0 } }, state) as {
         success: boolean;
         status: string;
         stats: { stepsCompleted: number; filesModified: string[] };
@@ -712,7 +712,7 @@ describe('MCP Tools', () => {
 
     it('sets prLink if provided', async () => {
       const tool = completeTaskTool(state);
-      await tool.handler({ taskId: 'task-1', prLink: 'https://github.com/pr/123' }, state);
+      await tool.handler({ taskId: 'task-1', prLink: 'https://github.com/pr/123', verification: { command: 'npm test', exitCode: 0 } }, state);
       const task = state.getTask('task-1');
       expect(task?.prLink).toBe('https://github.com/pr/123');
     });
@@ -738,7 +738,7 @@ describe('MCP Tools', () => {
       });
 
       const tool = completeTaskTool(state);
-      const result = await tool.handler({ taskId: 'task-1' }, state) as {
+      const result = await tool.handler({ taskId: 'task-1', verification: { command: 'npm test', exitCode: 0 } }, state) as {
         stats: { filesModified: string[] };
       };
 
@@ -1724,6 +1724,19 @@ describe('MCP Tools', () => {
       await expect(tool.handler({}, state)).rejects.toThrow('Missing required field: taskId');
     });
 
+    it('throws for missing or empty summary', async () => {
+      const tool = qaApproveTool(state);
+      await expect(tool.handler({ taskId: 'task-1' }, state)).rejects.toThrow('Missing required field: summary');
+      await expect(tool.handler({ taskId: 'task-1', summary: '   ' }, state)).rejects.toThrow('Missing required field: summary');
+      expect(state.getTask('task-1')?.status).toBe('REVIEW');
+    });
+
+    it('persists the approval summary as reviewSummary', async () => {
+      const tool = qaApproveTool(state);
+      await tool.handler({ taskId: 'task-1', summary: 'Re-ran npx vitest run: 12 passed. All 4 DoD items verified.' }, state);
+      expect(state.getTask('task-1')?.reviewSummary).toBe('Re-ran npx vitest run: 12 passed. All 4 DoD items verified.');
+    });
+
     it('throws for non-REVIEW status', async () => {
       await state.updateTask('task-1', { status: 'WORKING' });
       const tool = qaApproveTool(state);
@@ -2628,7 +2641,7 @@ describe('MCP Tools', () => {
       await state.load();
 
       const tool = completeTaskTool(state);
-      await tool.handler({ taskId: 'task-1' }, state);
+      await tool.handler({ taskId: 'task-1', verification: { command: 'npm test', exitCode: 0 } }, state);
 
       const task = state.getTask('task-1');
       expect(task?.reviewStartedAt).toBeDefined();
@@ -2642,7 +2655,7 @@ describe('MCP Tools', () => {
       await state.load();
 
       const tool = qaApproveTool(state);
-      await tool.handler({ taskId: 'task-1' }, state);
+      await tool.handler({ taskId: 'task-1', summary: 'verified DoD; re-ran verification command green' }, state);
 
       const task = state.getTask('task-1');
       expect(task?.completedAt).toBeDefined();

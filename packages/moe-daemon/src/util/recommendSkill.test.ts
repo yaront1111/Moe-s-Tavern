@@ -92,6 +92,7 @@ describe('recommendSkillFor', () => {
     expect(RECOMMENDED_SKILLS).toEqual([
       'adversarial-self-review',
       'explore-before-assume',
+      'moe-epic-breakdown',
       'moe-planning',
       'moe-qa-loop',
       'receiving-code-review',

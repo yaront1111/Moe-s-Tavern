@@ -168,6 +168,19 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               reopenCount: task.reopenCount,
               reopenReason: task.reopenReason,
               rejectionDetails: task.rejectionDetails || null,
+              // Size pressure from the latest submit_plan (warn-zone only) —
+              // an architect re-claiming after a size-critic block sees why.
+              ...(task.planSizeWarnings && task.planSizeWarnings.length > 0
+                ? { planSizeWarnings: task.planSizeWarnings }
+                : {}),
+              // Evidence surface for QA: what the worker ran to claim done,
+              // the aggregated changed-file set, and recent rejection history
+              // (newest-first) so repeat failures are visible without digging.
+              verification: task.verification || null,
+              filesModified: task.filesModified || [],
+              ...(task.rejectionHistory && task.rejectionHistory.length > 0
+                ? { rejectionHistory: task.rejectionHistory.slice(0, 5) }
+                : {}),
               implementationPlan: task.implementationPlan,
               planSubmittedAt: task.planSubmittedAt || null,
               planApprovedAt: task.planApprovedAt || null,
@@ -260,7 +273,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
                   return {
                     tool: 'moe.qa_approve',
                     args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Verify DoD + rails; approve or moe.qa_reject with actionable issues.',
+                    reason: 'Verify DoD + rails; re-run the verification command from task.verification yourself; approve or moe.qa_reject with actionable issues.',
                     recommendedSkill: recommendSkillFor('qa', 'review_entry')
                   };
                 }

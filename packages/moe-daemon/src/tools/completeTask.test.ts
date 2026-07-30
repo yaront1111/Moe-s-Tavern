@@ -125,8 +125,71 @@ describe('moe.complete_task ownership + ordering enforcement', () => {
     writeTask();
     await state.load();
     const tool = completeTaskTool(state);
-    const result = await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state) as { status: string };
+    const result = await tool.handler(
+      { taskId: 'task-1', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0, outputTail: '12 passed' } },
+      state
+    ) as { status: string };
     expect(result.status).toBe('REVIEW');
     expect(state.getTask('task-1')?.status).toBe('REVIEW');
+  });
+
+  it('rejects when verification evidence is missing', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask();
+    await state.load();
+    const tool = completeTaskTool(state);
+    try {
+      await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state);
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).code).toBe(MoeErrorCode.MISSING_REQUIRED);
+      expect((err as Error).message).toContain('verification');
+    }
+    expect(state.getTask('task-1')?.status).toBe('WORKING');
+  });
+
+  it('rejects when the verification command exited non-zero', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask();
+    await state.load();
+    const tool = completeTaskTool(state);
+    try {
+      await tool.handler(
+        { taskId: 'task-1', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 1 } },
+        state
+      );
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MoeError);
+      expect((err as MoeError).code).toBe(MoeErrorCode.INVALID_INPUT);
+      expect((err as Error).message).toContain('exit 1');
+    }
+    expect(state.getTask('task-1')?.status).toBe('WORKING');
+  });
+
+  it('persists verification evidence and the aggregated filesModified', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask({
+      implementationPlan: [
+        { stepId: 'step-1', description: 'first', status: 'COMPLETED', affectedFiles: ['a.ts'], modifiedFiles: ['a.ts', 'b.ts'] },
+        { stepId: 'step-2', description: 'second', status: 'COMPLETED', affectedFiles: ['b.ts', 'c.ts'] },
+      ],
+    });
+    await state.load();
+    const tool = completeTaskTool(state);
+    await tool.handler(
+      { taskId: 'task-1', workerId: 'worker-a', verification: { command: 'npx vitest run', exitCode: 0, outputTail: 'ok' } },
+      state
+    );
+    const task = state.getTask('task-1');
+    expect(task?.verification?.command).toBe('npx vitest run');
+    expect(task?.verification?.exitCode).toBe(0);
+    expect(task?.verification?.outputTail).toBe('ok');
+    expect(task?.verification?.reportedAt).toBeTruthy();
+    expect(task?.filesModified).toEqual(['a.ts', 'b.ts', 'c.ts']);
   });
 });

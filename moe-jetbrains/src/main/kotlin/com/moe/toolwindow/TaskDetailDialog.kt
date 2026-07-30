@@ -289,9 +289,14 @@ class TaskDetailDialog(
         val handoffs = task.priorHandoffs.orEmpty()
         val failedDod = task.failedDodItems.orEmpty()
         val critique = task.planCritiqueResult
+        val sizeWarnings = task.planSizeWarnings.orEmpty()
+        val verification = task.verification
+        val reviewSummary = task.reviewSummary
 
         // Nothing to render? Return null to avoid empty sections.
-        if (metrics == null && budget == null && handoffs.isEmpty() && failedDod.isEmpty() && critique == null) {
+        if (metrics == null && budget == null && handoffs.isEmpty() && failedDod.isEmpty() &&
+            critique == null && sizeWarnings.isEmpty() && verification == null && reviewSummary.isNullOrBlank()
+        ) {
             return null
         }
 
@@ -310,6 +315,9 @@ class TaskDetailDialog(
         val executed = metrics?.executedStepCount
         if (planned != null || executed != null) {
             kpis.add(kpiLabel(MoeBundle.message("moe.metrics.steps"), "${executed ?: "-"} / ${planned ?: "-"}"))
+        }
+        metrics?.plannedDistinctFileCount?.let {
+            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.files"), it.toString()))
         }
         metrics?.wallClockMs?.let {
             kpis.add(kpiLabel(MoeBundle.message("moe.metrics.wallClock"), MoeDuration.humanise(it)))
@@ -379,6 +387,71 @@ class TaskDetailDialog(
                 }, BorderLayout.SOUTH)
             }
             container.add(critiquePanel)
+        }
+
+        // Plan-size warnings (amber) — warn-zone size pressure from submit_plan
+        if (sizeWarnings.isNotEmpty()) {
+            val warnPanel = JPanel(BorderLayout()).apply {
+                isOpaque = true
+                background = JBColor(Color(0xFEF3C7), Color(0x33290F))
+                border = JBUI.Borders.empty(6, 8)
+            }
+            warnPanel.add(JBLabel(MoeBundle.message("moe.metrics.planSizeWarnings")).apply {
+                font = font.deriveFont(Font.BOLD)
+            }, BorderLayout.NORTH)
+            warnPanel.add(JBTextArea(sizeWarnings.joinToString("\n") { "• $it" }).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                isOpaque = false
+            }, BorderLayout.CENTER)
+            container.add(warnPanel)
+        }
+
+        // Verification evidence from complete_task (command + exit + output tail)
+        if (verification != null) {
+            val vPanel = JPanel(BorderLayout()).apply {
+                isOpaque = false
+                border = JBUI.Borders.emptyTop(6)
+            }
+            vPanel.add(JBLabel(MoeBundle.message("moe.metrics.verification")).apply {
+                font = font.deriveFont(Font.BOLD)
+            }, BorderLayout.NORTH)
+            val exitText = verification.exitCode?.let { " (exit $it)" } ?: ""
+            val atText = verification.reportedAt?.let { "  @ ${it.take(19)}" } ?: ""
+            val bodyText = buildString {
+                append("$ ").append(verification.command).append(exitText).append(atText)
+                verification.outputTail?.takeIf { it.isNotBlank() }?.let {
+                    append("\n").append(it)
+                }
+            }
+            val area = JBTextArea(bodyText).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+            }
+            val vScroll = JScrollPane(area)
+            vScroll.preferredSize = Dimension(520, 80)
+            vPanel.add(vScroll, BorderLayout.CENTER)
+            container.add(vPanel)
+        }
+
+        // QA approval summary (what the reviewer verified)
+        if (!reviewSummary.isNullOrBlank()) {
+            val rPanel = JPanel(BorderLayout()).apply {
+                isOpaque = false
+                border = JBUI.Borders.emptyTop(6)
+            }
+            rPanel.add(JBLabel(MoeBundle.message("moe.metrics.reviewSummary")).apply {
+                font = font.deriveFont(Font.BOLD)
+            }, BorderLayout.NORTH)
+            rPanel.add(JBTextArea(reviewSummary).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                isOpaque = false
+            }, BorderLayout.CENTER)
+            container.add(rPanel)
         }
 
         // Failed DoD list

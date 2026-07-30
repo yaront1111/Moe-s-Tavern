@@ -97,7 +97,7 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     setupMoe(); writeEpic(); writeTask({ assignedWorkerId: null });
     await state.load();
     const tool = qaApproveTool(state);
-    const result = await tool.handler({ taskId: 'task-1' }, state) as { status: string };
+    const result = await tool.handler({ taskId: 'task-1', summary: 'verified DoD; re-ran verification command green' }, state) as { status: string };
     expect(result.status).toBe('DONE');
   });
 
@@ -105,7 +105,7 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     setupMoe(); writeEpic(); writeTask();
     await state.load();
     const tool = qaApproveTool(state);
-    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-a' }, state) as { status: string };
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-a', summary: 'verified DoD; re-ran verification command green' }, state) as { status: string };
     expect(result.status).toBe('DONE');
   });
 
@@ -115,7 +115,7 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     await createWorker('qa-a', 'CODING', 'task-1');
 
     const tool = qaApproveTool(state);
-    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-a' }, state) as { status: string };
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-a', summary: 'verified DoD; re-ran verification command green' }, state) as { status: string };
 
     expect(result.status).toBe('DONE');
     expect(state.getTask('task-1')?.assignedWorkerId).toBeNull();
@@ -128,7 +128,7 @@ describe('qa_approve / qa_reject ownership enforcement', () => {
     await state.load();
 
     const tool = qaApproveTool(state);
-    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-missing' }, state) as { status: string };
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'qa-missing', summary: 'verified DoD; re-ran verification command green' }, state) as { status: string };
 
     expect(result.status).toBe('DONE');
     expect(state.getTask('task-1')?.assignedWorkerId).toBeNull();

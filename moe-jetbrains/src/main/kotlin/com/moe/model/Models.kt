@@ -60,12 +60,23 @@ data class ImplementationStep(
 
 data class TaskMetrics(
     val plannedStepCount: Int? = null,
+    val plannedDistinctFileCount: Int? = null,
     val executedStepCount: Int? = null,
     val reopenCount: Int? = null,
     val rejectCount: Int? = null,
     val wallClockMs: Long? = null,
     val firstClaimAt: String? = null,
     val doneAt: String? = null
+)
+
+// Verification evidence submitted with moe.complete_task (worker's fresh run
+// of the plan-named verification command). exitCode is always 0 when present —
+// the daemon rejects non-zero — but kept nullable for forward compat.
+data class TaskVerification(
+    val command: String,
+    val exitCode: Int? = null,
+    val outputTail: String? = null,
+    val reportedAt: String? = null
 )
 
 data class TaskBudget(
@@ -124,7 +135,13 @@ data class Task(
     val budget: TaskBudget? = null,
     val priorHandoffs: List<HandoffNote>? = null,
     val failedDodItems: List<FailedDodItem>? = null,
-    val planCritiqueResult: PlanCritiqueResult? = null
+    val planCritiqueResult: PlanCritiqueResult? = null,
+    // Warn-zone size warnings from the latest submit_plan (cleared by a
+    // compliant resubmit) — rendered as an amber chip on the board card.
+    val planSizeWarnings: List<String>? = null,
+    // complete_task verification evidence + qa_approve summary (audit trail).
+    val verification: TaskVerification? = null,
+    val reviewSummary: String? = null
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.

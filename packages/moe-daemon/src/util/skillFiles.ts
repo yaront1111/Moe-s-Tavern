@@ -1143,7 +1143,7 @@ If you're an architect: bake the verified symbol names into the step \`descripti
 
 Trivial doc edits, comment changes, formatting-only steps. If you're not naming a symbol, you don't need to verify one.`,
   'moe-epic-breakdown/SKILL.md': `---
-# moe-generated: sha=d8741ba0b7be
+# moe-generated: sha=6bd5a3cd8ed6
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -1177,17 +1177,39 @@ Anti-seams — do **not** cut here:
 - **By file.** Files move. A task scoped to a file becomes a merge conflict with a plan attached.
 - **By agent convenience.** Splitting so three workers are busy, when the second and third can't start until the first lands, just adds handoff cost.
 
-## Sizing
+## Sizing — hard numbers, not vibes
 
-Target: a task a competent worker finishes in **one session**, producing a diff a reviewer can hold in their head.
+Target: **≤60 minutes of human-equivalent work per task** — aim for ~30 (≈10–30 min of agent runtime). One self-contained deliverable: a function, a test file, a review. One noun per title: one model, one service, one endpoint. The evidence is one-sided — agents are ~90%+ reliable on 30-minute tasks and a coin flip on 5-hour ones, and review defect-discovery collapses past 400 changed LOC (see \`docs/roles/architect.reference.md\` → "Why small tasks").
+
+| Dimension | Target | Ceiling |
+|---|---|---|
+| Human-equivalent time | ~30 min | 60 min |
+| Files touched | 1–3 | >5 distinct files warns, >10 rejects at \`moe.submit_plan\` |
+| Plan steps | ≤8 | >8 warns, >12 rejects at \`moe.submit_plan\` |
+| DoD items | 3–7, each mechanically checkable | >7 draws a \`moe.create_task\` warning |
+| Net changed LOC | ≤200 | >400 is QA grounds for reject-as-oversized |
+
+The daemon enforces this downstream (thresholds tunable via \`project.json\` \`settings.taskSizing\`): \`moe.submit_plan\` hard-rejects oversized plans with \`CONSTRAINT_VIOLATION\`. An undersliced epic doesn't save work — it bounces back here for re-slicing after the architect has already burned a planning pass. **Recalibrate your count upward:** an epic that feels like 2–3 tasks is almost always 10–30 small ones. Foundational/contract tasks first, then vertical slices, ending with the integration-and-hardening task.
+
+Secondary split/merge signals:
 
 | Signal | Action |
 |---|---|
-| DoD has more than ~6 items | Split it |
+| DoD needs more than 7 items | Split it |
 | Touches 3+ packages | Split on the package seam, unless it's a single mechanical rename |
-| The title needs the word "and" | Usually two tasks — check whether the halves can land independently |
+| The title needs the word "and" | Usually two tasks — \`create_task\` warns on it; check whether the halves can land independently |
 | It can't be described without describing another unfinished task | Merge them, or make the dependency explicit via \`order\` |
 | Under ~30 minutes of real work | Merge it into its neighbour; per-task overhead (claim, plan, review) exceeds the work |
+
+### SPIDR — the split procedure
+
+When any cap above is exceeded, split with **SPIDR**. Try each letter in order; take the first that yields independently-landable pieces:
+
+- **S**pike — carve the unknown into its own research task whose deliverable is a written decision, not code.
+- **P**ath — split by workflow path: happy path first, each error/edge path its own task.
+- **I**nterface — split by surface: one task per endpoint, CLI flag, tool, UI entry point.
+- **D**ata — split by data variation: core shape first; each extra format, migration, or edge dataset later.
+- **R**ules — split by business rule: land the permissive version, tighten one rule per follow-up task.
 
 ## Ordering and dependencies
 
@@ -1196,14 +1218,24 @@ Target: a task a competent worker finishes in **one session**, producing a diff 
 - Producers before consumers. If task B imports what task A creates, A gets the lower \`order\`.
 - State the dependency in plain text in B's \`description\` ("depends on the \`SkillMarker\` type from task-…"), because nothing enforces it. A worker who claims B early needs to be able to see that.
 - Prefer orderings where the first 2–3 tasks are genuinely independent — that's what lets a fleet parallelize at all.
+- **File-disjoint tasks are the only ones parallel-claimable.** Overlapping \`affectedFiles\` across WORKING tasks surface as claim-time \`fileCollision\` warnings. Cut so concurrent-track tasks touch disjoint files; when two tasks must touch the same file, that's a sequencing decision (\`order\`), not something to talk workers through.
 - Tasks land in \`BACKLOG\` and are human-gated into \`PLANNING\`; ordering is advice to the human and to the governor, not a lock.
 
 ## What every task must carry
 
-- **\`definitionOfDone\`**: verifiable claims, not intentions. "moe.list_tasks returns tasks filtered by epicId" — not "epic filtering works."
+- **\`definitionOfDone\`**: 3–7 items, every one mechanically checkable — a command to run or a test to pass. DoD items double as the worker's stopping conditions. "moe.list_tasks returns tasks filtered by epicId, proven by the new vitest cases" — not "epic filtering works."
 - **Its own tests.** Every task tests its own behavior. This is not deferred to the final task.
 - **\`taskRails\`** only where this task needs a constraint the epic rails don't already impose.
-- **Enough \`description\`** that a worker who has read neither the epic nor the sibling tasks can start.
+- **A four-element \`description\`** a worker who has read neither the epic nor the sibling tasks can start from: (1) the objective, (2) the concrete deliverable that exists when it's done, (3) explicit NOT-in-scope boundaries, (4) the exact verification command that proves it done. The worker runs that command fresh and submits its result as \`moe.complete_task\` verification evidence — a task without a named command stalls at completion.
+
+## Separate test authorship from implementation
+
+Agents that own their tests are observed deleting or weakening them when the tests get in the way; held-out tests remove the incentive (separated authorship scores dramatically better on SWE-bench-style evals with near-zero test-hacking). For behavior-heavy slices, cut the pair:
+
+1. A **test-authoring task** at the lower \`order\`: deliverable is committed acceptance tests for the behavior — red or \`.skip\`-marked, mutation-resistant assertions, named files. Its DoD: "tests exist, express the acceptance criteria, and fail (or are skipped) against current code."
+2. The **implementation task** right after it: DoD includes "the tests from task-<id> pass **unchanged**" — QA rejects on sight if the diff touches those test files (the moe-qa-loop test-integrity check enforces this).
+
+Skip the pair for trivial slices (config, docs, mechanical renames) — two claim/review cycles cost more than the risk. One test-authoring task can also cover several small sibling implementations when they share a surface.
 
 ## End the epic with an integration-and-hardening task
 
@@ -1228,7 +1260,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=1b7e2b94e005
+# moe-generated: sha=343fb92202cb
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1238,6 +1270,12 @@ allowed-tools: Read, Grep, Glob, WebFetch
 # Moe Planning — 8-Phase Plan Template
 
 Your job: turn the task in front of you into an implementation plan that a worker can execute without guessing. Use the 8 phases below as the **default skeleton** for the steps you submit via \`moe.submit_plan\`. Skip phases that genuinely don't apply — but skip *consciously*, not by accident.
+
+## Size triage — before drafting steps
+
+Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct \`affectedFiles\`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. \`moe.submit_plan\` returns \`warnings\` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with \`CONSTRAINT_VIOLATION\` (thresholds: \`project.json\` \`settings.taskSizing\`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
+
+Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via \`moe-epic-breakdown\` (SPIDR split) and narrow this task to the first slice — or \`moe.report_blocked\` with the proposed split if the task isn't yours to split.
 
 ## Where the gate goes — read this before drafting steps
 
@@ -1263,7 +1301,7 @@ If you can't tell where the task sits, \`moe.list_tasks {epicId}\` and compare \
 ## The 8 phases
 
 ### Phase 1 — Plan before you touch anything
-Read \`task.context\`, \`task.acceptanceCriteria\`, the linked epic rails, and any \`KNOWN_ISSUES.md\`. Build a structured todo list before referencing a single line of code. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
+Read \`task.description\`, \`task.definitionOfDone\`, the linked epic rails, and any \`KNOWN_ISSUES.md\`. Build a structured todo list before referencing a single line of code. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
 
 ### Phase 2 — Explore before you assume
 Don't reference a function, model, method, relationship, or constant you haven't grepped for. Hallucinated \`user.clientProfile.accounts\`-style chains are the #1 source of plan-time errors. If the skill \`explore-before-assume\` is available, invoke it now.
@@ -1273,11 +1311,15 @@ For every behavior change, name the test that proves it. Use mutation-resistant 
 
 Scope the tests to *this* task's behavior. Don't plan end-to-end or full-system tests on a mid-epic task — those belong to the epic's final task, where the whole flow actually exists to be tested.
 
+If the breakdown created a sibling **test-authoring task** for this behavior, plan against those held-out tests: name the test files in the steps, make the final verification step "the tests from task-<id> pass unchanged", and never plan a step that edits them — QA rejects a diff that weakens held-out tests.
+
 ### Phase 4 — Plan the minimum implementation
 Each step does one thing. No clever abstractions. No "while we're here." Scope creep is a bug that looks like progress.
 
 ### Phase 5 — Plan the regression check, sized to position
 Name the suite the worker runs **once**, before \`moe.complete_task\` — and size it per the table above. Mid-epic: the narrow suite covering this task's slice. Epic-final, standalone, or shared-surface change: the broader suite, named explicitly (which packages, which command). One verification step per task, never one per implementation step.
+
+Name **one exact command**. This command IS the worker's completion evidence: \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` and rejects without it, so the worker runs the command you name here fresh and submits its result — and QA re-runs the same command to audit. \`npx vitest run src/server/McpAdapter.test.ts\`, not "run the tests".
 
 ### Phase 6 — Plan the documentation
 Inline comments only where the *why* is non-obvious. Changelog entry if user-visible. Update \`docs/\` if any contract changes. On a big epic, hold the docs sweep for the final task rather than re-editing the same doc from every task in the epic — unless this task alone changes a contract someone else is about to build against.
@@ -1327,7 +1369,7 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=661b86fa27fb
+# moe-generated: sha=943098f0e891
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -1342,11 +1384,12 @@ Your job: read the worker's diff and the task's plan, decide if it's done, and e
 
 For each task in \`REVIEW\`:
 
-1. **Read \`task.implementationPlan\` and \`task.acceptanceCriteria\`.** Know what was promised.
-2. **Read the diff.** \`git diff main...HEAD\` (or against the task's base). Read it adversarially — see the \`adversarial-self-review\` skill for the checklist.
-3. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
-4. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (\`assertEquals('expected', actual)\`, not \`assert(actual)\`)? Are edge cases covered or only the happy path?
-5. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
+1. **Read \`task.implementationPlan\` and \`task.definitionOfDone\`.** Know what was promised.
+2. **Audit the verification evidence.** \`moe.get_context\` returns \`task.verification\` — the exact command the worker ran at completion, its exit code, and an output tail — plus \`filesModified\` and recent \`rejectionHistory\`. Re-run the command yourself. Missing evidence, a non-zero exit, output that contradicts the claim, or a command that isn't the one the plan named → reject, citing the evidence gap.
+3. **Read the diff.** \`git diff main...HEAD\` (or against the task's base). Read it adversarially — see the \`adversarial-self-review\` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below).
+4. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
+5. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (\`assertEquals('expected', actual)\`, not \`assert(actual)\`)? Are edge cases covered or only the happy path? Any **deleted or weakened test** in the diff (loosened assertion, skipped case, removed file) that the plan didn't call for is a reject on sight.
+6. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
 
 ## Review depth follows the task's position in its epic
 
@@ -1358,19 +1401,27 @@ Plans deliberately concentrate the heavy verification at the **end of an epic**,
 
 Still reject at any position for: a DoD item with no code, tests that pass when the code does nothing, scope creep beyond the plan, an unhandled error path, or a \`complete_step\` claim that doesn't hold when re-run. Lean scope is not lower quality.
 
+## Oversized diffs are a defect
+
+More than **400 net changed LOC** is legitimate grounds for \`moe.qa_reject\` on its own, whatever the code quality: review defect-discovery collapses past ~400 changed lines, so a diff that size is unreviewable, and unreviewable means unverifiable. Don't line-edit it — reject with \`rejectionDetails\` telling the architect to split the task (\`moe-epic-breakdown\` / SPIDR) and land it as reviewable slices. Target diff size is ≤200 net LOC.
+
 ## Approve when
 
+- \`task.verification\` is present, matches the plan's named command, and re-runs green.
 - Every DoD item has clear evidence in the diff.
 - Tests cover the new behavior (happy path + at least one edge case) at the depth the plan called for.
 - No obvious adversarial-review red flags (concurrency, null-deref, missing cleanup).
 - The diff scope matches the plan's scope. No drift, no surprise refactors.
 
-Call \`moe.qa_approve\` with a one-line \`summary\` noting what you verified.
+Call \`moe.qa_approve\` with a \`summary\` naming what you verified — the commands you re-ran and the DoD items you checked. It is required (the daemon rejects approvals without it) and is persisted on the task as the review audit trail.
 
 ## Reject when
 
+- \`verification\` evidence is missing, its exit code isn't 0, or it doesn't reproduce when you re-run the command.
 - A DoD item has no corresponding code change.
 - Tests are missing or only check the happy path (for *this* task's behavior — see the depth section above before demanding system-wide coverage from a mid-epic task).
+- The diff deletes or weakens existing tests without the plan calling for it.
+- The diff exceeds ~400 net changed LOC — reject as oversized, route to a split.
 - The diff does something the plan didn't promise (scope creep / surprise refactor).
 - An adversarial-review red flag is present and ignored.
 - A claim made in \`complete_step\` (e.g., "all tests pass") doesn't hold when re-run.
@@ -1384,6 +1435,8 @@ A good reject:
 - Names the file and line.
 - Says what's missing or wrong.
 - Says what would make it pass — specific enough that the worker doesn't have to guess.
+
+Every reject cites a **failed DoD item, a failing command, or a specific out-of-scope hunk**. Style-only preference is never grounds for rejection.
 
 Bad rejects produce ping-pong. Good rejects produce one round-trip.
 

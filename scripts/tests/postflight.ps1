@@ -78,7 +78,12 @@ switch (tool) {
     break;
   }
   case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
-  case 'list_tasks': ok({ tasks: [{ id: 'task-postflight', status: 'WORKING', reopenCount: 0 }] }); break;
+  case 'list_tasks': ok({ tasks: [
+    { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
+    ...(process.env.FAKE_SIBLING_ORDER
+      ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
+      : [])
+  ] }); break;
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -180,6 +185,84 @@ switch (tool) {
         # didn't by checking the count is stable a few seconds later.
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
+
+        # --- Quality gate (settings.qualityGate): the post-flight runs the
+        # configured command before auto-commit. Failing gate => no commit,
+        # PUSH-BLOCKED chat message; passing gate => commit lands;
+        # MOE_DISABLE_QUALITY_GATE=1 => gate skipped even when the command
+        # would fail. Requires git in PATH. ---
+        $gateAvailable = [bool](Get-Command git -ErrorAction SilentlyContinue)
+        if ($gateAvailable) {
+            function New-GateProject([string]$dir, [string]$gateCmd) {
+                New-Item -ItemType Directory -Force -Path (Join-Path $dir '.moe\messages') | Out-Null
+                $cfg = @{ id = 'proj-gate'; name = 'postflight-gate'; settings = @{ qualityGate = $gateCmd } } | ConvertTo-Json -Depth 5
+                Set-Content -Path (Join-Path $dir '.moe\project.json') -Value $cfg -Encoding UTF8
+                Set-Content -Path (Join-Path $dir '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+                & git -C $dir init -q 2>$null | Out-Null
+                & git -C $dir config user.email 'moe@test.local' 2>$null | Out-Null
+                & git -C $dir config user.name 'Moe Test' 2>$null | Out-Null
+                Set-Content -Path (Join-Path $dir 'seed.txt') -Value 'seed'
+                & git -C $dir add seed.txt 2>$null | Out-Null
+                & git -C $dir commit -qm init 2>$null | Out-Null
+                # Leave a dirty file for the post-flight `git add -A` to pick up.
+                Set-Content -Path (Join-Path $dir 'work.txt') -Value 'dirty'
+            }
+            function Invoke-GateWrapper([string]$dir, [string]$outFile) {
+                & $psExe -NoProfile -File $wrapper `
+                    -Project $dir `
+                    -WorkerId worker-gate `
+                    -Role worker `
+                    -Team Smoke `
+                    -NoStartDaemon `
+                    -Command $trueCmd `
+                    -NoLoop `
+                    -PollInterval 0 `
+                    *> $outFile
+                return $LASTEXITCODE
+            }
+            $env:FAKE_TASK_STATUS = 'REVIEW'
+            try {
+                $gateFailDir = Join-Path $tempRoot 'gate-fail'
+                New-GateProject $gateFailDir 'exit 3'
+                $wrapperGateFailOut = Join-Path $tempRoot 'wrapper-gate-fail.out'
+                $gateFailCode = Invoke-GateWrapper $gateFailDir $wrapperGateFailOut
+
+                $gatePassDir = Join-Path $tempRoot 'gate-pass'
+                New-GateProject $gatePassDir 'exit 0'
+                $wrapperGatePassOut = Join-Path $tempRoot 'wrapper-gate-pass.out'
+                $gatePassCode = Invoke-GateWrapper $gatePassDir $wrapperGatePassOut
+
+                $gateSkipDir = Join-Path $tempRoot 'gate-skip'
+                New-GateProject $gateSkipDir 'exit 7'
+                $wrapperGateSkipOut = Join-Path $tempRoot 'wrapper-gate-skip.out'
+                $env:MOE_DISABLE_QUALITY_GATE = '1'
+                try {
+                    $gateSkipCode = Invoke-GateWrapper $gateSkipDir $wrapperGateSkipOut
+                } finally {
+                    Remove-Item Env:MOE_DISABLE_QUALITY_GATE -ErrorAction SilentlyContinue
+                }
+
+                # Mid-epic task (sibling with higher order) defers the gate under
+                # the default scope=epicFinal — a failing gate must not block.
+                $gateMidDir = Join-Path $tempRoot 'gate-midepic'
+                New-GateProject $gateMidDir 'exit 9'
+                $wrapperGateMidOut = Join-Path $tempRoot 'wrapper-gate-midepic.out'
+                $env:FAKE_SIBLING_ORDER = '99'
+                try {
+                    $gateMidCode = Invoke-GateWrapper $gateMidDir $wrapperGateMidOut
+                } finally {
+                    Remove-Item Env:FAKE_SIBLING_ORDER -ErrorAction SilentlyContinue
+                }
+
+                $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
+                $gatePassCommits = [int](& git -C $gatePassDir rev-list --count HEAD 2>$null)
+                $gateSkipCommits = [int](& git -C $gateSkipDir rev-list --count HEAD 2>$null)
+                $gateMidCommits = [int](& git -C $gateMidDir rev-list --count HEAD 2>$null)
+                $gateFailMessages = Get-Content -Raw -Path (Join-Path $gateFailDir '.moe\messages\chan-general.jsonl')
+            } finally {
+                Remove-Item Env:FAKE_TASK_STATUS -ErrorAction SilentlyContinue
+            }
+        }
     } finally {
         $ErrorActionPreference = $prevEap
         $env:MOE_PROXY_PATH = $oldProxy
@@ -221,6 +304,58 @@ switch (tool) {
     }
     if ($messages -notlike '*qa session ended: task=task-resume (CLI exit=0)*') {
         throw 'Expected resume post-flight chat message not found'
+    }
+
+    if ($gateAvailable) {
+        if ($gateFailCode -ne 0) {
+            Get-Content $wrapperGateFailOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-fail wrapper exited with $gateFailCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateFailOut) -notlike '*qualityGate failed (exit 3)*') {
+            Get-Content $wrapperGateFailOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'Expected qualityGate failure log not found'
+        }
+        if ($gateFailCommits -ne 1) {
+            throw "Failing qualityGate must block the auto-commit (found $gateFailCommits commits)"
+        }
+        if ($gateFailMessages -notlike '*PUSH-BLOCKED: qualityGate failed for task task-postflight*') {
+            Write-Host $gateFailMessages
+            throw 'Expected PUSH-BLOCKED chat message not found'
+        }
+        if ($gatePassCode -ne 0) {
+            Get-Content $wrapperGatePassOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-pass wrapper exited with $gatePassCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGatePassOut) -notlike '*qualityGate passed*') {
+            Get-Content $wrapperGatePassOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'Expected qualityGate pass log not found'
+        }
+        if ($gatePassCommits -ne 2) {
+            Get-Content $wrapperGatePassOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Passing qualityGate should allow the auto-commit (found $gatePassCommits commits)"
+        }
+        if ($gateSkipCode -ne 0) {
+            Get-Content $wrapperGateSkipOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-skip wrapper exited with $gateSkipCode"
+        }
+        if ($gateSkipCommits -ne 2) {
+            Get-Content $wrapperGateSkipOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "MOE_DISABLE_QUALITY_GATE=1 should skip the gate and allow the commit (found $gateSkipCommits commits)"
+        }
+        if ($gateMidCode -ne 0) {
+            Get-Content $wrapperGateMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-midepic wrapper exited with $gateMidCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateMidOut) -notlike '*qualityGate deferred*') {
+            Get-Content $wrapperGateMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'Expected mid-epic qualityGate deferral log not found'
+        }
+        if ($gateMidCommits -ne 2) {
+            Get-Content $wrapperGateMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Mid-epic task should commit without running the gate (found $gateMidCommits commits)"
+        }
+    } else {
+        Write-Host 'SKIP qualityGate cases: git not available'
     }
 
     Write-Host 'PASS postflight.ps1'

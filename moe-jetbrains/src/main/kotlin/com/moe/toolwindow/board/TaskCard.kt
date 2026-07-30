@@ -164,6 +164,23 @@ class TaskCard(
             })
         }
 
+        // Plan-size warning chip (amber): the latest submit_plan drew warn-zone
+        // size warnings (over the soft step/file thresholds, under the hard
+        // caps). Tooltip carries the actual warnings so the human approving
+        // the plan sees size pressure without opening chat.
+        val sizeWarnings = task.planSizeWarnings
+        if (!sizeWarnings.isNullOrEmpty()) {
+            val amber = JBColor(java.awt.Color(245, 158, 11), java.awt.Color(251, 191, 36))
+            meta.add(JBLabel("⚠ plan size").apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                foreground = java.awt.Color.WHITE
+                background = amber
+                toolTipText = sizeWarnings.joinToString("; ")
+            })
+        }
+
         // Plan critique blocked chip (red)
         val critique = task.planCritiqueResult
         if (critique?.verdict == "block") {
