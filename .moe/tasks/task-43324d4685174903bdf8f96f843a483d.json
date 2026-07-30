@@ -1,0 +1,28 @@
+{
+  "id": "task-43324d4685174903bdf8f96f843a483d",
+  "epicId": "epic-a0c9c8f8807d4dcabe8f9af99faa0b34",
+  "title": "Capture disk-state signature in handoffs and flag staleness on claim",
+  "description": "Objective: a handoff note records a git-status signature at release; claim_next_task recomputes it and flags staleHandoffDiskState when the disk moved, so the next claimer distrusts stale refusal reasons. Deliverable: HandoffNote.diskState in schema + capture in packages/moe-daemon/src/tools/releaseTask.ts + comparison/flag in claimNextTask.ts. NOT in scope: acting on the flag automatically. Spec: item #3 in tag archive/governance-plane-v2. Verification command: npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts",
+  "definitionOfDone": [
+    "release_task persists a diskState signature on the handoff note (cheap git-status derived string; failure to compute degrades to absent, never blocks release)",
+    "claim_next_task returns staleHandoffDiskState: true when the recomputed signature differs from the stored one",
+    "No flag is emitted when signatures match or diskState is absent",
+    "npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-07-30T21:42:28.417Z",
+  "updatedAt": "2026-07-30T21:42:28.417Z"
+}

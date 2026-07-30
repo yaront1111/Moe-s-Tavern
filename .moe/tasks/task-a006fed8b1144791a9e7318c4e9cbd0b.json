@@ -1,0 +1,29 @@
+{
+  "id": "task-a006fed8b1144791a9e7318c4e9cbd0b",
+  "epicId": "epic-a0c9c8f8807d4dcabe8f9af99faa0b34",
+  "title": "Reject plans citing nonexistent paths unless declared as newFiles",
+  "description": "Objective: submit_plan rejects plans whose affectedFiles cite paths that do not exist on disk, unless the step declares them in a new step.newFiles[] field — catching stale-doc plan defects at submit time instead of step 1. Deliverable: newFiles in the step schema + existence check in packages/moe-daemon/src/tools/submitPlan.ts with a teaching error message. NOT in scope: content validation of the files. DEPENDS on task order 1 landing first (same file: submitPlan.ts — do not work these in parallel). Spec: item #2 in tag archive/governance-plane-v2. Verification command: npx vitest run src/tools/submitPlan.test.ts",
+  "definitionOfDone": [
+    "A plan citing only existing paths passes unchanged",
+    "A plan citing a missing path without declaring it in step.newFiles is rejected with an error naming the path and the fix",
+    "The same plan with the path declared in step.newFiles passes, and newFiles survive into the persisted implementationPlan",
+    "Plan-size gate and rails checks are unaffected (existing submitPlan tests stay green)",
+    "npx vitest run src/tools/submitPlan.test.ts passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-07-30T21:42:28.024Z",
+  "updatedAt": "2026-07-30T21:42:28.024Z"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "epic-a0c9c8f8807d4dcabe8f9af99faa0b34",
+  "projectId": "proj-3830fac7",
+  "title": "Governance plane v2 — revive unlanded May improvements",
+  "description": "Eight governor-suggested improvements from the unmerged May fleet branch, re-specced against current main. Source spec preserved as git tag archive/governance-plane-v2. Two branch items dropped as superseded (see architectureNotes).",
+  "architectureNotes": "Origin: unmerged fleet branch moe/work-2026-05-16, archived as git tag archive/governance-plane-v2 (commit 8077693). The branch's code is 2.5 months stale against main — treat it as a SPEC, not a merge source; re-implement each item against current main.\n\nDeliberately dropped from this epic (superseded on main):\n- Item #8 chat_wait keepalive heartbeat — the wrapper heartbeat sidecar (moe-agent.{sh,ps1}) now pings moe.heartbeat on a timer for ALL blocking waits.\n- The branch's verificationEvidence min-length shape checks — superseded by structured complete_task verification {command, exitCode, outputTail} and required qa_approve summary (commit e651c22).\n- read-before-act role-doc mandates — superseded by the runtime-driven workflow (nextAction + get_context enforcement).\n\nLanded since the branch, interacts with this epic (do not regress): plan-size gate in submit_plan (settings.taskSizing, util/planSize.ts), required verification on complete_task, required summary on qa_approve, planSizeWarnings persistence, epic-final qualityGate in the wrappers.",
+  "epicRails": [
+    "Re-implement against current main; the archived branch (tag archive/governance-plane-v2) is a spec, not a merge source",
+    "Every new settings key: ProjectSettings type + validateSettingsUpdate whitelist/validation + docs/SCHEMA.md + docs/CONFIGURATION.md",
+    "New MCP tools must be registered in getTools() in packages/moe-daemon/src/tools/index.ts or they are invisible",
+    "No tool handler may run long synchronous work under the state mutex; only blocking:true tools may park",
+    "Each task ships vitest coverage next to the files it touches; name the exact vitest command in the plan"
+  ],
+  "status": "PLANNED",
+  "order": 1001,
+  "createdAt": "2026-07-30T21:42:26.942Z",
+  "updatedAt": "2026-07-30T21:42:26.942Z"
+}
