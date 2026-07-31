@@ -234,7 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
             });
 
             if (selected?.label === 'Reconnect to Daemon') {
-                vscode.commands.executeCommand('moe.restartDaemon');
+                vscode.commands.executeCommand('moe.reconnect');
             }
         })
     );
@@ -389,7 +389,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('moe.restartDaemon', async () => {
+        vscode.commands.registerCommand('moe.reconnect', async () => {
             if (!daemonClient) {
                 vscode.window.showWarningMessage('Daemon client not initialized');
                 return;
