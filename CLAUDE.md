@@ -74,7 +74,7 @@ npm run lint                                                        # repo root:
 
 Run daemon tests after touching daemon code; run `./gradlew test` after touching Kotlin. Proxy and claude-plugin have their own `npm test`. `npm run lint` enforces a hard 40-line cap on `docs/roles/{architect,worker,qa}.md` (governor + `*.reference.md` exempt) — keep role docs terse, put detail in the `.reference.md` files.
 
-CI (`.github/workflows/ci.yml`, PRs to main): daemon+proxy build + `test:coverage`, JetBrains `buildPlugin` + `./gradlew test`, and a 3-OS build matrix (ubuntu/windows/macos). Root lint and claude-plugin tests are NOT CI-enforced. Daemon changes also trigger a Docker build of `packages/moe-daemon/Dockerfile` (its EXPOSE/healthcheck port 3141 is stale vs the 9876 default — don't "fix" code to match it). Releases are tag-driven: pushing `v*` builds everything, publishes daemon+proxy to npm, attaches the plugin zip + .vsix to a GitHub Release, and publishes to JetBrains Marketplace.
+CI (`.github/workflows/ci.yml`, PRs to main): daemon+proxy build + `test:coverage`, JetBrains `buildPlugin` + `./gradlew test`, and a 3-OS build matrix (ubuntu/windows/macos). Root lint and claude-plugin tests are NOT CI-enforced. Daemon changes also trigger a Docker build of `packages/moe-daemon/Dockerfile`. Releases are tag-driven: pushing `v*` builds everything, publishes daemon+proxy to npm, attaches the plugin zip + .vsix to a GitHub Release, and publishes to JetBrains Marketplace.
 
 ## Working in this repo
 
@@ -94,8 +94,9 @@ CI (`.github/workflows/ci.yml`, PRs to main): daemon+proxy build + `test:coverag
 | Doc | Purpose |
 |---|---|
 | `docs/SCHEMA.md` | Canonical data shapes |
-| `docs/MCP_SERVER.md` | MCP tool contracts — near-complete but NOT authoritative (`wait_for_task` and `add_comment` lack contract sections); the authoritative list is `getTools()` in `packages/moe-daemon/src/tools/index.ts` |
+| `docs/MCP_SERVER.md` | MCP tool contracts (every registered tool has a section); the authoritative list is still `getTools()` in `packages/moe-daemon/src/tools/index.ts` |
 | `docs/ARCHITECTURE.md` | System architecture |
 | `docs/DEVELOPMENT.md` | Extended build/run guide |
-| `docs/CONFIGURATION.md` | Settings + env vars — **stale on env vars** (documents phantom `MOE_PORT`/`MOE_DAEMON_URL`, port 3141); trust the Run section above and `packages/moe-daemon/src/index.ts` instead |
+| `docs/CONFIGURATION.md` | Settings + env vars reference (source of truth for defaults stays `packages/moe-daemon/src/index.ts`) |
+| `docs/TROUBLESHOOTING.md` | Common failure modes + fixes |
 | `docs/roles/{architect,worker,qa,governor}.md` | Agent role guides |

@@ -15,7 +15,7 @@ import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
-import { backfillTaskMetrics } from './state/migrations/backfillTaskMetrics.js';
+import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { writeInitFiles } from './util/initFiles.js';

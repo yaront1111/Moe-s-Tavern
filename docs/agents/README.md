@@ -1,6 +1,8 @@
-# Moe Agent Roles
+# Moe Agents
 
-This directory contains documentation for each AI agent role that works with the Moe board system.
+This directory contains the **Claude Code subagent definitions** (`moe-*.md`) that are bundled into new projects: `generate-init-files.ts` vendors them into the daemon, `init` writes them to `.moe/agents/`, and the agent launchers mirror them to `.claude/agents/` (gated by `settings.enableAgentTeams`).
+
+Per-role workflow guides live in [`docs/roles/`](../roles/) — those are the docs agents actually load at launch.
 
 ## Overview
 
@@ -28,9 +30,18 @@ AWAITING_APPROVAL, and DONE are human-gated.
 
 | Role | Status Focus | Primary Action |
 |------|--------------|----------------|
-| [Architect](./ARCHITECT.md) | PLANNING | Creates implementation plans |
-| [Worker](./WORKER.md) | WORKING | Implements approved plans |
-| [Reviewer](./REVIEWER.md) | REVIEW | QA, testing, approval |
+| [Architect](../roles/architect.md) | PLANNING | Creates implementation plans |
+| [Worker](../roles/worker.md) | WORKING | Implements approved plans |
+| [QA](../roles/qa.md) | REVIEW | QA, testing, approval |
+| [Governor](../roles/governor.md) | — | Fleet oversight (never claims tasks) |
+
+## Subagent Definitions
+
+| File | Purpose |
+|------|---------|
+| `moe-explorer.md` | Read-only codebase exploration during planning |
+| `moe-test-runner.md` | Isolated test execution for workers |
+| `moe-code-reviewer.md` | Adversarial diff review before `qa_approve` |
 
 ## Task Status Flow
 

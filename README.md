@@ -81,13 +81,7 @@ cd Moe-s-Tavern
 .\scripts\install-all.ps1
 ```
 
-**Mac (Homebrew):**
-```bash
-brew tap yaront1111/moe
-brew install moe
-```
-
-**Mac / Linux (from source):**
+**Mac / Linux:**
 ```bash
 git clone https://github.com/yaront1111/Moe-s-Tavern.git
 cd Moe-s-Tavern

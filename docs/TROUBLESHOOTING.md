@@ -26,12 +26,12 @@ Common issues and solutions for Moe's Tavern.
 #### Port already in use
 
 ```bash
-# Check if port 3141 is in use
+# Check if port 9876 is in use
 # Windows
-netstat -ano | findstr :3141
+netstat -ano | findstr :9876
 
 # Mac/Linux
-lsof -i :3141
+lsof -i :9876
 ```
 
 **Solution:** Kill the existing process or use a different port:
@@ -303,8 +303,8 @@ export LOG_RETENTION_COUNT=3
 # Via CLI
 node packages/moe-daemon/dist/index.js status --project /path
 
-# Via HTTP
-curl http://localhost:3141/health
+# Via HTTP (default port 9876 — actual port is in .moe/daemon.json)
+curl http://localhost:9876/health
 ```
 
 ### View daemon logs
@@ -329,7 +329,7 @@ cat .moe/project.json | jq .
 
 ```bash
 # Using websocat (install separately)
-websocat ws://localhost:3141/ws
+websocat ws://localhost:9876/ws
 
 # Send ping
 {"type":"PING"}

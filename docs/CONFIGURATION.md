@@ -13,12 +13,13 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_PROJECT_PATH` | Path to project containing `.moe/` folder | Current directory | `/home/user/myproject` |
 | `MOE_DEFAULT_PORT` | WebSocket/HTTP server port (auto-scans upward if taken) | `9876` | `9900` |
 | `MOE_PORT_RANGE` | How many ports to scan past the default | `50` | `100` |
+| `MOE_BIND_HOST` | Bind address (recorded as `bindHost` in daemon.json when non-loopback; WSL agent mode uses `0.0.0.0`) | `127.0.0.1` | `0.0.0.0` |
 | `MOE_SHUTDOWN_TIMEOUT_MS` | Grace period for clean shutdown | `10000` | `5000` |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `warn`, `error` |
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
 | `LOG_RETENTION_COUNT` | Number of rotated logs to keep | `5` | `3` |
 
-(Advanced port/lock tuning: `MOE_SOCKET_TIMEOUT_MS`, `MOE_PORT_CHECK_INTERVAL_MS`, `MOE_PORT_READY_TIMEOUT_MS`, `MOE_LOCK_RETRY_DELAY_MS`, `MOE_LOCK_STALE_TIMEOUT_MS`, `MOE_HTTP_CLOSE_TIMEOUT_MS` — see `packages/moe-daemon/src/index.ts`.)
+(Advanced tuning — see `packages/moe-daemon/src/index.ts` and the util that reads each: port/lock `MOE_SOCKET_TIMEOUT_MS`, `MOE_PORT_CHECK_INTERVAL_MS`, `MOE_PORT_READY_TIMEOUT_MS`, `MOE_LOCK_RETRY_DELAY_MS`, `MOE_LOCK_STALE_TIMEOUT_MS`, `MOE_HTTP_CLOSE_TIMEOUT_MS`; state/limits `MOE_STATE_LOAD_TIMEOUT_MS`, `MOE_MCP_MAX_BATCH_SIZE`, `MOE_MAX_COMMENTS_PER_TASK`; rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`; proposal cleanup `MOE_PROPOSAL_PURGE_INTERVAL_MS`, `MOE_PROPOSAL_PURGE_AGE_MS`, `MOE_PROPOSAL_SNAPSHOT_RETENTION_MS`; log compression `LOG_COMPRESSION_TIMEOUT_MS`.)
 
 ### Proxy Configuration
 
@@ -27,6 +28,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_PROJECT_PATH` | Project path (used to locate `.moe/daemon.json`) | Current directory | `/home/user/myproject` |
 | `MOE_MESSAGE_TIMEOUT_MS` | Per-message timeout for forwarded MCP calls | `30000` | `60000` |
 | `MOE_WORKER_ID` | Worker identity injected into every `tools/call` | Set by agent launchers | `worker-1` |
+| `MOE_DAEMON_HOST` | Connect-host override (WSL agent mode: reach a Windows-owned daemon via the WSL gateway) | Loopback | `172.29.32.1` |
 
 ### Agent Scripts
 
@@ -37,6 +39,16 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_SERENA_PROJECT` | Serena project root override (multi-repo workspaces) | Moe project root | `/repo/backend` |
 | `MOE_NODE_COMMAND` | Node.js executable (JetBrains plugin daemon spawn) | `node` | `/usr/local/bin/node` |
 | `MOE_DAEMON_COMMAND` | Daemon start command override (JetBrains plugin) | Auto-detected | `npx moe-daemon` |
+| `MOE_DAEMON_HOST` | Daemon connect-host override for agents + spawned MCP servers (WSL mode) | Loopback | `172.29.32.1` |
+| `MOE_DISABLE_HEARTBEAT` | Skip the heartbeat sidecar that keeps `lastActivityAt` fresh during long silent CLI steps | Unset | `1` |
+| `MOE_HEARTBEAT_INTERVAL_SEC` | Heartbeat sidecar ping interval | `60` | `30` |
+| `MOE_HEARTBEAT_MAX_DURATION_SEC` | Heartbeat sidecar hard stop (a truly-hung CLI still goes stale) | `7200` | `3600` |
+| `MOE_DISABLE_QUALITY_GATE` | Skip `settings.qualityGate` for this run | Unset | `1` |
+| `MOE_RESUME_MAX_ATTEMPTS` | CLI relaunches onto an already-held task before escalating + idling | `5` | `3` |
+| `MOE_CODEX_REASONING_EFFORT` | `model_reasoning_effort` written to codex config.toml | `xhigh` | `high` |
+| `MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC` | `startup_timeout_sec` for the codex `moe` MCP entry (survives supervised daemon restarts) | `120` | `180` |
+| `MOE_FALLBACK_CLI` | Inject `moe-call.sh` fallback instructions into the agent prompt (rare edge case) | Unset | `1` |
+| `MOE_DISABLE_TOOL_HOOK` | Claude plugin: disable the PostToolUse hook that forwards `moe.*` tool events to the daemon | Unset | `1` |
 
 ---
 
@@ -126,6 +138,9 @@ The `.moe/project.json` file contains project-specific settings.
 | `chatEnabled` | Agent chat system | `true` (default) / `false` |
 | `chatMaxAgentHops` | Max agent-to-agent mention hops | Number (default: 4) |
 | `models.{role}` | Per-role model override for the `claude` CLI | e.g. `"models": {"worker": "claude-opus-4-8"}` |
+| `columnLimits` | Max tasks per board column (UI hint) | e.g. `{"WORKING": 5}` |
+| `staleWorkerTimeoutMs` | Silent-worker prune threshold: workers idle past this that own **no** active work are deleted from the worker map; owners of WORKING/PLANNING tasks are preserved (never idle-released) | Milliseconds (default: 1800000 = 30 min) |
+| `reviewStaleTimeoutMs` | REVIEW-only exception: a QA owner silent past this has its REVIEW task released (unassigned, stays REVIEW) so another QA can claim it | Milliseconds (default: 1800000 = 30 min) |
 
 ### Rails Reference
 

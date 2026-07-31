@@ -1369,6 +1369,128 @@ Long-poll for chat messages mentioning this worker or from humans.
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
 
+---
+
+### moe.chat_who
+
+List online workers, optionally filtered by channel participation.
+
+**Parameters:**
+```typescript
+{
+  channel?: string      // Optional: channel ID to filter by participation
+}
+```
+
+**Returns:**
+```typescript
+{ online: Array<{ workerId, status, lastActivity, currentTaskId, source }> }
+```
+
+**Notes:**
+- Online = activity within the last 120 seconds (same presence window as `moe.chat_join`)
+- With `channel`: includes workers with a chat cursor for the channel **and** workers currently blocked in `moe.chat_wait` watching it; `source` is `cursor`, `waiting`, or `both`
+- Without `channel`: returns all online workers
+
+---
+
+### moe.chat_create_channel
+
+Create a custom chat channel for ad-hoc agent coordination.
+
+**Parameters:**
+```typescript
+{
+  name: string          // Required: channel name
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, channel }            // created
+{ success: false, error }             // e.g. name conflict
+```
+
+---
+
+### moe.chat_pin
+
+Pin a chat message to a channel. Pinned messages serve as todos or important references.
+
+**Parameters:**
+```typescript
+{
+  channel: string,      // Required: channel ID
+  messageId: string,    // Required: message ID to pin
+  workerId: string      // Required: worker pinning the message
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, pin }
+```
+
+---
+
+### moe.chat_unpin
+
+Remove a pinned message from a channel.
+
+**Parameters:**
+```typescript
+{
+  channel: string,      // Required: channel ID
+  messageId: string     // Required: message ID to unpin
+}
+```
+
+**Returns:**
+```typescript
+{ success: true }
+```
+
+---
+
+### moe.chat_decision
+
+Propose a decision for human approval. Optionally post it to a chat channel.
+
+**Parameters:**
+```typescript
+{
+  content: string,      // Required: what is being proposed
+  channel?: string,     // Optional: channel ID to post the decision to
+  workerId?: string     // Optional: proposing worker
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, decision }
+```
+
+---
+
+### moe.chat_resync
+
+Clear chat cursors and return a bounded, token-budgeted message window — for agents resuming after context loss.
+
+**Parameters:**
+```typescript
+{
+  workerId: string,     // Required: worker whose cursors to reset
+  channel?: string,     // Optional: specific channel (omit for all)
+  limit?: number,       // Max messages per channel (default 20, max 200)
+  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, messagesCount, messages, cursorsReset: true, truncated, hint? }
+```
+
 ## Cross-Session Memory
 
 Moe has **no native memory tools**. Cross-session knowledge (conventions, gotchas, patterns, decisions, end-of-session handoffs) is provided by the **Serena MCP server**, which the agent launchers inject alongside the `moe` proxy. Use Serena's `list_memories` / `read_memory` / `write_memory` / `edit_memory` / `delete_memory`, backed by a flat per-name markdown store at `.serena/memories/*.md`. See [MEMORY.md](MEMORY.md) for the naming convention and pull-on-start / write-before-finish workflow.
@@ -1520,6 +1642,50 @@ Governor-only. Record a structured critique of a submitted plan. `verdict='block
 - Clears `task.pendingPlanCritique` once a critique lands (idempotent).
 
 ---
+
+## Liveness & Diagnostics
+
+### moe.get_activity_log
+
+Read the activity log with filtering and pagination — newest first.
+
+**Parameters:**
+```typescript
+{
+  taskId?: string,      // Filter by task
+  epicId?: string,      // Filter by epic
+  workerId?: string,    // Filter by worker
+  eventTypes?: string[],// Filter by event type
+  limit?: number,       // Default 10, max 100
+  offset?: number,      // Max 10000
+  maxPayloadChars?: number // Default 500, max 2000
+}
+```
+
+**Notes:**
+- Filtered queries scan at most 5000 recent lines; older matches are not returned
+
+---
+
+### moe.heartbeat
+
+Liveness ping: refreshes the calling worker's `lastActivityAt` with no other side effects.
+
+**Parameters:**
+```typescript
+{
+  workerId: string      // Required: worker to refresh
+}
+```
+
+**Returns:**
+```typescript
+{ ok: true }
+```
+
+**Notes:**
+- Called by the agent-wrapper heartbeat sidecar during long silent local steps (builds, test runs) so a live CLI isn't mistaken for a stale one; not intended to be called by agents directly
+- No-ops safely on a missing or `DEAD` worker record
 
 ## Plugin WebSocket Messages
 

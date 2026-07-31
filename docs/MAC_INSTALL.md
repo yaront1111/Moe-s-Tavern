@@ -4,17 +4,6 @@ Complete installation guide for Moe's Tavern on macOS (Intel and Apple Silicon).
 
 ---
 
-## Quick Install (Homebrew)
-
-```bash
-brew tap yaront1111/moe
-brew install moe
-```
-
-This installs `moe-daemon` and `moe-proxy` globally.
-
----
-
 ## Install from Source
 
 ### Prerequisites
@@ -104,7 +93,7 @@ Use this checklist to verify your installation works correctly.
 - [ ] `moe-daemon init --project ~/test-project` starts the daemon
 - [ ] `.moe/project.json` exists with correct structure
 - [ ] `moe-daemon start --project ~/test-project` starts without errors
-- [ ] `curl http://localhost:3141/health` returns healthy status
+- [ ] `curl http://localhost:9876/health` returns healthy status
 - [ ] `moe-daemon stop --project ~/test-project` stops cleanly
 - [ ] `moe-daemon status --project ~/test-project` shows correct state
 
@@ -148,7 +137,7 @@ Use this checklist to verify your installation works correctly.
 
 ### Known Issues
 
-1. **Port already in use**: If 3141 is taken, daemon scans for next available port
+1. **Port already in use**: If 9876 is taken, daemon scans for next available port
 2. **Permission denied**: Ensure `chmod +x` on all scripts
 3. **python3 not found**: Install via `brew install python3` (required for JSON parsing in scripts)
 
@@ -160,7 +149,7 @@ Use this checklist to verify your installation works correctly.
 
 ```bash
 # Check for existing process
-lsof -i :3141
+lsof -i :9876
 
 # Remove stale lock file
 rm .moe/daemon.json
@@ -173,7 +162,7 @@ LOG_LEVEL=debug moe-daemon start --project /path
 
 ```bash
 # Verify daemon is running
-curl http://localhost:3141/health
+curl http://localhost:9876/health
 
 # Check MCP config
 cat ~/.config/claude/mcp_servers.json

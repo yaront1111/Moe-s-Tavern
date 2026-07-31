@@ -10,7 +10,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
-import { backfillTaskMetrics, __testing as backfillTesting } from '../state/migrations/backfillTaskMetrics.js';
+import { backfillTaskMetrics, __testing as backfillTesting } from '../state/backfills/backfillTaskMetrics.js';
 import { deregisterWorker, nextStatusForRelease } from '../state/workerLifecycle.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';

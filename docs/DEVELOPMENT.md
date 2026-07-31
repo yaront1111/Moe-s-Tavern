@@ -12,19 +12,6 @@ This guide describes how to build and run the current implementation in this rep
 
 ---
 
-## Quick Install (Mac)
-
-If you just want to use Moe without building from source:
-
-```bash
-brew tap yaront1111/moe
-brew install moe
-```
-
-This installs `moe-daemon` and `moe-proxy` globally.
-
----
-
 ## Build the Daemon + Proxy
 
 ```bash
@@ -415,7 +402,7 @@ cd packages/moe-daemon
 docker build -t moe-daemon .
 
 # Run with your project mounted
-docker run -p 3141:3141 -v /path/to/project:/project moe-daemon
+docker run -p 9876:9876 -v /path/to/project:/project moe-daemon
 ```
 
 Or use docker-compose:

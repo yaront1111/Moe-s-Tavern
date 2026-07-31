@@ -2,7 +2,7 @@
 
 > "What'll it be, Homer?"
 
-Status note: This PRD is a forward-looking product vision. The current implementation is an MVP; see `PROJECT.md`, `docs/DEVELOPMENT.md`, and `docs/ARCHITECTURE.md` for what is built today.
+Status note: This PRD is a forward-looking product vision. See `CLAUDE.md`, `docs/DEVELOPMENT.md`, and `docs/ARCHITECTURE.md` for what is built today.
 
 ## Executive Summary
 
