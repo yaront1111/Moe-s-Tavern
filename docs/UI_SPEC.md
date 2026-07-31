@@ -7,15 +7,16 @@
 3. **Keyboard-first** — Power users shouldn't need the mouse
 4. **Non-blocking** — Never interrupt flow with mandatory modals
 
-## Current UI (MVP)
+## Current UI
 
 - Tool window titled "Moe" on the right.
-- Board with five columns (Backlog → Done; Awaiting Approval tasks display in Planning).
-- Drag/drop changes task status.
-- Task card shows title only; double-click opens a detail dialog with status, description, and DoD.
-- No worker panel, notifications, settings, or status bar widget yet.
+- Board with five columns (Backlog → Done; Awaiting Approval tasks display in Planning), epic grouping with an "All Epics" filter, drag/drop status changes.
+- Task cards with status dots; double-click opens a detail dialog with status, description, DoD, comments, and approve/reject/reopen actions.
+- Plan review, task/epic create, epic detail, and settings dialogs.
+- Chat, Metrics, Activity Log, Worker, and Proposal panels; IDE notifications; connection indicator with "Restart Daemon".
+- Agents menu launches architect/worker/qa/governor in the IDE terminal (incl. WSL mode).
 
-Everything below is the target UX spec for future iterations.
+See `docs/PLUGIN_SPEC.md` for the implemented feature list. Everything below is the target UX spec for future iterations — parts of it are now built.
 
 ---
 
