@@ -124,9 +124,10 @@ $moeHome = Join-Path $env:USERPROFILE ".moe"
 if (-not (Test-Path $moeHome)) {
     New-Item -ItemType Directory -Path $moeHome | Out-Null
 }
+$daemonPkg = Get-Content (Join-Path $root "packages\moe-daemon\package.json") -Raw | ConvertFrom-Json
 $globalConfig = @{
     installPath = $root
-    version = "0.1.0"
+    version = $daemonPkg.version
     updatedAt = (Get-Date -Format "o")
 }
 $globalConfig | ConvertTo-Json | Set-Content -Path (Join-Path $moeHome "config.json") -Encoding UTF8
