@@ -10,9 +10,115 @@
     "full vitest suite passes with zero regressions"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE + WIDEN INTERNALS. (a) Record the starting line count: `wc -l packages/moe-daemon/src/state/StateManager.ts` (expect 3654). (b) From packages/moe-daemon run `npx vitest run 2>&1 | tail -40` and SAVE the list of failing test files verbatim as your baseline — the fleet shares one dirty working tree, so some failures may belong to other in-flight tasks (governance-plane-v2 edits are uncommitted in this tree). Do NOT stash, revert or fix another task's edits. If the suite is already red, that baseline is what 'zero regressions' is measured against for the rest of this task. (c) Confirm `npx tsc --noEmit` exits 0 (it does today). (d) In StateManager.ts ONLY, widen exactly the members later steps need to reach from free functions, changing `private` to a public member tagged `/** @internal — reached by the extracted state/* modules; not part of the supported API. */`: mutex, activityMutex, messageMutexes, moePath, projectPath, project, emitter, fileWatcher, logRotator, mentionRouter, unreadCounts, pendingActivityWrites, activityFlushResolvers, lastActivityBackpressureWarn, droppedActivityWrites, blockedTimeoutInterval, proposalPurgeInterval, staleWorkerInterval, alertedStaleAssignments, blockedTimeoutMs, staleWorkerTimeoutMs, reviewStaleTimeoutMs. Also widen the private METHODS that cross module boundaries: emit, writeEntity, readJson, incrementUnread, getMessageMutex, notifyActivityFlushed. Keep `readonly` where it already is. Change NOTHING else — no logic, no reordering, no error handling touched. (e) Re-run `npx tsc --noEmit` (must stay 0) and `npx vitest run` (must match the step-b baseline exactly). This step is deliberately mechanical so every later step is a pure move.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "startedAt": "2026-07-31T19:26:32.106Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "EXTRACT validators.ts. Create packages/moe-daemon/src/state/validators.ts and move these StateManager methods there as exported free functions, bodies BYTE-FOR-BYTE unchanged apart from dropping the `this.` prefix on sibling validator calls: trimComments, requirePlainObject, rejectUnknownFields, validateStringValue, validateBooleanValue, validateIntegerValue, validateEnumValue, validateStringArrayValue, validatePatternSetting, validateSettingsUpdate, validateEpicUpdates, epicCreatedActivityPayload, epicUpdatedActivityPayload, validateTeamName, validateTeamRole, validateTeamMaxSize, validateMemberIds, validateCreateTeamInput, validateTeamUpdates, sanitizeStringIdArray, sanitizeStepAmendments, sanitizeImplementationPlan. Also move the constants MAX_COMMENTS_PER_TASK_DEFAULT / MAX_COMMENTS_PER_TASK_ENV / MAX_COMMENTS_PER_TASK (re-export MAX_COMMENTS_PER_TASK from StateManager.ts — it is already exported and external code may import it) and ACTIVITY_TEXT_PREVIEW_CHARS / ACTIVITY_TRUNCATED_SUFFIX plus the activityStringPreview helper. The ONLY signature change: validateSettingsUpdate takes the current project explicitly — `validateSettingsUpdate(project: Project, settings: Partial<ProjectSettings>): ProjectSettings` — because it reads this.project. Every other function is pure and takes no state handle. Error handling: these validators throw invalidInput(...) on bad input while the sanitize* family never throws (malformed entries are dropped, strings sliced) — preserve that split exactly; a sanitizer that starts throwing breaks every updateTask write path. CRITICAL: validateSettingsUpdate, validateEpicUpdates and sanitizeImplementationPlan are hardcoded field ALLOWLISTS — copy them verbatim; adding, removing or reordering a field silently drops writes while the tool's return value still looks correct. These are all private helpers, so there are NO delegation stubs: rewrite each call site inside StateManager.ts to call the imported function directly. Verify `npx tsc --noEmit` = 0 and the suite matches baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "EXTRACT persistence.ts. Create packages/moe-daemon/src/state/persistence.ts holding the disk-IO, bootstrap and migration layer. Move: loadEntities, readJson, writeEntity, verifyWritePermissions, normalizeProject, migrateToV5FileSystem, migrateToV6FileSystem, ensureChatInfrastructure, ensureRoleChannels, seedCanonicalChannel, tryLoadWorkerFromDisk. Signature rules: pure path helpers take the path explicitly — `loadEntities<T>(moePath: string, dir: string): Map<string, T>`, `readJson<T>(filePath: string): T`, `normalizeProject(project: Partial<Project>): Project`, `verifyWritePermissions(moePath: string): void`; anything that mutates in-memory maps or consults the FileWatcher takes the state handle first — `writeEntity(state: StateManager, kind: string, id: string, entity: unknown): Promise<void>`, `migrateToV5FileSystem(state)`, `migrateToV6FileSystem(state)`, `ensureChatInfrastructure(state)`, `ensureRoleChannels(state)`, `seedCanonicalChannel(state, name, type)`, `tryLoadWorkerFromDisk(state, workerId)`. Preserve writeEntity's path-traversal guard (validateEntityId + the resolved-path startsWith check) and its fileWatcher.ignorePath call in the same order — that ordering is what stops the watcher echoing our own writes. Error handling is load-bearing here and must move verbatim: loadEntities skips and logs an unparseable entity file instead of aborting the whole load, and tryLoadWorkerFromDisk swallows every throw and returns null by design — do not 'improve' either into a propagating error. tryLoadWorkerFromDisk is PUBLIC: keep a one-line delegating method on StateManager. `load()` and `applySettingsTimeouts` STAY in StateManager as the orchestrator; rewrite their internals to call the imported functions. Verify tsc = 0 and suite = baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/persistence.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "EXTRACT activityLog.ts. Create packages/moe-daemon/src/state/activityLog.ts and move: appendActivity, appendActivityAsync, validateActivityEvent, getActivityLog, getActivityLogWindow, flushActivityLog, notifyActivityFlushed. All take `state: StateManager` first. These mutate the backpressure counters widened in step 1 (state.pendingActivityWrites, state.droppedActivityWrites, state.lastActivityBackpressureWarn, state.activityFlushResolvers) and use state.activityMutex and state.logRotator — read and write them THROUGH the state handle so there is exactly one copy of each counter; do not shadow them in module scope. Preserve the drop-vs-warn thresholds and the exact log lines. Error handling: activity logging is best-effort — appendActivity must keep never throwing into its caller (a failed audit write must not fail the state mutation that triggered it), and getActivityLogWindow must keep returning an empty window rather than throwing when activity.log is absent or truncated mid-line. appendActivity, appendActivityAsync, getActivityLog, getActivityLogWindow and flushActivityLog are public — keep delegating methods with identical signatures (appendActivity is called from ~dozens of sites including workerLifecycle.ts). validateActivityEvent stays internal to the module; keep a notifyActivityFlushed stub only if something outside StateManager calls it — grep first and drop the stub if nothing does. Verify tsc = 0 and suite = baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/activityLog.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "EXTRACT chatStore.ts — the biggest single move (~600 lines). Create packages/moe-daemon/src/state/chatStore.ts covering channels, messages, pins, unread counters and decisions, all as free functions taking `state: StateManager` first. Channels/messages: getChannel, getChannels, createChannel, sendMessage, getMessages, readTailJsonl, messageExistsInChannel, postSystemMessage, postToGeneral, postToRoleChannel, deleteChannel, getMessageMutex. Unread: incrementUnread, getUnreadSummary, clearUnread. Pins: getPinsFilePath, readPins, writePins, getPins, pinMessage, unpinMessage, togglePinDone. Decisions: getDecision, getDecisions, createDecision, approveDecision, rejectDecision. Keep the per-channel mutex semantics exactly — getMessageMutex must keep returning the SAME AsyncMutex instance out of state.messageMutexes for a given channelId; a fresh mutex per call silently removes the serialization that stops interleaved JSONL appends. Preserve the mentionRouter call and the emit/appendActivity ordering inside sendMessage. Error handling: readPins and readTailJsonl currently degrade to an empty result on a missing or corrupt file rather than throwing, and the postTo* helpers are best-effort — callers across the daemon wrap them in `try { } catch { }` precisely because they must never block a state transition; keep every existing catch in place. Public delegating methods on StateManager for all of: getChannel, getChannels, createChannel, sendMessage, getMessages, messageExistsInChannel, postSystemMessage, postToGeneral, postToRoleChannel, deleteChannel, getPins, pinMessage, unpinMessage, togglePinDone, getUnreadSummary, clearUnread, getDecision, getDecisions, createDecision, approveDecision, rejectDecision. workerLifecycle.ts calls state.sendMessage / state.postToRoleChannel / state.getChannel — those stubs must keep identical signatures. Verify tsc = 0 and suite = baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "EXTRACT teamStore.ts. Create packages/moe-daemon/src/state/teamStore.ts and move: getTeam, getTeamByNameAndRole, getTeamByName, getTeamForWorker, createTeam, updateTeam, deleteTeam, addTeamMember, removeTeamMember — free functions, `state: StateManager` first. They call the validators extracted in step 2 (validateCreateTeamInput, validateTeamUpdates) — import those from ./validators.js directly rather than routing back through StateManager, so the runtime import edge points one way (teamStore -> validators). deleteTeam and removeTeamMember mutate worker records via state.updateWorker; keep those calls, their ordering and their surrounding error handling intact so a single failed member update still leaves the team write consistent and the WORKER_UPDATED emissions fire in the same sequence. All nine are public — full delegating methods with identical signatures. Verify tsc = 0 and suite = baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "EXTRACT sweeps.ts — the timer/watcher layer. Create packages/moe-daemon/src/state/sweeps.ts and move: startBlockedTimeoutCheck, stopBlockedTimeoutCheck, startProposalPurgeInterval, stopProposalPurgeInterval, startStaleWorkerWatcher, stopStaleWorkerWatcher, checkStaleWorkers, checkBlockedTimeouts, runBlockedTimeoutSweep, purgeResolvedProposals, isStaleResolvedProposal, isWorkerEligibleForStaleCleanup, plus the constants DAY_IN_MS, PROPOSAL_PURGE_AGE_MS, PROPOSAL_PURGE_INTERVAL_MS, PROPOSAL_SNAPSHOT_RETENTION_MS. Free functions, `state: StateManager` first; the interval handles live on the state object (state.blockedTimeoutInterval / state.proposalPurgeInterval / state.staleWorkerInterval, widened in step 1) so start/stop stay idempotent and stop actually clears the handle the matching start created — a module-level handle would leak a timer per StateManager instance and hang vitest. Keep `.unref()` on any timer that already has it. Error handling is what keeps these sweeps alive: each is a periodic callback with no caller to catch for it, so the per-item try/catch that logs and continues must move verbatim — one bad task or proposal must not kill the interval for the whole fleet. runBlockedTimeoutSweep routes released tasks via nextStatusForRelease(task, 'park') — that 'park' argument is load-bearing (blocked tasks go to BACKLOG for human triage, NOT back into a claim pool); do not drop or change it. Preserve the alertedStaleAssignments dedupe set semantics via state.alertedStaleAssignments. Public delegating methods for: startBlockedTimeoutCheck, stopBlockedTimeoutCheck, startProposalPurgeInterval, stopProposalPurgeInterval, startStaleWorkerWatcher, stopStaleWorkerWatcher, checkStaleWorkers, checkBlockedTimeouts, purgeResolvedProposals (all are called from index.ts/tests). Verify tsc = 0 and suite = baseline — pay attention to any test that fake-times these intervals.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "EXTRACT taskStore.ts. Create packages/moe-daemon/src/state/taskStore.ts and move: createTask, updateTask, deleteTask, approveTask, rejectTask, reopenTask, reorderTask, nextTaskOrder. Free functions, `state: StateManager` first. Move the `cancelSpeedModeTimeout` (../tools/submitPlan.js) and `cleanupStaleWaiters` (../tools/waitForTask.js) imports along with the code that uses them — this reproduces a PRE-EXISTING state->tools import edge, which is expected and is why step 10's cycle guard is scoped to src/state/**. updateTask is the hottest method in the daemon: it runs sanitizeImplementationPlan (import from ./validators.js) on EVERY write, trims comments to MAX_COMMENTS_PER_TASK, calls buildReopenClearingUpdates, persists via writeEntity, then emits and appends activity — preserve that statement order exactly, and keep its validation error handling in front of the write so an invalid update still throws BEFORE anything touches disk. reopenTask's reopenCount increment and the auto-flip-to-PLANNING threshold logic must move verbatim. All eight are public with many call sites across src/tools/** — delegating methods with identical signatures, including the optional `event?: ActivityEventType` third parameter on updateTask. Verify tsc = 0 and suite = baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-9",
+      "description": "EXTRACT workerStore.ts. Create packages/moe-daemon/src/state/workerStore.ts and move: createWorker, updateWorker, updateWorkerCursors, deleteWorker, purgeAllWorkers, touchWorker, getWorkersByEpic, getTasksAssignedToWorker, getActiveTasksAssignedToWorker, hasActiveTaskAssignment, isTaskClaimable, isTaskAssignedToMissingWorker, isTaskAssignedToDeadWorker, isTaskAssignedToInactiveWorker, plus the ACTIVE_ASSIGNMENT_STATUSES constant. Free functions, `state: StateManager` first. Claimability is safety-critical and must not drift: isTaskClaimable keys STRICTLY on the owner being missing from the worker map or explicitly DEAD, and NEVER on idle time for WORKING/PLANNING — copy the predicate bodies verbatim, and keep isTaskAssignedToInactiveWorker as the separate display-only signal it is today. updateWorker preserves lastActivityAt on the DEAD transition and emits WORKER_DELETED — keep both. purgeAllWorkers runs on every daemon start to release orphaned tasks; it must keep routing through nextStatusForRelease AND keep its per-worker error handling, since one unwritable worker record must not abort startup for the rest of the fleet. Watch the import direction: workerStore imports nextStatusForRelease from ./workerLifecycle.js, while workerLifecycle.ts calls back through the `state` handle (state.updateWorker, state.getTasksAssignedToWorker) — that keeps the runtime edge one-way. All public methods get delegating stubs with identical signatures; touchWorker keeps its `(workerId?, updates = {}, event?)` defaults. Verify tsc = 0, suite = baseline, and record `wc -l` on StateManager.ts — it should now be well under 1500 (projected ~1130). If it is 1500 or above, STOP and report_blocked rather than creating an 11th file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-10",
+      "description": "ADD THE DoD GUARD TEST. Create packages/moe-daemon/src/state/stateModules.test.ts with three vitest cases, using only node:fs / node:path (no new dependency — madge and dpdm are deliberately not added). (1) 'StateManager.ts stays under the size budget': read the file, assert its line count is < 1500 with a message naming the actual count, so the number regresses loudly rather than silently. (2) 'no runtime import cycles inside src/state': glob src/state/*.ts excluding *.test.ts, extract only RUNTIME relative imports and build a directed graph, then DFS for a cycle and assert none, printing the offending path on failure. The extractor MUST skip type-only imports — both whole-clause `import type { X } from './y.js'` and inline `import { type X } from './y.js'` specifiers — because every extracted module does `import type { StateManager }` while StateManager imports the module for real; that type-level cycle is erased at compile time and is the intended design, so counting it fails the test by construction. Scope the graph to src/state/** only: StateManager already imports ../tools/submitPlan.js and ../tools/waitForTask.js, a pre-existing cross-directory edge this task does not own. Give the file-reading helper real error handling — a path that disappears mid-scan should fail the assertion with the offending filename, not throw a bare ENOENT out of the test body. (3) 'every extracted module is reachable and named for one concern': assert the eight expected module files exist (validators, persistence, activityLog, chatStore, teamStore, sweeps, taskStore, workerStore) so a future merge that deletes or renames one trips here. Mutation-check case 2 before moving on: temporarily add a real runtime import from validators.ts back to StateManager.ts, confirm the test FAILS, then revert it. A cycle test that cannot fail is worse than no test.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/stateModules.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-11",
+      "description": "FULL VERIFICATION. From packages/moe-daemon run, in order: (1) `npx tsc --noEmit` — must exit 0; (2) `npm run build` — the tsc build must emit cleanly, since the JetBrains and VS Code plugin builds hard-fail without dist/; (3) `npx vitest run` — compare the failing-file list against the step-1 baseline and assert it is a subset, i.e. ZERO new failures. If a test that passed at baseline now fails, that is yours: fix the move, never the test's expectations. If a file was ALREADY failing at baseline, attribute it before touching anything — check .moe/tasks/*.json for sibling tasks still in WORKING and match the failure text to their feature (see serena memory gotcha-shared-tree-red-suite); do not absorb another task's breakage into this diff. (4) `wc -l` every file in src/state/ and record the table. (5) Confirm `git status` shows only the 10 files this plan declares plus the unrelated governance-plane-v2 edits that were already dirty when you started — if this diff touched anything else, back it out. Capture the exact vitest command and its tail as the `verification` payload for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-12",
+      "description": "ADVERSARIAL SELF-REVIEW, then complete. Load the `adversarial-self-review` skill and read your own full diff as an attacker. Specifically confirm, by grepping the diff rather than from memory: (a) NO allowlist changed — diff validateSettingsUpdate, validateEpicUpdates and sanitizeImplementationPlan field-by-field against git HEAD; a dropped field silently discards writes while the tool's return value still looks right. (b) NO public signature changed — 97 files import StateManager; every moved public method still has a stub with the same name, arity, optional-parameter defaults and return type. (c) EVERY try/catch survived — run `git diff` and count catch blocks per moved region against HEAD; the sweeps, the postTo* helpers, loadEntities, tryLoadWorkerFromDisk and purgeAllWorkers all rely on error handling that logs and continues, and a lost catch converts a best-effort side effect into a fleet-wide throw. (d) Mutex identity preserved — state.mutex, state.activityMutex and each per-channel mutex from state.messageMutexes are the same instances they were; no module constructs its own. (e) Timer handles live on the state object, so stop* actually clears what start* created and vitest exits cleanly (no open-handle warning). (f) Statement order preserved inside every moved body — persist, then emit, then appendActivity, wherever that was the original order. (g) Claimability predicates unchanged: still keyed strictly on missing-or-DEAD owner, never on idle time for WORKING/PLANNING. (h) The 'park' argument survives in runBlockedTimeoutSweep. (i) No `any` introduced to paper over a type that no longer resolves across the module boundary. Then add a one-paragraph header comment to StateManager.ts naming the extracted modules and stating the invariant — StateManager owns the maps and the mutex; the state/* modules are stateless function collections that operate on a StateManager handle — so the next reader does not re-scatter the state. Finally call moe.complete_task with the verification payload from step 11.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": "worker-5c53582f",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +130,38 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:46:56.880Z",
-  "updatedAt": "2026-07-31T17:46:56.880Z"
+  "updatedAt": "2026-07-31T19:26:32.106Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T18:22:41.307Z",
+    "plannedStepCount": 12,
+    "plannedDistinctFileCount": 10
+  },
+  "contextFetchedBy": [
+    "architect-98d69360",
+    "worker-5c53582f"
+  ],
+  "planSizeWarnings": [
+    "Plan has 12 steps (target <=8); plans over 12 are rejected. Consider splitting the task before it grows.",
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T18:34:38.773Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Class composition (ChatStore/ActivityLog own their own maps + mutexes, StateManager delegates) — rejected by the human: state ownership actually moves, so getSnapshot/load/FileWatcher wiring all need rework and it stops being a behavior-preserving move. (2) Splitting into 3 sibling tasks under the plan-size gate — offered and rejected; the human chose one task pegged at 12 steps / 10 files. (3) Extracting rail proposals into railProposalStore.ts — dropped for lack of a file slot; the proposal block (createProposal/approveProposal/applyRailChange/rejectProposal) deliberately STAYS in StateManager.ts. Projected landing size ~1130 lines, ~370 under the 1500 DoD.",
+    "codebaseInsights": "StateManager.ts is 3654 lines: one class, ~180 methods, 97 files import it. state/workerLifecycle.ts is the EXISTING precedent for extraction in this package — free functions with `state: StateManager` as the first arg, `import type { StateManager }` to keep the runtime graph acyclic. Follow it exactly, including its error handling idiom (per-item try/catch that logs and continues rather than aborting a sweep). Verified block boundaries by line (pre-edit): imports/consts 1-103; AsyncMutex 104-163; types 164-203; class fields 204-253; ctor+emitter 254-287; unread 288-333; subscribe/mutex/isLoaded 334-372; sweeps+timers 373-687; activity flush helpers 688-726; emit 727-761; validators/sanitizers 762-1248; load 1249-1365; snapshot/stats 1366-1402; getters+claimability+touchWorker 1403-1524; channels/messages/pins 1525-1968; decisions 1969-2081; teams 2082-2245; worker/task/epic CRUD 2246-2914; rail proposals 2915-3053; reorder/nextOrder 3054-3085; activity log 3086-3302; persistence/migrations/bootstrap 3303-3654. Line numbers shift as you go — after step 1 address everything by SYMBOL NAME, never by line. No test in the repo reaches StateManager privates (the only 3 `as any).` hits are LogRotator.test.ts), so no existing test file should need an edit; if one does, you have exhausted the 10-file budget and must report_blocked instead of adding an 11th file. `npx tsc --noEmit` in packages/moe-daemon is currently EXIT=0 on the dirty tree.",
+    "risks": "HARD FILE CAP: exactly 10 affectedFiles, zero slack. Do not create an 11th file for any reason — report_blocked instead.\nALLOWLIST TRAP: validateSettingsUpdate, validateEpicUpdates and sanitizeImplementationPlan are hardcoded field allowlists. A field silently dropped here fails in the way that is hardest to catch — the tool's own return value still looks correct. Move them BYTE-FOR-BYTE; do not tidy, reorder or 'complete' any field list.\nERROR HANDLING MUST SURVIVE THE MOVE: many bodies wrap IO and chat posts in try/catch that deliberately swallows or logs-and-continues (writeEntity callers, deregister chat-leave loops, sweep per-task releases, readPins/readTailJsonl fallbacks). A moved body that loses its catch turns a best-effort side effect into a fleet-wide throw. Copy every try/catch/finally verbatim, including empty catches and their comments.\nTYPE-ONLY CYCLES ARE FINE: modules do `import type { StateManager }` while StateManager imports the modules for real. That is a type-level cycle, erased at compile time. The step-10 cycle guard MUST ignore `import type ...` lines and inline `{ type X }` specifiers, or it fails by construction on the very design it is guarding.\nPRE-EXISTING tools/ EDGES: StateManager already imports cancelSpeedModeTimeout from ../tools/submitPlan.js and cleanupStaleWaiters from ../tools/waitForTask.js (both land in taskStore.ts). Scope the cycle guard to src/state/**, or it flags a pre-existing state<->tools edge that is not yours.\nSHARED DIRTY TREE: the working tree carries uncommitted governance-plane-v2 edits and the fleet shares one tree, so `npm test` can be red from OTHER tasks (see serena memory gotcha-shared-tree-red-suite). Baseline in step 1, then read 'zero regressions' as 'no NEW failing test file vs. that baseline'. Never stash, revert or 'clean up' another task's edits.\nMUTEX REENTRANCY: tool dispatch is serialized through one global reentrant mutex. Methods calling this.mutex.runExclusive must keep calling the SAME AsyncMutex instance after the move — pass `state` and use `state.mutex`, never construct a new one.\nEMIT/ACTIVITY ORDER: several methods emit a state change AND append an activity event in a specific order that the UI depends on. Preserve statement order inside every moved body.\nPUBLIC API IS FROZEN: 97 files import StateManager. Every moved public method keeps a delegating method with an identical signature. Do not change a return type, do not drop an overload, do not rename a parameter that callers pass by object key.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts",
+      "packages/moe-daemon/src/state/StateManager.fixes.test.ts",
+      "packages/moe-daemon/src/util/planSize.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 14400000
+  },
+  "planApprovedAt": "2026-07-31T18:34:38.822Z",
+  "workStartedAt": "2026-07-31T19:26:32.106Z"
 }

@@ -233,6 +233,9 @@ export const DEFAULT_APPEND_ONLY_FILES: readonly string[] = Object.freeze(['CHAN
  * Case folding follows the collision-key policy so `changelog.md` and
  * `CHANGELOG.md` behave the same way here as they do for ownership.
  */
+/** Expansion of `**​/` — hoisted so the adjacency collapse below can test for it. */
+const DIR_STAR_GROUP = '(?:[^/]+/)*';
+
 function appendOnlyPatternToRegExp(pattern: string): RegExp {
   // Hand-edited settings may carry Windows separators / a leading `./`.
   const normalized = pattern.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -245,10 +248,16 @@ function appendOnlyPatternToRegExp(pattern: string): RegExp {
     }
     if (normalized[i + 1] === '*') {
       if (normalized[i + 2] === '/') {
-        source += '(?:[^/]+/)*'; // `**/` also matches zero directories
+        // `**/` also matches zero directories. Adjacent groups are collapsed:
+        // `**/**/x` is semantically identical to `**/x`, but emitting the group
+        // twice chains ambiguous stars, and a pattern like `'**/'.repeat(50)`
+        // then backtracks combinatorially on a deep non-matching path — inside
+        // computeFileCollisions, which runs under the claim mutex. Same
+        // hardening as the `*` cap in util/branchPolicy.ts.
+        if (!source.endsWith(DIR_STAR_GROUP)) source += DIR_STAR_GROUP;
         i += 2;
       } else {
-        source += '.*';
+        if (!source.endsWith('.*')) source += '.*';
         i += 1;
       }
     } else {

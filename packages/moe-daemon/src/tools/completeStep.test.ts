@@ -205,4 +205,95 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
     await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state);
     expect(state.getTask('task-1')?.stepsCompleted).toEqual(['step-1']);
   });
+
+  describe('amended steps (moe.amend_plan_step)', () => {
+    const AMENDMENT = {
+      amendmentId: 'amend-1',
+      description: 'AMENDED: do X instead',
+      reason: 'the API changed',
+      amendedBy: 'architect-1',
+      amendedAt: '2026-07-31T10:00:00.000Z',
+    };
+
+    async function complete(stepId = 'step-1'): Promise<Record<string, unknown>> {
+      await state.load();
+      return await completeStepTool(state).handler(
+        { taskId: 'task-1', stepId, workerId: 'worker-a' },
+        state
+      ) as Record<string, unknown>;
+    }
+
+    it('echoes the amended description and names the amendment', async () => {
+      setupMoe();
+      writeEpic();
+      writeTask({
+        implementationPlan: [
+          {
+            stepId: 'step-1', description: 'first', status: 'IN_PROGRESS', affectedFiles: [],
+            amendments: [AMENDMENT], activeAmendmentId: 'amend-1',
+          },
+        ],
+      });
+
+      const result = await complete();
+
+      expect(result.effectiveDescription).toBe('AMENDED: do X instead');
+      expect(result.amended).toEqual({
+        amendmentId: 'amend-1',
+        reason: 'the API changed',
+        amendedBy: 'architect-1',
+        amendedAt: '2026-07-31T10:00:00.000Z',
+      });
+    });
+
+    it('leaves the unamended response shape unchanged', async () => {
+      setupMoe();
+      writeEpic();
+      writeTask();
+
+      const result = await complete();
+
+      expect(result.effectiveDescription).toBe('first');
+      // Absent, not false/null — existing consumers must see no new key.
+      expect('amended' in result).toBe(false);
+      expect(result.nextStep).toEqual({ stepId: 'step-2', description: 'second' });
+    });
+
+    it('points the worker at the amended text of the NEXT step', async () => {
+      setupMoe();
+      writeEpic();
+      writeTask({
+        implementationPlan: [
+          { stepId: 'step-1', description: 'first', status: 'IN_PROGRESS', affectedFiles: [] },
+          {
+            stepId: 'step-2', description: 'second', status: 'PENDING', affectedFiles: [],
+            amendments: [AMENDMENT], activeAmendmentId: 'amend-1',
+          },
+        ],
+      });
+
+      const result = await complete();
+
+      expect(result.nextStep).toEqual({ stepId: 'step-2', description: 'AMENDED: do X instead' });
+      expect((result.nextAction as { reason: string }).reason).toContain('AMENDED: do X instead');
+    });
+
+    it('degrades a dangling activeAmendmentId to the original description', async () => {
+      setupMoe();
+      writeEpic();
+      writeTask({
+        implementationPlan: [
+          {
+            stepId: 'step-1', description: 'first', status: 'IN_PROGRESS', affectedFiles: [],
+            amendments: [AMENDMENT], activeAmendmentId: 'amend-99',
+          },
+        ],
+      });
+
+      const result = await complete();
+
+      expect(result.effectiveDescription).toBe('first');
+      expect('amended' in result).toBe(false);
+    });
+  });
 });

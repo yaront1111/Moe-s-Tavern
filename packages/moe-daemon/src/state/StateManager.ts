@@ -19,6 +19,7 @@ import type {
   Project,
   ProjectSettings,
   RailProposal,
+  StepAmendment,
   StepStatus,
   Task,
   TaskStatus,
@@ -54,6 +55,7 @@ import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { atomicWriteJson, atomicWriteJsonAsync } from '../util/atomicWrite.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -212,7 +214,8 @@ export class StateManager {
   channels = new Map<string, ChatChannel>();
   decisions = new Map<string, Decision>();
 
-  private emitter?: (event: StateChangeEvent) => void;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  emitter?: (event: StateChangeEvent) => void;
   private subscribers = new Set<StateSubscriber>();
   private subscriberErrorCounts = new Map<StateSubscriber, number>();
   // Lock ordering: this.mutex → channelMutex (per-channel, from messageMutexes)
@@ -220,34 +223,54 @@ export class StateManager {
   // Methods like claimNextTask hold this.mutex and call sendMessage which
   // acquires channelMutex — never reverse this order or deadlocks will occur.
   // activityMutex is independent and can be acquired in any order.
-  private readonly mutex = new AsyncMutex();
-  private readonly activityMutex = new AsyncMutex();
-  private readonly messageMutexes = new Map<string, AsyncMutex>();
-  private logRotator?: LogRotator;
-  private pendingActivityWrites = 0;
-  private activityFlushResolvers: Array<() => void> = [];
-  private lastActivityBackpressureWarn = 0;
-  private droppedActivityWrites = 0;
-  private blockedTimeoutInterval?: NodeJS.Timeout;
-  private proposalPurgeInterval?: NodeJS.Timeout;
-  private staleWorkerInterval?: NodeJS.Timeout;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  readonly mutex = new AsyncMutex();
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  readonly activityMutex = new AsyncMutex();
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  readonly messageMutexes = new Map<string, AsyncMutex>();
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  logRotator?: LogRotator;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  pendingActivityWrites = 0;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  activityFlushResolvers: Array<() => void> = [];
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  lastActivityBackpressureWarn = 0;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  droppedActivityWrites = 0;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  blockedTimeoutInterval?: NodeJS.Timeout;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  proposalPurgeInterval?: NodeJS.Timeout;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  staleWorkerInterval?: NodeJS.Timeout;
   // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
   // until the staleness clears (worker becomes alive again) or the assignment
   // moves to a different task.
-  private alertedStaleAssignments = new Set<string>();
-  private readonly blockedTimeoutMs: number;
-  private staleWorkerTimeoutMs: number;
-  private reviewStaleTimeoutMs: number;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  alertedStaleAssignments = new Set<string>();
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  readonly blockedTimeoutMs: number;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  staleWorkerTimeoutMs: number;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  reviewStaleTimeoutMs: number;
   // True when the constructor caller passed an explicit override (tests, mainly).
   // Explicit constructor options always win over .moe/project.json settings —
   // otherwise load() would silently clobber a test's chosen timeout with
   // whatever normalizeProject defaults to.
   private readonly staleWorkerTimeoutMsExplicit: boolean;
   private readonly reviewStaleTimeoutMsExplicit: boolean;
-  private mentionRouter: MentionRouter;
-  private fileWatcher?: import('./FileWatcher.js').FileWatcher;
-  /** In-memory per-worker per-channel unread message counts */
-  private unreadCounts = new Map<string, Map<string, number>>();
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  mentionRouter: MentionRouter;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  fileWatcher?: import('./FileWatcher.js').FileWatcher;
+  /**
+   * In-memory per-worker per-channel unread message counts
+   * @internal — reached by the extracted state/* modules; not part of the supported API.
+   */
+  unreadCounts = new Map<string, Map<string, number>>();
 
   constructor(options: StateManagerOptions) {
     this.projectPath = options.projectPath;
@@ -283,7 +306,8 @@ export class StateManager {
   }
 
   /** Increment unread count for a worker on a channel. */
-  private incrementUnread(workerId: string, channelId: string): void {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  incrementUnread(workerId: string, channelId: string): void {
     // Guard against routing targets that don't correspond to a registered
     // worker — otherwise we'd accumulate unread entries for ghost IDs forever.
     if (!this.workers.has(workerId)) {
@@ -703,7 +727,8 @@ export class StateManager {
     });
   }
 
-  private getMessageMutex(channelId: string): AsyncMutex {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  getMessageMutex(channelId: string): AsyncMutex {
     let m = this.messageMutexes.get(channelId);
     if (!m) {
       m = new AsyncMutex();
@@ -712,7 +737,8 @@ export class StateManager {
     return m;
   }
 
-  private notifyActivityFlushed(): void {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  notifyActivityFlushed(): void {
     if (this.pendingActivityWrites === 0) {
       const resolvers = this.activityFlushResolvers;
       this.activityFlushResolvers = [];
@@ -722,7 +748,8 @@ export class StateManager {
     }
   }
 
-  private emit(event: StateChangeEvent) {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  emit(event: StateChangeEvent) {
     if (this.emitter) {
       try {
         this.emitter(event);
@@ -891,6 +918,7 @@ export class StateManager {
       'pacePerStepMs',
       'qualityGate',
       'qualityGateScope',
+      'consolidationBranch',
       'appendOnlyFiles',
       'refusalCascadeAutoBacklog',
     ], 'project setting');
@@ -954,6 +982,16 @@ export class StateManager {
     }
     if (input.qualityGateScope !== undefined) {
       next.qualityGateScope = this.validateEnumValue(input.qualityGateScope, 'qualityGateScope', ['epicFinal', 'everyTask'] as const);
+    }
+    if (input.consolidationBranch !== undefined) {
+      // Literal branch name or a `*` glob checked at complete_task. Empty
+      // string is the documented off switch; the cap bounds the pattern that
+      // gets compiled into a regex.
+      next.consolidationBranch = this.validateStringValue(input.consolidationBranch, 'consolidationBranch', {
+        maxLength: 200,
+        allowEmpty: true,
+        trim: true,
+      });
     }
     if (input.appendOnlyFiles !== undefined) {
       // Bounded string array first (shape + length), then the affected-file
@@ -1179,6 +1217,34 @@ export class StateManager {
     return out;
   }
 
+  /**
+   * Rebuild a step's amendment history (moe.amend_plan_step). Same contract as
+   * the rest of the plan sanitizer: never throw, just drop what is malformed.
+   */
+  private sanitizeStepAmendments(value: unknown): StepAmendment[] {
+    if (!Array.isArray(value)) return [];
+    const out: StepAmendment[] = [];
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object') continue;
+      const a = entry as Record<string, unknown>;
+      if (typeof a.amendmentId !== 'string' || a.amendmentId.length === 0) continue;
+      // An amendment with no replacement text carries no instructions — drop it
+      // rather than let it resolve a step to an empty description.
+      if (typeof a.description !== 'string' || a.description.trim().length === 0) continue;
+      out.push({
+        amendmentId: a.amendmentId.slice(0, 200),
+        // 5000 matches the step-description cap above (submitPlan's 10000 limit
+        // would be silently truncated here otherwise).
+        description: a.description.slice(0, 5000),
+        reason: typeof a.reason === 'string' ? a.reason.slice(0, 2000) : '',
+        amendedBy: typeof a.amendedBy === 'string' ? a.amendedBy.slice(0, 200) : '',
+        amendedAt: typeof a.amendedAt === 'string' ? a.amendedAt.slice(0, 64) : '',
+      });
+      if (out.length >= MAX_AMENDMENTS_PER_STEP) break;
+    }
+    return out;
+  }
+
   private sanitizeImplementationPlan(plan: unknown): ImplementationStep[] {
     if (!Array.isArray(plan)) return [];
     const VALID_STEP_STATUSES = ['PENDING', 'IN_PROGRESS', 'COMPLETED'];
@@ -1198,6 +1264,8 @@ export class StateManager {
         ...(typeof s.note === 'string' ? { note: s.note.slice(0, 5000) } : {}),
         ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),
         ...(typeof s.completedAt === 'string' ? { completedAt: s.completedAt } : {}),
+        ...(s.amendments !== undefined ? { amendments: this.sanitizeStepAmendments(s.amendments) } : {}),
+        ...(typeof s.activeAmendmentId === 'string' ? { activeAmendmentId: s.activeAmendmentId.slice(0, 200) } : {}),
       });
     }
     return result;
@@ -3278,7 +3346,8 @@ export class StateManager {
     return map;
   }
 
-  private readJson<T>(filePath: string): T {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  readJson<T>(filePath: string): T {
     const raw = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(raw) as T;
   }
@@ -3560,7 +3629,8 @@ export class StateManager {
     };
   }
 
-  private async writeEntity(kind: string, id: string, entity: unknown): Promise<void> {
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  async writeEntity(kind: string, id: string, entity: unknown): Promise<void> {
     // Validate ID to prevent path traversal attacks using centralized validation
     validateEntityId(id);
 

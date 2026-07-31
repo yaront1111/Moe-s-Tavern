@@ -4,6 +4,7 @@ import { notFound, missingRequired, invalidInput } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
+import { findFreshestLiveWorkerByRole } from '../util/workerLiveness.js';
 
 const MAX_REASON_LENGTH = 2000;
 
@@ -52,9 +53,42 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // Cross-post blocked message to task channel, general, and #governors
       // so the on-call governor's chat_wait wakes on the block event.
       const blockedMsg = `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
+
+      // Page a real person, not whoever happened to plan the task: the
+      // architect with the freshest lastActivityAt inside the liveness window.
+      // The blocked worker is excluded because an architect blocked on its own
+      // PLANNING task would otherwise page itself and dead-end the escalation —
+      // daemon posts use sender 'system', which takes the human routing path
+      // and does NOT filter self-mentions the way the agent path does.
+      const architect = findFreshestLiveWorkerByRole(
+        state.workers.values(),
+        state.teams.values(),
+        'architect',
+        {
+          excludeWorkerIds: [task.assignedWorkerId, params.workerId].filter(
+            (id): id is string => typeof id === 'string' && id.length > 0
+          ),
+        }
+      );
+      // Both forms are routable by MentionRouter: a bare worker id and the
+      // `governors` group mention.
+      const mentionPrefix = architect ? `@${architect.id} ` : '@governors ';
+
+      // postSystemMessage currently forwards to the general channel, so it stays
+      // unprefixed — prefixing both copies would page the same person twice in
+      // the same channel. Every post keeps its own try/catch: chat is
+      // best-effort and must never fail report_blocked or skip the BLOCKED update.
       try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
-      try { await state.postToGeneral(blockedMsg); } catch { /* never block tool */ }
-      try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
+      try { await state.postToGeneral(mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+      if (architect) {
+        try { await state.postToRoleChannel('architects', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+        // Governors keep full visibility of every block without being paged.
+        try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
+      } else {
+        // No live architect: the governors channel is the escalation, so it
+        // carries the mention.
+        try { await state.postToRoleChannel('governors', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+      }
 
       // wait_for_task requires both workerId and statuses. Only emit the hint
       // when we can populate them; otherwise omit nextAction to avoid a
@@ -80,7 +114,14 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         taskId: task.id,
         taskStatus: task.status,
         workerStatus: 'BLOCKED',
-        message: 'Worker marked as blocked. Human has been notified.',
+        // Who was actually paged — assertable, and readable by a human eyeing
+        // the tool output instead of the chat channels.
+        notified: architect
+          ? { target: architect.id, via: 'freshest-live-architect' as const }
+          : { target: '@governors', via: 'governors-fallback' as const },
+        message: architect
+          ? `Worker marked as blocked. Pinged ${architect.id} (freshest live architect).`
+          : 'Worker marked as blocked. No live architect — escalated to @governors.',
         ...(nextAction ? { nextAction } : {})
       };
     }

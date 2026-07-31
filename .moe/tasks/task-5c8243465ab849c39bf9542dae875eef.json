@@ -15,51 +15,75 @@
     {
       "stepId": "step-1",
       "description": "Before writing the gate tests, synchronize to the latest shared epic state and verify every order-1 through order-9 deliverable is actually present (not merely planned): `pacePerStepMs` budget seeding, append-only collision filtering, `ImplementationStep.newFiles` path validation, handoff disk-state capture/claim flag, refusal-cascade parking, freshest-architect blocked routing, amendment persistence/tool registration/effective descriptions, burst-aware `chat_wait`, and `consolidationBranch` enforcement. Re-read the current symbols and existing tests rather than copying the archived tag or stale sibling plans. If a prerequisite is still absent because its sibling is genuinely in flight, do not duplicate its implementation; report the sequencing blocker through Moe and resume this final gate only after the feature lands.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Preflight against the CURRENT working tree (not the archived tag, not sibling plans). LANDED and symbol-verified: (1) pacePerStepMs budget seeding — util/budget.ts read from submitPlan; (2) appendOnlyFiles collision filtering — util/affectedFiles.ts + claimNextTask, committed in 402cb11; (3) ImplementationStep.newFiles path validation — submitPlan.ts inputSchema + normalizedSteps; (4) handoff disk-state capture + claim flag — util/diskState.ts, releaseTask capture, claimNextTask.ts:460 `staleHandoffDiskState`, committed in 53e3336; (5) refusal-cascade parking — releaseTask.ts REFUSAL_CASCADE_THRESHOLD; (6) freshest-architect blocked routing — reportBlocked.ts findFreshestLiveWorkerByRole; (7) amendments — planAmendments.ts, amendPlanStepTool registered in getTools(), completeStep effective descriptions. NOT LANDED (sequencing blockers): (8) burst-aware chat_wait (task-aa44c1be, held by worker-f5977052, 5/5 steps PENDING) — chatWait.ts still has only the pre-existing per-channel cursor backfill; its inputSchema has NO `sinceId` property and there is no full-burst drain, so three of its four behavioural DoD items are absent; (9) consolidationBranch branch policy (task-f05cbea, 6/6 steps PENDING, currently unassigned) — zero occurrences of `consolidationBranch`/`currentBranch` in completeTask.ts or types/schema.ts. Per this step's own instruction I am NOT recreating either feature. Steps 2-3 (the two cross-feature composition tests) depend only on orders 1-7 and will proceed; steps 5-7 (docs sweep covering orders 8-9, whole-epic adversarial review, and the final full-suite gate) are blocked on those two siblings and will be reported through moe.report_blocked rather than faked. Note for the tree: a sibling's post-flight auto-commit (53e3336) swept my in-flight files into that commit — shared-tree behaviour, no action needed.",
+      "startedAt": "2026-07-31T15:44:11.017Z",
+      "completedAt": "2026-07-31T15:45:13.549Z"
     },
     {
       "stepId": "step-2",
       "description": "Create a dedicated composition suite and add the first cross-feature integration test around the real `submitPlanTool`/StateManager path. In one deterministic test flow, configure TURBO mode, a custom `pacePerStepMs`, and low-but-nonrejecting `taskSizing` warning thresholds; create one real project-relative file and reference one missing file. First assert that submitting the missing path without `newFiles` rejects with the teaching error naming the path and the `newFiles` remedy while leaving the task unmodified. Then resubmit the same multi-step plan with the missing path declared in `newFiles`, and assert the persisted plan retains `newFiles`, the absent explicit budget is seeded as `stepCount * pacePerStepMs`, and the size warning is persisted/returned. Exact assertions must ensure removing any one of the budget, path, or size gates breaks the test, while existing files pass unchanged and the test performs all filesystem setup/cleanup within its temporary project.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
+      ],
+      "note": "Created src/tools/governancePlaneV2.integration.test.ts with the first composition test around the real submitPlanTool + StateManager (no mocks on this path). One temporary project per test: TURBO, pacePerStepMs 60000, taskSizing warn 2 steps / 1 file with max 12/10 so the 3-step 2-file plan warns without rejecting; `src/existing.ts` is really created inside the tmp project and `src/created-by-this-task.ts` is deliberately absent; all setup/cleanup stays inside the tmpdir. Assertions: (a) submitting the missing path WITHOUT newFiles rejects with a teaching error that names the offending path and the newFiles remedy, and the task is left completely untouched — still PLANNING, empty implementationPlan, no budget, no planSizeWarnings — while the existing path is never reported missing; (b) the corrected resubmit succeeds and composes all three gates in one write: persisted implementationPlan[1].newFiles survives the sanitizer, budget.wallClockMs === stepCount * pacePerStepMs both in the response and on the task, planSizeWarnings persisted and warnings returned, status auto-approved to WORKING; (c) an explicit budget is not clobbered by the seeding branch. `npx vitest run src/tools/governancePlaneV2.integration.test.ts` → 3 passed. Mutation-proved each gate is load-bearing: disabling the missing-path throw fails 2 tests; replacing the seeded wallClockMs with a constant fails 1; making assessPlanSize ignore project.settings (so default thresholds apply) fails 1. File restored and re-run green after each.",
+      "startedAt": "2026-07-31T15:45:17.492Z",
+      "completedAt": "2026-07-31T15:47:18.621Z"
     },
     {
       "stepId": "step-3",
       "description": "In the same suite, add the second cross-feature integration test for one release/human-unpark/claim flow using the real `releaseTaskTool` and `claimNextTaskTool`. Freeze time; seed two recent qualifying empty-progress handoffs; mock only the disk-signature boundary to return a release signature and then a different claim signature; perform the third assigned-worker empty-progress release and assert it persists the newest handoff/disk signature, idles the prior worker, returns `cascadeTriggered`, and parks the task in BACKLOG with the explanatory governor message. Simulate the documented human re-enable by moving the now-unassigned task back to WORKING, claim it with a new worker, and assert the response reports `staleHandoffDiskState: true` plus a re-verification hint while retaining the handoff history. Include error handling assertions that chat notification failure cannot undo the park and an undefined recomputation produces no false stale flag, without invoking a real git binary or leaving timers/mocks behind.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
+      ],
+      "note": "Added the second composition to governancePlaneV2.integration.test.ts: one release → human unpark → claim flow through the real releaseTaskTool, setTaskStatusTool and claimNextTaskTool. Time frozen at 2026-07-31T12:00:00Z (Date-only fake timers so the real fs writes still run); two qualifying empty-progress handoffs seeded at 2h and 20h; only ../util/diskState.js is mocked, sequenced to return a release signature first and a different claim signature after. Main test asserts, in one flow: cascadeTriggered + status BACKLOG + diskStateCaptured on the release response; the governor channel receiving the BACKLOG explanation; the persisted task parked and unassigned with all three handoffs kept and the newest carrying the release signature; the prior worker cleared to IDLE/no task; then the documented human unpark BACKLOG→WORKING through the real set_task_status (proving that transition is legal, not a direct field poke); then a new worker's claim returning staleHandoffDiskState:true, a handoffHint naming re-verification, and priorHandoffCount 3. Error-handling cases: both chat posts rejecting cannot undo the park or the worker cleanup; an undefined recomputation raises no false stale flag and no re-verify hint; an unchanged signature raises no flag either. No real git binary is invoked and timers/mocks are restored in afterEach. `npx vitest run src/tools/governancePlaneV2.integration.test.ts` → 7 passed (7). Mutation-proved both features are load-bearing: forcing the cascade condition false fails 2 tests; making claimNextTask always skip the stale comparison fails 1. Both files restored (git diff --stat clean) and re-run green.",
+      "startedAt": "2026-07-31T15:47:22.199Z",
+      "completedAt": "2026-07-31T15:49:02.345Z"
     },
     {
       "stepId": "step-4",
       "description": "If either composition test exposes a real interaction defect after all sibling features are present, make the smallest causal repair only in the owning current-main implementation: preserve submit ordering (rails/size before async path probes, then one atomic task update), keep path probes fail-open on infrastructure errors, keep disk subprocesses outside the state mutex, keep normal `nextStatusForRelease` behavior outside the refusal override, and decorate claim responses only after disk-state recomputation. Do not redesign or duplicate sibling features, broaden glob grammars, change settings defaults, or weaken teaching errors/test assertions to force green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/affectedFiles.ts",
         "packages/moe-daemon/src/tools/releaseTask.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/util/diskState.ts"
-      ]
+      ],
+      "note": "No repair needed and none made — this step is explicitly conditional and its trigger did not fire. Both compositions passed on their first run against the unmodified current-main implementations, so neither exposed an interaction defect between orders 1-7. I audited each invariant the step names rather than assuming: submitPlan.ts keeps the order rails (255) → plan-size gate (287) → async path probes (329) → exactly one state.updateTask (417) with a single updatePayload, so a rejection cannot half-write a task; util/affectedFiles.ts findMissingPaths is fail-open on infrastructure errors (unstattable/non-directory root returns [], and a path is only reported missing on ENOENT/ENOTDIR, so EACCES/EPERM never manufacture a rejection); releaseTask.ts computes the disk signature BEFORE state.runExclusive and claimNextTask.ts recomputes AFTER the exclusive block returns, so no git subprocess runs under the global mutex; the refusal override only replaces the already-computed status inside releaseTaskTool and nextStatusForRelease itself is unchanged; claimNextTask decorates the response only after recomputation, returning the byte-identical result on absent/failed/matching signatures. Zero production files were changed in this step (git diff --stat clean for releaseTask.ts and claimNextTask.ts after the step-3 mutation checks). Note the step's precondition \"after all sibling features are present\" is still unmet — orders 8 (burst-aware chat_wait) and 9 (consolidationBranch) have not landed, so no composition covering them could be run or repaired here.",
+      "startedAt": "2026-07-31T15:49:05.768Z",
+      "completedAt": "2026-07-31T15:49:29.145Z"
     },
     {
       "stepId": "step-5",
       "description": "Perform a line-by-line documentation sweep after all sibling docs edits have landed, updating only omissions or contradictions. In `docs/SCHEMA.md` verify canonical shapes/defaults for `pacePerStepMs`, `appendOnlyFiles`, `refusalCascadeAutoBacklog`, `consolidationBranch`, `ImplementationStep.newFiles`, `HandoffNote.diskState`, and `StepAmendment`/`amendments`/`activeAmendmentId`. In `docs/CONFIGURATION.md` verify every new setting's type, default, bounds/opt-out, replacement semantics, and examples. In `docs/MCP_SERVER.md` verify submit-plan budget/path teaching behavior, append-only/stale-handoff claim responses, disk capture/refusal cascade release responses, freshest-architect blocked routing, registered `moe.amend_plan_step` plus amendment-aware `complete_step`, `chat_wait` backlog/burst/`sinceId`/cursor semantics, and `complete_task.currentBranch` branch-policy warning/rejection behavior. Remove stale statements but do not edit role docs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/CONFIGURATION.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Docs sweep across all nine epic features, verifying semantics against the code rather than presence alone. VERIFIED CORRECT, no edit needed — docs/SCHEMA.md: pacePerStepMs (default 900000, seeding rule), appendOnlyFiles (replacement semantics + [] disables), refusalCascadeAutoBacklog (absence = enabled), consolidationBranch (glob + case-sensitivity + missing-branch warn), ImplementationStep.newFiles, HandoffNote.diskState (absence means unknown), StepAmendment/amendments/activeAmendmentId. docs/CONFIGURATION.md: every new setting has type, default, bounds/opt-out and an example, including the consolidationBranch row and the project.json example. docs/MCP_SERVER.md: submit_plan budget seeding + the two-fix path teaching error including the fail-open note; release_task diskStateCaptured + the refusal-cascade park; report_blocked freshest-architect routing; amend_plan_step contract and amendment-aware complete_step; claim_next_task staleHandoffDiskState; complete_task branchPolicy with all three outcomes; chat_wait backlog/burst/sinceId/cursor semantics. ONE REAL OMISSION FOUND AND FIXED: `appendOnlyFiles` appeared nowhere in docs/MCP_SERVER.md, so the claim_next_task `fileCollision` contract — the only place that behaviour is observable to an agent — never mentioned that append-only matches are dropped before the overlap comparison. Added it to that bullet: the default [\"CHANGELOG.md\"] (verified against DEFAULT_APPEND_ONLY_FILES in util/affectedFiles.ts), that a task whose only overlap was append-only yields no entry, that a supplied array replaces the default, and that [] disables suppression. Scope discipline: I edited only that bullet. The chat_wait section of the same file belongs to task-aa44c1be, which was qa_rejected (reopenCount 1) and is being reworked by worker-f5977052 right now — the claim reported the MCP_SERVER.md collision, so I left that section untouched. Role docs untouched.",
+      "startedAt": "2026-07-31T17:42:28.413Z",
+      "completedAt": "2026-07-31T17:43:38.268Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarially review the complete epic diff from the pre-feature epic filing commit `f785be3` through the final working tree, not just this task's additions. Inspect concurrency/mutex safety (especially git subprocess placement, `chat_wait` subscribe-before-drain and blocking cleanup, and single-update plan/release transitions), null/empty/malformed inputs and default-vs-explicit-false semantics, sanitizer persistence for every new step field, tool registration/role gates, bounded scans and cursor advancement only for delivered messages, and teaching-error quality (errors name the offending/expected values and concrete recovery). Verify no QA reopen counters or normal release routes were repurposed and no forbidden pattern was introduced. Record concrete findings and any narrow fixes in the eventual `moe.complete_task` summary under `concurrency`, `null/empty`, `teaching errors`, and `docs`; if review changes code or tests, rerun the final gates on the corrected bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/util/affectedFiles.ts",
@@ -70,18 +94,34 @@
         "docs/SCHEMA.md",
         "docs/CONFIGURATION.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/util/affectedFiles.test.ts"
+      ],
+      "note": "Adversarial review of the whole epic diff (git diff f785be3 → working tree: 45 files, +3341/-733), not just my own tasks.\n\nCONCURRENCY: no git subprocess runs under the state mutex on either side — releaseTask computes the signature pre-mutex with the shape validation, claimNextTask stashes the stored value inside runExclusive and recomputes only after it returns, both documented at the call site. diskState.ts uses execFile with an args array (never a shell string), 3s timeout, 8MB maxBuffer, windowsHide; `git` is git.exe so the Windows .cmd-shim trap does not apply. submit_plan keeps rails → size → async path probe → ONE updateTask, so a rejection cannot half-write; complete_task runs the branch check with the other assertions BEFORE updateTask for the same reason. Every new chat post is individually try/caught. chat_wait was NOT reviewed — task-aa44c1be was qa_rejected (reopenCount 1) and its bytes are being rewritten by worker-f5977052 right now; reviewing a moving target would be theatre, and its subscribe-before-drain/cursor claims belong to that task's own QA pass.\n\nNULL/EMPTY + DEFAULT-VS-EXPLICIT-FALSE: claimNextTask reads appendOnlyFiles with `??`, never `||`, so an explicit `[]` still disables suppression; refusalCascadeAutoBacklog is read as `!== false` so absence stays enabled; consolidationBranch type-guards a hand-edited non-string into \"disabled\" rather than throwing; matchesBranchPattern returns false (never throws) for non-strings, empty values, >255-char branches and uncompilable patterns; compileAppendOnlyMatchers guards a non-array setting (a string would compile one matcher per character) and skips non-string/over-long entries; findMissingPaths fails open on anything but ENOENT/ENOTDIR; computeDiskStateSignature returns undefined on every failure and callers treat undefined as \"unknown\", never \"unchanged\".\n\nSANITIZER PERSISTENCE: sanitizeImplementationPlan carries every new step field — newFiles (sibling) and amendments/activeAmendmentId (mine) — and both have tests asserting through state.getTask rather than the object handed to updateTask.\n\nREGISTRATION / ROLE GATES / COUNTERS: moe.amend_plan_step is in getTools(); its architect-or-governor gate fails closed on a missing workerId, mirroring submit_plan_critique. No QA counter was repurposed — reopenCount/reopenReason are untouched by the refusal cascade (the archived branch mutated them; deliberately not carried forward), and nextStatusForRelease is unchanged, with the cascade reusing its existing 'park' context.\n\nTEACHING ERRORS: the missing-path error names the offending paths, the project root, and both concrete fixes; the size-gate error names counts, thresholds and moe.create_task; BRANCH-POLICY-FAIL names both branches and the recovery; the amendment rejections point at moe.request_replan. No forbidden pattern (eval(, innerHTML, dangerouslySetInnerHTML, __proto__) appears in the diff.\n\nFINDING + NARROW FIX (concurrency/hardening): the epic shipped TWO glob compilers and only one was hardened. util/branchPolicy.ts caps wildcards and collapses adjacent `.*`; util/affectedFiles.ts expanded every `**/` to a fresh `(?:[^/]+/)*`, so a pattern like '**/'.repeat(50) chained 50 ambiguous stars — and computeFileCollisions runs INSIDE claim_next_task under runExclusive, where a hang freezes tool dispatch fleet-wide. Previously recorded as accepted-not-blocking, but the gate task is where it gets fixed. Fix: collapse adjacent expansions (skip the group when source already ends with it, same for `.*`), semantics identical. Added a test asserting `**/**/notes.md` still matches at depth and at zero depth, still rejects a non-match, and that the pathological pattern completes in <1s. Mutation-proved: reverting the collapse makes that single case take 102.7 SECONDS of backtracking; with it the whole file runs in under a second.\n\nDOCS: covered in step-5 — one real omission found and fixed (appendOnlyFiles was absent from all of docs/MCP_SERVER.md, so the claim_next_task fileCollision contract never mentioned the suppression).\n\nGates on these bytes: `npx tsc --noEmit` exit 0; full daemon suite 55 files / 863 tests passed.",
+      "startedAt": "2026-07-31T17:43:43.086Z",
+      "completedAt": "2026-07-31T17:48:02.145Z"
     },
     {
       "stepId": "step-7",
       "description": "Run the two final gates on the exact reviewed bytes. From the repository root run `npm run lint` (on Windows, use an environment with Git Bash available because the root linter is a bash script) and require exit 0. Then run the task's exact completion-evidence command `cd packages/moe-daemon && npm test`; require exit 0 for the entire daemon suite, including both new composition tests, with zero baseline regressions. Use the exact daemon command/output for `moe.complete_task.verification`, and include the root-lint result plus the structured whole-epic adversarial findings in the completion summary; failures must be fixed, not waived or hidden by narrowing the test selection.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts",
+        "packages/moe-daemon/src/util/affectedFiles.ts",
+        "packages/moe-daemon/src/util/affectedFiles.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Both final gates run on the exact reviewed bytes, neither narrowed nor waived. Root `npm run lint` (Git Bash) → exit 0: architect.md 39/40, worker.md 23/40, qa.md 24/40 lines. Then the task's exact evidence command from packages/moe-daemon, `npm test` → exit 0, 55 files / 863 tests passed, including both new compositions in governancePlaneV2.integration.test.ts and the new append-only backtracking case. Baseline comparison: 823 tests before this task's additions, 863 after (+40 from the compositions, the ReDoS case and the siblings that landed meanwhile), zero failures and zero regressions. Caveat carried into the completion summary rather than hidden: task-aa44c1be (burst-aware chat_wait) is WORKING with reopenCount 1 after a qa_reject, so its bytes may still change — the suite is green on its current state and its docs match its current code, but QA should re-run this command after that task lands.",
+      "startedAt": "2026-07-31T17:48:06.008Z",
+      "completedAt": "2026-07-31T17:48:43.987Z"
     }
   ],
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,19 +134,32 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:30.592Z",
-  "updatedAt": "2026-07-30T22:27:40.693Z",
+  "updatedAt": "2026-07-31T17:55:03.430Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:25:00.240Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 7,
+    "doneAt": "2026-07-31T17:55:03.430Z",
+    "wallClockMs": 70203190
   },
   "contextFetchedBy": [
-    "architect-4f3cb814"
+    "architect-4f3cb814",
+    "worker-5c53582f",
+    "qa-04d1cb13"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-07-30T22:27:40.647Z",
   "planningNotes": {
@@ -125,5 +178,37 @@
       "docs/MCP_SERVER.md"
     ]
   },
-  "planApprovedAt": "2026-07-30T22:27:40.693Z"
+  "planApprovedAt": "2026-07-30T22:27:40.693Z",
+  "workStartedAt": "2026-07-31T15:44:11.017Z",
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Steps 1-4 complete and green. Preflight verified orders 1-7 landed by symbol. Added packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts with both required cross-feature compositions (7 tests): submit_plan missing-path teaching rejection leaving the task untouched then the corrected newFiles resubmit composing newFiles + seeded stepCount*pacePerStepMs budget + persisted size warning in one write; and third empty-progress release parking to BACKLOG (cascadeTriggered, captured disk signature, governor message, worker idled) then the documented human BACKLOG->WORKING unpark via the real set_task_status then a claim reporting staleHandoffDiskState + re-verify hint, plus chat-failure, undefined-recompute and unchanged-signature negatives. Every gate mutation-proved load-bearing. Step-4 needed no repair; invariants audited. Verified orders 1-7 docs coverage in SCHEMA/CONFIGURATION/MCP_SERVER is complete and semantically correct. Baseline on these bytes: npx tsc --noEmit exit 0, npm test 53 files / 823 tests passed.",
+      "whatRemains": "Steps 5-7 only. Step-5 docs sweep still needs the chat_wait backlog/burst/sinceId/cursor section and the complete_task currentBranch branch-policy section (orders 1-7 are already verified done). Step-6 whole-epic adversarial review from f785be3. Step-7 root npm run lint then the exact evidence command: cd packages/moe-daemon && npm test. No re-plan needed; resume at step-5.",
+      "pitfalls": "Do NOT implement the blocking siblings here (epic rail + step-1). Fake timers in the integration suite must be vi.useFakeTimers({ toFake: ['Date'] }) or the real fs writes stall. The human unpark must go through setTaskStatusTool; claiming BACKLOG directly is an illegal lifecycle. The disk mock is sequenced mockResolvedValueOnce(RELEASE_SIG).mockResolvedValue(CLAIM_SIG) because release computes pre-mutex and claim post-mutex.",
+      "openQuestions": "Blocked on task-aa44c1be (burst-aware chat_wait, held by worker-f5977052, 5/5 steps PENDING) and task-f05cbea (consolidationBranch, 6/6 PENDING). I am claiming task-f05cbea now to clear one of the two; the chat_wait sibling still needs to land before this gate can close.",
+      "releasedAt": "2026-07-31T16:05:30.759Z",
+      "releasedBy": "worker-5c53582f",
+      "reason": "Parked on a sequencing blocker; picking up one of the blocking siblings instead"
+    }
+  ],
+  "reviewStartedAt": "2026-07-31T17:49:09.778Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " Test Files  55 passed (55)\n      Tests  863 passed (863)\n   Start at  20:48:16\n   Duration  6.56s (transform 14.40s, setup 0ms, import 22.48s, tests 61.81s, environment 4ms)",
+    "reportedAt": "2026-07-31T17:49:09.778Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/governancePlaneV2.integration.test.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/util/affectedFiles.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/util/diskState.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/util/affectedFiles.test.ts"
+  ],
+  "completedAt": "2026-07-31T17:55:03.430Z",
+  "reviewCompletedAt": "2026-07-31T17:55:03.430Z",
+  "reviewSummary": "Re-ran gates myself: `cd packages/moe-daemon && npm test` -> exit 0, 55 files / 863 tests, 0 skipped (matches evidence); integration file alone 7/7; root `npm run lint` -> exit 0. Byte-freshness checked: sibling order-8 rewrote chatWait/chatBacklog/MCP_SERVER at 20:44-20:45; evidence run (20:48) and mine (20:49) postdate those mtimes, so green covers current bytes. Both compositions real + mutation-resistant: exact asserts (budget === 3*60000, newFiles equals, priorHandoffs[0].diskState === release sig, cascadeTriggered + BACKLOG, staleHandoffDiskState true) plus negatives (undefined signature -> no flag, unchanged -> no flag, chat failure cannot undo park, explicit budget not clobbered); real submitPlan/releaseTask/setTaskStatus/claimNextTask, only util/diskState mocked; tmp project per test, rmSync + restoreAllMocks + useRealTimers. Docs audited against code: pacePerStepMs/appendOnlyFiles/refusalCascadeAutoBacklog/consolidationBranch each in ProjectSettings + validateSettingsUpdate allowlist with validators; defaults match source (PACE_PER_STEP_MS_DEFAULT 15*60*1000 = documented 900000, bounds 1000-86400000); `!== false` and `??` match documented absence-enabled / explicit-[]-disables; newFiles, diskState, StepAmendment/amendments/activeAmendmentId in SCHEMA; amend_plan_step is the only new getTools() entry, documented, as are complete_task.currentBranch, report_blocked routing, claim/release additions; fixed omission (appendOnlyFiles missing from claim_next_task fileCollision) was real. submit_plan order by line: rails 252, size 287, path probe 329, ONE updateTask 417; seeding guarded so explicit arg and positive existing budget win. affectedFiles ReDoS collapse in scope, semantics-preserving, pathological pattern <1s. No deleted tests vs f785be3, no .only/.skip, no forbidden patterns, role docs untouched. Whole-epic review (45 files) in step-6 note. Disclosed gap accepted: chat_wait excluded (order-8 mid-rework, owns its own QA pass, now REVIEW)."
 }

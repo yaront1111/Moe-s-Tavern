@@ -54,6 +54,7 @@ import { listMetricsTool } from './listMetrics.js';
 import { getActivityLogTool } from './getActivityLog.js';
 import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
+import { amendPlanStepTool } from './amendPlanStep.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
 import { heartbeatTool } from './heartbeat.js';
 
@@ -127,6 +128,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     getActivityLogTool(state),
     setTaskBudgetTool(state),
     submitPlanCritiqueTool(state),
+    amendPlanStepTool(state),
     deregisterWorkerTool(state),
     heartbeatTool(state),
   ];

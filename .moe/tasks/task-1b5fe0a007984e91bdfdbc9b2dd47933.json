@@ -1,0 +1,28 @@
+{
+  "id": "task-1b5fe0a007984e91bdfdbc9b2dd47933",
+  "epicId": "epic-2eb35551610d4323b6caaea91bcd2cdd",
+  "title": "Split tools.test.ts slice 4 — chat/activity/cross-cutting, then delete tools.test.ts",
+  "description": "Slice 4 of 4 — the closer — splitting packages/moe-daemon/src/tools/tools.test.ts (3147 lines, 32 describe blocks). Sliced because the plan-size gate caps a plan at 10 distinct affectedFiles and the full split needs ~30 destination files — human-approved split decision, 2026-07-31.\n\nDEPENDS ON SLICES 1, 2 AND 3 (task-4f541baba99b458da14bf8250d88af4c, task-a1e3148993f7413a900a44dce9429beb, task-9cf38eb411b640c5a528866f9dc58a3b). First planned step must confirm src/tools/__fixtures__/toolsHarness.ts exists AND that tools.test.ts contains only the 5 describe blocks below; if other describes remain, an earlier slice has not landed — call moe.report_blocked rather than absorbing its scope.\n\nMove the remaining describe blocks, verbatim, no assertion changes:\n- 'moe.get_activity_log' -> getActivityLog.test.ts (NEW)\n- 'Task comments' -> addComment.test.ts (APPEND — file exists)\n- 'WIP limits' -> lifecycleFixes.test.ts (APPEND)\n- 'ARCHIVED status' -> lifecycleFixes.test.ts (APPEND)\n- 'Task timestamps' -> lifecycleFixes.test.ts (APPEND)\n- 'chat token budgets' -> split across chatRead.test.ts / chatSend.test.ts (both NEW) by which tool each `it` exercises; if the block is genuinely cross-tool, put it in one new chatTokenBudgets.test.ts instead — this slice has spare file slots, so pick whichever keeps the assertions intact.\n\nThen DELETE tools.test.ts. The three cross-cutting blocks (WIP limits, ARCHIVED status, Task timestamps) are not per-tool and belong in lifecycleFixes.test.ts, which already holds lifecycle-level coverage — that is the intended home, not a new file.",
+  "definitionOfDone": [
+    "tools.test.ts deleted from the repo",
+    "all remaining describe blocks running under their destination file, cross-cutting ones in lifecycleFixes.test.ts",
+    "vitest total test count for the whole daemon suite identical to the pre-split baseline recorded in slice 1 (no test lost across all four slices)",
+    "npx tsc --noEmit clean and full suite green with zero new failures vs. the pre-slice baseline"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 2.75,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-07-31T19:27:53.233Z",
+  "updatedAt": "2026-07-31T19:27:53.233Z"
+}

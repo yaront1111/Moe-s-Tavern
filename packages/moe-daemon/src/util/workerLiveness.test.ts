@@ -126,7 +126,7 @@ describe('findFreshestLiveWorkerByRole', () => {
     expect(found).toBeNull();
   });
 
-  it('honours excludeWorkerIds, including down to null', () => {
+  it('honours excludeWorkerIds, down to null when every candidate is excluded', () => {
     const workers = [architect('architect-a', 1), architect('architect-b', 30)];
     expect(find(workers, { excludeWorkerIds: ['architect-a'] })?.id).toBe('architect-b');
     expect(find(workers, { excludeWorkerIds: ['architect-a', 'architect-b'] })).toBeNull();

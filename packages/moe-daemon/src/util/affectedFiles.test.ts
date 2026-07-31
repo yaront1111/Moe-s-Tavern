@@ -133,6 +133,25 @@ describe('computeFileCollisions — append-only suppression', () => {
       .toEqual([{ task: 'task-other', files: ['CHANGELOG.md'] }]);
   });
 
+  it('collapses repeated `**/` instead of chaining ambiguous stars', () => {
+    // Semantics are unchanged: `**/**/x` still matches at any depth, including
+    // zero directories.
+    expect(collide(['docs/deep/notes.md'], ['docs/deep/notes.md'], ['**/**/notes.md'])).toEqual([]);
+    expect(collide(['notes.md'], ['notes.md'], ['**/**/notes.md'])).toEqual([]);
+    expect(collide(['notes.txt'], ['notes.txt'], ['**/**/notes.md'])).toEqual([
+      { task: 'task-other', files: ['notes.txt'] },
+    ]);
+
+    // A pathological pattern must not backtrack: chained `(?:[^/]+/)*` groups
+    // would blow up combinatorially here, and this runs under the claim mutex.
+    const nested = 'a/'.repeat(30) + 'nope.txt';
+    const started = Date.now();
+    expect(collide([nested], [nested], ['**/'.repeat(50) + 'x.md'])).toEqual([
+      { task: 'task-other', files: [nested] },
+    ]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it('keeps ownership grouping, WORKING-only scoping and sorting intact', () => {
     const candidate = makeTask('task-cand', ['CHANGELOG.md', 'src/z.ts', 'src/a.ts']);
     const working = makeTask('task-b', ['CHANGELOG.md', 'src/z.ts', 'src/a.ts']);

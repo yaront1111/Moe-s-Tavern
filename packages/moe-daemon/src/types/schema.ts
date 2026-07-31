@@ -98,6 +98,15 @@ export interface ProjectSettings {
    */
   qualityGateScope?: 'epicFinal' | 'everyTask';
   /**
+   * Branch a worker is expected to be on when it calls `moe.complete_task`.
+   * Either a literal branch name or a `*` glob (e.g. "moe/work-*", which is
+   * what the agent wrappers peel onto). Matching is case-sensitive because git
+   * branch names are. Empty/unset disables the check entirely; a completion
+   * that reports no `currentBranch` is never blocked, only warned to
+   * #governors, so wrapper rollout stays graceful.
+   */
+  consolidationBranch?: string;
+  /**
    * Auto-commit + push on worker `complete_task`. When true (default), the
    * agent wrapper runs `git add -A && git commit && git push` on the current
    * branch after a worker moves a task to REVIEW (first pass OR retry after
@@ -194,8 +203,32 @@ export interface Epic {
   updatedAt: string;
 }
 
+/**
+ * One in-place revision of a plan step's instructions, recorded by
+ * moe.amend_plan_step so an architect/governor can correct a step without a
+ * full re-plan.
+ *
+ * `description` is the FULL replacement text for the step, never a delta.
+ * Amendments are append-only and the step's original `description` is never
+ * mutated, so the audit trail of what was originally asked stays intact.
+ */
+export interface StepAmendment {
+  amendmentId: string;
+  /** Full replacement instructions for the step (not a diff). */
+  description: string;
+  /** Why the step was amended — surfaced to the worker in chat. */
+  reason: string;
+  amendedBy: string;
+  amendedAt: string;
+}
+
 export interface ImplementationStep {
   stepId: string;
+  /**
+   * The step as originally planned. Never rewritten by an amendment — read
+   * `effectiveStepDescription(step)` (util/planAmendments.ts) for the text a
+   * worker must actually follow.
+   */
   description: string;
   status: StepStatus;
   affectedFiles: string[];
@@ -210,6 +243,19 @@ export interface ImplementationStep {
   completedAt?: string;
   note?: string;
   modifiedFiles?: string[];
+  /**
+   * Append-only revision history from moe.amend_plan_step, oldest first.
+   * Absent on steps that were never amended.
+   */
+  amendments?: StepAmendment[];
+  /**
+   * Which entry in `amendments` is currently in force. The effective
+   * description a worker must follow is
+   * `activeAmendmentId ? amendments[matching].description : description`; a
+   * dangling id degrades to the original description rather than throwing.
+   * Amending does not change step status semantics in any way.
+   */
+  activeAmendmentId?: string;
 }
 
 export type QAIssueType = 'test_failure' | 'lint' | 'security' | 'missing_feature' | 'regression' | 'other';

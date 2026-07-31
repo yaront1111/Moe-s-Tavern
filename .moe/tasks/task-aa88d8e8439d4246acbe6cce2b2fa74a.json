@@ -128,7 +128,7 @@
       "completedAt": "2026-07-31T13:14:39.075Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -141,16 +141,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.777Z",
-  "updatedAt": "2026-07-31T13:15:07.452Z",
+  "updatedAt": "2026-07-31T15:44:22.905Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:16:01.783Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-07-31T15:44:22.905Z",
+    "wallClockMs": 62901122
   },
   "contextFetchedBy": [
     "architect-4f3cb814",
-    "worker-5c53582f"
+    "worker-5c53582f",
+    "qa-04d1cb13"
   ],
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -198,5 +201,8 @@
     "docs/SCHEMA.md",
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md"
-  ]
+  ],
+  "completedAt": "2026-07-31T15:44:22.905Z",
+  "reviewCompletedAt": "2026-07-31T15:44:22.905Z",
+  "reviewSummary": "Verified all 4 DoD items against the diff (commit 53e3336 + worktree; releaseTask.ts +106, releaseTask.test.ts +333, schema.ts, StateManager.ts, 3 docs). Re-ran the required command myself from packages/moe-daemon: `npx vitest run src/tools/releaseTask.test.ts` -> exit 0, 30/30. Regression: releaseTask + StateManager suites 148/148 pass, `npx tsc --noEmit` exit 0. DoD1: 3rd empty-progress release parks to BACKLOG via nextStatusForRelease(task,'park') (shared helper NOT modified), returns cascadeTriggered:true + explanatory message, posts a dedicated best-effort #governors line naming task/threshold/human action (test asserts channel + content, releaseTask.ts:299-309). DoD2: isEmptyProgressHandoff only matches exact nothing|none|n/a|na or ^nothing/^no progress; concrete-work current handoff and concrete-work priors both proven non-counting (tests 468/478); no-handoff release never counts; already-unassigned repair and DONE/stale-assignee paths never park. DoD3: refusalCascadeAutoBacklog in ProjectSettings + validateSettingsUpdate whitelist + validateBooleanValue, read as `!== false` so absence = enabled; tests cover explicit false, explicit true, absent-key default, and non-boolean rejection with no partial mutation; documented in SCHEMA.md, CONFIGURATION.md (example + table) and the release_task contract in MCP_SERVER.md. Rails: bounded 20-entry scan with no I/O under runExclusive, chat failures swallowed, reopenCount/reopenReason untouched (asserted), no forbidden patterns. Window boundary tested inclusive at 24h, exclusive at 24h+1ms, plus malformed/future timestamps skipped. Residual accepted risk (documented in the handoff memory): a proxy-retried release on the already-unassigned repair path can add one duplicate qualifying note; recovery is one human set_task_status."
 }

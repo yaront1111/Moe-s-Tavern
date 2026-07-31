@@ -305,7 +305,54 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   taskId,
   stepId,
   progress: { completed, total, percentage },
-  nextStep: { stepId, description } | null
+  effectiveDescription: string,       // what the worker was actually told to do (amendment-resolved)
+  amended?: {                         // ABSENT unless an amendment is active on the completed step
+    amendmentId, reason, amendedBy, amendedAt
+  },
+  nextStep: { stepId, description } | null   // description is amendment-resolved too
+}
+```
+
+**Notes:**
+- `effectiveDescription` is the amended text when the step has an active amendment (see `moe.amend_plan_step`), otherwise the step's planned `description`. The chat line posted for the completion uses the same text, so a worker following an amendment does not read as plan drift.
+- `amended` is omitted entirely (not `false`/`null`) on unamended steps, so existing consumers see an unchanged shape.
+- `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
+
+---
+
+### moe.amend_plan_step
+
+**Architect/governor only.** Amend ONE plan step in place — correct or re-scope a step's instructions without a full re-plan. `description` **replaces** the step's instructions (full text, not a delta); the step's original `description` is never mutated, so the audit trail of what was first asked survives.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,        // required
+  stepId: string,        // required
+  description: string,   // required — FULL replacement instructions (non-empty, ≤5000 chars)
+  reason: string,        // required — why; posted to the assigned worker (non-empty, ≤2000 chars)
+  workerId?: string      // caller (auto-injected by proxy) — the role gate reads it
+}
+```
+
+**Notes:**
+- **Role gate:** the caller's team role must be `architect` or `governor`, else `NOT_ALLOWED`. A missing or unknown `workerId` has no team and therefore fails closed — a worker cannot rewrite its own instructions.
+- Rejects a `DONE`/`ARCHIVED` task (`INVALID_STATE`) and a step whose status is `COMPLETED` (`INVALID_STATE`, message points at `moe.request_replan` — amending shipped work would rewrite history).
+- Rejects the 11th amendment on one step (`NOT_ALLOWED`, max 10): a step amended that many times is a re-plan, so it points at `moe.request_replan` too.
+- Appends the amendment to `step.amendments` and sets `step.activeAmendmentId` to it. **Step status is never changed** — a worker mid-step is not reset.
+- Best-effort chat: `@{assignedWorkerId} ✏️ step {stepId} amended on {taskId}: {reason}` to `#general` (the mention wakes the worker's wait) and `#workers`. A chat failure never fails a persisted amendment.
+- Amendment **approval** flows are deliberately out of scope — an amendment takes effect immediately.
+
+**Returns:**
+```typescript
+{
+  success: true,
+  taskId, stepId,
+  amendmentId: string,            // "amend-1", "amend-2", …
+  amendmentCount: number,         // amendments now on the step
+  effectiveDescription: string,   // == the new description
+  previousDescription: string,    // what was in force before (original, or the prior amendment)
+  message: string
 }
 ```
 
@@ -326,6 +373,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
   },
   prLink?: string,
   summary?: string,
+  currentBranch?: string,  // branch the worker is on; enables the consolidationBranch check
   workerId?: string
 }
 ```
@@ -333,29 +381,51 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 **Notes:**
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
 - The evidence is persisted as `task.verification` (with `reportedAt`) and the union of per-step `modifiedFiles`/`affectedFiles` as `task.filesModified`; both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself.
+- **Branch policy** (`settings.consolidationBranch`, a literal branch name or a `*` glob such as `moe/work-*`; case-sensitive, anchored at both ends). Unset or empty disables the check entirely and no `branchPolicy` key appears in the response. When it is set there are three outcomes: `currentBranch` matches → completion proceeds and the response carries `branchPolicy: { pattern, currentBranch, matched: true }`; `currentBranch` does not match → `CONSTRAINT_VIOLATION` whose message starts `BRANCH-POLICY-FAIL:` and names both branches, thrown **before** the task update so the task stays `WORKING` with no verification persisted; `currentBranch` missing or blank → **never blocked**, a one-line warning is posted to `#governors` and the response carries `branchPolicy: { pattern, matched: null, warning }`.
+- The agent wrappers are unchanged by this: they already peel onto `moe/work-<YYYY-MM-DD>` but do not report the branch yet, so `currentBranch` is opt-in until a later task teaches them to send it — which is exactly why an absent branch warns instead of failing.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "REVIEW", stats: { stepsCompleted, totalSteps, filesModified, duration } }
+{
+  success: true, taskId, status: "REVIEW",
+  stats: { stepsCompleted, totalSteps, filesModified, duration },
+  branchPolicy?: { pattern: string, currentBranch?: string, matched: boolean | null, warning?: string }
+}
 ```
 
 ---
 
 ### moe.report_blocked
 
-Report a worker as blocked on a task.
+Report a worker as blocked on a task, and page whoever can actually unblock it.
 
 **Parameters:**
 ```typescript
-{ taskId: string, reason: string, needsFrom?: string, currentStepId?: string }
+{ taskId: string, reason: string, needsFrom?: string, currentStepId?: string, workerId?: string }
 ```
 
 **Notes:**
 - Updates the assigned worker status to `BLOCKED` (task status is not changed).
+- Only the assigned worker may report a task blocked (`workerId` is auto-injected by the proxy); a `reason` is required and capped at 2000 chars.
+- **Ping routing:** the daemon direct-mentions the **architect with the freshest `lastActivityAt` inside the 120s liveness window** (`isWorkerAlive` — so a `DEAD`/deregistered architect is never picked), resolving the role through `worker.teamId`. The blocked worker itself is excluded, so an architect blocked on its own PLANNING task cannot page itself into a dead end. Ties on `lastActivityAt` break to the lowest worker id, so routing is deterministic.
+- With **no live architect**, the ping escalates to `@governors` instead.
+- Channels: the task/general system copy stays unmentioned (it lands in `#general`, which already receives the mentioned copy — prefixing both would page the same person twice); `#general` gets the mentioned copy; `#architects` additionally gets it when an architect was found; `#governors` always receives the message — unmentioned when an architect was paged (visibility without being paged), mentioned when it *is* the escalation. Every post is best-effort: a chat failure never fails `report_blocked` or skips the `BLOCKED` update.
+- This changes **only who gets paged**. Liveness rules (`LIVENESS_TIMEOUT_MS`, `isWorkerAlive`), task status, and release routing are untouched.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "BLOCKED", message }
+{
+  success: true,
+  taskId: string,
+  taskStatus: TaskStatus,             // unchanged by this call
+  workerStatus: "BLOCKED",
+  notified: {
+    target: string,                   // architect worker id, or "@governors"
+    via: "freshest-live-architect" | "governors-fallback"
+  },
+  message: string,                    // names who was pinged
+  nextAction?: { tool: "moe.wait_for_task", ... }   // only when the task has an assigned worker
+}
 ```
 
 ---
@@ -545,7 +615,7 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
 **Notes:**
 - On first claim the daemon stamps `task.metrics.firstClaimAt` (idempotent).
 - After the claim, the daemon re-evaluates `task.budget` (warn at 80%, escalate at 100% to `#governors`).
-- `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`.
+- `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`. Files matching `settings.appendOnlyFiles` (default `["CHANGELOG.md"]`) are dropped from the comparison first, so shared append-only files don't bury the real overlaps; a task whose only overlap was append-only produces no entry at all. Supplying the setting **replaces** the default list, and `[]` disables the suppression — see docs/CONFIGURATION.md.
 - When `task.priorHandoffs` is non-empty, `nextAction.tool` is `moe.get_handoff_history` (instead of `moe.get_context`) so the worker reads the handoff before redoing finished work.
 - `staleHandoffDiskState: true` is returned when the newest handoff carries a `diskState` signature (see `moe.release_task`) and a fresh recompute differs — the working tree moved since that note was written, so its claims (especially a refusal or "blocked by" reason) describe a tree that no longer exists and must be re-verified. `handoffHint` gets a matching sentence appended. The flag is **informational**: the daemon takes no automatic action on it. No flag is emitted when the newest handoff has no `diskState`, when the recompute fails, or when the signatures match — and in those cases no git subprocess runs at all unless a stored signature exists, so ordinary polling claims stay free.
 - Governors short-circuit: a caller whose team role is `governor` gets `nextAction.tool = "moe.enter_governance"` and never claims a task.
@@ -1010,7 +1080,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 - Activity event: `WORKER_GOVERNING`.
 
 **Auto-push signals.** While a governor's `chat_wait` is blocked on `#governors`, the daemon cross-posts these events so the loop wakes:
-- `🚧 {worker} blocked on {taskId}: {reason}` (from `moe.report_blocked`).
+- `🚧 {worker} blocked on {taskId}: {reason}` (from `moe.report_blocked`; the `#governors` copy is prefixed `@governors` only when no live architect could be paged).
 - `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
 - `🔓 {worker} released task: {title}` (from `moe.release_task`).
 - `🛑 task {id} ({title}) parked to BACKLOG after 3 empty-progress releases in 24h …` (from `moe.release_task`'s refusal cascade; needs human reprioritization).
@@ -1359,13 +1429,14 @@ Join a chat channel. Posts a system message and returns online workers.
 
 ### moe.chat_wait
 
-Long-poll for chat messages mentioning this worker or from humans.
+Long-poll for chat messages mentioning this worker or from humans. **Burst-aware**: any unread backlog is returned immediately instead of blocking, and a wake returns everything waiting across the watched channels in one response — not just the message that triggered it.
 
 **Parameters:**
 ```typescript
 {
   workerId: string,     // Required: your worker ID
   channels?: string[],  // Optional: channel filter
+  sinceId?: string,     // Optional: explicit catch-up cursor, overrides stored per-channel cursors
   timeoutMs?: number,   // Max wait (default 300000, max 600000)
   maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
 }
@@ -1373,15 +1444,19 @@ Long-poll for chat messages mentioning this worker or from humans.
 
 **Returns:**
 ```typescript
-{ hasMessage: true, messages: [ChatMessage], truncated: number }  // on match
+{ hasMessage: true, messages: [ChatMessage], truncated: number, hasMore?: true }  // on match
 { hasMessage: false, timedOut: true }           // on timeout
 { hasMessage: false, cancelled: true }          // if cancelled
 ```
 
 **Notes:**
 - Follows the same long-poll pattern as `moe.wait_for_task`
+- **Backfill on entry**: the caller's per-channel cursors are drained before blocking, so a message that landed between the last `chat_read` and this call comes back immediately. The subscription is installed *before* the drain, so nothing arriving mid-drain is lost.
+- **Full burst on wake**: waking re-drains every watched channel and returns the whole burst (up to 100 messages) in one response, ordered oldest-first. `hasMore: true` means the burst was capped and another call has more waiting.
 - When `channels` is explicitly provided, wakes on **any** message in those channels — the subscription set is the filter (matches the governor `#governors` watch pattern).
-- When `channels` is omitted (broad scope), only wakes for messages where `workerId` is in `mentions` or `sender` is `"human"`.
+- When `channels` is omitted (broad scope), only wakes for messages where `workerId` is in `mentions` or `sender` is `"human"`. The *drain* applies no such filter: once a channel is in scope it returns everything since the cursor, so group pings stored as raw mention tokens are not silently dropped.
+- `sinceId` is an explicit catch-up override: it replaces the stored cursor for every scanned channel and, with no `channels` filter, widens the scan to every channel (a reconnect has usually already cleared the unread bookkeeping the broad-scope scan relies on). A `sinceId` that is unknown in a given channel degrades to that channel's most recent window — useful as a resync, but it can rewind that channel's cursor and re-deliver messages.
+- **Cursors advance only for delivered messages the drain actually read.** A capped burst stops the cursor at the last message returned; a channel the drain never scanned moves no cursor at all; and a message delivered straight off the event bus (the wake trigger, or anything that arrived mid-drain) never moves its channel's cursor, because it says nothing about the messages between it and where the scan stopped — a channel with more than 50 waiting would otherwise be skipped. Such a message is simply re-delivered on the next call. Unread counts are cleared only for channels that were fully drained. A failed cursor write is logged and the messages are still returned (a duplicate delivery beats a lost one).
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
 

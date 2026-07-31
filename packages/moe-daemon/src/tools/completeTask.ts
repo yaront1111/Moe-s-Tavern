@@ -1,7 +1,59 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState } from '../util/errors.js';
+import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
+import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
+
+interface BranchPolicyOutcome {
+  pattern: string;
+  currentBranch?: string;
+  matched: boolean | null;
+  warning?: string;
+}
+
+/**
+ * Enforce `settings.consolidationBranch` for one completion.
+ *
+ * Returns null when no policy is configured (unconfigured projects are wholly
+ * unaffected), throws on a real mismatch, and only WARNS when the caller
+ * reported no branch — the agent wrappers do not send `currentBranch` yet, so
+ * blocking on its absence would break every completion on rollout.
+ */
+async function checkBranchPolicy(
+  state: StateManager,
+  taskId: string,
+  currentBranch?: string
+): Promise<BranchPolicyOutcome | null> {
+  // A hand-edited project.json bypasses validateSettingsUpdate, so the type
+  // guard here is the real error handling — a non-string setting must disable
+  // the check, not throw out of complete_task.
+  const configured = state.project?.settings?.consolidationBranch;
+  const pattern = typeof configured === 'string' ? configured.trim() : '';
+  if (!pattern) return null;
+
+  const branch = typeof currentBranch === 'string' ? currentBranch.trim() : '';
+  if (!branch) {
+    const warning = 'currentBranch not reported — branch policy not enforced for this completion';
+    try {
+      await state.postToRoleChannel(
+        'governors',
+        `⚠️ Branch policy not enforced on ${taskId}: no currentBranch reported (expected "${pattern}").`
+      );
+    } catch { /* never block a completion on a chat post */ }
+    return { pattern, matched: null, warning };
+  }
+
+  if (!matchesBranchPattern(branch, pattern)) {
+    throw new MoeError(
+      MoeErrorCode.CONSTRAINT_VIOLATION,
+      `BRANCH-POLICY-FAIL: ${describeBranchPolicyFailure(branch, pattern)}`,
+      { currentBranch: branch, expectedPattern: pattern },
+      'CONSTRAINT_VIOLATION'
+    );
+  }
+
+  return { pattern, currentBranch: branch, matched: true };
+}
 
 export function completeTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -24,6 +76,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         },
         prLink: { type: 'string' },
         summary: { type: 'string' },
+        currentBranch: { type: 'string', description: 'Branch the worker is on; enables the consolidationBranch policy check' },
         workerId: { type: 'string' }
       },
       required: ['taskId', 'verification'],
@@ -35,6 +88,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         verification?: { command?: string; exitCode?: number; outputTail?: string };
         prLink?: string;
         summary?: string;
+        currentBranch?: string;
         workerId?: string;
       };
       const task = state.getTask(params.taskId);
@@ -46,6 +100,9 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       assertWorkerOwns(task, params.workerId);
       assertAllStepsCompleted(task);
       const verification = assertVerificationEvidence(params.verification);
+      // Runs with the other assertions, BEFORE updateTask: a rejection must
+      // leave the task untouched in WORKING rather than half-completed.
+      const branchPolicy = await checkBranchPolicy(state, task.id, params.currentBranch);
 
       // Capture the worker to IDLE *after* the task update so a failed updateTask
       // doesn't leave the worker idle while the task is still WORKING (half-applied state).
@@ -101,6 +158,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           filesModified,
           duration: 'n/a'
         },
+        ...(branchPolicy ? { branchPolicy } : {}),
         nextAction: {
           tool: 'moe.wait_for_task',
           args: {

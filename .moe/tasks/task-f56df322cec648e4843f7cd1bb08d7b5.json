@@ -15,71 +15,122 @@
     {
       "stepId": "step-1",
       "description": "Define the amendment shape in `packages/moe-daemon/src/types/schema.ts`. Add `export interface StepAmendment { amendmentId: string; description: string; reason: string; amendedBy: string; amendedAt: string; }` above `ImplementationStep`, then add `amendments?: StepAmendment[];` and `activeAmendmentId?: string;` to `ImplementationStep`. Doc-comment the contract precisely: `description` is the FULL replacement text for the step (not a delta); `activeAmendmentId` names which entry is currently in force; the original `description` field is never mutated so the audit trail stays intact; and the effective description a worker must follow is `activeAmendmentId ? amendments[matching].description : description`. Note that amendments are append-only and that nothing here changes step status semantics.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Added `StepAmendment { amendmentId, description, reason, amendedBy, amendedAt }` above ImplementationStep with the contract doc-commented: description is the FULL replacement text (not a delta), amendments are append-only, and the step's original description is never mutated so the audit trail survives. Added `amendments?: StepAmendment[]` (oldest first, absent when never amended) and `activeAmendmentId?: string` to ImplementationStep, documenting that the effective description is `activeAmendmentId ? amendments[matching].description : description`, that a dangling id degrades to the original instead of throwing, and that amending changes no step-status semantics. Also doc-commented the existing `description` field to point at effectiveStepDescription. `npx tsc --noEmit` exit 0.",
+      "startedAt": "2026-07-31T14:43:50.929Z",
+      "completedAt": "2026-07-31T14:44:17.775Z"
     },
     {
       "stepId": "step-2",
       "description": "MANDATORY persistence fix in `packages/moe-daemon/src/state/StateManager.ts`: `sanitizeImplementationPlan` (around line 1172) rebuilds every step from an ALLOWLIST of known fields, so any `amendments`/`activeAmendmentId` written by the new tool would be silently discarded on the very same `updateTask` call that wrote them. Extend it: carry `activeAmendmentId` when it is a string, and carry `amendments` when it is an array — mapping each entry defensively (skip non-objects; require string `amendmentId` and non-empty string `description`; slice `description` to 5000 chars to match the sibling step-description cap in this same function, `reason` to 2000; default `amendedBy`/`amendedAt` to empty strings rather than dropping the entry) and capping the array at `MAX_AMENDMENTS_PER_STEP`. Error handling style must match the rest of this function: never throw on malformed input, just drop the bad entry. Pull latest main first — a sibling task is editing this same function's neighbourhood.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/util/planAmendments.ts"
+      ],
+      "note": "Extended the sanitizeImplementationPlan allowlist (re-read fresh — a sibling task's `newFiles` branch is already in it): steps now carry `amendments` (when the incoming value is defined) and `activeAmendmentId` (when it is a string, sliced to 200). Added a private `sanitizeStepAmendments` helper matching the function's never-throw style: skips non-objects, requires a non-empty string amendmentId and a non-blank string description, slices description to 5000 (matching the sibling step-description cap so submitPlan's 10000 limit is not silently truncated here), reason to 2000, defaults amendedBy/amendedAt to '' rather than dropping the entry, and breaks at MAX_AMENDMENTS_PER_STEP. Imported StepAmendment as a type and MAX_AMENDMENTS_PER_STEP from util/planAmendments.js. Because the sanitizer needs that constant, util/planAmendments.ts (step-3's deliverable) was created in this step with its full contents — step-3 reviews it against its spec. `npx tsc --noEmit` exit 0; `npx vitest run src/state` → 4 files / 140 tests passed (implementationPlan round-trips unaffected).",
+      "startedAt": "2026-07-31T14:44:28.328Z",
+      "completedAt": "2026-07-31T14:45:26.998Z"
     },
     {
       "stepId": "step-3",
       "description": "Create `packages/moe-daemon/src/util/planAmendments.ts` — the one place that resolves an amended step, so the tool, complete_step and any future consumer cannot drift. Export `MAX_AMENDMENTS_PER_STEP = 10`; `nextAmendmentId(step): string` returning `amend-<count+1>` based on the existing amendments length; `effectiveStepDescription(step: Pick<ImplementationStep, 'description' | 'amendments' | 'activeAmendmentId'>): string` returning the active amendment's description when `activeAmendmentId` is set AND resolves to an entry, else the original `description` (a dangling `activeAmendmentId` degrades to the original rather than throwing — that is the error handling contract); and `activeAmendment(step): StepAmendment | null` for callers that need the metadata. Pure functions, no StateManager import.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/planAmendments.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/planAmendments.ts"
+      ],
+      "note": "Reviewed util/planAmendments.ts (created in step-2 because the sanitizer needs its cap) against this step's spec — it matches: `MAX_AMENDMENTS_PER_STEP = 10`; `nextAmendmentId(step)` → `amend-<existing count + 1>`; `activeAmendment(step)` returning the matching entry or null; `effectiveStepDescription(step)` returning the active amendment's description else the original. Error-handling contract implemented as specified: a dangling activeAmendmentId, a non-array `amendments` (hand-edited .moe/ is possible), an entry whose description is not a string, and a missing description all degrade to the original text instead of throwing. Pure functions over a `Pick<ImplementationStep, 'description' | 'amendments' | 'activeAmendmentId'>`; only a type-only import from types/schema.js, so no StateManager import and no runtime cycle with the sanitizer that consumes the constant. `npx tsc --noEmit` exit 0; helper behaviour is unit-tested in step-6's suite as planned.",
+      "startedAt": "2026-07-31T14:45:29.532Z",
+      "completedAt": "2026-07-31T14:45:40.770Z"
     },
     {
       "stepId": "step-4",
       "description": "Implement `packages/moe-daemon/src/tools/amendPlanStep.ts` and register it. Tool name `moe.amend_plan_step`; inputs `taskId`, `stepId`, `description` (the full replacement text), `reason`, `workerId`; `additionalProperties: false`; required `taskId`, `stepId`, `description`, `reason`. Handler order: validate presence (`missingRequired`) and shape — `description` non-empty and ≤5000 chars, `reason` non-empty and ≤2000 chars (`invalidInput`); then the ROLE GATE, copying the pattern in `submitPlanCritique.ts`: `const role = state.getTeamForWorker(params.workerId || '')?.role;` and reject with `notAllowed('amend_plan_step', ...)` unless role is `'architect'` or `'governor'` (a missing workerId therefore fails closed); then `notFound` for a missing task or step; then reject `task.status` of `DONE`/`ARCHIVED` via `invalidState` (amending finished work is meaningless) and reject a step whose `status === 'COMPLETED'` with a message pointing at `moe.request_replan` for work that already shipped; then reject when `step.amendments.length >= MAX_AMENDMENTS_PER_STEP`, again steering to `moe.request_replan` — a step amended ten times is a re-plan wearing a disguise. Build the amendment with `nextAmendmentId`, append it, set `activeAmendmentId`, and persist the whole `implementationPlan` through `state.updateTask(task.id, { implementationPlan: nextSteps }, 'TASK_UPDATED')`. Do NOT wrap the handler in `state.runExclusive` — MCP dispatch already serializes on that mutex. Best-effort chat (each in its own try/catch, never blocking the tool): post `@<assignedWorkerId> ✏️ step <stepId> amended on <taskId>: <reason>` to general so the assigned worker's wait wakes, and the same line to the `workers` role channel. Return `{ success, taskId, stepId, amendmentId, amendmentCount, effectiveDescription, previousDescription, message }`. Finally register it in `packages/moe-daemon/src/tools/index.ts` — import `amendPlanStepTool` and add `amendPlanStepTool(state)` to the array returned by `getTools()`; an unregistered tool is invisible over MCP.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/amendPlanStep.ts",
         "packages/moe-daemon/src/tools/index.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/amendPlanStep.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "note": "Created tools/amendPlanStep.ts (`moe.amend_plan_step`) and registered it in getTools() — imported next to submitPlanCritiqueTool and added to the returned array, so it is visible over MCP. Handler order exactly as planned: presence checks (missingRequired) → shape/type/length checks (description non-empty ≤5000, reason non-empty ≤2000, invalidInput) → role gate via `state.getTeamForWorker(params.workerId || '')?.role` accepting only 'architect'/'governor' and failing closed on a missing workerId (notAllowed) → notFound for task/step → invalidState for DONE/ARCHIVED tasks → COMPLETED-step rejection as an INVALID_STATE MoeError whose message names moe.request_replan → amendment-cap rejection (notAllowed) also steering to request_replan. Persists via `state.updateTask(taskId, { implementationPlan: nextSteps }, 'TASK_UPDATED')` with no runExclusive (MCP dispatch already serializes). Append-only: the step's original description is untouched; the new entry is pushed and activeAmendmentId points at it. Chat is best-effort in two independent try/catch blocks, posting `@<assignedWorkerId> ✏️ step <id> amended on <task>: <reason>` to #general (the mention wakes the worker's wait) and #workers. Returns success/taskId/stepId/amendmentId/amendmentCount/effectiveDescription/previousDescription/message, reading the counts back off the persisted task so the response reflects what actually survived the sanitizer. `npx tsc --noEmit` exit 0; `npx vitest run src/tools/tools.test.ts` → 181 passed (registry unaffected).",
+      "startedAt": "2026-07-31T14:45:44.669Z",
+      "completedAt": "2026-07-31T14:46:46.314Z"
     },
     {
       "stepId": "step-5",
       "description": "Echo the effective description in `packages/moe-daemon/src/tools/completeStep.ts` so a worker following an amendment does not read as plan drift. Import `effectiveStepDescription` and `activeAmendment`. (1) Use the effective description of `existingStep` in the `postSystemMessage` line (`Step N completed: <effective>`) instead of the raw `description`. (2) Add to the response `effectiveDescription` (always) plus, only when an amendment is active on the completed step, `amended: { amendmentId, reason, amendedBy, amendedAt }`. (3) Use the effective description for the NEXT step too — in the returned `nextStep.description`, in both `nextAction.reason` strings, and in the `isTestStep` heuristic input — so the worker is told to do the amended work, not the superseded work. Change nothing about step-status transitions, `stepsCompleted`, metrics, the budget check or `assertWorkerOwns`/`assertContextFetched`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeStep.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "note": "completeStep.ts now resolves amendments through util/planAmendments.js. (1) The postSystemMessage line reports `completedDescription` (the effective text) instead of the raw planned description. (2) The response always carries `effectiveDescription`, and carries an `amended: { amendmentId, reason, amendedBy, amendedAt }` block ONLY when an amendment is active — the key is absent, not false/null, on unamended steps so existing consumers see an unchanged shape. (3) The next step is resolved once into `nextDescription` and used for `nextStep.description`, both nextAction.reason strings (in-progress and pending branches) and the isTestStep heuristic input, so the worker is pointed at the amended work. Untouched: step-status transitions, stepsCompleted, metrics, the budget check, assertWorkerOwns/assertContextFetched, and the all-steps-complete chatHint. `npx tsc --noEmit` exit 0; `npx vitest run src/tools/completeStep.test.ts` → 7 passed, so the existing behaviour is unchanged (amendment-specific cases land in step-7).",
+      "startedAt": "2026-07-31T14:46:51.832Z",
+      "completedAt": "2026-07-31T14:47:39.094Z"
     },
     {
       "stepId": "step-6",
       "description": "Create `packages/moe-daemon/src/tools/amendPlanStep.test.ts`. Harness: tmpdir `.moe` (including `channels`, `messages`, `teams`), TURBO project, epic, a WORKING task whose `implementationPlan` has a PENDING `step-1`, an IN_PROGRESS `step-2` and a COMPLETED `step-3`; register callers with `state.createWorker` + `state.createTeam({ name, role })` + `state.addTeamMember`. Cover: (1) an architect amends `step-1` — response carries `amendmentId: 'amend-1'`, and the RELOADED task (assert via `state.getTask`) has `implementationPlan[0].amendments.length === 1`, `activeAmendmentId === 'amend-1'`, and an UNCHANGED original `description` (this is also the regression test for the sanitizer allowlist — if the fields vanish, the sanitizer was not extended); (2) a governor may amend; (3) a worker-role caller and a caller with no `workerId` are both rejected with a NOT_ALLOWED error; (4) amending the COMPLETED `step-3` is rejected and the message names `moe.request_replan`; (5) a second amendment on the same step yields `amend-2` and moves `activeAmendmentId` to it while keeping both entries; (6) exceeding `MAX_AMENDMENTS_PER_STEP` is rejected; (7) unknown taskId/stepId give NOT_FOUND, and a DONE task is rejected; (8) empty or oversized `description`/`reason` give INVALID_INPUT; (9) error handling — with `postToGeneral` stubbed to reject, the amendment still persists and the tool still resolves. Also unit-test the helpers imported from `util/planAmendments.js` here: effective description with no amendments, with an active one, and with a dangling `activeAmendmentId` (falls back to the original, does not throw).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/amendPlanStep.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/amendPlanStep.test.ts"
+      ],
+      "note": "Created src/tools/amendPlanStep.test.ts — 16 cases. Harness: tmpdir .moe (epics/tasks/workers/proposals/teams/channels/messages), TURBO project, epic, WORKING task assigned to worker-1 with a PENDING step-1, IN_PROGRESS step-2 and COMPLETED step-3; callers registered via createWorker + createTeam/addTeamMember. Coverage: registry check (getTools() contains moe.amend_plan_step); architect amend asserted by RE-READING through state.getTask (amendments length, activeAmendmentId, amendedBy/amendedAt, unchanged original description, unchanged status, untouched sibling step) — this is the sanitizer-allowlist regression test; governor may amend; worker-role, absent-workerId and unknown-worker callers all rejected NOT_ALLOWED with no mutation; COMPLETED step rejected with a message naming moe.request_replan; IN_PROGRESS step amendable without status change; second amendment yields amend-2, keeps both entries, moves activeAmendmentId, and previousDescription reports the superseded amended text; MAX_AMENDMENTS_PER_STEP exceeded is rejected and the history stays capped; unknown task/step NOT_FOUND and a DONE task rejected; missing/blank/oversized/non-string description and reason all INVALID_INPUT; amendment still persists when both chat posts reject; the general post carries the exact `@worker-1 ✏️ step step-1 amended on task-1: <reason>` mention. Plus a util/planAmendments describe block: no amendments, active amendment, dangling activeAmendmentId degrading to the original, and a hand-edited non-array amendments field. `npx vitest run src/tools/amendPlanStep.test.ts` → 16 passed. Mutation-checked the key assertion: deleting the sanitizer's amendments line fails 4 tests (4 failed/12 passed), restored and re-run green (23 passed across amendPlanStep + completeStep).",
+      "startedAt": "2026-07-31T14:47:42.238Z",
+      "completedAt": "2026-07-31T14:49:12.093Z"
     },
     {
       "stepId": "step-7",
       "description": "Extend `packages/moe-daemon/src/tools/completeStep.test.ts` without weakening any existing assertion. Add a describe block that seeds a task whose IN_PROGRESS step already carries `amendments: [{ amendmentId: 'amend-1', description: 'AMENDED: do X instead', reason: '...', amendedBy: 'architect-1', amendedAt: <iso> }]` and `activeAmendmentId: 'amend-1'`, then asserts: `complete_step` returns `effectiveDescription === 'AMENDED: do X instead'` and an `amended` block naming `amend-1`; a step with NO amendments returns `effectiveDescription` equal to its original description and no `amended` key (proving the common path is unchanged); when the NEXT step is amended, the returned `nextStep.description` and `nextAction.reason` both carry the amended text; and a step with a dangling `activeAmendmentId` (no matching entry) degrades to the original description instead of throwing. Verification command: `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeStep.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "note": "Extended completeStep.test.ts with an `amended steps (moe.amend_plan_step)` describe block; every pre-existing test and assertion is untouched (7 before, 11 now). Cases: an IN_PROGRESS step carrying amendments + activeAmendmentId returns effectiveDescription 'AMENDED: do X instead' and an `amended` block with amendmentId/reason/amendedBy/amendedAt; an unamended step returns effectiveDescription equal to its original description with `'amended' in result === false` (proving the common path's shape is unchanged) and the usual nextStep; an amended NEXT step makes both nextStep.description and nextAction.reason carry the amended text; a dangling activeAmendmentId degrades to the original description with no `amended` key and no throw. `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts` (the plan's verification command) → 2 files / 27 tests passed. Mutation-checked: reverting nextStep.description to the raw planned text fails exactly the NEXT-step case (1 failed/10 passed); restored and re-run green.",
+      "startedAt": "2026-07-31T14:49:19.033Z",
+      "completedAt": "2026-07-31T14:50:00.521Z"
     },
     {
       "stepId": "step-8",
       "description": "Document and regression-check. In `docs/SCHEMA.md`, add `StepAmendment` and the two new `ImplementationStep` fields to the canonical shapes, stating that the original description is never mutated and that the effective description is amendment-resolved. In `docs/MCP_SERVER.md`, add a `moe.amend_plan_step` contract section (inputs, architect/governor role gate, the COMPLETED-step and amendment-cap rejections, response fields) and extend the `moe.complete_step` section with `effectiveDescription`/`amended`. Note in both that amendment APPROVAL flows are deliberately out of scope. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`; pay particular attention to `StateManager.test.ts` and any suite asserting on `implementationPlan` round-trips, since the sanitizer changed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/SCHEMA.md: added `amendments?`/`activeAmendmentId?` to the ImplementationStep shape, the full StepAmendment interface with its caps, and an \"Amendment resolution\" paragraph stating the original description is never mutated, how the effective description is computed, that a dangling activeAmendmentId degrades rather than errors, that status is unchanged, and that approval flows are out of scope. docs/MCP_SERVER.md: new moe.amend_plan_step contract (inputs, architect/governor role gate failing closed on a missing workerId, DONE/ARCHIVED and COMPLETED-step rejections pointing at moe.request_replan, the 10-amendment cap, append-only persistence, best-effort mention chat, full response shape, approval out of scope) and the moe.complete_step section extended with effectiveDescription, the conditionally-present `amended` block, and amendment-resolved nextStep/nextAction. Adversarial review of the diff: sanitizer normalizes a malformed `amendments` to [] instead of throwing; a dangling activeAmendmentId left by dropped entries degrades to the original; the completed step keeps its amendment history because the status update spreads the existing step; `nextDescription`'s '' default is only reachable under a nextStep guard; the handler deliberately takes no mutex (MCP dispatch serializes, same as every sibling tool); no forbidden patterns; JetBrains parses steps key-by-key so the new keys are inert there. Regression: `npx tsc --noEmit` exit 0 and `npm test` → 52 files / 816 tests passed, including StateManager.test.ts and every implementationPlan round-trip suite. Fresh named verification `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts` → exit 0, 27 passed.",
+      "startedAt": "2026-07-31T14:50:11.484Z",
+      "completedAt": "2026-07-31T14:51:51.145Z"
     }
   ],
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,19 +143,33 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.521Z",
-  "updatedAt": "2026-07-30T22:22:37.693Z",
+  "updatedAt": "2026-07-31T15:50:55.529Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:20:13.289Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 10
+    "plannedDistinctFileCount": 10,
+    "executedStepCount": 8,
+    "doneAt": "2026-07-31T15:50:55.529Z",
+    "wallClockMs": 63042240
   },
   "contextFetchedBy": [
-    "architect-6469484d"
+    "architect-6469484d",
+    "worker-5c53582f",
+    "qa-04d1cb13"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-07-30T22:22:37.638Z",
   "planningNotes": {
@@ -120,7 +185,32 @@
     ]
   },
   "budget": {
-    "wallClockMs": 9000000
+    "wallClockMs": 9000000,
+    "warnedAt": "2026-07-31T14:43:14.209Z",
+    "escalatedAt": "2026-07-31T14:43:14.209Z"
   },
-  "planApprovedAt": "2026-07-30T22:22:37.693Z"
+  "planApprovedAt": "2026-07-30T22:22:37.693Z",
+  "workStartedAt": "2026-07-31T14:43:50.929Z",
+  "reviewStartedAt": "2026-07-31T14:52:12.053Z",
+  "verification": {
+    "command": "npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  2 passed (2)\n      Tests  27 passed (27)\n   Start at  17:51:38\n   Duration  887ms (transform 571ms, setup 0ms, import 728ms, tests 438ms, environment 0ms)",
+    "reportedAt": "2026-07-31T14:52:12.053Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/util/planAmendments.ts",
+    "packages/moe-daemon/src/tools/amendPlanStep.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "packages/moe-daemon/src/tools/amendPlanStep.test.ts",
+    "packages/moe-daemon/src/tools/completeStep.test.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "completedAt": "2026-07-31T15:50:55.529Z",
+  "reviewCompletedAt": "2026-07-31T15:50:55.529Z",
+  "reviewSummary": "Re-ran verification myself: `npx vitest run src/tools/amendPlanStep.test.ts src/tools/completeStep.test.ts` -> 2 files / 27 passed. Also full `npm test` (53 files / 823 passed, green) + `npx tsc --noEmit` (exit 0), since the plan sanitizer changed. DoD1: amendPlanStep.ts appends to amendments + sets activeAmendmentId; role gate copies submitPlanCritique (getTeamForWorker(workerId||'')?.role) so worker-role / missing / unknown workerId all fail closed NOT_ALLOWED (3 tests). DoD2: COMPLETED step -> INVALID_STATE naming moe.request_replan (tested); DONE task and the 10-amendment cap also rejected. DoD3: complete_step returns effectiveDescription always, `amended` only when active (key ABSENT otherwise, asserted via `'amended' in result === false`); nextStep.description, both nextAction.reason strings and isTestStep input are amendment-resolved; dangling activeAmendmentId degrades to the original, no throw (tested in both files). DoD4: registered in getTools() (tools/index.ts:131, plus a registration test) and documented in docs/MCP_SERVER.md + docs/SCHEMA.md. Persistence landmine handled: sanitizeImplementationPlan carries amendments (new sanitizeStepAmendments: drops malformed entries, never throws, caps at MAX_AMENDMENTS_PER_STEP, slices 5000/2000) and activeAmendmentId, spread conditionally so untouched task JSON is byte-identical; the regression test re-reads via state.getTask, not the tool return. Audited other implementationPlan writers (startStep, completeStep, util/reopen.resetPlanStepsToPending on the qa_reject path) — all spread ...step, so amendments survive reopen. No runExclusive (mutex rail OK); chat is per-call try/catch and a rejecting postToGeneral still persists the amendment (tested). No forbidden patterns. Scope matches plan."
 }

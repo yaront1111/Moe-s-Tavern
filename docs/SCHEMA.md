@@ -122,6 +122,13 @@ interface ProjectSettings {
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
 
+  // Branch a worker is expected to be on when it calls moe.complete_task:
+  // a literal branch name or a `*` glob (e.g. "moe/work-*", what the agent
+  // wrappers peel onto). Case-sensitive, anchored at both ends. Empty/unset
+  // disables the check; a completion that reports no currentBranch is never
+  // blocked, only warned to #governors.
+  consolidationBranch?: string;
+
   // Plan-size thresholds enforced by moe.submit_plan: warn past the warn
   // values, hard-reject past the max values. Distinct files = union of
   // affectedFiles across all steps.
@@ -370,6 +377,18 @@ interface ImplementationStep {
   completedAt?: string;          // When step finished
   note?: string;                 // Optional note from complete_step
   modifiedFiles?: string[];      // Files actually touched in this step (set by complete_step)
+  amendments?: StepAmendment[];  // Append-only revisions from moe.amend_plan_step (oldest first, max 10)
+  activeAmendmentId?: string;    // Which amendment is in force; absent = follow `description`
+}
+
+// One in-place revision of a step's instructions (moe.amend_plan_step), so an
+// architect/governor can correct a step without a full re-plan.
+interface StepAmendment {
+  amendmentId: string;           // "amend-1", "amend-2", … (sequential per step)
+  description: string;           // FULL replacement instructions for the step — never a delta (≤5000 chars)
+  reason: string;                // Why it was amended; posted to the assigned worker (≤2000 chars)
+  amendedBy: string;             // workerId of the architect/governor
+  amendedAt: string;             // ISO timestamp
 }
 
 type StepStatus =
@@ -377,6 +396,15 @@ type StepStatus =
   | 'IN_PROGRESS'   // Currently executing
   | 'COMPLETED';    // Done
 ```
+
+**Amendment resolution.** `ImplementationStep.description` is the step **as originally planned and is
+never mutated** — that is the audit trail. The instructions a worker must actually follow are the
+*effective* description: `activeAmendmentId ? amendments[matching].description : description`. A
+dangling `activeAmendmentId` (no matching entry) degrades to the original description rather than
+erroring. `moe.complete_step` echoes the effective text back (see `effectiveDescription` / `amended`
+in docs/MCP_SERVER.md) so a worker following an amendment does not read as plan drift. Amending never
+changes step status. Amendment **approval** flows are deliberately out of scope — an amendment takes
+effect immediately.
 
 **Example:**
 

@@ -15,51 +15,81 @@
     {
       "stepId": "step-1",
       "description": "In `packages/moe-daemon/src/tools/chatWait.ts`, add the `sinceId` input and extract the backlog scan into one exported helper both entry and wake paths will share. Add `sinceId: { type: 'string', description: 'Explicit catch-up cursor: overrides the stored per-channel cursor' }` to the input schema and to the params type, validating it as a non-empty string when present. Add constants `PER_CHANNEL_SCAN_LIMIT = 50` and `MAX_BURST_MESSAGES = 100`. Export `async function collectChatBacklog(state, workerId, channelSet: Set<string> | null, explicitSinceId?: string)` returning `{ messages, cursorUpdates, fullyDrained, hasMore }`. Channel selection: the explicit `channelSet` when given; else every channel from `state.getChannels()` when `explicitSinceId` is set (an explicit catch-up must not be gated on unread bookkeeping that a reconnect already cleared); else the channels named by `state.getUnreadSummary(workerId)`. Per channel: `sinceId = explicitSinceId ?? worker.chatCursors?.[channelId]`, then `state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT })` inside its own try/catch so one unreadable channel is skipped instead of failing the tool (error handling requirement). Always drop messages whose `sender === workerId`. Apply NO mention/human filter here — the unread-summary path is already routed, the channelSet path is deliberately 'any message in my channels' (see the existing comment), and an explicit `sinceId` means the caller asked for everything. Merge, sort by `timestamp` then `id` for determinism, and cap at `MAX_BURST_MESSAGES` keeping the OLDEST slice (matching getMessages' forward-paging semantics, so repeated calls walk the backlog in order) with `hasMore: true` when anything was dropped. Compute `cursorUpdates` as the last delivered message id PER channel, and `fullyDrained` as the channels that had nothing dropped by the cap.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWait.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatBacklog.ts"
+      ],
+      "note": "REOPEN FIX (QA blocker: \"Cursors advance only for messages actually delivered\" failed for a PARTIALLY scanned channel). Confirmed the defect in the shared core before changing anything: cursorUpdates took the last delivered message per channel regardless of origin, so an off-bus message (wake trigger or anything buffered mid-drain) — newest by timestamp — became the cursor of a channel whose scan had stopped at PER_CHANNEL_SCAN_LIMIT, jumping messages 51..N that were never read and never delivered. Fix in util/chatBacklog.ts: summarizeChatBurst now takes (scanned, offBus, scope: BurstScope { partialChannels, scannedChannels }) instead of one merged array, tracks scan-sourced ids, and a channel's cursor may only be set by a message that came from that channel's OWN scan. Off-bus messages are still DELIVERED — they are just re-delivered next call, which is the stated \"duplicate beats lost\" trade. Dedupe puts scanned first so a message both re-read and buffered counts as scan-sourced (the common wake case, where the cursor still reaches the trigger). collectChatBacklog passes (raw, [], scope). Original step-1 scope (sinceId input, PER_CHANNEL_SCAN_LIMIT/MAX_BURST_MESSAGES, exported collectChatBacklog, stable timestamp-only sort, partialChannels) is unchanged and still in place. Verified: npx tsc --noEmit exit 0; npx vitest run src/tools/chatWait.test.ts -> 18 passed.",
+      "startedAt": "2026-07-31T17:43:17.295Z",
+      "completedAt": "2026-07-31T17:48:33.384Z"
     },
     {
       "stepId": "step-2",
       "description": "Rework the entry path in `packages/moe-daemon/src/tools/chatWait.ts` to subscribe BEFORE draining — this is the correctness core of the task. Today the unread backlog check runs before subscribing and is skipped entirely when `channels` is set (the code comments call out that any await before subscribing opens a lost-wakeup window). New order inside the returned Promise: (1) install the `state.subscribe` handler first, pushing every relevant `MESSAGE_CREATED` payload into a local `buffered: ChatMessage[]` array while a `settled` flag is false; (2) `await collectChatBacklog(...)` with the caller's `channelSet` and `sinceId`; (3) merge `buffered` into the drained list, de-duplicating by message id and re-sorting, then recompute `cursorUpdates` from the FINAL delivered list (last message per channel) so the cursor can never advance past something that was not returned; (4) if the merged list is non-empty, `cleanup()` and resolve with it; otherwise leave the subscription live and block as today. Wrap the drain in try/catch: on failure log a warning and fall through to blocking rather than failing the tool. Keep every existing behaviour intact — `blocking: true`, the cancel-existing-waiter block, the `activeChatWaiters` bookkeeping, the CHANNEL_DELETED abort, the timeout response shape, and the fire-and-forget heartbeat touch (it must stay un-awaited).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWait.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ],
+      "note": "REOPEN FIX for QA issue #2 (entry path had the same shape: merged = [...drained.messages, ...buffered] fed one array into summarizeChatBurst, so a message buffered during a PARTIAL drain advanced the cursor past the un-scanned remainder). drainOnEntry now passes the two lists separately — summarizeChatBurst(scanned, this.buffered, { partialChannels, scannedChannels }) — so buffered messages stay tagged off-bus and cannot move a cursor; the empty check became \"scanned.length === 0 && buffered.length === 0\" since there is no merged array any more. Everything else from the original step-2 is untouched and re-verified: subscription installed synchronously in the promise executor before any await, buffering while unsettled, drain failure falling through to blocking, blocking:true, cancel-existing-waiter, activeChatWaiters shape, CHANNEL_DELETED abort, timeout shape, un-awaited heartbeat touch. Verified: npx tsc --noEmit exit 0; npx vitest run src/tools/chatWait.test.ts -> 18 passed, including the new \"does not advance a partially scanned channel past what the scan read (entry path)\" case, which is made deterministic (no race) by stubbing getMessages to add an 80ms delay after the read and posting the off-bus message 20ms in.",
+      "startedAt": "2026-07-31T17:48:36.660Z",
+      "completedAt": "2026-07-31T17:48:46.022Z"
     },
     {
       "stepId": "step-3",
       "description": "Make the wake path drain the whole burst and persist cursors, in `packages/moe-daemon/src/tools/chatWait.ts`. When a relevant message arrives and the waiter has not settled: `cleanup()`, then re-run `collectChatBacklog` (cursors have not advanced, so the trigger message is normally included) and merge in anything already `buffered`. Safety net: if the trigger message id is absent from the drained list — possible if the MESSAGE_CREATED event is emitted before the JSONL append is visible to a re-read — append it explicitly, then recompute `cursorUpdates` from the final list. Wrap the whole wake handler body in try/catch and, on any failure, resolve with just the trigger message: a blocking tool that never resolves would park the caller for the full timeout and hold a `blocking: true` slot. Delivery bookkeeping, shared by both paths and applied ONLY to messages actually being returned: `await state.updateWorkerCursors(workerId, cursorUpdates)` when non-empty, then `state.clearUnread(workerId, ch)` for each channel in `fullyDrained` — both inside try/catch that logs and still returns the messages (a duplicate delivery on a failed cursor write is strictly better than a lost one). Extend the response with `hasMore` when the cap trimmed the burst and keep `hasMessage`, `messages`, `truncated` and the existing truncation `hint` exactly as they are.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWait.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ],
+      "note": "REOPEN FIX for QA issue #1 at the wake site. wake() now calls summarizeChatBurst(drained.messages, [...this.buffered, trigger], { partialChannels, scannedChannels }) — the trigger and the buffer are explicitly off-bus, so on a partial channel the cursor stops at the last scan-sourced message instead of jumping to the trigger. The drain-failure fallback became summarizeChatBurst([], [trigger], { empty scope }), which delivers the trigger and moves no cursor at all. QA's reproduction now behaves as required: 60 unrouted fillers behind a seeded cursor plus one @mention trigger returns 51 messages with hasMore true, the cursor at filler 50 (NOT the trigger), and the next call returns the remaining 10 fillers plus the trigger again — nothing is lost, one duplicate. Unchanged and re-verified: shared applyChatDelivery bookkeeping (updateWorkerCursors then clearUnread per fullyDrained channel, each in its own try/catch that still returns the messages), the response shape (hasMessage/messages/truncated/hint plus hasMore), the always-resolve guarantee, and the detachFromMutexContext dispatch of the wake. Verified: npx tsc --noEmit exit 0; npx vitest run src/tools/chatWait.test.ts -> 18 passed.",
+      "startedAt": "2026-07-31T17:48:48.598Z",
+      "completedAt": "2026-07-31T17:48:58.459Z"
     },
     {
       "stepId": "step-4",
       "description": "Create `packages/moe-daemon/src/tools/chatWait.test.ts` (no dedicated suite exists today). Harness: tmpdir `.moe` with `channels`/`messages`/`workers`/`teams`, a project, a registered worker, and channels created through the StateManager; post messages with `state.sendMessage`; always pass a short `timeoutMs` (e.g. 1000) and await the returned promise so no timer leaks between cases. Cover the DoD: (1) messages posted BEFORE the call are returned immediately — assert the promise resolves well under the timeout with `hasMessage: true` — for both the `channels: [...]` path and the no-filter unread path; (2) a burst of five messages across two watched channels posted before the call comes back in ONE response, ordered by timestamp; (3) burst on wake — start the wait, then post three messages, and assert all three come back in a single resolution rather than just the first; (4) `sinceId` overrides the stored cursor: seed a cursor at the newest message, pass `sinceId` of an older message, and assert the older messages are re-delivered; (5) cursor advance — after a delivery, `state.getWorker(id).chatCursors[channel]` equals the LAST delivered message id, and an immediately following `chat_wait` returns nothing new and blocks to timeout; (6) with the burst cap exceeded, `hasMore` is true, the cursor stops at the last DELIVERED message, and the next call returns the remainder; (7) the worker's own posts never wake it and never advance its cursor; (8) error handling — with `state.getMessages` stubbed to reject for one channel, the other channel's messages are still delivered, and with `updateWorkerCursors` stubbed to reject the messages are still returned; (9) unchanged behaviour — timeout returns `{ hasMessage: false, timedOut: true }`, a second `chat_wait` for the same worker cancels the first with `cancelled: true`, and deleting a watched channel resolves with the cancelled/error shape. Verification command: `npx vitest run src/tools/chatWait.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWait.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "note": "REOPEN FIX for QA issue #3 (no partially-scanned-channel case, which is why the loss path shipped). chatWait.test.ts is now 18 cases — the original 15 plus three written BEFORE the fix and watched to fail: (a) unit guard on the shared core — summarizeChatBurst([scanned], [offBus], { partialChannels, scannedChannels }) delivers both messages but sets cursorUpdates to the SCANNED id and leaves fullyDrained empty; (b) wake path, QA's exact reproduction — anchor cursor, PER_CHANNEL_SCAN_LIMIT+10 unrouted system fillers, broad-scope wait, one @mention trigger: asserts the trigger is delivered, hasMore is true, the cursor is NOT the trigger and IS filler 50, and that across the first and second calls EVERY filler is delivered (plus the trigger repeating, the accepted trade); (c) entry path, made deterministic rather than racy by stubbing getMessages to sleep 80ms after the read and posting the off-bus message 20ms in — asserts the late message is delivered, hasMore true, and the cursor stops at filler 50. RED evidence: removing the one guard line (`if (!scannedIds.has(message.id)) continue;`) fails exactly those three (3 failed / 15 passed); restoring gives 18 passed. One test assumption was wrong on first run and was corrected, not worked around: an absent cursor makes getMessages return the most RECENT window rather than paging forward, so the entry case now seeds an anchor cursor first — noted inline. Verified: npx vitest run src/tools/chatWait.test.ts -> Test Files 1 passed, Tests 18 passed, exit 0.",
+      "startedAt": "2026-07-31T17:49:01.339Z",
+      "completedAt": "2026-07-31T17:49:11.739Z"
     },
     {
       "stepId": "step-5",
       "description": "Repair the pre-existing chat_wait cases in `packages/moe-daemon/src/tools/tools.test.ts` and document the tool. Those cases (the 'fires on ANY message in subscribed channels' regression, the heartbeat-refresh case and the truncation case) were written against a wait that never backfilled: if their `setupChat()` fixture posts any message into the watched channel before the wait starts, the new entry drain now returns it immediately and the assertion about the later message breaks. Fix them by seeding the worker's cursor past the fixture messages (or by not posting fixture messages into the watched channel) — do NOT weaken what each case asserts; the ANY-message regression in particular must keep proving that a non-mentioning message wakes a channel-scoped waiter. In `docs/MCP_SERVER.md`, extend the `moe.chat_wait` contract: it now returns any unread backlog immediately instead of blocking, drains the full burst across watched channels in one response, accepts `sinceId` as an explicit catch-up override that bypasses stored cursors, advances per-channel cursors only for messages actually delivered, and reports `hasMore` when a burst exceeded the cap. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`; watch `WebSocketServer.test.ts` and `enterGovernance.test.ts`, which also exercise chat waiting.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/tools.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "tools.test.ts remains unchanged (git status clean for it) and green — its setupChat() posts no fixture message into the watched channel, so the three pre-existing chat_wait cases still prove what they assert. docs/MCP_SERVER.md cursor bullet rewritten for the reopen: a message delivered straight off the event bus never moves its channel's cursor, because it says nothing about the messages between it and where the scan stopped (a channel with more than 50 waiting would otherwise be skipped); such a message is simply re-delivered on the next call. Adversarial re-review of the fix: cursors still cannot move backwards (scanned messages always come from getMessages after the stored cursor; only an explicit sinceId can rewind, already documented); a channel delivered ONLY off-bus messages gets no cursorUpdates entry and therefore is not in fullyDrained, so its unread stays and it is rescanned next call; the QA-flagged own-post wedge is untouched. Full-suite note for auditing: an intermediate run showed 1 failure in src/util/affectedFiles.test.ts (\"collapses repeated `**/`\"), a sibling worker's in-flight ReDoS-hardening edit in the shared tree (both affectedFiles.ts and its test are modified by another task; I import neither) — it passed in isolation and the re-run was fully green. Verified fresh: npx vitest run src/tools/chatWait.test.ts -> Test Files 1 passed, Tests 18 passed, exit 0; npm test -> Test Files 55 passed, Tests 863 passed; npx tsc --noEmit exit 0.",
+      "startedAt": "2026-07-31T17:49:26.930Z",
+      "completedAt": "2026-07-31T17:49:47.732Z"
     }
   ],
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Re-verified green: `npx vitest run src/tools/chatWait.test.ts` 15 passed, full daemon suite 54 files / 838 tests passed, `npx tsc --noEmit` exit 0. blocking:true, ActiveChatWaiter shape, cancel/CHANNEL_DELETED/timeout paths and the fire-and-forget heartbeat preserved; subscribe-before-drain correct; docs updated. One blocker.\n\nDoD \"Cursors advance only for messages actually delivered\" holds for the MAX_BURST cap and for un-scanned channels, but NOT for a PARTIALLY scanned one. When getMessages returns a full page (PER_CHANNEL_SCAN_LIMIT=50) and a newer message reaches the burst off the event bus (the wake `trigger`, or anything in `buffered`), it is newest by timestamp so it becomes that channel's cursorUpdates value — jumping the cursor over messages 51..N which the scan never reached and which were never delivered. hasMore:true says \"call again\", but the next call starts after the trigger, so they are gone.\n\nReproduced against your tree (throwaway test, deleted; tree clean): seed a cursor at an anchor in #general, post 60 unrouted `system` messages (no unread increment, no broad-scope wake), start a broad-scope chat_wait, then post one @worker mention. Result: delivered=51, hasMore=true, cursor===trigger.id, 10 filler undelivered. Second chat_wait: 0 messages, timedOut=true — those 10 are lost permanently. New behaviour, not pre-existing: HEAD's chatWait.ts never called updateWorkerCursors.\n\nTo pass: a channel in partialChannels must not have its cursor advanced past the contiguous slice the drain actually READ. An off-bus message may still be DELIVERED but must not move that channel's cursor beyond the last scan-sourced message; re-delivering the trigger next call is the right trade and is already your stated principle. Add the regression test described in the issues.\n\nNon-blocking: the own-post wedge is plan-mandated (chatWait.test.ts:199) — do NOT change it, just keep the cursor fix from letting it skip other people's messages.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -67,17 +97,35 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.878Z",
-  "updatedAt": "2026-07-30T22:25:26.252Z",
+  "updatedAt": "2026-07-31T17:59:09.967Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:22:55.327Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-07-31T17:59:09.967Z",
+    "wallClockMs": 70574640
   },
   "contextFetchedBy": [
-    "architect-6469484d"
+    "worker-f5977052",
+    "qa-04d1cb13"
   ],
-  "stepsCompleted": [],
-  "failedDodItems": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [
+    {
+      "item": "Cursors advance only for messages actually delivered",
+      "rejectedAt": "2026-07-31T16:08:50.893Z",
+      "rejectedBy": "qa-04d1cb13"
+    }
+  ],
   "planSubmittedAt": "2026-07-30T22:25:26.209Z",
   "planningNotes": {
     "approachesConsidered": "(1) Keeping the backlog check before the subscription and just widening it to the channelSet path — rejected: the file's own comments explain that awaiting before subscribing opens a lost-wakeup window, and widening the await would open it for exactly the governors this task is meant to protect. Subscribe-then-drain-then-merge is the standard fix and costs one buffer array. (2) Draining with a short 'burst settle' timer on wake (wait 200ms for stragglers) — rejected: it adds latency and nondeterminism to tests for a case the cursor already handles (anything that lands after the drain is unread and comes back immediately on the next call). (3) Applying the mention/human relevance filter to the sinceId catch-up path — rejected: stored messages carry RAW mention tokens (a group mention is stored as 'governors', not the workerId), so that filter would silently drop exactly the group pings a governor is catching up on. An explicit sinceId means 'give me everything since X'. (4) Advancing cursors optimistically before delivery — rejected outright: a failed write would then lose messages permanently.",
@@ -91,7 +139,81 @@
     ]
   },
   "budget": {
-    "wallClockMs": 7200000
+    "wallClockMs": 7200000,
+    "warnedAt": "2026-07-31T15:42:17.786Z",
+    "escalatedAt": "2026-07-31T15:42:17.786Z"
   },
-  "planApprovedAt": "2026-07-30T22:25:26.252Z"
+  "planApprovedAt": "2026-07-30T22:25:26.252Z",
+  "workStartedAt": "2026-07-31T15:45:56.410Z",
+  "reviewStartedAt": "2026-07-31T17:50:54.250Z",
+  "verification": {
+    "command": "npx vitest run src/tools/chatWait.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  18 passed (18)\n   Start at  20:49:31\n   Duration  5.01s (transform 149ms, setup 0ms, import 198ms, tests 4.72s, environment 0ms)\n\nexit: 0",
+    "reportedAt": "2026-07-31T17:50:54.250Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/chatBacklog.ts",
+    "packages/moe-daemon/src/tools/chatWait.ts",
+    "packages/moe-daemon/src/tools/chatWait.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewCompletedAt": "2026-07-31T17:59:09.967Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Cursors advance only for messages actually delivered"
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/util/chatBacklog.ts",
+        "line": 71,
+        "description": "cursorUpdates takes the LAST delivered message per channel with no regard for whether it came from that channel's scan or from the event buffer/trigger. When the scan hit PER_CHANNEL_SCAN_LIMIT (channel is in partialChannels), the off-bus trigger is newest by timestamp and becomes the cursor, jumping over the un-scanned, un-delivered 51st..Nth messages. Fix: for a partial channel, cap its cursor at the last message that came from its OWN scan; still deliver the trigger, let it repeat next call."
+      },
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/tools/chatWait.ts",
+        "line": 240,
+        "description": "Entry path has the same shape: merged = [...drained.messages, ...this.buffered] feeds summarizeChatBurst, so a buffered message landing during a partial drain advances the cursor past the un-scanned remainder of its channel. The summarizeChatBurst fix should cover it, but add an entry-path case to prove it."
+      },
+      {
+        "type": "missing_feature",
+        "file": "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "line": 150,
+        "description": "Suite covers the un-scanned-channel cursor guard but has no PARTIALLY-scanned-channel case, which is why the loss path shipped. Add: seed a cursor, post PER_CHANNEL_SCAN_LIMIT+10 unrouted messages, wake with one mention, assert (a) the cursor after the first call is NOT the trigger id and (b) every filler message is delivered across the first and second calls."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Re-verified green: `npx vitest run src/tools/chatWait.test.ts` 15 passed, full daemon suite 54 files / 838 tests passed, `npx tsc --noEmit` exit 0. blocking:true, ActiveChatWaiter shape, cancel/CHANNEL_DELETED/timeout paths and the fire-and-forget heartbeat preserved; subscribe-before-drain correct; docs updated. One blocker.\n\nDoD \"Cursors advance only for messages actually delivered\" holds for the MAX_BURST cap and for un-scanned channels, but NOT for a PARTIALLY scanned one. When getMessages returns a full page (PER_CHANNEL_SCAN_LIMIT=50) and a newer message reaches the burst off the event bus (the wake `trigger`, or anything in `buffered`), it is newest by timestamp so it becomes that channel's cursorUpdates value — jumping the cursor over messages 51..N which the scan never reached and which were never delivered. hasMore:true says \"call again\", but the next call starts after the trigger, so they are gone.\n\nReproduced against your tree (throwaway test, deleted; tree clean): seed a cursor at an anchor in #general, post 60 unrouted `system` messages (no unread increment, no broad-scope wake), start a broad-scope chat_wait, then post one @worker mention. Result: delivered=51, hasMore=true, cursor===trigger.id, 10 filler undelivered. Second chat_wait: 0 messages, timedOut=true — those 10 are lost permanently. New behaviour, not pre-existing: HEAD's chatWait.ts never called updateWorkerCursors.\n\nTo pass: a channel in partialChannels must not have its cursor advanced past the contiguous slice the drain actually READ. An off-bus message may still be DELIVERED but must not move that channel's cursor beyond the last scan-sourced message; re-delivering the trigger next call is the right trade and is already your stated principle. Add the regression test described in the issues.\n\nNon-blocking: the own-post wedge is plan-mandated (chatWait.test.ts:199) — do NOT change it, just keep the cursor fix from letting it skip other people's messages.",
+      "rejectedAt": "2026-07-31T16:08:50.893Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Cursors advance only for messages actually delivered"
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/util/chatBacklog.ts",
+          "line": 71,
+          "description": "cursorUpdates takes the LAST delivered message per channel with no regard for whether it came from that channel's scan or from the event buffer/trigger. When the scan hit PER_CHANNEL_SCAN_LIMIT (channel is in partialChannels), the off-bus trigger is newest by timestamp and becomes the cursor, jumping over the un-scanned, un-delivered 51st..Nth messages. Fix: for a partial channel, cap its cursor at the last message that came from its OWN scan; still deliver the trigger, let it repeat next call."
+        },
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/tools/chatWait.ts",
+          "line": 240,
+          "description": "Entry path has the same shape: merged = [...drained.messages, ...this.buffered] feeds summarizeChatBurst, so a buffered message landing during a partial drain advances the cursor past the un-scanned remainder of its channel. The summarizeChatBurst fix should cover it, but add an entry-path case to prove it."
+        },
+        {
+          "type": "missing_feature",
+          "file": "packages/moe-daemon/src/tools/chatWait.test.ts",
+          "line": 150,
+          "description": "Suite covers the un-scanned-channel cursor guard but has no PARTIALLY-scanned-channel case, which is why the loss path shipped. Add: seed a cursor, post PER_CHANNEL_SCAN_LIMIT+10 unrouted messages, wake with one mention, assert (a) the cursor after the first call is NOT the trigger id and (b) every filler message is delivered across the first and second calls."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-07-31T17:59:09.967Z",
+  "reviewSummary": "Re-verified after reopen #1. Ran myself: `npx vitest run src/tools/chatWait.test.ts` 18 passed; chatWait+tools together 199 passed (tools.test.ts unmodified, its 3 chat_wait cases green); full `npm test` 55 files / 863 tests passed; `npx tsc --noEmit` exit 0.\n\nDoD 1-3 tested: entry backfill on channel-filtered and broad-scope paths, 5-message two-channel burst oldest-first, wake returning quiet1+quiet2+trigger, sinceId re-delivering pre-cursor messages + empty-string rejection.\n\nDoD 4 (the blocker) fixed in the shared core: summarizeChatBurst(scanned, offBus, scope) at util/chatBacklog.ts:91-95 advances a cursor only for a message that is BOTH in the delivered slice AND scan-sourced for a scanned channel, so an off-bus trigger/buffered message can no longer jump a partially scanned channel's cursor over messages 51..N. Mutation-tested instead of trusting green: deleting `if (!scannedIds.has(message.id)) continue;` fails exactly 3 of 18 (off-bus unit guard, partial-channel wake path, partial-channel entry path); line restored, re-run green, tree clean. Both call sites pass the lists separately (chatWait.ts:214-218 wake, :250-253 entry); the drain-failure fallback delivers the trigger with an empty scan scope so no cursor moves.\n\nRails: blocking:true and the ActiveChatWaiter shape (resolve/unsubscribe/timer/channels, used by WS disconnect cleanup) untouched in the diff; wake writes go through state.detachFromMutexContext; no forbidden patterns; every new async path has error handling and still resolves rather than parking the blocking slot. docs/MCP_SERVER.md covers sinceId, hasMore, backfill-on-entry, full-burst-on-wake, delivered-only cursors. Scope matches the plan.\n\nNit (non-blocking, in memory): hasMore is true whenever a scan returns exactly PER_CHANNEL_SCAN_LIMIT even if nothing remains — one wasted call, never a lost message."
 }

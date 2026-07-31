@@ -28,47 +28,76 @@
     {
       "stepId": "step-2",
       "description": "Create `packages/moe-daemon/src/util/workerLiveness.test.ts` (no test file exists for this module yet) covering both the existing predicate and the new lookup with plain object literals and an injected `nowMs` — no StateManager, no timers. Cases for `findFreshestLiveWorkerByRole`: (1) a single live architect is returned; (2) with three live architects the greatest `lastActivityAt` wins; (3) a worker on a team with a different role is never returned even when it is the freshest overall; (4) a worker whose `lastActivityAt` is older than the liveness window is skipped, and when that is the only architect the result is `null`; (5) a `DEAD` architect inside the window is skipped; (6) a worker with `teamId: null` or a `teamId` pointing at a missing team is skipped; (7) `excludeWorkerIds` removes a candidate, and excluding the only live architect yields `null`; (8) two architects with identical `lastActivityAt` resolve to the lexicographically lower id on repeated calls (determinism); (9) error handling — a malformed `lastActivityAt` string is treated as not-alive rather than throwing. Also keep/extend direct `isWorkerAlive` coverage for the boundary (exactly at the timeout is alive, one ms past is not). Verification: `npx vitest run src/util/workerLiveness.test.ts`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/workerLiveness.test.ts"
       ],
-      "startedAt": "2026-07-31T13:20:23.751Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.test.ts"
+      ],
+      "note": "Created src/util/workerLiveness.test.ts (first test file for this module): 15 cases over plain object literals with an injected nowMs — no StateManager, no tmpdir, no timers. isWorkerAlive: exactly-at-timeout alive vs one-ms-past not, DEAD never alive however fresh, malformed lastActivityAt returns false instead of throwing. findFreshestLiveWorkerByRole: single live architect; freshest of three wins; a fresher worker on a different-role team never wins; stale architect skipped (and null when it is the only one); DEAD-but-fresh architect skipped; teamId null and teamId pointing at a missing team skipped; null when no team carries the role; excludeWorkerIds removes a candidate and yields null when all are excluded; tie on lastActivityAt resolves to the lowest id in both iteration orders; malformed timestamp treated as not-alive; explicit timeoutMs override; empty inputs. `npx vitest run src/util/workerLiveness.test.ts` → 15 passed (15). Because the helper landed in step-1 before its tests, I mutation-checked them rather than trusting a first-run green: replacing the tie-break with `lastMs >= bestMs` fails the determinism test (1 failed/14 passed), and dropping the role-membership filter fails two tests (2 failed/13 passed); the file was restored and re-run green after each.",
+      "startedAt": "2026-07-31T13:20:23.751Z",
+      "completedAt": "2026-07-31T13:21:30.342Z"
     },
     {
       "stepId": "step-3",
       "description": "Route the ping in `packages/moe-daemon/src/tools/reportBlocked.ts`. Import `findFreshestLiveWorkerByRole`. After `blockedMsg` is built, resolve the target: call the helper with `state.workers.values()`, `state.teams.values()`, role `'architect'`, and `excludeWorkerIds` containing `task.assignedWorkerId` and `params.workerId` — a blocked architect must never ping itself (the chat sender here is `system`, which takes the human routing path and therefore does NOT filter self-mentions for us). Build `mentionPrefix` = `@<architectId> ` when one is found, else `@governors ` (the MentionRouter resolves both forms: a bare worker id and the `governors` group). Posting changes, keeping every existing try/catch so chat never blocks the tool: leave the `postSystemMessage` call unprefixed (it currently forwards straight to the general channel, so prefixing it too would double-ping the same person in the same channel); prefix the `postToGeneral` copy with `mentionPrefix`; when an architect was found, additionally `postToRoleChannel('architects', mentionPrefix + blockedMsg)` and keep the existing `postToRoleChannel('governors', blockedMsg)` unprefixed so governors keep full visibility without being paged; when no architect was found, post the `@governors`-prefixed message to the governors channel instead of the plain one. Do not change the worker BLOCKED update, the reason validation, `waitStatuses`, or the existing `nextAction`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/reportBlocked.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "note": "reportBlocked.ts now resolves the ping target with findFreshestLiveWorkerByRole(state.workers.values(), state.teams.values(), 'architect', { excludeWorkerIds: [task.assignedWorkerId, params.workerId] filtered to non-empty strings }) — the exclude list stops a blocked architect paging itself, which matters because daemon posts use sender 'system' and take the human routing path (no self-mention filter). mentionPrefix is `@<architectId> ` or `@governors `, both routable by MentionRouter. Posting: postSystemMessage stays unprefixed (it forwards to general, so prefixing both would double-page in one channel); the postToGeneral copy carries the prefix; with an architect found we additionally post the prefixed copy to #architects and keep #governors unprefixed (visibility without paging); with none, #governors gets the @governors-prefixed copy as the escalation. Every post keeps its own try/catch. Untouched: reason validation, the BLOCKED worker update, waitStatuses, nextAction. `npx tsc --noEmit` exit 0.",
+      "startedAt": "2026-07-31T13:21:35.770Z",
+      "completedAt": "2026-07-31T13:22:04.260Z"
     },
     {
       "stepId": "step-4",
       "description": "Expose the routing decision in the `moe.report_blocked` response (same file, `packages/moe-daemon/src/tools/reportBlocked.ts`) so the outcome is assertable and visible to a human reading the tool output: add `notified: { target: '<architectId>' | '@governors', via: 'freshest-live-architect' | 'governors-fallback' }` to the returned object, and reword `message` to name who was pinged (e.g. `Worker marked as blocked. Pinged architect-abc (freshest live architect).` / `Worker marked as blocked. No live architect — escalated to @governors.`). Keep `success`, `taskId`, `taskStatus`, `workerStatus` and the conditional `nextAction` exactly as they are today — existing callers key on those.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/reportBlocked.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "note": "Response now carries `notified: { target, via }` — `{ target: <architectId>, via: 'freshest-live-architect' }` or `{ target: '@governors', via: 'governors-fallback' }` — and `message` names who was paged (\"Worker marked as blocked. Pinged <id> (freshest live architect).\" / \"Worker marked as blocked. No live architect — escalated to @governors.\"). success/taskId/taskStatus/workerStatus and the conditional nextAction are byte-identical to before, since existing callers key on those. `npx tsc --noEmit` exit 0.",
+      "startedAt": "2026-07-31T13:22:06.623Z",
+      "completedAt": "2026-07-31T13:22:22.519Z"
     },
     {
       "stepId": "step-5",
       "description": "Create `packages/moe-daemon/src/tools/reportBlocked.test.ts` (none exists today). Harness: tmpdir + `.moe` subdirs including `channels`, `messages` and `teams`, a TURBO project, an epic, a WORKING task assigned to `worker-1`, then `state.load()`; register workers via `state.createWorker` and roles via `state.createTeam({ name, role })` + `state.addTeamMember`, and set each worker's freshness with `state.updateWorker(id, { lastActivityAt: <iso> })` (updateWorker honours an explicit `lastActivityAt`). Assert chat routing with `vi.spyOn(state, 'postToGeneral')` and `vi.spyOn(state, 'postToRoleChannel')` rather than reading message files. Cases: (1) one live architect — the general post starts with `@<architectId>`, an `architects` role-channel post carries the same prefix, and the response `notified.target` is that id; (2) three architects with different `lastActivityAt` — the freshest is mentioned; (3) a stale architect (older than the liveness window) plus a DEAD one — falls back to `@governors`, `notified.via === 'governors-fallback'`, and no `architects` post is made; (4) no architect team at all — same fallback; (5) the blocked worker IS the only live architect — fallback, no self-mention; (6) the governors channel still receives the message in every case; (7) error handling — with chat posting stubbed to reject, `report_blocked` still resolves successfully and still marks the worker BLOCKED; (8) unchanged behaviour — an empty/oversized `reason` still throws, and `nextAction` is still emitted for an assigned worker. Verification command: `npx vitest run src/tools/reportBlocked.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/reportBlocked.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts"
+      ],
+      "note": "Created src/tools/reportBlocked.test.ts (first test file for this tool): tmpdir .moe with epics/tasks/workers/proposals/teams/channels/messages, TURBO project, epic, WORKING task assigned to worker-1, state.load(), then workers via createWorker + createTeam/addTeamMember. Freshness is stamped with updateWorker({lastActivityAt}) AFTER the team join, because addTeamMember internally updates the worker and would otherwise bump the timestamp back to now. Routing is asserted through vi.spyOn on postToGeneral/postToRoleChannel rather than message files. 8 cases: single live architect (prefix in #general and #architects, notified.target); freshest of three wins; stale + DEAD-but-fresh architects fall back to @governors with no #architects post; no architect team at all falls back; the blocked worker as the only live architect falls back with no self-mention; #governors receives the message in both branches (unprefixed when an architect was paged, prefixed when it is the escalation); every chat post rejecting still resolves successfully with the worker BLOCKED and lastError set; and the unchanged contract (blank reason, >2000-char reason, unknown task all still throw; taskStatus/workerStatus/nextAction unchanged). The single-architect case also asserts exactly one of the two general-channel copies carries the mention, which is what stops postSystemMessage double-paging. `npx vitest run src/tools/reportBlocked.test.ts` → 8 passed (8). Mutation-checked since the implementation preceded the tests: emptying the exclude list fails the self-mention case, and prefixing the postSystemMessage copy fails the double-page assertion; restored and re-run green (23 passed across both new files).",
+      "startedAt": "2026-07-31T13:22:25.363Z",
+      "completedAt": "2026-07-31T13:24:08.376Z"
     },
     {
       "stepId": "step-6",
       "description": "Document the routing and regression-check. In `docs/MCP_SERVER.md`, extend the `moe.report_blocked` contract (add one if the tool has no section yet): the daemon direct-mentions the architect with the freshest `lastActivityAt` inside the 120s liveness window, excluding the blocked worker itself; with no live architect it escalates to `@governors`; the response carries `notified: { target, via }`. Note that this changes only who is paged — liveness rules, task status and release routing are untouched. Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit`; pay attention to any existing suite that asserts on the general-channel text of a blocked message, since those strings now carry a mention prefix.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Rewrote the docs/MCP_SERVER.md moe.report_blocked contract: ping routing (freshest lastActivityAt architect inside the 120s isWorkerAlive window, role resolved via worker.teamId, DEAD never picked, blocked worker excluded, ties to lowest id), the @governors fallback, the per-channel matrix and why the system copy stays unmentioned, best-effort chat, and an explicit \"this changes only who is paged — liveness rules, task status and release routing are untouched\". Also corrected the stale Returns block (it claimed `status: \"BLOCKED\"`; the tool actually returns taskStatus + workerStatus) and documented `notified: { target, via }` and the conditional nextAction, plus a note on the governor auto-push signal line. Regression sweep: `npx tsc --noEmit` exit 0; `npm test` → 51 files / 796 tests passed — no existing suite asserted on the general-channel blocked-message text, which was the flagged risk. Fresh named verification `npx vitest run src/tools/reportBlocked.test.ts` → exit 0, 8 passed. Adversarial review noted one pre-existing limitation left alone: MentionRouter matches a bare-id mention case-sensitively against known ids, so an uppercase worker id would post fine but not route — mentionRouter behavior is outside this task's scope, and the message still names the architect and lands in #architects.",
+      "startedAt": "2026-07-31T13:24:11.895Z",
+      "completedAt": "2026-07-31T13:25:12.401Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5c53582f",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -80,19 +109,27 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.140Z",
-  "updatedAt": "2026-07-31T13:20:23.751Z",
+  "updatedAt": "2026-07-31T15:47:31.703Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:17:47.737Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 6,
+    "doneAt": "2026-07-31T15:47:31.703Z",
+    "wallClockMs": 62983966
   },
   "contextFetchedBy": [
     "architect-6469484d",
-    "worker-5c53582f"
+    "worker-5c53582f",
+    "qa-04d1cb13"
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-07-30T22:20:07.684Z",
@@ -113,5 +150,22 @@
     "escalatedAt": "2026-07-31T13:18:42.855Z"
   },
   "planApprovedAt": "2026-07-30T22:20:07.733Z",
-  "workStartedAt": "2026-07-31T13:19:50.124Z"
+  "workStartedAt": "2026-07-31T13:19:50.124Z",
+  "reviewStartedAt": "2026-07-31T13:25:31.801Z",
+  "verification": {
+    "command": "npx vitest run src/tools/reportBlocked.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  8 passed (8)\n   Start at  16:25:01\n   Duration  520ms (transform 143ms, setup 0ms, import 191ms, tests 240ms, environment 0ms)",
+    "reportedAt": "2026-07-31T13:25:31.801Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/workerLiveness.ts",
+    "packages/moe-daemon/src/util/workerLiveness.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completedAt": "2026-07-31T15:47:31.703Z",
+  "reviewCompletedAt": "2026-07-31T15:47:31.703Z",
+  "reviewSummary": "Re-ran DoD command `npx vitest run src/tools/reportBlocked.test.ts` myself: exit 0, 8/8. Also `src/util/workerLiveness.test.ts` 15/15, `npx tsc --noEmit` exit 0, full `npm test` 53 files / 819 tests green (shared tree also carries another task's in-flight amendPlanStep/completeStep work — nothing red). DoD 1-3 verified in code + tests: reportBlocked.ts:63-91 resolves the ping via findFreshestLiveWorkerByRole(state.workers.values(), state.teams.values(), 'architect', excludeWorkerIds=[assignedWorkerId, params.workerId]) and prefixes exactly one #general copy (postSystemMessage's forwarded copy stays unprefixed, so no double-page) plus #architects; falls back to '@governors ' with the mention moved onto the #governors copy. workerLiveness.ts:59-89 is pure over iterables (no StateManager import), role via worker.teamId not team.memberIds, liveness via the one canonical isWorkerAlive, ties broken to lowest id — verified deterministic under both iteration orders. Tests are mutation-resistant (exact ids/objects asserted, not truthiness) and cover freshest-of-three, stale+DEAD fallback, no-architect-team, self-ping exclusion, all-chat-posts-reject still returns success + BLOCKED + lastError, and unchanged reason validation / nextAction contract. Spot-checked the ping is real, not decorative: postToGeneral/postToRoleChannel go through sendMessage with sender 'system' (StateManager.ts:1784/1804) and mentionRouter.ts:33 regex `(?<![\\w@])@(\\w[\\w-]*)` captures a hyphenated bare worker id, with 'governors' resolving to the governor role group. docs/MCP_SERVER.md report_blocked section documents routing, channel matrix, notified:{target,via} and states liveness/status/release routing are untouched. Rails clean: no new settings key, no new MCP tool, no forbidden patterns, chat stays inside per-post try/catch so nothing long or throwing runs under the state mutex."
 }

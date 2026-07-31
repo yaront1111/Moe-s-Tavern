@@ -4,6 +4,7 @@ import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.j
 import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
+import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -101,10 +102,15 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       // Best-effort budget check — never blocks step completion.
       await maybeApplyBudgetWarnings(state, updatedTask).catch(() => {});
 
+      // Report the step as the worker was actually instructed to do it: an
+      // amended step reads as plan drift if we echo the superseded text.
+      const completedDescription = effectiveStepDescription(existingStep);
+      const completedAmendment = activeAmendment(existingStep);
+
       // Post system message to task channel
       const stepNum = steps.findIndex((s) => s.stepId === params.stepId) + 1;
       try {
-        await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${existingStep.description}`);
+        await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${completedDescription}`);
       } catch { /* never block tool */ }
 
       const completed = steps.filter((s) => s.status === 'COMPLETED').length;
@@ -126,6 +132,10 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         }
       }
 
+      // Same for what comes next: point the worker at the amended instructions,
+      // never the superseded ones.
+      const nextDescription = nextStep ? effectiveStepDescription(nextStep) : '';
+
       const nextAction = nextStep
         ? (() => {
             // An IN_PROGRESS remaining step was started out-of-order; start_step
@@ -134,20 +144,20 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
               return {
                 tool: 'moe.complete_step',
                 args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
-                reason: `Finish in-progress step ${nextStep.stepId}: ${nextStep.description.slice(0, 80)}`,
+                reason: `Finish in-progress step ${nextStep.stepId}: ${nextDescription.slice(0, 80)}`,
                 recommendedSkill: steps.indexOf(nextStep) === steps.length - 1
                   ? recommendSkillFor('worker', 'final_step')
                   : undefined
               };
             }
-            const desc = (nextStep.description || '').toLowerCase();
+            const desc = nextDescription.toLowerCase();
             const files = (nextStep.affectedFiles || []).join(' ').toLowerCase();
             const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
             const isFinal = steps.indexOf(nextStep) === steps.length - 1;
             return {
               tool: 'moe.start_step',
               args: { taskId: task.id, stepId: nextStep.stepId, workerId: params.workerId },
-              reason: `Advance to next pending step ${nextStep.stepId}: ${nextStep.description.slice(0, 80)}`,
+              reason: `Advance to next pending step ${nextStep.stepId}: ${nextDescription.slice(0, 80)}`,
               recommendedSkill: isFinal
                 ? recommendSkillFor('worker', 'final_step')
                 : isTestStep
@@ -171,7 +181,22 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           total: steps.length,
           percentage: steps.length > 0 ? Math.round((completed / steps.length) * 100) : 0
         },
-        nextStep: nextStep ? { stepId: nextStep.stepId, description: nextStep.description } : null,
+        // What the worker was actually told to do (amended when an amendment is
+        // in force, otherwise identical to the planned description).
+        effectiveDescription: completedDescription,
+        // Absent — not false/null — on unamended steps, so existing consumers
+        // see an unchanged response shape.
+        ...(completedAmendment
+          ? {
+              amended: {
+                amendmentId: completedAmendment.amendmentId,
+                reason: completedAmendment.reason,
+                amendedBy: completedAmendment.amendedBy,
+                amendedAt: completedAmendment.amendedAt,
+              },
+            }
+          : {}),
+        nextStep: nextStep ? { stepId: nextStep.stepId, description: nextDescription } : null,
         ...(chatHint ? { chatHint } : {}),
         nextAction
       };
