@@ -373,9 +373,17 @@ object TerminalAgentLauncher {
      * Gate: when does JetBrains opt a role into Claude's interactive TUI?
      *
      * - Architect: always (planning benefits from clarifying questions in the REPL).
-     * - Worker: always — hands-on coding sessions want the TUI.
      * - Governor: always — oversight is interactive; the operator steers escalations.
      * - QA: never — verification is mechanical, --print stream-json is preferable.
+     * - Worker: never — the TUI does not exit when the agent finishes a task, and
+     *   the wrapper blocks inside that call for the TUI's whole lifetime. Its
+     *   post-flight (session-end announce, and the auto-commit+push that ships a
+     *   REVIEW task) lives strictly AFTER that call, so an interactive worker
+     *   never reaches it. Observed 2026-07-31: across the whole project chat
+     *   history there were 13 "qa session ended" messages and zero "worker
+     *   session ended", finished work piled up uncommitted, and a human had to
+     *   land it by hand. Workers stay on one-shot --print, which exits at
+     *   end_turn; the stream-json parser still prints every tool call live.
      *
      * Codex / Gemini providers ignore this gate: they have their own native TUI vs
      * headless toggles (`-CodexExec`, `-GeminiExec`). codexExec=true also forces
@@ -386,7 +394,7 @@ object TerminalAgentLauncher {
         agentCommand: String,
         codexExec: Boolean
     ): Boolean =
-        (role == "architect" || role == "worker" || role == "governor") &&
+        (role == "architect" || role == "governor") &&
             !codexExec &&
             AgentProvider.fromCommand(agentCommand) == AgentProvider.CLAUDE
 

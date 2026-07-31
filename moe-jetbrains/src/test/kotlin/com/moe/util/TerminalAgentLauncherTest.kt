@@ -7,7 +7,7 @@ import org.junit.Test
 
 class TerminalAgentLauncherTest {
     @Test
-    fun `PowerShell worker Claude command opts into interactive TUI`() {
+    fun `PowerShell worker Claude command stays in print mode`() {
         val command = TerminalAgentLauncher.buildPowerShellCommandForTest(
             basePath = "D:\\Cordum",
             role = "worker",
@@ -20,7 +20,10 @@ class TerminalAgentLauncherTest {
         assertTrue(command.contains("-Role worker"))
         assertTrue(command.contains("-Command 'claude'"))
         assertTrue(command.contains("-Team 'Cordum'"))
-        assertTrue(command.contains("-Interactive"))
+        // A worker must NOT get the TUI: it never exits on its own, so the
+        // wrapper would block inside it forever and never reach the post-flight
+        // auto-commit+push that ships a task reaching REVIEW.
+        assertFalse(command.contains("-Interactive"))
         assertFalse(command.contains("MOE_NO_PRINT_MODE"))
     }
 

@@ -2033,27 +2033,76 @@ $mentionsJson
         # task owns the full gate; mid-epic tasks stay lean. Missing epicId
         # or unparsable orders default to final (gate on the safe side).
         $isEpicFinal = $true
-        $listResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{}
-        if ($listResp -and $listResp.tasks) {
-            $matched = $listResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
-            if ($matched) {
+        # Resolve the status by EXACT task id. This used to be an unscoped
+        # `list_tasks @{}` filtered client-side, which the daemon caps at
+        # DEFAULT_TASK_LIST_LIMIT (100) — so once the project outgrew one page
+        # the completed task simply wasn't in the rows, $finalStatus stayed
+        # $null, the REVIEW guard below was false, and the ENTIRE auto-commit
+        # block (including every diagnostic in it) was skipped with no output.
+        # get_context keys on the task id and cannot be paginated away.
+        # Do NOT "fix" this by raising the limit: MAX_TASK_LIST_LIMIT is 500,
+        # which only moves the same silent cliff further out.
+        $statusLookupError = $null
+        try {
+            $ctxResp = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+            $matched = if ($ctxResp) { $ctxResp.task } else { $null }
+            if (-not $matched -or -not $matched.id) {
+                $statusLookupError = "get_context returned no task"
+            } elseif ([string]$matched.id -ne $preflightTaskId) {
+                # getContext.ts falls back to the CALLER's currentTaskId when the
+                # requested id resolves to nothing (deleted/archived/wrong
+                # project), and moe-proxy injects MOE_WORKER_ID on every call —
+                # so a stale id comes back as some OTHER task's status. Committing
+                # on that would be worse than not committing at all.
+                $statusLookupError = "get_context resolved a different task ($($matched.id)) — the requested id no longer exists"
+            } else {
                 $finalStatus = $matched.status
                 if ($matched.PSObject.Properties['reopenCount'] -and $matched.reopenCount) {
                     $finalReopenCount = [int]$matched.reopenCount
                 }
-                if ($matched.PSObject.Properties['epicId'] -and $matched.epicId) {
+                # get_context's task projection carries no epicId/order, but it
+                # returns the resolved epic alongside it. Epic-final needs the
+                # siblings' orders anyway, so ask for ONE epic's tasks and read
+                # this task's own order out of that same page: that collection is
+                # legitimately bounded, unlike the whole project, so a limit here
+                # is not the same mistake — and the page is guaranteed to contain
+                # this task, because it is scoped to this task's epic.
+                $taskEpicId = if ($ctxResp.epic -and $ctxResp.epic.id) { [string]$ctxResp.epic.id } else { "" }
+                if ($taskEpicId) {
                     try {
-                        $myOrder = 0.0
-                        if ($null -ne $matched.order) { $myOrder = [double]$matched.order }
-                        $siblingMax = ($listResp.tasks |
-                            Where-Object { $_.epicId -eq $matched.epicId } |
-                            ForEach-Object { if ($null -ne $_.order) { [double]$_.order } else { 0.0 } } |
-                            Measure-Object -Maximum).Maximum
-                        if ($null -ne $siblingMax -and $myOrder -lt $siblingMax) { $isEpicFinal = $false }
+                        $sibResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{ epicId = $taskEpicId; limit = 500 }
+                        if ($sibResp -and $sibResp.tasks) {
+                            $myOrder = 0.0
+                            $mine = $sibResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
+                            if ($mine -and $null -ne $mine.order) { $myOrder = [double]$mine.order }
+                            $siblingMax = ($sibResp.tasks |
+                                ForEach-Object { if ($null -ne $_.order) { [double]$_.order } else { 0.0 } } |
+                                Measure-Object -Maximum).Maximum
+                            if ($null -ne $siblingMax -and $myOrder -lt $siblingMax) { $isEpicFinal = $false }
+                        }
                     } catch {
                         $isEpicFinal = $true
                     }
                 }
+            }
+        } catch {
+            $statusLookupError = "$_"
+        }
+        # A lookup that FAILED and a task that genuinely isn't in REVIEW are two
+        # different things, and collapsing them into one silent no-op is what
+        # made this defect invisible. A real non-REVIEW status stays quiet (the
+        # agent simply didn't finish); an unresolved status is loud on stdout
+        # AND in chat. Best-effort throughout: it must never abort the loop.
+        if ($statusLookupError) {
+            Write-Host "[WARN] post-flight status lookup failed for task ${preflightTaskId}: $statusLookupError. Cannot tell whether it reached REVIEW, so auto-commit+push is being skipped — check the working tree and commit manually." -ForegroundColor Yellow
+            if ($generalChannelId) {
+                try {
+                    Invoke-MoeRpc -Tool "chat_send" -Args @{
+                        channel  = $generalChannelId
+                        workerId = $WorkerId
+                        content  = "PUSH-BLOCKED: post-flight status lookup failed for task ${preflightTaskId} ($statusLookupError); auto-commit skipped and the work may be sitting uncommitted"
+                    } | Out-Null
+                } catch {}
             }
         }
 

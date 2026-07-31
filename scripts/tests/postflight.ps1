@@ -77,13 +77,53 @@ switch (tool) {
     }
     break;
   }
-  case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
-  case 'list_tasks': ok({ tasks: [
-    { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
-    ...(process.env.FAKE_SIBLING_ORDER
-      ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
-      : [])
-  ] }); break;
+  case 'get_context': {
+    // Mirrors getContext.ts: the task projection carries NO epicId and NO order
+    // (the resolved epic comes back alongside it instead), and an unresolvable
+    // taskId falls back to the CALLER's currentTaskId rather than erroring --
+    // so a stale id silently answers with a different task.
+    // 'empty'    => daemon answered but carried no task.
+    // 'mismatch' => the real fallback: some OTHER task comes back.
+    if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
+    const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
+      ? 'task-someone-elses'
+      : (args.taskId || 'task-postflight');
+    ok({
+      task: {
+        id: ctxTaskId,
+        status: process.env.FAKE_TASK_STATUS || 'WORKING',
+        reopenCount: 0,
+        implementationPlan: [],
+        definitionOfDone: []
+      },
+      project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
+    });
+    break;
+  }
+  case 'list_tasks': {
+    const epicTasks = [
+      { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
+      ...(process.env.FAKE_SIBLING_ORDER
+        ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
+        : [])
+    ];
+    // An epic-scoped query asks about one epic's siblings, so it is bounded by
+    // construction and always answers in full.
+    if (args.epicId) { ok({ tasks: epicTasks.filter((t) => t.epicId === args.epicId) }); break; }
+    // FAKE_LIST_TASKS_TRUNCATED models the real daemon behaviour that made the
+    // production auto-commit path inert: an UNSCOPED list_tasks is capped at
+    // DEFAULT_TASK_LIST_LIMIT and, once the project outgrows one page, the
+    // just-completed task is simply not in the rows that come back.
+    if (process.env.FAKE_LIST_TASKS_TRUNCATED === '1') {
+      ok({
+        tasks: [{ id: 'task-other', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-other', order: 1 }],
+        pagination: { limit: 1, offset: 0, returned: 1, total: 2, hasMore: true }
+      });
+      break;
+    }
+    ok({ tasks: epicTasks });
+    break;
+  }
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -254,7 +294,56 @@ switch (tool) {
                     Remove-Item Env:FAKE_SIBLING_ORDER -ErrorAction SilentlyContinue
                 }
 
+                # REGRESSION: the post-flight must not resolve the task's final
+                # status through an UNSCOPED list_tasks. The daemon caps that
+                # call at DEFAULT_TASK_LIST_LIMIT, so past one page of tasks the
+                # just-completed task is absent from the rows, the status comes
+                # back empty, and the whole auto-commit block is skipped in total
+                # silence. The lookup must key on the task id instead, which
+                # cannot be paginated away.
+                $gateTruncDir = Join-Path $tempRoot 'gate-truncated'
+                New-GateProject $gateTruncDir ''
+                $wrapperGateTruncOut = Join-Path $tempRoot 'wrapper-gate-truncated.out'
+                $env:FAKE_LIST_TASKS_TRUNCATED = '1'
+                try {
+                    $gateTruncCode = Invoke-GateWrapper $gateTruncDir $wrapperGateTruncOut
+                } finally {
+                    Remove-Item Env:FAKE_LIST_TASKS_TRUNCATED -ErrorAction SilentlyContinue
+                }
+
+                # A status lookup that fails outright is an ERROR, not a quiet
+                # "the task isn't in REVIEW". It must warn on stdout AND escalate
+                # to chat — that distinction is the whole reason this failure
+                # went unnoticed for a day.
+                $gateLookupDir = Join-Path $tempRoot 'gate-lookupfail'
+                New-GateProject $gateLookupDir ''
+                $wrapperGateLookupOut = Join-Path $tempRoot 'wrapper-gate-lookupfail.out'
+                $env:FAKE_GET_CONTEXT_FAIL = 'empty'
+                try {
+                    $gateLookupCode = Invoke-GateWrapper $gateLookupDir $wrapperGateLookupOut
+                } finally {
+                    Remove-Item Env:FAKE_GET_CONTEXT_FAIL -ErrorAction SilentlyContinue
+                }
+
+                # get_context's real miss behaviour: getContext.ts falls back to
+                # the caller's currentTaskId, so a stale/deleted id answers with
+                # a DIFFERENT task. Auto-committing on another task's REVIEW
+                # status would be worse than not committing at all.
+                $gateMismatchDir = Join-Path $tempRoot 'gate-mismatch'
+                New-GateProject $gateMismatchDir ''
+                $wrapperGateMismatchOut = Join-Path $tempRoot 'wrapper-gate-mismatch.out'
+                $env:FAKE_GET_CONTEXT_FAIL = 'mismatch'
+                try {
+                    $gateMismatchCode = Invoke-GateWrapper $gateMismatchDir $wrapperGateMismatchOut
+                } finally {
+                    Remove-Item Env:FAKE_GET_CONTEXT_FAIL -ErrorAction SilentlyContinue
+                }
+
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
+                $gateTruncCommits = [int](& git -C $gateTruncDir rev-list --count HEAD 2>$null)
+                $gateLookupCommits = [int](& git -C $gateLookupDir rev-list --count HEAD 2>$null)
+                $gateMismatchCommits = [int](& git -C $gateMismatchDir rev-list --count HEAD 2>$null)
+                $gateLookupMessages = Get-Content -Raw -Path (Join-Path $gateLookupDir '.moe\messages\chan-general.jsonl')
                 $gatePassCommits = [int](& git -C $gatePassDir rev-list --count HEAD 2>$null)
                 $gateSkipCommits = [int](& git -C $gateSkipDir rev-list --count HEAD 2>$null)
                 $gateMidCommits = [int](& git -C $gateMidDir rev-list --count HEAD 2>$null)
@@ -295,6 +384,13 @@ switch (tool) {
     $messages = Get-Content -Raw -Path $messagesFile
     if ($messages -notlike '*worker session ended: task=task-postflight (CLI exit=0)*') {
         throw 'Expected post-flight chat message not found'
+    }
+    # The quiet half of the same decision: this run's task resolves cleanly to a
+    # non-REVIEW status, which is a legitimate no-op. It must NOT be reported as
+    # a failed lookup — collapsing those two back together is what hid the defect.
+    if ((Get-Content -Raw -Path $wrapperOut) -like '*post-flight status lookup failed*') {
+        Get-Content $wrapperOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw 'A resolved non-REVIEW status must stay a quiet no-op, not warn as a lookup failure'
     }
 
     $resumeOutText = Get-Content -Raw -Path $wrapperResumeOut
@@ -353,6 +449,40 @@ switch (tool) {
         if ($gateMidCommits -ne 2) {
             Get-Content $wrapperGateMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
             throw "Mid-epic task should commit without running the gate (found $gateMidCommits commits)"
+        }
+        if ($gateTruncCode -ne 0) {
+            Get-Content $wrapperGateTruncOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-truncated wrapper exited with $gateTruncCode"
+        }
+        if ($gateTruncCommits -ne 2) {
+            Get-Content $wrapperGateTruncOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "A truncated list_tasks page must NOT stop the auto-commit: the REVIEW status has to be resolved by exact task-id lookup (found $gateTruncCommits commits)"
+        }
+        if ($gateLookupCode -ne 0) {
+            Get-Content $wrapperGateLookupOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-lookupfail wrapper exited with $gateLookupCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateLookupOut) -notlike '*post-flight status lookup failed for task task-postflight*') {
+            Get-Content $wrapperGateLookupOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'Expected a [WARN] naming the task when the post-flight status lookup fails'
+        }
+        if ($gateLookupMessages -notlike '*PUSH-BLOCKED: post-flight status lookup failed for task task-postflight*') {
+            Write-Host $gateLookupMessages
+            throw 'Expected a chat escalation when the post-flight status lookup fails'
+        }
+        if ($gateLookupCommits -ne 1) {
+            throw "An unresolved status must NOT commit (found $gateLookupCommits commits)"
+        }
+        if ($gateMismatchCode -ne 0) {
+            Get-Content $wrapperGateMismatchOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-mismatch wrapper exited with $gateMismatchCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateMismatchOut) -notlike '*get_context resolved a different task (task-someone-elses)*') {
+            Get-Content $wrapperGateMismatchOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'Expected the wrapper to reject a get_context fallback onto a different task'
+        }
+        if ($gateMismatchCommits -ne 1) {
+            throw "A get_context fallback onto a different task must NOT auto-commit (found $gateMismatchCommits commits)"
         }
     } else {
         Write-Host 'SKIP qualityGate cases: git not available'

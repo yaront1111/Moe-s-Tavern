@@ -348,11 +348,11 @@ fi
 
 # Resolve final INTERACTIVE: explicit --interactive / --no-interactive wins,
 # otherwise architect + governor default to true (planning is a conversation,
-# governance is interactive oversight), worker and qa default to false. Note:
-# the bash sibling does not yet implement a --print stream-json fallback the
-# way moe-agent.ps1 does, so on bash today Claude always runs in TUI regardless
-# of this flag. The flag is wired up for forward parity and to keep the
-# loop-decoupling logic symmetric.
+# governance is interactive oversight), worker and qa default to false. The
+# false default is load-bearing, not cosmetic: the TUI never exits on its own,
+# and this wrapper blocks inside the CLI call for its whole lifetime, so an
+# interactive worker never reaches the post-flight below -- no session-end
+# announce and, worse, no auto-commit+push for a task that reached REVIEW.
 if [ -n "$INTERACTIVE_REQUESTED" ]; then
     INTERACTIVE="$INTERACTIVE_REQUESTED"
 elif [ "$ROLE" = "architect" ] || [ "$ROLE" = "governor" ]; then
@@ -2626,48 +2626,127 @@ PYEOF
     if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         # Check task's final status and reopenCount (agent may have completed,
         # paused, or bailed; reopenCount drives commit-message wording below).
-        POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' 2>/dev/null || echo "")
+        # Resolve the status by EXACT task id. This used to be an unscoped
+        # `list_tasks '{}'` filtered client-side, which the daemon caps at
+        # DEFAULT_TASK_LIST_LIMIT (100) -- so once the project outgrew one page
+        # the completed task simply wasn't in the rows, FINAL_STATUS stayed
+        # empty, the REVIEW guard below was false, and the ENTIRE auto-commit
+        # block (including every diagnostic in it) was skipped with no output.
+        # get_context keys on the task id and cannot be paginated away.
+        # Do NOT "fix" this by raising the limit: MAX_TASK_LIST_LIMIT is 500,
+        # which only moves the same silent cliff further out.
+        POSTFLIGHT_CTX=$(moe_rpc get_context \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
+            2>/dev/null || echo "")
         FINAL_STATUS=""
         FINAL_REOPEN_COUNT="0"
         IS_EPIC_FINAL="true"
-        if [ -n "$POSTFLIGHT_STATE" ]; then
+        TASK_EPIC_ID=""
+        STATUS_LOOKUP_ERROR=""
+        PARSED_POSTFLIGHT=""
+        if [ -n "$POSTFLIGHT_CTX" ]; then
+            # getContext.ts falls back to the CALLER's currentTaskId when the
+            # requested id resolves to nothing (deleted/archived/wrong project),
+            # and moe-proxy injects MOE_WORKER_ID on every call -- so a stale id
+            # comes back as some OTHER task's status. Committing on that would be
+            # worse than not committing at all, hence the id equality check.
+            # The task projection carries no epicId/order, but get_context
+            # returns the resolved epic alongside it.
             PARSED_POSTFLIGHT=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
-    tasks = d.get('tasks', [])
-    for t in tasks:
-        if t.get('id') == sys.argv[1]:
-            # Epic-final = highest 'order' among this epic's tasks (ties count).
-            # Drives the qualityGate scope: the epic's integration-and-hardening
-            # task owns the full gate; mid-epic tasks stay lean. Missing epicId
-            # or unparsable orders default to final (gate on the safe side).
-            epic_final = 'true'
-            epic_id = t.get('epicId')
-            if epic_id:
-                try:
-                    my_order = float(t.get('order') or 0)
-                    sibling_max = max(
-                        (float(s.get('order') or 0) for s in tasks if s.get('epicId') == epic_id),
-                        default=my_order,
-                    )
-                    epic_final = 'true' if my_order >= sibling_max else 'false'
-                except Exception:
-                    epic_final = 'true'
-            # \x1f-separated so we don't collide with whitespace in fields
-            # (NOT NUL: command substitution strips NUL bytes).
-            sys.stdout.write((t.get('status') or '') + '\x1f' + str(t.get('reopenCount') or 0) + '\x1f' + epic_final + '\x1f')
-            break
+    t = d.get('task') or {}
+    e = d.get('epic') or {}
+    if not t.get('id'):
+        sys.stdout.write('NOTASK\x1f\x1f\x1f')
+    elif t.get('id') != sys.argv[1]:
+        sys.stdout.write('MISMATCH\x1f' + str(t.get('id')) + '\x1f\x1f')
+    else:
+        # \x1f-separated so we don't collide with whitespace in fields
+        # (NOT NUL: command substitution strips NUL bytes).
+        sys.stdout.write(
+            'OK\x1f'
+            + (t.get('status') or '') + '\x1f'
+            + str(t.get('reopenCount') or 0) + '\x1f'
+            + (e.get('id') or '') + '\x1f'
+        )
 except Exception:
     pass
-" "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_STATE" 2>/dev/null || echo "")
-            { IFS= read -r -d $'\x1f' FINAL_STATUS
+" "$PREFLIGHT_TASK_ID" <<< "$POSTFLIGHT_CTX" 2>/dev/null || echo "")
+        fi
+        LOOKUP_OUTCOME=""
+        LOOKUP_DETAIL=""
+        if [ -n "$PARSED_POSTFLIGHT" ]; then
+            { IFS= read -r -d $'\x1f' LOOKUP_OUTCOME
+              IFS= read -r -d $'\x1f' LOOKUP_DETAIL
               IFS= read -r -d $'\x1f' FINAL_REOPEN_COUNT
-              IFS= read -r -d $'\x1f' IS_EPIC_FINAL
+              IFS= read -r -d $'\x1f' TASK_EPIC_ID
             } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
-            FINAL_STATUS="${FINAL_STATUS:-}"
-            FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
-            IS_EPIC_FINAL="${IS_EPIC_FINAL:-true}"
+        fi
+        case "${LOOKUP_OUTCOME:-}" in
+            OK)
+                FINAL_STATUS="${LOOKUP_DETAIL:-}"
+                FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
+                TASK_EPIC_ID="${TASK_EPIC_ID:-}"
+                ;;
+            MISMATCH)
+                STATUS_LOOKUP_ERROR="get_context resolved a different task (${LOOKUP_DETAIL:-?}) -- the requested id no longer exists"
+                ;;
+            *)
+                # The RPC failed, returned nothing, or carried no task. That is
+                # NOT the same as "the task isn't in REVIEW" -- see below.
+                STATUS_LOOKUP_ERROR="get_context returned no task"
+                ;;
+        esac
+        FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
+        # Epic-final = highest 'order' among this epic's tasks (ties count).
+        # Drives the qualityGate scope: the epic's integration-and-hardening
+        # task owns the full gate; mid-epic tasks stay lean. Missing epicId or
+        # unparsable orders default to final (gate on the safe side). Asked
+        # epic-SCOPED: one epic's siblings is a legitimately bounded collection,
+        # unlike the whole project, so a limit is safe here -- and the page is
+        # guaranteed to contain this task, so it also supplies MY_ORDER.
+        if [ -z "$STATUS_LOOKUP_ERROR" ] && [ -n "$TASK_EPIC_ID" ]; then
+            SIBLING_STATE=$(moe_rpc list_tasks \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'epicId':sys.argv[1],'limit':500}))" "$TASK_EPIC_ID" 2>/dev/null)" \
+                2>/dev/null || echo "")
+            if [ -n "$SIBLING_STATE" ]; then
+                IS_EPIC_FINAL=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    tasks = d.get('tasks', [])
+    my_order = 0.0
+    for s in tasks:
+        if s.get('id') == sys.argv[1]:
+            my_order = float(s.get('order') or 0)
+            break
+    sibling_max = max(
+        (float(s.get('order') or 0) for s in tasks),
+        default=my_order,
+    )
+    print('true' if my_order >= sibling_max else 'false')
+except Exception:
+    print('true')
+" "$PREFLIGHT_TASK_ID" <<< "$SIBLING_STATE" 2>/dev/null || echo "true")
+            fi
+        fi
+        IS_EPIC_FINAL="${IS_EPIC_FINAL:-true}"
+        # A lookup that FAILED and a task that genuinely isn't in REVIEW are two
+        # different things, and collapsing them into one silent no-op is what
+        # made this defect invisible. A real non-REVIEW status stays quiet (the
+        # agent simply didn't finish); an unresolved status is loud on stdout
+        # AND in chat. Best-effort throughout: it must never abort the loop.
+        if [ -n "$STATUS_LOOKUP_ERROR" ]; then
+            echo -e "${YELLOW}[WARN]${NC} post-flight status lookup failed for task $PREFLIGHT_TASK_ID: $STATUS_LOOKUP_ERROR. Cannot tell whether it reached REVIEW, so auto-commit+push is being skipped -- check the working tree and commit manually."
+            if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+                moe_rpc chat_send \
+                    "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                        "$GENERAL_CHANNEL_ID" "$WORKER_ID" \
+                        "PUSH-BLOCKED: post-flight status lookup failed for task $PREFLIGHT_TASK_ID ($STATUS_LOOKUP_ERROR); auto-commit skipped and the work may be sitting uncommitted" 2>/dev/null)" \
+                    > /dev/null 2>&1 || true
+            fi
         fi
 
         # Auto-commit + push on worker completion. Runs when:

@@ -249,6 +249,76 @@ ls .moe/tasks/
 
 ---
 
+### Worker finished but nothing was committed
+
+**Symptom:** Tasks reach REVIEW/DONE on the board, but the working tree stays dirty and no
+`moe/work-<date>` commit appears. There is **no output at all** from the wrapper about it and **no
+PUSH-BLOCKED chat message** — the failure is completely silent, which is what makes it hard to spot.
+A human ends up landing a whole day of fleet work by hand.
+
+**Two independent causes, both fixed — check which one you have.**
+
+**1. The worker was launched into the interactive TUI.** The wrapper blocks inside the CLI call for
+that process's entire lifetime, and the post-flight (session-end announce, auto-commit+push) runs
+strictly *after* it — a TUI that never exits means a post-flight that never runs. Diagnostic: grep
+`#general` for session-end messages. If you see `qa session ended: task=…` lines but never
+`worker session ended: …`, this is it. Confirm with the launch argv:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+  Where-Object { $_.CommandLine -like '*moe-agent.ps1*' } |
+  Select-Object ProcessId, CommandLine
+```
+
+A `-Interactive` on a `-Role worker` line is the bug. Only architect and governor take the TUI now
+(`TerminalAgentLauncher.shouldLaunchClaudeInteractive`); worker and QA run one-shot `--print`, which
+exits at end_turn so the post-flight is reached. You still see every tool call — the wrapper's
+stream-json parser prints them live.
+
+**2. The post-flight could not resolve the task's final status.** It used to answer "is this task in
+REVIEW?" with an *unscoped* `list_tasks`, filtered client-side. The daemon caps that call at
+`DEFAULT_TASK_LIST_LIMIT` (100), so once a project outgrows one page the just-completed task simply
+is not among the rows that come back: the status reads empty, the `= REVIEW` guard is false, and the
+entire auto-commit block — including every diagnostic line inside it and the PUSH-BLOCKED escalation
+— is skipped in silence. Diagnostic you can run yourself:
+
+```bash
+scripts/moe-call.sh list_tasks '{}' --project <path>
+```
+
+If `tasks` comes back with exactly 100 entries while `pagination.total` is larger, you have hit it.
+
+The lookup now goes through `get_context { taskId }`, which keys on the task id and cannot be
+paginated away; the epic-final check that drives `qualityGate` scope uses a separate **epic-scoped**
+`list_tasks { epicId, limit }`, which is bounded legitimately because it asks about one epic's
+siblings. Raising the unscoped limit is *not* a fix — `MAX_TASK_LIST_LIMIT` is 500, so that only
+moves the same silent cliff further out.
+
+Two sharp edges worth knowing if you touch this code: `get_context`'s task projection carries no
+`epicId` and no `order` (the resolved `epic` object comes back alongside it), and an unresolvable
+`taskId` **falls back to the caller's own current task** rather than erroring — so the wrapper checks
+`task.id` against the id it asked for and treats a mismatch as a failed lookup.
+
+A failed lookup is no longer indistinguishable from "the task genuinely isn't in REVIEW". It now
+prints `[WARN] post-flight status lookup failed for task <id>: …` and posts a
+`PUSH-BLOCKED: post-flight status lookup failed for task <id>` message to `#general`. A real
+non-REVIEW status stays a quiet no-op, which is correct.
+
+**Note:** the fleet runs the wrapper scripts and launcher bundled into the **installed** plugin, not
+the ones in your working tree. Fixing this in the repo does nothing until you rebuild and reinstall:
+
+```bash
+cd packages/moe-daemon && npm run build     # buildPlugin hard-fails on a stale daemon dist
+cd moe-jetbrains && ./gradlew buildPlugin
+.\scripts\install-all.ps1                   # then restart the IDE
+```
+
+Regression coverage for both causes lives in `scripts/tests/postflight.sh` and its `.ps1` sibling
+(`FAKE_LIST_TASKS_TRUNCATED`, `FAKE_GET_CONTEXT_FAIL=empty|mismatch`) plus
+`TerminalAgentLauncherTest`.
+
+---
+
 ## Performance Issues
 
 ### Large activity.log slowing things down

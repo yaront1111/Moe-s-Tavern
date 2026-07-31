@@ -101,13 +101,53 @@ switch (tool) {
     }
     break;
   }
-  case 'get_context': ok({ task: { id: args.taskId || 'task-postflight', implementationPlan: [], definitionOfDone: [] }, project: {}, epic: {}, nextAction: { tool: 'moe.start_step' } }); break;
-  case 'list_tasks': ok({ tasks: [
-    { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
-    ...(process.env.FAKE_SIBLING_ORDER
-      ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
-      : [])
-  ] }); break;
+  case 'get_context': {
+    // Mirrors getContext.ts: the task projection carries NO epicId and NO order
+    // (the resolved epic comes back alongside it instead), and an unresolvable
+    // taskId falls back to the CALLER's currentTaskId rather than erroring --
+    // so a stale id silently answers with a different task.
+    // 'empty'    => daemon answered but carried no task.
+    // 'mismatch' => the real fallback: some OTHER task comes back.
+    if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
+    const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
+      ? 'task-someone-elses'
+      : (args.taskId || 'task-postflight');
+    ok({
+      task: {
+        id: ctxTaskId,
+        status: process.env.FAKE_TASK_STATUS || 'WORKING',
+        reopenCount: 0,
+        implementationPlan: [],
+        definitionOfDone: []
+      },
+      project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
+    });
+    break;
+  }
+  case 'list_tasks': {
+    const epicTasks = [
+      { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
+      ...(process.env.FAKE_SIBLING_ORDER
+        ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
+        : [])
+    ];
+    // An epic-scoped query asks about one epic's siblings, so it is bounded by
+    // construction and always answers in full.
+    if (args.epicId) { ok({ tasks: epicTasks.filter((t) => t.epicId === args.epicId) }); break; }
+    // FAKE_LIST_TASKS_TRUNCATED models the real daemon behaviour that made the
+    // production auto-commit path inert: an UNSCOPED list_tasks is capped at
+    // DEFAULT_TASK_LIST_LIMIT and, once the project outgrows one page, the
+    // just-completed task is simply not in the rows that come back.
+    if (process.env.FAKE_LIST_TASKS_TRUNCATED === '1') {
+      ok({
+        tasks: [{ id: 'task-other', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-other', order: 1 }],
+        pagination: { limit: 1, offset: 0, returned: 1, total: 2, hasMore: true }
+      });
+      break;
+    }
+    ok({ tasks: epicTasks });
+    break;
+  }
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -151,6 +191,14 @@ if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=0)' "$MESSAG
   cat "$TMP_DIR/wrapper.out" >&2 || true
   cat "$MESSAGES_FILE" >&2 || true
   echo "Expected post-flight chat message not found" >&2
+  exit 1
+fi
+# The quiet half of the same decision: this run's task resolves cleanly to a
+# non-REVIEW status, which is a legitimate no-op. It must NOT be reported as a
+# failed lookup -- collapsing those two back together is what hid the defect.
+if grep -Fq 'post-flight status lookup failed' "$TMP_DIR/wrapper.out"; then
+  cat "$TMP_DIR/wrapper.out" >&2 || true
+  echo "A resolved non-REVIEW status must stay a quiet no-op, not warn as a lookup failure" >&2
   exit 1
 fi
 
@@ -426,6 +474,83 @@ if command -v git >/dev/null 2>&1; then
   if [ "$(git -C "$GATE_MID_DIR" rev-list --count HEAD)" -ne 2 ]; then
     cat "$TMP_DIR/wrapper-gate-midepic.out" >&2 || true
     echo "Mid-epic task should commit without running the gate (scope=epicFinal)" >&2
+    exit 1
+  fi
+
+  # Case 5: REGRESSION — the post-flight must not resolve the task's final
+  # status through an UNSCOPED list_tasks. The daemon caps that call at
+  # DEFAULT_TASK_LIST_LIMIT, so past one page of tasks the just-completed task
+  # is absent from the rows, the status comes back empty, and the whole
+  # auto-commit block is skipped in total silence (no output, no chat message).
+  # The lookup must key on the task id instead, which cannot be paginated away.
+  GATE_TRUNC_DIR="$TMP_DIR/gate-truncated"
+  make_gate_project "$GATE_TRUNC_DIR" ""
+  set +e
+  FAKE_LIST_TASKS_TRUNCATED=1 run_gate_wrapper "$GATE_TRUNC_DIR" "$TMP_DIR/wrapper-gate-truncated.out"
+  gate_trunc_code=$?
+  set -e
+  if [ "$gate_trunc_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-truncated.out" >&2 || true
+    echo "Gate-truncated wrapper exited with $gate_trunc_code" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_TRUNC_DIR" rev-list --count HEAD)" -ne 2 ]; then
+    cat "$TMP_DIR/wrapper-gate-truncated.out" >&2 || true
+    echo "A truncated list_tasks page must NOT stop the auto-commit: the REVIEW status has to be resolved by exact task-id lookup (expected 2 commits)" >&2
+    exit 1
+  fi
+
+  # Case 6: a status lookup that fails outright is an ERROR, not a quiet
+  # "the task isn't in REVIEW". It must warn on stdout AND escalate to chat --
+  # that distinction is the whole reason this failure went unnoticed for a day.
+  GATE_LOOKUP_DIR="$TMP_DIR/gate-lookupfail"
+  make_gate_project "$GATE_LOOKUP_DIR" ""
+  set +e
+  FAKE_GET_CONTEXT_FAIL=empty run_gate_wrapper "$GATE_LOOKUP_DIR" "$TMP_DIR/wrapper-gate-lookupfail.out"
+  gate_lookup_code=$?
+  set -e
+  if [ "$gate_lookup_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-lookupfail.out" >&2 || true
+    echo "Gate-lookupfail wrapper exited with $gate_lookup_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'post-flight status lookup failed for task task-postflight' "$TMP_DIR/wrapper-gate-lookupfail.out"; then
+    cat "$TMP_DIR/wrapper-gate-lookupfail.out" >&2 || true
+    echo "Expected a [WARN] naming the task when the post-flight status lookup fails" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'PUSH-BLOCKED: post-flight status lookup failed for task task-postflight' "$GATE_LOOKUP_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$GATE_LOOKUP_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    echo "Expected a chat escalation when the post-flight status lookup fails" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_LOOKUP_DIR" rev-list --count HEAD)" -ne 1 ]; then
+    echo "An unresolved status must NOT commit (we cannot know the task reached REVIEW)" >&2
+    exit 1
+  fi
+
+  # Case 7: get_context's real miss behaviour -- getContext.ts falls back to the
+  # caller's currentTaskId, so a stale/deleted id answers with a DIFFERENT task.
+  # Auto-committing on another task's REVIEW status would be worse than not
+  # committing at all, so this must take the loud path too, not the happy one.
+  GATE_MISMATCH_DIR="$TMP_DIR/gate-mismatch"
+  make_gate_project "$GATE_MISMATCH_DIR" ""
+  set +e
+  FAKE_GET_CONTEXT_FAIL=mismatch run_gate_wrapper "$GATE_MISMATCH_DIR" "$TMP_DIR/wrapper-gate-mismatch.out"
+  gate_mismatch_code=$?
+  set -e
+  if [ "$gate_mismatch_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-mismatch.out" >&2 || true
+    echo "Gate-mismatch wrapper exited with $gate_mismatch_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'get_context resolved a different task (task-someone-elses)' "$TMP_DIR/wrapper-gate-mismatch.out"; then
+    cat "$TMP_DIR/wrapper-gate-mismatch.out" >&2 || true
+    echo "Expected the wrapper to reject a get_context fallback onto a different task" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_MISMATCH_DIR" rev-list --count HEAD)" -ne 1 ]; then
+    echo "A get_context fallback onto a different task must NOT auto-commit" >&2
     exit 1
   fi
 else
