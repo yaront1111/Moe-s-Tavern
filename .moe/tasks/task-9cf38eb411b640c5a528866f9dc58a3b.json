@@ -10,19 +10,131 @@
     "npx tsc --noEmit clean and full suite green with zero new failures vs. the pre-slice baseline"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GUARD + BASELINE + MOCK AUDIT. (a) Confirm packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts exists; if not, slice 1 (task-4f541baba99b458da14bf8250d88af4c) has not landed — moe.report_blocked, do NOT build a second harness. Read it and note that testDir/moePath/state are GETTERS (never destructure — state is reassigned each beforeEach, so a copy goes stale and later tests silently run against a dead StateManager) while setupMoeFolder/createEpic/createTask/createWorker are stable and destructurable. (b) MOCK AUDIT — do this before writing any code: `grep -n \"vi.mock\" src/tools/qaReject.test.ts src/tools/claimNextTask.test.ts`. `vi.mock` is HOISTED and applies to the entire file, so a destination's mock silently rewrites the behavior of anything appended into it. claimNextTask.test.ts:12 mocks ../util/diskState.js — which is exactly why claim_next_task goes to a NEW file in step 2, per this task's destination-change comment. If qaReject.test.ts also carries a hoisted mock, route qa_reject to a new qaReject.contract.test.ts instead of appending, and say so in the completion summary; the file budget absorbs it either way. (c) From packages/moe-daemon run `npx vitest run 2>&1 | tail -30`; record the `Tests   N passed` total and any failing files as this slice's baseline — pre-existing red may belong to another task in the shared tree (mem:gotcha-shared-tree-red-suite), never stash or revert it. (d) `npx tsc --noEmit` must exit 0. (e) Locate this slice's 9 blocks in tools.test.ts BY NAME and record each `it` count. Expected: create_team 4, claim_next_task 17, propose_rail 3, qa_approve 6, qa_reject 12, unblock_worker 5, archive_task 5, archive_epic 4, get_pending_questions 7 — 63 total. A mismatch means an earlier slice touched a block it did not own: stop and report_blocked.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-07-31T19:40:30.405Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MOVE claim_next_task TO A NEW UNMOCKED FILE — the largest and highest-risk move in the whole split. Create packages/moe-daemon/src/tools/claimNextTask.contract.test.ts (dotted-qualifier name matching the repo's existing enforcement.integration.test.ts / governancePlaneV2.integration.test.ts convention) and move `describe('moe.claim_next_task')` (17 its, ~334 lines) there from tools.test.ts, bodies and assertions VERBATIM. This file must NOT mock ../util/diskState.js — that is the entire reason it exists rather than being appended into claimNextTask.test.ts, whose file-wide `vi.mock` would feed all 17 tests an undefined signature and let them pass for the wrong reason. Do not import diskState here at all unless the moved assertions already name it. Permitted edits only: import header, `const h = useToolsHarness();`, helper destructure, and h.-prefixed mutable references. These assertions are the regression net for safety-critical claim semantics — claimability keys strictly on the owner being missing or explicitly DEAD and NEVER on idle time for WORKING/PLANNING, and claiming a human-gated column (BACKLOG/AWAITING_APPROVAL/DONE) is hard-rejected with a specific MoeErrorCode. Keep every expected error code and message exact; do not loosen a coded error handling assertion into a bare truthy check. Delete the block from tools.test.ts. Run `npx vitest run src/tools/claimNextTask.contract.test.ts src/tools/claimNextTask.test.ts` and assert 17 tests in the new file plus claimNextTask.test.ts's original count, all green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MOVE THE QA BLOCKS. Create qaApprove.test.ts and move `describe('moe.qa_approve')` (6 its) into it. Move `describe('moe.qa_reject')` (12 its) into the existing qaReject.test.ts as a TOP-LEVEL describe with its own `const h = useToolsHarness();` — unless the step-1 mock audit found a hoisted vi.mock there, in which case create qaReject.contract.test.ts instead and note the deviation. Do not nest the moved block inside the file's existing 'qa_reject bounded escalation' describe and do not refactor those existing tests onto the harness; that is scope this task does not own. The moved assertions cover contracts the daemon enforces in code because prompt rules do not hold: qa_approve REQUIRES a summary (persisted as reviewSummary) and qa_reject's rejectionDetails drive the reopen path, auto-flipping REVIEW to PLANNING after 3 reopens or when the same DoD item fails twice. Keep the exact expected error codes and reopen-count assertions — these overlap coverage in qaOwnership.test.ts and governanceFeatures.test.ts, and you must NOT merge, dedupe or drop anything that looks redundant: identical test count is the cross-slice DoD and slice 4 checks the final number against slice 1's recorded baseline. Delete both blocks from tools.test.ts. Run `npx vitest run src/tools/qaApprove.test.ts src/tools/qaReject.test.ts` and assert the counts rose by exactly 6 and 12.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "MOVE THE GOVERNANCE/TEAM BLOCKS. Create createTeam.test.ts, proposeRail.test.ts and unblockWorker.test.ts. Move `describe('moe.create_team')` (4 its), `describe('moe.propose_rail')` (3 its) and `describe('moe.unblock_worker')` (5 its) out of tools.test.ts, one block per file, verbatim. Each file imports only the tool factory it exercises (createTeamTool / proposeRailTool / unblockWorkerTool) plus the schema types its assertions name — do not copy tools.test.ts's whole import block. The create_team block asserts the team-name/role/maxSize validators, which throw on bad input; the propose_rail block covers the rail-proposal path that a rejected plan uses as its escape hatch. Both depend on validator error handling that the concurrent StateManager split (task-1bc9d7a8) is relocating to src/state/validators.ts behavior-identically — these tests must keep passing unchanged, and a failure inside src/state/** mid-slice is that task's transient, not yours. Delete all three blocks from tools.test.ts. Run `npx vitest run src/tools/createTeam.test.ts src/tools/proposeRail.test.ts src/tools/unblockWorker.test.ts` and assert 12 tests pass (4+3+5).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.test.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts",
+        "packages/moe-daemon/src/tools/unblockWorker.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "MOVE THE ARCHIVE BLOCKS. Create archiveTask.test.ts and archiveEpic.test.ts. Move `describe('moe.archive_task')` (5 its) and `describe('moe.archive_epic')` (4 its) out of tools.test.ts, verbatim, same import discipline. These assertions cover the rule that ARCHIVED tasks are hidden from list_tasks by default while counts.archived still reflects the true total — an easy contract to paraphrase wrongly, so keep the expected shapes byte-identical. Note tools.test.ts also has a separate cross-cutting `describe('ARCHIVED status')` block: that one belongs to SLICE 4 and goes to lifecycleFixes.test.ts. Do not move it here and do not merge it into these files — taking scope from a later slice breaks its file budget and its test-count accounting. Delete only the two named blocks. Run `npx vitest run src/tools/archiveTask.test.ts src/tools/archiveEpic.test.ts` and assert 9 tests pass (5+4).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveTask.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "MOVE get_pending_questions. Create getPendingQuestions.test.ts and move `describe('moe.get_pending_questions')` (7 its, ~192 lines) there from tools.test.ts, verbatim. This block covers the question/answer path over task comments — it exercises comment creation and the hasPendingQuestion flag, so it depends on the comment trimming cap (MAX_COMMENTS_PER_TASK) that the concurrent StateManager split is relocating to src/state/validators.ts along with the constant's re-export. The tests must keep passing unchanged; if they fail with an import error naming MAX_COMMENTS_PER_TASK, that is the other task mid-edit in the shared tree — re-run rather than 'fixing' it, and report it in the completion summary if it persists. Delete the block from tools.test.ts — 6 describes should now remain, which is exactly the set slice 4 owns. Run `npx vitest run src/tools/getPendingQuestions.test.ts` and assert 7 tests pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getPendingQuestions.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "FULL VERIFICATION. From packages/moe-daemon: (1) `npx tsc --noEmit` must exit 0 — a failure confined to src/state/** is the concurrent StateManager split mid-edit; re-run rather than 'fixing' it, and say so in the summary if it persists. (2) `npm run build` must emit cleanly. (3) `npx vitest run` — the `Tests   N passed` total must EQUAL the step-1 baseline exactly. A lower number means a describe was dropped in a move; a higher one means a block was pasted twice. If it differs, diff per-file counts against step 1 to find the file that gained or lost. (4) The failing-file list must be a subset of the step-1 baseline — zero NEW failures. (5) `grep -c \"^  describe(\" src/tools/tools.test.ts` must report 6 (15 after slice 2, minus this slice's 9). (6) Confirm the new and appended files account for exactly 63 moved `it`s. (7) Prove the mock hazard was actually avoided: `grep -n \"vi.mock\" src/tools/claimNextTask.contract.test.ts` must return NOTHING, and the 17 tests there must pass against the real computeDiskStateSignature. (8) `git status` must show exactly the 10 files this plan declares plus pre-existing unrelated dirt. Capture the exact vitest command and summary tail as the `verification` payload.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, then complete. Load the `adversarial-self-review` skill and read the diff as an attacker. Confirm by grepping, not from memory: (a) claimNextTask.contract.test.ts contains NO `vi.mock` and does not import ../util/diskState.js — this is the failure this slice was designed around, and it is invisible in a green run because the mocked tests would still pass; (b) no `const { state`, `const { testDir` or `const { moePath` destructure anywhere in the diff; (c) every `expect(` line in the moved regions is byte-identical to HEAD — in particular no MoeErrorCode assertion was loosened to a bare truthy check, and the claim-semantics assertions (missing-or-DEAD owner only, never idle time for WORKING/PLANNING; human-gated columns hard-rejected) survived exactly; (d) the cross-cutting `describe('ARCHIVED status')` block is still in tools.test.ts — it belongs to slice 4, and absorbing it here would break that slice's budget and accounting; (e) no test dropped or duplicated — restate the step-7 count equality and the 63-`it` accounting; (f) each new file passes when run ALONE, not just under the full suite — run claimNextTask.contract.test.ts and one other in isolation to prove temp-dir independence; (g) no unused imports carried over from tools.test.ts's import block. Then call moe.complete_task with the step-7 verification payload, stating plainly that claim_next_task landed in claimNextTask.contract.test.ts rather than as an append — with the hoisted-mock reason — and that tools.test.ts still holds 6 describes by design, since slice 4 (task-1b5fe0a007984e91bdfdbc9b2dd47933) owns deleting it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ]
+    }
+  ],
+  "status": "BACKLOG",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human requested taking an unblocked task; park this prerequisite-blocked slice until slice 1 lands the shared harness.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 2.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2555c4e750d34b808e0667a0550ceda3",
+      "author": "architect-98d69360",
+      "content": "DESTINATION CHANGE — claim_next_task goes to a NEW file, not an append (architect, 2026-07-31).\n\nThe task description says `'moe.claim_next_task' -> claimNextTask.test.ts (APPEND)`. That is wrong and would corrupt the moved tests. Planned destination is instead:\n\n  'moe.claim_next_task' (17 its) -> **claimNextTask.contract.test.ts (NEW)**\n\nWhy: claimNextTask.test.ts line 12 carries a hoisted, file-wide mock —\n\n    vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));\n\n`vi.mock` is hoisted and applies to every test in the file, so appending the block would run all 17 moved tests against a bare `vi.fn()` returning `undefined` instead of the real `computeDiskStateSignature`. Those tests currently exercise the REAL implementation (tools.test.ts neither imports nor mocks diskState). Claim routing consults disk-state freshness, so the mock changes behavior for the moved tests — the dangerous outcome being tests that still pass, for the wrong reason. That silently violates the epic's \"behavior-preserving\" rule and would not be visible in a green run.\n\n`claimNextTask.contract.test.ts` follows the repo's existing dotted-qualifier convention (`enforcement.integration.test.ts`, `governancePlaneV2.integration.test.ts`) and is still a per-tool file, so DoD items 1 and 2 both hold — arguably better, since \"do not collide with existing fixtures\" is satisfied by construction.\n\nFile budget unaffected: the append slot is simply spent on a new file instead. Slice 3 remains exactly 10 files.\n\nGENERALIZES TO SLICE 4 (task-1b5fe0a007984e91bdfdbc9b2dd47933): its append targets are addComment.test.ts and lifecycleFixes.test.ts. Audit both for hoisted `vi.mock` before appending, and split to a new file on any hit. A file-wide mock is invisible at the append site — you only see it by grepping the top of the destination.",
+      "timestamp": "2026-07-31T19:32:54.349Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T19:27:37.838Z",
-  "updatedAt": "2026-07-31T19:27:37.838Z"
+  "updatedAt": "2026-07-31T19:40:45.629Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T19:31:54.070Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 10
+  },
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T19:34:10.789Z",
+  "planningNotes": {
+    "approachesConsidered": "Appending claim_next_task into claimNextTask.test.ts as the task description specified — REJECTED after reading the destination: line 12 hoists `vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }))` file-wide, which would run all 17 moved tests against a stub returning undefined. Considered neutralizing it per-describe (vi.doUnmock / importActual in the factory) — both either fail against hoisted static imports or change the existing tests' behavior, so a separate unmocked file is the only genuinely behavior-preserving destination. Batching the small new-file blocks 2-3 per step keeps the plan at 8 steps while each step stays one reviewable concern; claim_next_task and get_pending_questions get their own steps on size alone.",
+    "codebaseInsights": "Measured before slices 1-2 run, so every line number is stale — address blocks by describe NAME. The `it` count per block does NOT go stale and is the move contract: create_team 4, claim_next_task 17, propose_rail 3, qa_approve 6, qa_reject 12, unblock_worker 5, archive_task 5, archive_epic 4, get_pending_questions 7. **Total 63 `it`s across 9 blocks, ~1078 lines — the largest of the four slices.** claim_next_task alone is 334 lines / 17 its. The harness from slice 1 (src/tools/__fixtures__/toolsHarness.ts) exposes testDir/moePath/state as GETTERS plus four stable destructurable helpers; see mem:daemon/tools-test-split-slices. claimNextTask.test.ts already holds three describes ('role-aware routing', 'one task per worker', 'stale handoff disk state') and qaReject.test.ts holds one ('qa_reject bounded escalation') — the moved blocks are additional top-level describes, not merges.",
+    "risks": "HOISTED MOCK — the defining hazard of this slice, recorded in full in this task's comment: claimNextTask.test.ts:12 mocks ../util/diskState.js for the WHOLE file. The moved claim_next_task block runs against the real implementation today. Appending would make 17 tests exercise `undefined` instead of a real signature, and the dangerous outcome is that they still PASS — wrong reason, invisible in a green run, violating the epic's behavior-preserving rule. Destination is therefore claimNextTask.contract.test.ts (NEW). Audit qaReject.test.ts the same way before appending into it.\nSTALE-BINDING TRAP (inherited): never `const { state } = h` — state is reassigned every beforeEach, so a destructured copy goes stale and later tests silently run against a dead StateManager. Only the four helper functions are safe to destructure.\nCLAIM SEMANTICS ARE SAFETY-CRITICAL: the moved block asserts that claimability keys strictly on the owner being missing or explicitly DEAD and NEVER on idle time for WORKING/PLANNING, and that claiming a human-gated column (BACKLOG/AWAITING_APPROVAL/DONE) is hard-rejected. Those assertions must survive byte-identical; a loosened expectation here removes the regression net for the exact bug the rule exists to prevent.\nCONCURRENT EDIT: task-1bc9d7a8 is moving isTaskClaimable and friends into src/state/workerStore.ts in the same working tree, behavior-identical. These tests must keep passing unchanged; a failure inside src/state/** mid-slice is that task's transient, not yours.\nDEPENDENCY: if src/tools/__fixtures__/toolsHarness.ts is missing, slice 1 has not landed — report_blocked, do NOT build a second harness.\nSHARED DIRTY TREE: `npm test` can be red from other tasks (mem:gotcha-shared-tree-red-suite). Baseline first; 'green' means no NEW failing file.\nNO DEDUPING: qa_approve/qa_reject coverage overlaps qaOwnership.test.ts and governanceFeatures.test.ts. Do not merge or drop anything that looks redundant — identical test count is the cross-slice DoD and slice 4 checks the final number against slice 1's recorded baseline.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+      "packages/moe-daemon/src/tools/qaReject.test.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 14400000
+  },
+  "planApprovedAt": "2026-07-31T19:34:10.837Z",
+  "contextFetchedBy": [
+    "worker-34a5d32d"
+  ],
+  "workStartedAt": "2026-07-31T19:40:30.405Z"
 }

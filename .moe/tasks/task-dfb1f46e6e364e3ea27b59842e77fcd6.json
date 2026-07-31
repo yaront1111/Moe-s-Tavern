@@ -10,8 +10,71 @@
     ".gitattributes linguist-generated paths updated"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE + REFERENCE INVENTORY. From packages/moe-daemon: (a) `npx tsc --noEmit` must exit 0; (b) `npx vitest run 2>&1 | tail -30` — record the `Tests   N passed` total and any failing files as the baseline. The fleet shares one uncommitted tree with several in-flight tasks, so pre-existing red may not be yours (mem:gotcha-shared-tree-red-suite); never stash or revert it. (c) `npm run test:coverage` and record the four global percentages — the coverage config's `include: ['src/**/*.ts']` still matches the new location, so these must be unchanged at the end; a shift means something other than a path moved. (d) Re-derive the reference inventory yourself rather than trusting this plan: `grep -rn \"util/initFiles\\|util/skillFiles\" --include=*.ts --include=*.json --include=*.md --include=*.yml --include=*.kts . | grep -v node_modules | grep -v /dist/` from the repo root. Expected hits: both generator scripts (outPath + header comment each), src/index.ts, src/tools/initProject.ts, the two test files, src/util/claudeHook.ts:117 (a comment), and .gitattributes:7-8. Also expected and OFF LIMITS: several .moe/tasks/*.json historical records — those are daemon-owned audit history with the daemon as sole writer; do not edit a single one. If the grep finds a reference this plan does not list, add it to your working list and say so in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "RE-POINT THE GENERATORS. In packages/moe-daemon/scripts/generate-init-files.ts change `outPath` (line 26) from path.join(__dirname, '..', 'src', 'util', 'initFiles.ts') to path.join(__dirname, '..', 'src', 'generated', 'initFiles.ts'), and update the header comment (line 3) that names the destination. Do the same in generate-skill-files.ts (outPath line 20, header comment line 4). Both scripts must create src/generated/ if it does not exist — add an fs.mkdirSync(path.dirname(outPath), { recursive: true }) before the writeFileSync, because a fresh clone runs prebuild before that directory exists and the current code relies on src/util/ already being there. That mkdir is the one behavioral addition in this task; everything else is a path string. Do NOT touch either generator's existing error handling — both fail loudly when a source doc under docs/roles/**, docs/agents/moe-*.md or docs/skills/** is missing, and that loud failure is what stops a silently-truncated vendored file from shipping. Do not change the sha-stamping or the console.log summaries beyond the path they print.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/scripts/generate-skill-files.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MOVE THE FILES AND PROVE THE GENERATORS AGREE. (a) `git mv packages/moe-daemon/src/util/initFiles.ts packages/moe-daemon/src/generated/initFiles.ts` and the same for skillFiles.ts. Use git mv, not copy-then-delete: skillFiles.ts is 31,417 lines, and without rename detection the diff becomes a 63k-line delete-plus-add that buries the two-line generator change from any reviewer. (b) Run `npm run prebuild` and then `git status` / `git diff` on the two moved files. The expected result is NO content diff — that simultaneously proves the generators now emit to the right place AND that the checked-in output was current. (c) If prebuild produces a CONTENT diff, stop: the vendored copy was already stale against docs/roles/**, docs/agents/moe-*.md or docs/skills/**, which means this 'pure path move' task would silently ship a content update QA is not reviewing. Report it in the completion summary as a finding, state exactly which file drifted and roughly how, and keep the regenerated content only if it is clearly the correct current output. (d) Confirm src/util/ no longer contains initFiles.ts or skillFiles.ts, and that src/generated/ contains exactly those two files and nothing else — the directory's invariant is that everything in it is generator output, which is why the two test files stay in src/util/.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "UPDATE THE IMPORT SITES AND THE STALE COMMENT. (a) src/index.ts lines 21-22: './util/initFiles.js' -> './generated/initFiles.js' and './util/skillFiles.js' -> './generated/skillFiles.js'. Note src/index.ts is excluded from the coverage config but NOT from tsc, so a mistake here surfaces as a build failure rather than a test failure — verify with tsc, not by assuming the suite would catch it. (b) src/tools/initProject.ts lines 6-7: '../util/initFiles.js' -> '../generated/initFiles.js' and the skillFiles equivalent. (c) src/util/initFiles.test.ts and src/util/skillFiles.test.ts: update their import paths to '../generated/…js'. These test files stay in src/util/ on purpose — add a one-line header comment to each naming the relocated subject (e.g. 'Tests packages/moe-daemon/src/generated/initFiles.ts; the subject is prebuild-generated, this test is not, which is why it does not live beside it'), so the split location reads as deliberate rather than as leftover. Change nothing else in either test. (d) src/util/claudeHook.ts line 117: the comment references 'util/initFiles.ts' — update it to 'generated/initFiles.ts'. It is only a comment, but leaving it is exactly the doc rot this task exists to remove. Run `npx tsc --noEmit` (must be 0) and `npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts` (both must pass).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts",
+        "packages/moe-daemon/src/util/skillFiles.test.ts",
+        "packages/moe-daemon/src/util/claudeHook.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "UPDATE .gitattributes — the fourth DoD item. In the repo-root .gitattributes, change lines 7-8 from packages/moe-daemon/src/util/initFiles.ts and .../src/util/skillFiles.ts to the src/generated/ paths, keeping `linguist-generated=true` on each. Keep the explanatory comment above them (it names the sources: docs/roles/**, docs/agents/moe-*.md, docs/skills/**) and update it if it references the old location. Mark the two files by EXACT PATH rather than globbing the whole src/generated/ directory: the paths are the authoritative statement of what is vendored output, and a directory glob would silently mismark anything a future task drops in there. Verify the attribute actually applies: `git check-attr linguist-generated packages/moe-daemon/src/generated/skillFiles.ts` must report `linguist-generated: true`, and the same for initFiles.ts. Also confirm the OLD paths no longer resolve — `git check-attr linguist-generated packages/moe-daemon/src/util/skillFiles.ts` should report `unspecified`, proving no stale rule was left behind.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".gitattributes"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "FULL VERIFICATION. From packages/moe-daemon: (1) `npx tsc --noEmit` must exit 0. (2) `npm run build` must emit cleanly — it runs prebuild first, so this also re-proves the generators write to the new path from a clean invocation, and the JetBrains and VS Code plugin builds hard-fail without dist/. (3) `npx vitest run` — the `Tests   N passed` total must equal the step-1 baseline and the failing-file list must be a subset of it (zero NEW failures). (4) `npm run test:coverage` — the four global percentages must match step 1; the coverage include glob `src/**/*.ts` matches both old and new locations, so any movement means something beyond a path changed and needs explaining, not accepting. (5) `grep -rn \"util/initFiles\\|util/skillFiles\" --include=*.ts --include=*.md --include=*.yml --include=*.kts packages/ scripts/ docs/ .gitattributes` must return NOTHING — note this grep deliberately excludes .moe/, whose historical task records legitimately still name the old paths and must not be touched. (6) `git status` must show the two moves recorded as RENAMES (R) rather than delete+add pairs, plus the other declared files. Capture the exact vitest command and its tail as the `verification` payload for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, then complete. Load the `adversarial-self-review` skill and read the diff as an attacker. Confirm by grepping, not from memory: (a) the two moved files show as git RENAMES with zero content change — if skillFiles.ts shows even one changed line, either the checked-in copy was stale (a finding to report explicitly, per step 3) or something re-serialized it; do not let a 31k-line file's content change ride along unexamined inside a path-move task; (b) no .moe/tasks/*.json was modified — `git status .moe/` must show nothing from you; those are daemon-owned audit history; (c) both generators create src/generated/ before writing, so a fresh clone's first `npm run build` succeeds — prove it by deleting src/generated/ and running `npm run prebuild`, then confirming both files reappear identical; (d) `git check-attr linguist-generated` reports true for both new paths and unspecified for both old ones; (e) no import anywhere still resolves to util/initFiles or util/skillFiles, and tsc agrees; (f) neither generator's failure path was altered — they must still fail loudly on a missing source doc, since a silent partial generation would ship a truncated vendored file to every IDE user; (g) the coverage percentages are unchanged, and the coverage config was NOT edited to exclude src/generated/ — that is a separate decision with its own measurement, deliberately out of scope here. Then call moe.complete_task with the step-6 verification payload, stating whether prebuild reproduced the checked-in files byte-for-byte.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +87,35 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.901Z",
-  "updatedAt": "2026-07-31T18:22:35.316Z"
+  "updatedAt": "2026-07-31T19:42:41.386Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T19:40:05.997Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 10
+  },
+  "contextFetchedBy": [
+    "architect-98d69360"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T19:42:41.333Z",
+  "planningNotes": {
+    "approachesConsidered": "Moving initFiles.test.ts / skillFiles.test.ts into src/generated/ alongside their subjects — rejected. The safest invariant for a directory named `generated/` is that EVERYTHING in it is generator output: it lets the dir be wiped and regenerated wholesale and marked linguist-generated as a unit. Handwritten tests living there would be collateral damage the first time someone adds a clean step to prebuild. The tests are 96 and 143 lines and do not pollute greps, which is the problem this task exists to solve, so they stay in src/util/ with a header comment pointing at the relocated subject. Also considered excluding src/generated/ from the coverage config — deliberately NOT doing it: coverage has 60% CI thresholds and dropping 31k generated lines out of the denominator would move every percentage, which is a separate decision needing its own measurement, not a silent rider on a path move.",
+    "codebaseInsights": "Sizes: skillFiles.ts 31,417 lines, initFiles.ts 627 — both pure prebuild output (`prebuild` = generate-init-files && generate-skill-files, package.json:50-52). COMPLETE reference inventory, grepped across ts/json/md/yml/kts: generate-init-files.ts writes outPath at line 26 and names the path in its header comment at line 3; generate-skill-files.ts at lines 20 and 4; src/index.ts:21-22; src/tools/initProject.ts:6-7; src/util/initFiles.test.ts and src/util/skillFiles.test.ts (import paths); src/util/claudeHook.ts:117 mentions 'util/initFiles.ts' in a comment (doc rot if left); .gitattributes:7-8 mark both with linguist-generated=true. The task description says '3 importers' — it is actually 4 import sites plus the comment. tsconfig `include: [\"src\"]` already covers src/generated/, so NO tsconfig change is needed; vitest `include: ['src/**/*.test.ts']` is likewise unaffected. Coverage config uses `include: ['src/**/*.ts']`, which still matches the new location — percentages should not move.",
+    "risks": "STALE CHECKED-IN OUTPUT: the whole task assumes the committed initFiles.ts/skillFiles.ts match what the generators currently produce. If `npm run prebuild` after the move yields a byte DIFFERENT file, the checked-in copy was already stale and you are now mixing a content update into what QA will review as a pure path move. Stop and report that in the summary rather than quietly committing new content — the source docs under docs/roles/**, docs/agents/moe-*.md and docs/skills/** would have drifted from the vendored copy, which is a real finding.\nDO NOT EDIT .moe/tasks/*.json: several historical task records mention the old paths. They are daemon-owned history, the daemon is their sole writer, and rewriting them by hand corrupts the audit trail. Leave every one of them alone.\nsrc/index.ts IS EXCLUDED FROM COVERAGE (`exclude: ['src/**/*.test.ts', 'src/index.ts']`) but not from tsc — a broken import there fails the build, not the coverage gate, so verify with tsc rather than assuming the test run would catch it.\nGIT RENAME DETECTION: skillFiles.ts is 31k lines; use `git mv` so the change records as a rename rather than a 31k-line delete plus a 31k-line add. A reviewer facing a 63k-line diff cannot see the two-line generator change buried in it.\nERROR HANDLING: writeInitFiles/writeSkillFiles create directories and write files conditionally, and both generators fail loudly if a source doc is missing. Do not touch that logic while re-pointing paths — this task changes WHERE output lands, nothing about how failures are handled.\nSHARED DIRTY TREE: the fleet works in one uncommitted tree — the StateManager split (task-1bc9d7a8) and three tools.test.ts slices are in flight. `npm test` may be red from them (mem:gotcha-shared-tree-red-suite). Baseline first; 'green' means no NEW failing file. Never stash or revert another task's work.",
+    "keyFiles": [
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts",
+      "packages/moe-daemon/src/util/skillFiles.ts",
+      "packages/moe-daemon/src/util/initFiles.ts",
+      ".gitattributes"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 5400000
+  },
+  "planApprovedAt": "2026-07-31T19:42:41.386Z"
 }

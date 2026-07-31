@@ -10,9 +10,83 @@
     "full suite green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-98d69360",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE. From packages/moe-daemon: (a) run `npx vitest run 2>&1 | tail -30` and record BOTH the exact `Tests   N passed` / `Test Files  M passed` summary lines AND the list of any failing files. The fleet shares one uncommitted working tree (governance-plane-v2 edits, plus the StateManager split now WORKING under task-1bc9d7a899724caa87d1df962658e1f6), so pre-existing red is possible and is NOT yours — see serena memory gotcha-shared-tree-red-suite. That baseline is what every later 'green' claim in this task is measured against. (b) Immediately post the recorded `Tests N passed` number to this task with moe.add_comment — slice 4's DoD compares the final count against it long after this session ends, so it must survive outside your context. (c) Confirm `npx tsc --noEmit` exits 0. (d) Re-confirm the eight describe blocks this slice owns are the ones at lines 162-791 of tools.test.ts (get_context, submit_plan, check_approval, heartbeat, start_step, complete_step, complete_task, report_blocked) and that 24 others remain — those belong to slices 2-4, do not touch them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "EXTRACT THE SHARED HARNESS — the keystone step; slices 2, 3 and 4 all import what you build here. Create packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts exporting `export interface ToolsHarness` and `export function useToolsHarness(): ToolsHarness`. useToolsHarness registers its OWN vitest beforeEach (mkdtemp into os.tmpdir() with the existing 'moe-tools-test-' prefix, derive moePath, construct `new StateManager({ projectPath: testDir })`) and afterEach (vi.restoreAllMocks() then fs.rmSync(testDir, { recursive: true, force: true })), and returns a handle. CRITICAL SHAPE: testDir, moePath and state are reassigned on every beforeEach, so expose them as GETTERS over module-private mutable refs — `get state() { return current.state; }` — never as snapshot properties; a value captured once goes stale after the first test and every later test silently runs against a dead StateManager. The four helpers (setupMoeFolder, createEpic, createTask, createWorker) are stable functions that read those refs internally, so they CAN be handed out by value and destructured at a call site. Move all four bodies verbatim from tools.test.ts lines 47-149, including the comment explaining why setupMoeFolder writes a real file.ts (submit_plan rejects affectedFiles that do not exist under the project root). Error handling: wrap the rmSync teardown in try/catch that reports the failing path — on Windows a lingering file handle throws EBUSY even with force:true, which would cascade an unrelated failure into the next test file; this is the ONE deliberate deviation from a pure move in this task and must be flagged in the completion summary. Then rewire tools.test.ts itself to use the harness: delete the inline fixture, add `const h = useToolsHarness();` plus a destructure of the four stable helpers inside the outer describe, and rewrite the three mutable references — bare `state` -> `h.state`, `testDir` -> `h.testDir`, `moePath` -> `h.moePath` — across ALL 32 describes. Do NOT rewrite `createTaskTool` / `createEpicTool` (imports) while rewriting `createTask(` / `createEpic(` (helpers); anchor on the call paren. Run `npx vitest run src/tools/tools.test.ts` and assert its own test count is unchanged from baseline. This step proves the harness before a single describe moves.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MOVE THE THREE NEW-FILE DESCRIBES. Create getContext.test.ts, checkApproval.test.ts and heartbeat.test.ts in packages/moe-daemon/src/tools/, each following the existing colocated pattern (claimNextTask.test.ts is the reference). Move 'moe.get_context' (was lines 162-371), 'moe.check_approval' (429-488) and 'moe.heartbeat' (489-541) out of tools.test.ts into them, one describe per file, bodies and assertions VERBATIM — the only edits permitted are the import header, `const h = useToolsHarness();` plus the helper destructure, and the h.-prefixed mutable references established in step 2. Each new file imports only the tool factory it exercises (getContextTool / checkApprovalTool / heartbeatTool) plus whatever schema types its assertions name — do not copy tools.test.ts's full 38-line import block into each file; unused imports are noise the next reader has to disprove. Delete each moved block from tools.test.ts as you go, leaving 29 describes there. Run `npx vitest run src/tools/getContext.test.ts src/tools/checkApproval.test.ts src/tools/heartbeat.test.ts src/tools/tools.test.ts` and assert the summed test count equals what those four files' worth of describes contributed at baseline.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.test.ts",
+        "packages/moe-daemon/src/tools/checkApproval.test.ts",
+        "packages/moe-daemon/src/tools/heartbeat.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "APPEND start_step AND complete_step. Move 'moe.start_step' (was 542-575) into the existing startStep.test.ts and 'moe.complete_step' (576-689) into the existing completeStep.test.ts. Both destination files already have their OWN local fixtures — append the moved block as a TOP-LEVEL describe with its own `const h = useToolsHarness();`, do not nest it inside the file's existing describe or let it capture that file's local helpers. Before destructuring the harness helpers, grep each destination for an existing `createTask` / `createEpic` / `createWorker` / `state` binding; where one exists, skip the destructure and call `h.createTask(...)` explicitly rather than shadowing. Two useToolsHarness() calls in one file are fine — each registers its own beforeEach/afterEach pair scoped to its own describe — but confirm the destination's existing fixture still tears down its own temp dir independently; a shared temp dir between the two would make test order matter. Assertions unchanged. Delete both blocks from tools.test.ts (27 describes remain). Run `npx vitest run src/tools/startStep.test.ts src/tools/completeStep.test.ts` and confirm each file's count rose by exactly the moved block's test count.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "APPEND complete_task AND report_blocked. Move 'moe.complete_task' (was 690-759) into the existing completeTask.test.ts and 'moe.report_blocked' (760-791) into the existing reportBlocked.test.ts, using the same top-level-describe + own-harness + no-shadowing rules as the previous step. Note reportBlocked.test.ts is newly added in the current uncommitted working tree — read it fully before appending so you match its conventions rather than the older files'. completeTask.test.ts covers the `verification: { command, exitCode, outputTail? }` contract; the moved block may assert overlapping behavior — that is fine, do NOT dedupe, merge or delete a test that looks redundant. 'Identical test count' is a DoD item across all four slices, and a judgement call about redundancy here silently breaks slice 4's accounting. Assertions unchanged. Delete both blocks from tools.test.ts (25 describes remain). Run `npx vitest run src/tools/completeTask.test.ts src/tools/reportBlocked.test.ts` and confirm the per-file counts rose by exactly the moved amounts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "APPEND submit_plan. Move 'moe.submit_plan' (was 372-428) into the existing submitPlan.test.ts — at 1033 lines the largest destination in this slice — as a top-level describe with its own useToolsHarness(), same no-shadowing rules. submitPlan.test.ts already covers the plan-size gate and the affectedFiles-existence gate; the moved block relies on setupMoeFolder writing a real file.ts under the project root precisely because that existence gate rejects phantom paths (see the comment carried over in step 2), so confirm the moved tests still pass against the harness's temp project rather than assuming the destination file's own fixture provides it. Assertions unchanged. Delete the block from tools.test.ts — 24 describes remain, which is exactly the set slices 2, 3 and 4 own. Run `npx vitest run src/tools/submitPlan.test.ts` and confirm its count rose by exactly the moved amount.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "FULL VERIFICATION. From packages/moe-daemon: (1) `npx tsc --noEmit` must exit 0 — if it fails only inside src/state/**, that is the concurrent StateManager split (task-1bc9d7a8) mid-edit in the shared tree, not this slice; re-run rather than 'fixing' it, and if it persists say so in the completion summary instead of touching those files. (2) `npm run build` must emit cleanly. (3) `npx vitest run` — assert the `Tests   N passed` total EQUALS the step-1 baseline number exactly. Not 'about the same': a smaller number means a describe was dropped in a move, a larger one means a block got pasted twice. If it differs, diff the per-file counts against baseline to find which file gained or lost, and fix the move. (4) Assert the failing-file list is a subset of the step-1 baseline — zero NEW failures. (5) `grep -c '^  describe(' src/tools/tools.test.ts` must report 24. (6) `git status` must show exactly the 10 files this plan declares, plus the pre-existing unrelated dirt that was already there when you started. Capture the exact vitest command and its summary tail as the `verification` payload for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, then complete. Load the `adversarial-self-review` skill and read the diff as an attacker. Confirm by grepping, not from memory: (a) the harness exposes testDir/moePath/state as GETTERS — grep the diff for any `const { state`, `const { testDir` or `const { moePath` destructure, which would capture a stale pre-beforeEach value and make later tests run against a dead StateManager; (b) no assertion text changed — `git diff` the moved regions against HEAD and confirm every `expect(` line is byte-identical, only fixture references were re-pointed; (c) no test was silently dropped or duplicated — the step-7 count equality is the proof, restate the number; (d) no `createTaskTool`/`createEpicTool` identifier got caught by a helper find/replace; (e) each append target's two harness instances tear down independent temp dirs, so the file passes when run alone AND under the full suite — run one appended file in isolation to prove it; (f) the ONLY deviation from a pure move is the try/catch error handling around the harness rmSync teardown — confirm nothing else changed behavior, and name that deviation explicitly in the completion summary so QA does not read it as unflagged scope creep. Then add a header comment to __fixtures__/toolsHarness.ts stating it is the shared fixture for ALL colocated tool tests and that slices 2-4 depend on it, so nobody re-inlines a fixture later. Finally call moe.complete_task with the step-7 verification payload, and state plainly in the summary that tools.test.ts still holds 24 describes by design — DoD item 1 belongs to slice 4 (task-1b5fe0a007984e91bdfdbc9b2dd47933), as recorded in this task's scope re-cut comment.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": "worker-d7f1347d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -31,11 +105,35 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.241Z",
-  "updatedAt": "2026-07-31T19:28:03.653Z",
+  "updatedAt": "2026-07-31T19:37:36.853Z",
   "metrics": {
-    "firstClaimAt": "2026-07-31T18:35:30.405Z"
+    "firstClaimAt": "2026-07-31T18:35:30.405Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 10
   },
   "contextFetchedBy": [
-    "architect-98d69360"
-  ]
+    "architect-98d69360",
+    "worker-d7f1347d"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T19:29:47.562Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) One task for the whole split — impossible: ~30 destination files against a 10-file hard cap, and per-tool file count IS the deliverable so no merge shrinks it. (2) Raising settings.taskSizing.maxDistinctFiles fleet-wide (optionally reverting at the end) — offered and rejected by the human; the gate stays as-is. (3) 4 sequenced sibling slices — chosen. Slice 1 (this task) extracts the harness first because slices 2-4 all import it; their planned step 1 checks for it and reports blocked rather than duplicating it. (4) Harness as a plain exported object literal — rejected: `state` is reassigned every beforeEach, so a snapshot property goes stale after the first test and every later test silently runs against a dead StateManager. Getters over module-private refs are the only correct shape.",
+    "codebaseInsights": "tools.test.ts is 3147 lines: ONE outer `describe('MCP Tools')` wrapping a 120-line fixture (lines 42-161) and 32 sibling describe blocks. The fixture is a closure over three MUTABLE bindings (testDir, moePath, state) reassigned in beforeEach, plus four stable helper functions (setupMoeFolder, createEpic, createTask, createWorker) that capture them. That mutable/stable split is the whole design constraint for the harness: the helpers can be handed out by value, the three bindings CANNOT. Measured describe boundaries (pre-edit, this slice owns the first eight): get_context 162-371, submit_plan 372-428, check_approval 429-488, heartbeat 489-541, start_step 542-575, complete_step 576-689, complete_task 690-759, report_blocked 760-791. Remaining 24 blocks belong to slices 2-4 — do not touch them. `npx tsc --noEmit` in packages/moe-daemon is currently EXIT=0. All five append targets in this slice already exist and carry their own local fixtures; the newer colocated files (claimNextTask.test.ts, chatWait.test.ts) are the naming pattern to imitate.",
+    "risks": "SCOPE RE-CUT: DoD item 1 ('tools.test.ts deleted or reduced to shared-fixture helpers only') belongs to slice 4, NOT this task — tools.test.ts is deliberately still populated (24 describes) when this slice lands. The re-scope is recorded as a task comment because architects have no update_task tool. QA should judge against the comment.\nSTALE-BINDING TRAP: expose testDir / moePath / state as GETTERS on the harness. A destructured `const { state } = h` at module scope captures the pre-beforeEach value forever. The four helper FUNCTIONS are stable and may be destructured; the three bindings may not. Get this wrong and tests fail in a confusing, order-dependent way.\nIDENTIFIER COLLISION: the fixture helpers `createEpic` / `createTask` sit alongside imports named `createEpicTool` / `createTaskTool` in the same file. Any find/replace must anchor on the call paren and must not rewrite the *Tool identifiers. Separately, the five append targets have their own local fixtures — check each for an existing `createTask`/`state` before destructuring, and fall back to `h.createTask(...)` where it collides.\nTEST-COUNT ACCOUNTING: 'no lost tests' is only provable against a recorded number. Capture the pre-split `Tests N passed` line in step 1 and put it in a task comment — slice 4's DoD checks the final count against it, and by then this session is long gone.\nSHARED DIRTY TREE: the fleet works in one uncommitted tree (governance-plane-v2 edits, plus the StateManager split now in WORKING under task-1bc9d7a8). `npm test` can be red from other tasks — see mem:gotcha-shared-tree-red-suite. Baseline in step 1; 'green' means no NEW failing file. Never stash or revert another task's work.\nCONCURRENT EDIT: task-1bc9d7a8 (StateManager split) is WORKING in the same tree and rewrites src/state/**. This slice only touches src/tools/** and imports StateManager's unchanged public surface, so they should not collide — but if `npx tsc --noEmit` breaks with a state/* error mid-slice, that is the other task's transient, not yours: re-run rather than 'fixing' it.\nONE DELIBERATE DEVIATION from pure-move: the harness teardown gets try/catch error handling around fs.rmSync (Windows file locks can throw EBUSY even with force:true, cascading an unrelated failure into the next test file). Call it out in the completion summary so QA does not read it as unflagged scope creep. It must be the ONLY deviation.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "packages/moe-daemon/src/tools/lifecycleFixes.test.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 10800000
+  },
+  "planApprovedAt": "2026-07-31T19:29:47.620Z"
 }

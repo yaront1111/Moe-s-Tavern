@@ -10,8 +10,126 @@
     "buildPlugin succeeds"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE. (a) Ensure the build prerequisites exist: `packages/moe-daemon` and `packages/moe-proxy` each need BOTH dist/ and node_modules/, or ./gradlew buildPlugin hard-fails for reasons unrelated to this task — run npm install + npm run build in each if missing. (b) From moe-jetbrains run `./gradlew test` and record the result; it is a CI merge gate and must be green before you start, so a pre-existing failure is something to report, not to inherit. (c) Run `./gradlew buildPlugin` and confirm it succeeds. (d) Record `wc -l src/main/kotlin/com/moe/services/MoeProjectService.kt` (expect 1734) — the DoD target is under 900, so you need to shed ~835 net. (e) Read MoeProjectServiceTest.kt in full: it uses plain JUnit 4 with NO IntelliJ fixture, faking IdeaProject through a dynamic reflection Proxy and reaching a private field via daemonRegistrationForTest(). That is the pattern the new supervisor test must follow, and it is why the supervisor takes a plain String basePath rather than an IdeaProject. (f) Note that Serena has no Kotlin LSP for this project — navigate by grep, and move functions by SYMBOL NAME never by line range, because dispose() (1551-1617) sits between isPortOpen and killSpawnedDaemon and must stay on MoeProjectService.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "Baseline: daemon/proxy node_modules and dist existed. Initial buildPlugin exposed stale daemon dist due concurrent src/state edits; rebuilt packages/moe-daemon successfully, then moe-jetbrains `.\\gradlew.bat test` and `.\\gradlew.bat buildPlugin` both passed. MoeProjectService.kt is 1734 lines. Read MoeProjectServiceTest.kt fully: plain JUnit 4, dynamic IdeaProject proxy, reflection into daemonRegistration, synchronous invokeLater seam. Confirmed dispose() is between isPortOpen and killSpawnedDaemon; symbol-name moves required. Pre-existing unrelated dirt is confined to .moe task files and packages/moe-daemon/src/state/**.",
+      "startedAt": "2026-07-31T19:41:22.672Z",
+      "completedAt": "2026-07-31T19:42:13.127Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "EXTRACT MoeDaemonSupervisor — the DoD's core ask. Create moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt and move these functions BY NAME, bodies verbatim: readDaemonInfo, ensureDaemonRunning, ensureMoeInitialized, buildDaemonCommand, buildDirectDaemonCommand, resolveLocalDaemonScript, resolveGlobalConfigDaemonScript, resolveBundledDaemonScript, findInParents, resolveNodeExecutable, findNodeFromWhere, findNodeViaWhich, resolveInstalledDaemonCommand, isWindows, isProcessAlive, isPortOpen, killSpawnedDaemon. Move the fields they own too: spawnedDaemonProcess, daemonSpawnAttempts, maxDaemonSpawnAttempts, lastDaemonStartAttemptAt, daemonStartCooldownMs, and the PORT_CHECK_TIMEOUT_MS companion constant (keep its `moe.portCheckTimeoutMs` system-property override). DO NOT move dispose() — it sits between isPortOpen and killSpawnedDaemon in the source and belongs to the service. Constructor shape, designed for headless unit tests: `class MoeDaemonSupervisor(private val basePath: String, private val projectName: String, private val onStatus: (Boolean, String) -> Unit = { _, _ -> }, private val portProbe: (Int, Int) -> Boolean = ::defaultPortProbe, private val processAliveProbe: (Int) -> Boolean = ::defaultProcessAliveProbe, private val processStarter: (ProcessBuilder) -> Process = { it.start() })`. The defaults must reproduce today's behavior exactly; the seams exist so step 3 can test spawn logic without spawning anything. Those two IdeaProject couplings are the only ones: project.basePath/project.name become constructor params, and the `publishStatus(false, ...)` in ensureDaemonRunning's catch becomes onStatus. Preserve verbatim: the spawn try/catch that returns false instead of throwing; the daemon-drain Thread that swallows exceptions to avoid a Windows ~4KB pipe deadlock; killSpawnedDaemon clearing the shared reference BEFORE the kill and re-checking identity in finally (a double-kill race fix); the isWindows() cmd-/c vs bash -lc branch; the PATH prepend using File.pathSeparator. Then wire MoeProjectService to it: hold one supervisor instance, and route the CONNECT PATH's existing calls through it — isProcessAlive/isPortOpen at the connect and retry sites, the spawnedDaemonProcess read, and the daemonSpawnAttempts resets — via public supervisor methods plus a resetSpawnBackoff(). Do NOT leave a second copy of isPortOpen behind. Keep public delegating methods for ensureDaemonRunning(), getDaemonInfo() and restartDaemon() with identical signatures, because MoeToolWindowPanel.kt calls the latter two. Run `./gradlew test` — green, including the reflection-based existing test.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "Extracted daemon discovery/spawn/backoff/process teardown into MoeDaemonSupervisor and wired every connect/retry/dispose/restart path through it. Existing public ensureDaemonRunning/getDaemonInfo/restartDaemon signatures remain. Exactly one isPortOpen/isProcessAlive definition remains. Preserved process-reference clearing, drain-thread exception swallowing, cross-platform command/PATH behavior, and port timeout property. Added one necessary constructor seam beyond the planned shape (`wslAgentsEnabled`) because both moved command builders call TerminalAgentLauncher.isWslAgentsEnabled(project); the service injects the original project-based behavior while headless tests default false. `.\\gradlew.bat test --stacktrace` passed (an earlier forced-rerun hit a transient Gradle EOF after compilation; immediate foreground rerun passed).",
+      "startedAt": "2026-07-31T19:42:19.475Z",
+      "completedAt": "2026-07-31T19:46:28.877Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "UNIT-TEST THE SUPERVISOR — the second DoD item ('a dedicated class with its own unit tests'). Create moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt as plain JUnit 4, no IntelliJ fixture, following MoeProjectServiceTest's style. Construct the supervisor over a JUnit TemporaryFolder and injected fakes so nothing real is spawned or probed. Cover, with assertions that fail if the logic is removed: (1) readDaemonInfo returns null when .moe/daemon.json is absent; (2) readDaemonInfo parses a well-formed file; (3) readDaemonInfo DELETES the file and returns null when its projectPath points at a different project — the stale-daemon.json branch, and assert the file is actually gone, not just that null came back; (4) readDaemonInfo returns null rather than throwing on malformed JSON — that error handling is why a corrupt file cannot wedge project open; (5) ensureDaemonRunning returns false WITHOUT starting a process when the probes report a live PID on an open port — assert the fake processStarter was never invoked; (6) it refuses to spawn once daemonSpawnAttempts hits maxDaemonSpawnAttempts; (7) it refuses to spawn again inside the cooldown window; (8) on a spawn exception it returns false and invokes onStatus(false, message) instead of propagating; (9) killSpawnedDaemon is idempotent and safe with no process — call it twice against a fake Process and assert destroy happened once; (10) findInParents locates a file in an ancestor within maxDepth and gives up beyond it. Use a fake Process (a small stub class or a real short-lived one) rather than mocking frameworks — the module has none beyond JUnit 4. Do not test resolveNodeExecutable's `where`/`which` subprocess path; it is environment-dependent and belongs to the runIde smoke, not a unit test. Run `./gradlew test` and confirm the new tests run and pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Added 10 plain JUnit 4 supervisor tests using TemporaryFolder, injected probes/starter, and a small FakeProcess. Coverage includes absent/valid/stale/malformed daemon.json; live-daemon no-spawn; attempt cap; cooldown; spawn-error status callback; idempotent kill; ancestor depth. Targeted forced run passed, and XML confirms tests=10 skipped=0 failures=0 errors=0. Full `.\\gradlew.bat test` also passed.",
+      "startedAt": "2026-07-31T19:46:32.416Z",
+      "completedAt": "2026-07-31T19:47:53.925Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "EXTRACT MoeMessageDispatcher — the biggest single shed. Create moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt and move handleMessage (~375 lines, the largest function in the file), applyMessageOnEdt, and the whole publish* family (publishState, publishStatus, publishError, publishChatMessage, publishChatMessages, publishPins, publishPinCreated, publishPinRemoved, publishPinToggled, publishDecisions, publishDecisionProposed, publishDecisionResolved, publishActivityLog, publishMetrics), bodies verbatim. The dispatcher owns the listener list and the EDT hop: construct it with the listeners collection (or the service handle) plus the invokeLater function, so the invokeLaterForTests seam the service already exposes keeps working — that seam is what lets the existing test assert a status publish synchronously, so breaking it breaks MoeProjectServiceTest. Keep the CopyOnWriteArrayList semantics and the safeAsString() JsonElement helper next to whichever side still needs it. MoeProjectService keeps addListener/removeListener/getListenerCount as delegating methods (getListenerCount is asserted in tests) and reduces its WS onMessage hook to a single dispatcher.handle(message) call. handleMessage is a long when/branch over message types: do not reorder branches, do not merge duplicated-looking ones, and keep every unknown-type fallback — an unrecognized message must stay a no-op rather than throwing on the WS thread, which is error handling that keeps a daemon-version mismatch from killing the board connection. Run `./gradlew test` — green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "Extracted the complete message-type switch, EDT application guard, listener CopyOnWriteArrayList, and publish fan-out into MoeMessageDispatcher. MoeProjectService delegates listener APIs, status/error publishing, and WS messages; its existing synchronous invokeLater test seam is injected. State mutation, project-mismatch recovery, notification routing, daemon-shutdown handling, and unknown-type no-op semantics remain. `.\\gradlew.bat test --rerun-tasks` passed. MoeProjectService is now 867 lines.",
+      "startedAt": "2026-07-31T19:47:59.611Z",
+      "completedAt": "2026-07-31T19:50:01.674Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "EXTRACT THE LISTENER INTERFACE AND THE OUTBOUND COMMANDS. (a) Move the `interface MoeStateListener` declaration (currently trailing MoeProjectService.kt after the class body) into its own moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt, verbatim, same package — so no import changes anywhere. A public interface in its own file is the Kotlin norm and this one is implemented across the toolwindow. (b) Create MoeCommandSender.kt and move the ~30 outbound command methods there: updateTaskStatus, updateTaskDetails, deleteTask, deleteEpic, updateSettings, updateEpicStatus, updateEpicDetails, approveTask, releaseTask, rejectTask, reopenTask, addTaskComment, archiveDoneTasks, createTask, createEpic, requestChannels, requestMessages, sendChatMessage, requestPins, pinMessage, unpinMessage, togglePinDone, requestDecisions, approveDecision, rejectDecision, requestActivityLog, requestMetrics, approveProposal, rejectProposal — plus ensureConnected and sendMessage. Construct it with the send seam and the connected check; MoeProjectService keeps a one-line delegating method for EVERY one of them with an identical signature, INCLUDING default parameter values (releaseTask's reason: String? = null, requestMessages' limit: Int = 50, createTask's priority: String = \"MEDIUM\", requestActivityLog's limit: Int = 100, and the others). MoeToolWindowPanel and the rest of the UI call these directly and must not be touched — a dropped default turns a compiling call site into a compile error, which is the most likely way this step breaks the build. Run `./gradlew test` and `./gradlew buildPlugin` — both green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "Moved MoeStateListener verbatim to its own file. Extracted all 29 outbound public commands plus connection guard/message serialization into MoeCommandSender. MoeProjectService retains all signatures/defaults as delegating methods (release reason=null, requestMessages limit=50, createTask priority=MEDIUM, createEpic defaults, requestActivityLog limit=100, and metrics defaults). WS internal GET_STATE/refresh uses a private delegating sendMessage, so serialization has one implementation. MoeCommandSender is 293 lines. `.\\gradlew.bat test` passed; after refreshing concurrently-stale daemon dist, `.\\gradlew.bat buildPlugin` passed.",
+      "startedAt": "2026-07-31T19:50:06.347Z",
+      "completedAt": "2026-07-31T19:53:20.686Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY THE DoD NUMBERS. (a) `wc -l src/main/kotlin/com/moe/services/MoeProjectService.kt` must be under 900 (projected ~724). If it is 900 or above, the remaining lever is moving the connect/reconnect/disconnect/timer block into a MoeWsConnection class — but measure first and report the actual number before doing more surgery; do not pre-emptively split further. (b) `./gradlew test` must be green, and the run must include MoeDaemonSupervisorTest — confirm the new tests actually executed rather than being silently skipped by a source-set or naming mismatch; a test file that never runs satisfies no DoD item. (c) `./gradlew buildPlugin` must succeed and produce the zip under build/distributions/. (d) `wc -l` all files in services/ and record the table. (e) If MoeProjectServiceTest needed any edit to keep compiling — its reflection into a private field, or its Proxy's defaultReturn coverage for basePath/name — state exactly what changed and why; adjusting a test to match moved internals is legitimate here, weakening an assertion is not. (f) `git status` must show only the files this plan declares. Capture the exact gradle commands and their tails as the `verification` payload for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+      ],
+      "note": "DoD verification: MoeProjectService.kt is 596 lines (<900). Services table: MoeCommandSender 293, MoeDaemonSupervisor 452, MoeMessageDispatcher 525, MoeNotificationService 120, MoeProjectService 596, MoeStateListener 25. Fresh `.\\gradlew.bat test --rerun-tasks` exited 0; XML confirms MoeDaemonSupervisorTest tests=10 skipped=0 failures=0 errors=0. Fresh daemon build plus `.\\gradlew.bat buildPlugin` exited 0 and build/distributions/moe-jetbrains-0.6.0.zip exists. MoeProjectServiceTest.kt was not edited. Scoped status shows exactly the six declared task files; unrelated shared-tree dirt remains in .moe/tasks and packages/moe-daemon/src/state/**.",
+      "startedAt": "2026-07-31T19:53:24.312Z",
+      "completedAt": "2026-07-31T19:54:42.998Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "runIde SMOKE TEST — the task explicitly requires it and JetBrains is the primary IDE, so unit tests alone do not cover the paths this refactor most endangers: daemon spawn, WS connect, and board fan-out all run only in a live IDE. From moe-jetbrains run `./gradlew runIde`, open a project containing .moe/, and confirm by observation: (1) the daemon auto-spawns on project open — check .moe/daemon.json appears with a live PID, which exercises the moved ensureDaemonRunning end to end including the real node resolution that step 3 deliberately did not unit-test; (2) the Moe tool window opens and the board populates all five columns over the WS connection, proving MoeMessageDispatcher's handleMessage still routes STATE messages; (3) the daemon-restart action in the tool window works, proving the restartDaemon delegation and the spawn-backoff reset; (4) a board action that sends an outbound command (move a task between columns) round-trips, proving MoeCommandSender's delegation kept its payloads intact; (5) closing the project kills the spawned daemon when it is the last project on that PID, proving killSpawnedDaemon still runs from dispose(). If you CANNOT run a GUI in this environment, do not claim any of this passed — say plainly in the completion summary which of the five checks were not performed, so QA can decide whether to gate on a human running them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "GUI runIde smoke could not be performed from this non-interactive one-shot shell. I did not launch a background IDE or claim visual results. Unperformed and left for human/QA: (1) daemon auto-spawn/live daemon.json, (2) five-column board population, (3) restart action, (4) board-command round trip, (5) last-project-close daemon kill. Automated Gradle tests and buildPlugin are green, but they do not substitute for these five observations.",
+      "startedAt": "2026-07-31T19:54:50.157Z",
+      "completedAt": "2026-07-31T19:54:58.912Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, then complete. Load the `adversarial-self-review` skill and read the diff as an attacker. Confirm by grepping, not from memory: (a) dispose() is still on MoeProjectService and still calls killSpawnedDaemon through the supervisor — it sat inside the daemon block's line range and a range-based move would have silently taken the whole teardown path with it; (b) there is exactly ONE definition each of isPortOpen and isProcessAlive in the module — the connect path calls the supervisor's rather than keeping a private copy, since two copies drift; (c) every delegating method kept its default parameter values (releaseTask reason, requestMessages limit, createTask priority, requestActivityLog limit) — grep the diff against HEAD signature by signature, because a dropped default is a compile error at a UI call site you never opened; (d) the race and deadlock fixes survived verbatim: killSpawnedDaemon clears the shared reference BEFORE the kill and re-checks identity in finally, and the daemon-drain thread still swallows exceptions to prevent the Windows pipe deadlock; (e) the cross-platform branches are untouched — cmd /c vs bash -lc, where vs which, File.pathSeparator in the PATH prepend; (f) handleMessage's unknown-message-type fallback still no-ops instead of throwing on the WS thread; (g) MoeToolWindowPanel.kt is NOT in the diff. Then add a header comment to MoeDaemonSupervisor.kt stating it owns the spawned process lifecycle and that MoeDaemonRegistrationTracker deliberately stays on MoeProjectService (it tracks the CONNECTED daemon's PID for shared-daemon lifecycle, not spawn/kill), so the next reader does not merge them. Finally call moe.complete_task with the step-6 verification payload, and state the runIde results from step 7 honestly — including any check you could not perform.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Adversarial review complete. dispose() remains on MoeProjectService and delegates both reference release and kill to the supervisor. Grep found exactly one isPortOpen/isProcessAlive definition. All 29 outbound service signatures match HEAD, including every default. Spawn reference is cleared before kill and identity-checked in finally; drain exceptions remain swallowed. cmd/bash, where/which, and File.pathSeparator branches remain. Dispatcher message branch order matches HEAD (37 labels) and has no else, so unknown types no-op. MoeToolWindowPanel and MoeProjectServiceTest are untouched; listener interface is byte-identical. Added the required supervisor/tracker ownership header. Fixed one review finding by preserving failed process-probe error handling and adding its 11th supervisor test. Fresh combined daemon build + Gradle test + buildPlugin exited 0; supervisor XML: 11 tests, 0 skipped/failures/errors. GUI smoke remains honestly unperformed.",
+      "startedAt": "2026-07-31T19:55:07.557Z",
+      "completedAt": "2026-07-31T19:58:50.757Z"
+    }
+  ],
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +142,62 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.572Z",
-  "updatedAt": "2026-07-31T18:22:34.259Z"
+  "updatedAt": "2026-07-31T20:01:32.199Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T19:36:17.525Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 8
+  },
+  "contextFetchedBy": [
+    "architect-98d69360",
+    "worker-34a5d32d"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T19:40:00.305Z",
+  "planningNotes": {
+    "approachesConsidered": "Extracting only the daemon supervisor (the DoD's explicit ask) — insufficient on arithmetic: it sheds ~373 net and leaves the file at ~1361, well over the 900 line budget. Adding the message dispatcher gets to ~906, still marginally over, which is why MoeStateListener.kt and MoeCommandSender.kt are in the plan rather than held as contingency: guessing wrong on a 6-line margin means a rejected task. Projected landing ~724. Considered moving the ~30 outbound command methods to a class the UI calls directly (service.commands.updateTaskStatus) — rejected: it would change MoeToolWindowPanel and every other UI call site for no structural gain; delegating stubs keep the blast radius at zero. Considered moving MoeDaemonRegistrationTracker into the supervisor since it is daemon-adjacent — rejected: it tracks the CONNECTED daemon's PID for shared-daemon lifecycle, not spawn/kill, and the existing test reflects into it. Out of scope; leave it on MoeProjectService.",
+    "codebaseInsights": "MoeProjectService.kt is 1734 lines. Measured block map (pre-edit; treat as stale once you start editing and work by SYMBOL name): imports 1-49; class decl + fields + invokeLater 50-105; connect/reconnect/disconnect/timers 106-364; listeners + applyMessageOnEdt 365-400; handleMessage 401-775 (375 lines, the single biggest function); ensureConnected + ~30 outbound command methods 776-1031; sendMessage/closeQuietly 1032-1058; publish* fan-out 1059-1142; requestActivityLog/requestMetrics/approveProposal/rejectProposal 1143-1179; readDaemonInfo 1180-1200; DAEMON SUPERVISION 1202-1550 and 1618-1640; **dispose() 1551-1617 sits INSIDE that range and must NOT move**; startAutoRefresh/stopAutoRefresh/scheduleReconnect/getters/restartDaemon/companion 1641-1717; MoeStateListener interface 1719-1734. Serena has no Kotlin LSP for this project (TypeScript only) — navigate by grep, not find_symbol. Tests are plain JUnit 4 (junit:junit:4.13.2, build.gradle.kts:86) with NO IntelliJ test fixture: MoeProjectServiceTest builds a dynamic reflection Proxy for IdeaProject and reaches a private field via a `daemonRegistrationForTest()` helper. That is the pattern to imitate — and the reason the new supervisor must be constructible from a plain String basePath, not an IdeaProject.",
+    "risks": "dispose() IS INSIDE THE DAEMON LINE RANGE (1551-1617, between isPortOpen and killSpawnedDaemon). Moving it by line range instead of by symbol name breaks the whole service teardown path. Move functions by NAME.\nTHE CONNECT PATH SHARES DAEMON STATE: lines 136, 163, 171, 180 and 245 call isProcessAlive/isPortOpen and read spawnedDaemonProcess / reset daemonSpawnAttempts. Those must become calls through the supervisor's public API, not duplicated helpers. Two copies of isPortOpen is the failure that looks harmless and drifts.\nPUBLIC API USED BY THE UI: MoeToolWindowPanel.kt calls service.restartDaemon() (lines 187, 401) and service.getDaemonInfo() (line 373). Both must keep working with identical signatures via delegating methods — do not touch the toolwindow.\nEXISTING TEST REACHES PRIVATES BY REFLECTION: MoeProjectServiceTest's daemonRegistrationForTest() reflects into a private field, and its fakeProject() is a dynamic Proxy whose defaultReturn() must answer basePath/name. Moving fields can break it in a way the compiler will not catch — run ./gradlew test after every step, not just at the end.\nERROR HANDLING IS THE DAEMON PATH'S ACTUAL CONTRACT: the spawn try/catch publishes a status and returns false rather than throwing; the stdout drain thread swallows exceptions to prevent a Windows ~4KB pipe deadlock; killSpawnedDaemon clears the shared reference BEFORE the kill attempt to prevent a double-kill race and re-checks identity in its finally block. Copy all of it verbatim — these are race and deadlock fixes, not defensive noise.\nCROSS-PLATFORM: buildDaemonCommand branches on isWindows() between cmd /c and bash -lc, resolveNodeExecutable shells out to `where` vs `which`, and PATH is prepended with File.pathSeparator. Do not normalize any of it while moving.\nBUILD PREREQ: ./gradlew buildPlugin hard-fails unless packages/moe-daemon AND packages/moe-proxy each have dist/ AND node_modules/. Build both first or the DoD's buildPlugin item fails for an unrelated reason.\nrunIde IS A GUI SMOKE TEST and cannot be automated here. If you cannot run it, say so plainly in the completion summary rather than claiming it passed.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/build.gradle.kts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 14400000
+  },
+  "planApprovedAt": "2026-07-31T19:40:00.353Z",
+  "workStartedAt": "2026-07-31T19:41:22.672Z",
+  "reviewStartedAt": "2026-07-31T20:01:32.199Z",
+  "verification": {
+    "command": "Push-Location '..\\packages\\moe-daemon'; npm run build; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Pop-Location; .\\gradlew.bat --no-daemon '-Dkotlin.compiler.execution.strategy=in-process' test buildPlugin --rerun-tasks",
+    "exitCode": 0,
+    "outputTail": "> Task :compileTestKotlin\n> Task :prepareSandbox\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses\n> Task :instrumentTestCode SKIPPED\n> Task :test\n> Task :buildSearchableOptions SKIPPED\n> Task :prepareJarSearchableOptions SKIPPED\n> Task :jarSearchableOptions SKIPPED\n> Task :buildPlugin\n\nBUILD SUCCESSFUL in 59s\n13 actionable tasks: 13 executed\nMoeDaemonSupervisorTest XML: tests=\"11\" skipped=\"0\" failures=\"0\" errors=\"0\".\nMoeProjectService.kt: 596 lines. build/distributions/moe-jetbrains-0.6.0.zip exists.",
+    "reportedAt": "2026-07-31T20:01:32.199Z"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
+  ]
 }

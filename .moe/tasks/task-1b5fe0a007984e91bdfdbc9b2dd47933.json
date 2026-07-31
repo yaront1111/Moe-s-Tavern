@@ -10,13 +10,83 @@
     "npx tsc --noEmit clean and full suite green with zero new failures vs. the pre-slice baseline"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GUARD + BASELINE + RECOVER THE EPIC BASELINE NUMBER. (a) Confirm packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts exists; if not, slice 1 has not landed — moe.report_blocked. Read it: testDir/moePath/state are GETTERS (never destructure — state is reassigned each beforeEach, so a copy goes stale and later tests silently run against a dead StateManager); setupMoeFolder/createEpic/createTask/createWorker are stable and destructurable. (b) `grep -c \"^  describe(\" src/tools/tools.test.ts` must report exactly 6. More than 6 means slice 2 (task-a1e3148993f7413a900a44dce9429beb) or slice 3 (task-9cf38eb411b640c5a528866f9dc58a3b) has not landed — report_blocked; absorbing their scope breaks their file budgets and test-count accounting. Confirm the 6 are get_activity_log, Task comments, WIP limits, ARCHIVED status, Task timestamps and chat token budgets. (c) RECOVER THE EPIC BASELINE: read the comments on task-4f541baba99b458da14bf8250d88af4c via moe.get_context and extract the pre-split `Tests N passed` number slice 1 recorded there. This slice's DoD — 'no test lost across all four slices' — is provable ONLY against that number, and once tools.test.ts is deleted, reconstructing what it held is git archaeology. If the comment is missing, report_blocked rather than deleting on an unverifiable count. (d) MOCK AUDIT: `grep -n \"vi.mock\" src/tools/addComment.test.ts src/tools/lifecycleFixes.test.ts` — expected to return nothing (verified pre-slice), which is what makes these safe append targets; a hit means route that block to a new *.contract.test.ts instead, as slice 3 did for claim_next_task. (e) Run `npx vitest run 2>&1 | tail -30`, record this slice's own baseline count and failing files (pre-existing red may belong to another task in the shared tree — mem:gotcha-shared-tree-red-suite; never stash or revert it). (f) `npx tsc --noEmit` must exit 0. (g) Record each block's `it` count. Expected: get_activity_log 9, Task comments 9, WIP limits 2, ARCHIVED status 9, Task timestamps 7, chat token budgets 8 — 44 total.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ],
+      "startedAt": "2026-07-31T19:40:57.625Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MOVE get_activity_log. Create packages/moe-daemon/src/tools/getActivityLog.test.ts and move `describe('moe.get_activity_log')` (9 its) there from tools.test.ts, bodies and assertions VERBATIM. Permitted edits only: import header, `const h = useToolsHarness();`, helper destructure, and h.-prefixed mutable references. Import only getActivityLogTool plus the schema types the assertions name — do not copy tools.test.ts's whole import block. These tests cover the activity log's windowing and its deliberately best-effort error handling: reading a missing or mid-line-truncated activity.log returns an empty window rather than throwing, because a failed audit read must never fail the caller. Keep those expectations exact — an assertion loosened to a bare truthy check would still pass while removing the only guard on that behavior. The concurrent StateManager split (task-1bc9d7a8) is relocating appendActivity/getActivityLogWindow into src/state/activityLog.ts behavior-identically, so these tests must keep passing unchanged; a failure inside src/state/** is that task's transient, not yours. Delete the block from tools.test.ts. Run `npx vitest run src/tools/getActivityLog.test.ts` and assert 9 tests pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getActivityLog.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "APPEND Task comments. Move `describe('Task comments')` (9 its) into the existing addComment.test.ts as a TOP-LEVEL describe with its own `const h = useToolsHarness();`. Do not nest it inside that file's existing describe, do not let it capture that file's local fixture, and do not refactor the existing tests onto the harness — scope this task does not own. Before destructuring the harness helpers, grep addComment.test.ts for an existing `createTask` / `createEpic` / `createWorker` / `state` binding; where one exists, skip the destructure and call `h.createTask(...)` explicitly rather than shadowing. This block asserts the MAX_COMMENTS_PER_TASK trimming cap, which the concurrent StateManager split is moving to src/state/validators.ts along with a re-export of the constant from StateManager — if these tests fail with an import error naming MAX_COMMENTS_PER_TASK, that is the other task mid-edit in the shared tree; re-run rather than 'fixing' it, and report it in the summary if it persists. Confirm the two fixtures allocate INDEPENDENT temp dirs by running `npx vitest run src/tools/addComment.test.ts` ALONE and then under the full directory, asserting the same count both ways — a shared temp dir makes test order matter and surfaces as a flake days later. Delete the block from tools.test.ts. Assert addComment.test.ts's count rose by exactly 9.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/addComment.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "APPEND THE THREE CROSS-CUTTING BLOCKS. Move `describe('WIP limits')` (2 its), `describe('ARCHIVED status')` (9 its) and `describe('Task timestamps')` (7 its) into the existing lifecycleFixes.test.ts — 18 its total. These are not per-tool, which is why lifecycleFixes.test.ts is their home rather than a new file. Append each as its OWN top-level describe with its OWN `const h = useToolsHarness();` — do not merge the three into one describe, do not nest them inside the file's existing describe, and do not refactor the file's existing tests onto the harness. Same no-shadowing rule: grep for existing `createTask` / `state` bindings and fall back to explicit `h.` calls where they collide. ARCHIVED status asserts that archived tasks are hidden from list_tasks by default while counts.archived still reflects the true total; Task timestamps asserts the lifecycle stamps (planSubmittedAt, planApprovedAt, workStartedAt, reviewStartedAt, completedAt) are set on the right transitions. Both overlap this file's existing coverage — do NOT merge, dedupe or drop anything that looks redundant. This is the LAST chance to preserve them: once tools.test.ts is deleted in step 6, anything dropped is gone permanently and the cross-slice count check will fail with no way to identify what went missing. Delete all three blocks from tools.test.ts — 1 describe remains. Run `npx vitest run src/tools/lifecycleFixes.test.ts` alone and under the full directory, asserting its count rose by exactly 18 both ways.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/lifecycleFixes.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "MOVE chat token budgets TO ONE NEW FILE. Create packages/moe-daemon/src/tools/chatTokenBudgets.test.ts and move `describe('chat token budgets')` (8 its) there whole, verbatim. Take the task description's second option deliberately: the block is genuinely cross-tool — its tests decompose as chat_read 3, chat_wait 3, chat_resync 1, chat_send 1 — so splitting it four ways would orphan 1-3 tests per file and fragment a single coherent contract (payload truncation and cursor-advance budgets, tested through four entry points). Two of those four destinations would also be appends into files with their own fixtures (chatWait.test.ts is 386 lines), adding collision risk for no benefit. One file keeps the theme intact and costs one slot instead of four. Import all four tool factories it exercises (chatReadTool, chatWaitTool, chatResyncTool, chatSendTool) plus the schema types the assertions name. Preserve the cursor-advance assertions exactly — 'does not advance cursors or clear unread for messages omitted by the global limit' is a subtle correctness property where a paraphrased assertion passes trivially, and the chat_send test asserts a coded rejection of the reserved 'system' sender, which is error handling that must keep its exact expected error, not a bare truthy check. Delete the block from tools.test.ts — 0 describes remain. Run `npx vitest run src/tools/chatTokenBudgets.test.ts` and assert 8 tests pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatTokenBudgets.test.ts",
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "DELETE tools.test.ts AND PROVE THE CROSS-SLICE ACCOUNTING. (a) Confirm tools.test.ts now contains zero describe blocks — only the outer wrapper and imports remain. If ANY describe is left, stop: something was missed and deleting now loses it permanently. (b) Delete packages/moe-daemon/src/tools/tools.test.ts with `git rm`. (c) Run `npx vitest run` and compare the `Tests   N passed` total against the EPIC baseline recovered in step 1 from slice 1's task comment — not against this slice's own step-1 baseline. They must be EQUAL. This single comparison is the only proof that no test was lost across all four slices, and it is this task's third DoD item. (d) If the number is LOWER, do not delete-and-move-on: `git show HEAD:packages/moe-daemon/src/tools/tools.test.ts` still has the original, so diff its `it` titles against the union of titles now present across the destination files to identify exactly which test vanished, then restore it. If HIGHER, a block was pasted twice — find the duplicate title. (e) Post the final number to this task with moe.add_comment alongside the epic baseline so the epic's outcome is auditable after this session ends. (f) Confirm no source file imports tools.test.ts (nothing should — test files are entry points, not modules) and that `npm run build` still emits cleanly.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "FULL VERIFICATION. From packages/moe-daemon: (1) `npx tsc --noEmit` must exit 0 — a failure confined to src/state/** is the concurrent StateManager split (task-1bc9d7a8) mid-edit in the shared tree; re-run rather than 'fixing' it, and say so in the summary if it persists. (2) `npm run build` must emit cleanly. (3) `npx vitest run` — total equals the epic baseline (re-assert step 6's result) and the failing-file list is a subset of this slice's step-1 baseline, i.e. zero NEW failures. (4) `ls src/tools/tools.test.ts` must report no such file. (5) Confirm this slice's destinations account for exactly 44 moved `it`s: getActivityLog.test.ts 9, addComment.test.ts +9, lifecycleFixes.test.ts +18, chatTokenBudgets.test.ts 8. (6) Run each of the two new files and both append targets in ISOLATION as well as under the full suite, asserting identical counts — temp-dir independence between a file's own fixture and the shared harness is the failure mode that only shows up under a different run order. (7) `git status` must show exactly the 5 files this plan declares (one of them a deletion) plus pre-existing unrelated dirt. Capture the exact vitest command and summary tail as the `verification` payload for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/tools.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, then close the epic thread. Load the `adversarial-self-review` skill and read the diff as an attacker. Confirm by grepping, not from memory: (a) the epic-baseline count equality actually holds — restate both numbers, since this is the one DoD item that cannot be re-checked after tools.test.ts is gone; (b) no `const { state`, `const { testDir` or `const { moePath` destructure anywhere in the diff; (c) every `expect(` line in the moved regions is byte-identical to `git show HEAD:packages/moe-daemon/src/tools/tools.test.ts` — in particular the cursor-advance assertions in chat token budgets and the coded error handling expectations (reserved 'system' sender rejection, empty activity-log window on a missing file) were not loosened to truthy checks; (d) lifecycleFixes.test.ts holds the three cross-cutting blocks as three SEPARATE top-level describes, not merged into one; (e) no test dropped or duplicated — the 44-`it` accounting adds up per destination; (f) every touched file passes when run ALONE; (g) no unused imports carried over. Then add a short header comment to chatTokenBudgets.test.ts explaining why these four tools' budget tests live together, so a future reader does not 'tidy' them back into per-tool files and re-fragment the contract. Finally call moe.complete_task with the step-7 verification payload, stating: tools.test.ts is deleted, all 32 original describe blocks are accounted for across slices 1-4, and the final test count matches the epic baseline slice 1 recorded.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatTokenBudgets.test.ts"
+      ]
+    }
+  ],
+  "status": "BACKLOG",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human requested taking an unblocked task; park this closer until all prerequisite slices land.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -24,5 +94,33 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T19:27:53.233Z",
-  "updatedAt": "2026-07-31T19:27:53.233Z"
+  "updatedAt": "2026-07-31T19:41:09.503Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T19:34:16.671Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 5
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T19:35:51.359Z",
+  "planningNotes": {
+    "approachesConsidered": "Splitting 'chat token budgets' across chatRead/chatWait/chatResync/chatSend test files as the description's first option — rejected: its 8 tests decompose 3/3/1/1 across four tools, so four files would each get 1-3 orphaned tests while fragmenting a coherent theme (payload truncation and cursor-advance budgets are one contract tested through four entry points). chatWait.test.ts already exists and has its own fixture, so two of the four would also be appends. One chatTokenBudgets.test.ts keeps the theme intact, costs one file slot instead of four, and the task description explicitly authorizes it. The three cross-cutting blocks (WIP limits, ARCHIVED status, Task timestamps) are not per-tool at all and go to lifecycleFixes.test.ts, which already holds lifecycle-level coverage — that is the intended home per the task description, not a new file.",
+    "codebaseInsights": "Measured before slices 1-3 run, so line numbers are stale — address blocks by describe NAME. Per-block `it` counts are the move contract and do not go stale: get_activity_log 9, Task comments 9, WIP limits 2, ARCHIVED status 9, Task timestamps 7, chat token budgets 8. **Total 44 `it`s across 6 blocks, ~813 lines.** MOCK AUDIT ALREADY RUN: neither addComment.test.ts nor lifecycleFixes.test.ts contains any `vi.mock`, so both are safe append targets — unlike claimNextTask.test.ts, which forced slice 3 to route to a new file (see that task's comment). 'chat token budgets' decomposes by tool as chat_read 3, chat_wait 3, chat_resync 1, chat_send 1 — genuinely cross-tool, which is why the task description's escape hatch applies and it lands in ONE new chatTokenBudgets.test.ts rather than being sprayed across four files.",
+    "risks": "THIS SLICE CLOSES THE EPIC — its DoD is the only place 'no test lost across all four slices' is actually proven. Slice 1 recorded the pre-split `Tests N passed` number in a comment on task-4f541baba99b458da14bf8250d88af4c; read it before deleting anything, and if that comment is missing, report_blocked rather than deleting tools.test.ts on an unverifiable count. Deleting the file is irreversible in the sense that reconstructing which tests it held becomes a git-archaeology exercise.\nORDERING: depends on slices 1, 2 AND 3. Step 1 hard-checks that exactly 6 describes remain in tools.test.ts. If more remain, an earlier slice has not landed — report_blocked; absorbing its scope breaks that slice's own file budget and test-count accounting.\nSTALE-BINDING TRAP (inherited): never `const { state } = h` — state is reassigned every beforeEach, so a destructured copy goes stale and later tests silently run against a dead StateManager. Only the four helper functions are safe to destructure.\nlifecycleFixes.test.ts receives THREE blocks (18 its). Append each as its own top-level describe with its own useToolsHarness(); do not merge them into one, do not nest them inside the file's existing describe, and do not refactor the file's existing tests onto the harness.\nCONCURRENT EDIT: task-1bc9d7a8 is moving the activity log to src/state/activityLog.ts and comment trimming to src/state/validators.ts in the same working tree, behavior-identically. get_activity_log and Task comments tests must keep passing unchanged; a failure inside src/state/** mid-slice is that task's transient.\nNO DEDUPING, LAST CHANCE: ARCHIVED status and Task timestamps overlap coverage in lifecycleFixes.test.ts's existing tests. Anything dropped here is dropped permanently once tools.test.ts is gone.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/tools.test.ts",
+      "packages/moe-daemon/src/tools/__fixtures__/toolsHarness.ts",
+      "packages/moe-daemon/src/tools/lifecycleFixes.test.ts",
+      "packages/moe-daemon/src/tools/addComment.test.ts",
+      "packages/moe-daemon/src/tools/chatWait.test.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 10800000
+  },
+  "planApprovedAt": "2026-07-31T19:35:51.404Z",
+  "contextFetchedBy": [
+    "worker-34a5d32d"
+  ],
+  "workStartedAt": "2026-07-31T19:40:57.625Z"
 }
