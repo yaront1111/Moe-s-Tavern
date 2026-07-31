@@ -14,10 +14,11 @@
     {
       "stepId": "step-1",
       "description": "BASELINE + REFERENCE INVENTORY. From packages/moe-daemon: (a) `npx tsc --noEmit` must exit 0; (b) `npx vitest run 2>&1 | tail -30` — record the `Tests   N passed` total and any failing files as the baseline. The fleet shares one uncommitted tree with several in-flight tasks, so pre-existing red may not be yours (mem:gotcha-shared-tree-red-suite); never stash or revert it. (c) `npm run test:coverage` and record the four global percentages — the coverage config's `include: ['src/**/*.ts']` still matches the new location, so these must be unchanged at the end; a shift means something other than a path moved. (d) Re-derive the reference inventory yourself rather than trusting this plan: `grep -rn \"util/initFiles\\|util/skillFiles\" --include=*.ts --include=*.json --include=*.md --include=*.yml --include=*.kts . | grep -v node_modules | grep -v /dist/` from the repo root. Expected hits: both generator scripts (outPath + header comment each), src/index.ts, src/tools/initProject.ts, the two test files, src/util/claudeHook.ts:117 (a comment), and .gitattributes:7-8. Also expected and OFF LIMITS: several .moe/tasks/*.json historical records — those are daemon-owned audit history with the daemon as sole writer; do not edit a single one. If the grep finds a reference this plan does not list, add it to your working list and say so in the completion summary.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/index.ts"
-      ]
+      ],
+      "startedAt": "2026-07-31T20:33:21.061Z"
     },
     {
       "stepId": "step-2",
@@ -75,7 +76,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-34a5d32d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -87,14 +88,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.901Z",
-  "updatedAt": "2026-07-31T19:42:41.386Z",
+  "updatedAt": "2026-07-31T20:33:21.061Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T19:40:05.997Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 10
   },
   "contextFetchedBy": [
-    "architect-98d69360"
+    "architect-98d69360",
+    "worker-34a5d32d"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -117,5 +119,6 @@
   "budget": {
     "wallClockMs": 5400000
   },
-  "planApprovedAt": "2026-07-31T19:42:41.386Z"
+  "planApprovedAt": "2026-07-31T19:42:41.386Z",
+  "workStartedAt": "2026-07-31T20:33:21.061Z"
 }

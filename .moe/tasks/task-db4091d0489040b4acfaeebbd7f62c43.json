@@ -129,7 +129,7 @@
       "completedAt": "2026-07-31T19:58:50.757Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -142,16 +142,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.572Z",
-  "updatedAt": "2026-07-31T20:01:32.199Z",
+  "updatedAt": "2026-07-31T20:16:32.598Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T19:36:17.525Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-07-31T20:16:32.598Z",
+    "wallClockMs": 2415073
   },
   "contextFetchedBy": [
     "architect-98d69360",
-    "worker-34a5d32d"
+    "worker-34a5d32d",
+    "qa-04d1cb13"
   ],
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -199,5 +202,8 @@
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectServiceTest.kt"
-  ]
+  ],
+  "completedAt": "2026-07-31T20:16:32.598Z",
+  "reviewCompletedAt": "2026-07-31T20:16:32.598Z",
+  "reviewSummary": "APPROVED. Re-ran myself: `gradlew.bat test buildPlugin --rerun-tasks` -> BUILD SUCCESSFUL exit 0, 13/13 tasks executed. XML: MoeDaemonSupervisorTest tests=11 skipped=0 failures=0; 46 tests/6 classes, 0 failures; zip regenerated with bundled daemon+proxy. DoD: (1) MoeProjectService.kt 596 lines (<900); dispatcher 525/supervisor 457/sender 293. (2) MoeDaemonSupervisor is the dedicated spawn/kill class, 11 mutation-resistant JUnit4 tests over TemporaryFolder + injected probes/starter: starts==0 on live daemon, destroyCalls==1 on double kill, stale daemon.json actually deleted, statuses==[false to \"boom\"] on spawn throw, findInParents hit at depth 3 / null at 2; nothing real spawned. (3)(4) green above. Behavior preservation checked by normalized body diff vs HEAD~1, not by summary: handleMessage identical except 2 callback seams (disconnect+isManualDisconnect=false+scheduleReconnect; isManualDisconnect=true+stopAutoRefresh); 14 publish* bodies identical; 29 command bodies identical (cosmetic import only); supervisor bodies identical except injected seams; MoeStateListener.kt byte-identical. Public API: zero dropped/reshaped signatures, defaults intact (releaseTask null, requestMessages 50, createTask MEDIUM, requestActivityLog 100, archiveDoneTasks null, createEpic \"\"/emptyList). Exactly one isPortOpen/isProcessAlive/isWindows module-wide. dispose() still on the service, still kills via supervisor; kill clears the shared ref before destroy and re-checks identity in finally; drain thread still swallows; cmd /c vs bash -lc, where vs which, File.pathSeparator untouched; unknown types still no-op. Daemon-state call sites map 1:1 to original lines 171/180/245/1578/1703. MoeToolWindowPanel.kt and MoeProjectServiceTest.kt untouched. NOT VERIFIED, flagged for a human (not a DoD item; worker disclosed; no GUI here): the 5 runIde checks. Static wiring of all five matches HEAD~1."
 }

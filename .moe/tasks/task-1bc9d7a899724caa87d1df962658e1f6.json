@@ -196,8 +196,8 @@
       "completedAt": "2026-07-31T19:56:26.482Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-04d1cb13",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -206,15 +206,24 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-6528b90671d64ec1b0ec5ef440b9557a",
+      "author": "qa-04d1cb13",
+      "content": "QA full evidence (approval summary is capped at 2000 chars, so the detail lives here).\n\nDoD\n1. StateManager.ts = 1346 lines (<1500; 3654 at HEAD).\n2. No runtime import cycle. I mutation-tested the guard rather than trusting it: appended a real runtime `import { MAX_COMMENTS_PER_TASK } from './StateManager.js'` to validators.ts, stateModules.test.ts FAILED with `StateManager -> taskStore -> validators -> StateManager`; reverted, back to 3/3 green. The guard also asserts the graph has edges, so it cannot pass vacuously.\n3. `npx tsc --noEmit` exit 0. `npm run build` exit 0 (dist/ emits — both plugin builds hard-depend on it).\n4. `npx vitest run --exclude \"**/claudeHook*.test.ts\"` = 54 files / 851 tests, exit 0.\n\nBehaviour preservation — scripted diff vs `git show HEAD:.../StateManager.ts`, brace-matching every method body out of both trees and normalising ONLY `this.` -> `state.` plus the threaded `(state, ` handle argument:\n- 139 HEAD methods parsed, 135 bodies byte-identical, 0 missing, 0 reduced to a stub with no home.\n- The 4 deltas are call-site dependency narrowing and nothing else: validateSettingsUpdate(project, settings) / verifyWritePermissions(moePath) / migrateToV5FileSystem(moePath) / migrateToV6FileSystem(moePath) / normalizeProject(projectPath, raw) / cleanupStaleWaiters(state).\n- Note: the plan text specified `migrateToV5FileSystem(state)` and `normalizeProject(project)`. You passed the narrower moePath/projectPath instead. Accepted — strictly fewer deps, bodies verbatim.\n\nRails, all by script rather than by eye:\n- ALLOWLISTS: validateSettingsUpdate 65/65 string literals in identical ORDER, validateEpicUpdates 18/18, sanitizeImplementationPlan 15/15; bodies otherwise identical.\n- ERROR HANDLING exact across (new StateManager + the 8 modules) vs HEAD's class: `try {` 54->54, `catch (` 41->41, `catch {` 11->11, `finally {` 3->3.\n- PUBLIC API frozen: 0 methods removed, 0 signature changes. One addition — hasActiveTaskAssignment widened private->public.\n- MUTEX identity: no module constructs `new AsyncMutex`; messageMutexes is one readonly Map on the class; chatStore routes through state.getMessageMutex; writeEntity stayed a METHOD (StateManager.ts:847) so StateManager.test.ts:340's spy still intercepts.\n- TIMERS: every handle state.-qualified (the only bare hits are inside a comment); `.unref()` 3->3.\n- `nextStatusForRelease(owned, 'park')` alive at sweeps.ts:225. isTaskClaimable verbatim (missing-or-DEAD owner, never idle time). `as any` / `: any` count 0 -> 0. Header comment naming the 8 modules and the ownership invariant is present.\n- Scope: git status shows exactly the 10 declared files. The dirty moe-jetbrains/** Kotlin belongs to sibling task-db4091d0489040b4acfaeebbd7f62c43.\n\nTwo failures I did NOT charge to this diff\nsrc/util/claudeHook.test.ts and src/util/claudeHook.integration.test.ts fail here with `expected null to be +0`. `result.status === null` means spawnSync KILLED the child at its inner `timeout: 5000` — not a wrong exit code, and not an assertion about daemon state. Attribution: claudeHook.test.ts contains zero references to StateManager or state/; the integration test's one non-spawn case (init_project writes settings + both hook scripts, which DOES exercise StateManager) passes; the hook's moe-call.sh is a fake written by the test, so no daemon is involved. Measured on this box, `bash -lc` cold start is ~2.1s, and the test chains bash -> hook -> python -> a second bash inside a 5s budget. Confirmed flaky, not deterministic: 2 failures in the full run, 3 in those two files run alone.\n\nFor whoever owns that file (not you): the fix is raising the inner spawnSync `timeout` in runBashHook/runPowerShellHook to match the 30s it() budget already granted — do not relax the assertions. Recorded as serena memory gotcha-claudehook-inner-spawn-timeout; note it corrects moes-test-env-quirks, which credited the it() timeout with fixing this.",
+      "timestamp": "2026-07-31T20:07:07.685Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:46:56.880Z",
-  "updatedAt": "2026-07-31T19:57:17.008Z",
+  "updatedAt": "2026-07-31T20:07:19.132Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T18:22:41.307Z",
     "plannedStepCount": 12,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 12
+    "executedStepCount": 12,
+    "doneAt": "2026-07-31T20:07:19.132Z",
+    "wallClockMs": 6277825
   },
   "contextFetchedBy": [
     "architect-98d69360",
@@ -276,5 +285,8 @@
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/state/workerStore.ts",
     "packages/moe-daemon/src/state/stateModules.test.ts"
-  ]
+  ],
+  "completedAt": "2026-07-31T20:07:19.132Z",
+  "reviewCompletedAt": "2026-07-31T20:07:19.132Z",
+  "reviewSummary": "APPROVED — 4/4 DoD re-verified myself. Full evidence in task comment comment-6528b90.\n\n(1) StateManager.ts 1346 lines (<1500; 3654 at HEAD). (2) 8 modules, no runtime cycle — I mutation-tested the guard instead of trusting it: added a real runtime import of MAX_COMMENTS_PER_TASK from StateManager.js into validators.ts, stateModules.test.ts FAILED (\"StateManager -> taskStore -> validators -> StateManager\"); reverted, 3/3 green. It also asserts the graph has edges, so it cannot pass vacuously. (3) npx tsc --noEmit exit 0; npm run build exit 0. (4) npx vitest run --exclude \"**/claudeHook*.test.ts\" = 54 files / 851 tests, exit 0.\n\nScripted body diff vs git HEAD, normalising ONLY this.->state. and the threaded (state, arg: 139 HEAD methods, 135 byte-identical, 0 missing, 0 orphaned. The 4 deltas are call-site dependency narrowing only.\n\nRails by script, not by eye: ALLOWLISTS intact (validateSettingsUpdate 65/65 literals in identical ORDER, validateEpicUpdates 18/18, sanitizeImplementationPlan 15/15). ERROR HANDLING exact: try{ 54->54, catch( 41->41, catch{ 11->11, finally{ 3->3. PUBLIC API: 0 removed, 0 sig changes, 1 addition. MUTEX: no module does new AsyncMutex; writeEntity stayed a METHOD so StateManager.test.ts:340's spy still intercepts. TIMERS state.-qualified, .unref() 3->3. park arg alive sweeps.ts:225. isTaskClaimable verbatim. any-count 0->0. Scope = exactly the 10 declared files.\n\nNot charged to this diff: claudeHook.test.ts + .integration.test.ts fail \"expected null to be +0\" — status===null = spawnSync killed the child at its inner timeout:5000. They reference no state/ code and the integration test's non-spawn StateManager case passes; bash -lc costs ~2.1s here and the test chains bash->hook->python->bash inside 5s. Flaky: 2 fails full-run, 3 alone. See memory gotcha-claudehook-inner-spawn-timeout."
 }
