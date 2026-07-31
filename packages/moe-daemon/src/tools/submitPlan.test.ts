@@ -1031,3 +1031,68 @@ describe('budget seeding', () => {
     expect(state.getTask('task-size')!.budget?.wallClockMs).toBe(2 * PACE_PER_STEP_MS_DEFAULT);
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+
+describe('moe.submit_plan', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ status: 'PLANNING' });
+    await h.state.load();
+  });
+
+  it('submits a valid plan', async () => {
+    const tool = submitPlanTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      steps: [
+        { description: 'Step 1', affectedFiles: ['file.ts'] },
+        { description: 'Step 2', affectedFiles: [] },
+      ],
+    }, h.state) as { success: boolean; status: string; stepCount: number };
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(result.stepCount).toBe(2);
+
+    const task = h.state.getTask('task-1');
+    expect(task?.status).toBe('AWAITING_APPROVAL');
+    expect(task?.implementationPlan.length).toBe(2);
+  });
+
+  it('throws for non-existent task', async () => {
+    const tool = submitPlanTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'nonexistent', steps: [{ description: 'Step 1' }] }, h.state)
+    ).rejects.toThrow('Task not found');
+  });
+
+  it('throws for wrong task status', async () => {
+    await h.state.updateTask('task-1', { status: 'WORKING' });
+    const tool = submitPlanTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', steps: [{ description: 'Step 1' }] }, h.state)
+    ).rejects.toThrow('expected PLANNING');
+  });
+
+  it('throws for empty plan', async () => {
+    const tool = submitPlanTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', steps: [] }, h.state)
+    ).rejects.toThrow('plan cannot be empty');
+  });
+
+  it('rejects plan with forbidden pattern', async () => {
+    const tool = submitPlanTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', steps: [{ description: 'Run rm -rf /' }] }, h.state)
+    ).rejects.toThrow('Rail violation');
+  });
+});
+

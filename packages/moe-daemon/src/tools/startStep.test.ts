@@ -163,3 +163,46 @@ describe('moe.start_step ownership + ordering enforcement', () => {
     expect(result.success).toBe(true);
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+import { vi } from 'vitest';
+
+describe('moe.start_step', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      status: 'WORKING',
+      implementationPlan: [
+        { stepId: 'step-1', description: 'First step', status: 'PENDING', affectedFiles: [] },
+        { stepId: 'step-2', description: 'Second step', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+    await h.state.load();
+  });
+
+  it('marks step as IN_PROGRESS', async () => {
+    const tool = startStepTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, h.state) as { success: boolean; stepNumber: number };
+
+    expect(result.success).toBe(true);
+    expect(result.stepNumber).toBe(1);
+
+    const task = h.state.getTask('task-1');
+    expect(task?.implementationPlan[0].status).toBe('IN_PROGRESS');
+    expect(task?.implementationPlan[0].startedAt).toBeDefined();
+  });
+
+  it('throws for non-existent step', async () => {
+    const tool = startStepTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'nonexistent' }, h.state)
+    ).rejects.toThrow('STEP_NOT_FOUND');
+  });
+});
+

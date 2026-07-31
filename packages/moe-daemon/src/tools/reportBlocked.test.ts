@@ -217,3 +217,43 @@ describe('moe.report_blocked', () => {
     });
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+
+describe('moe.report_blocked', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ assignedWorkerId: 'worker-1' });
+    h.createWorker();
+    await h.state.load();
+  });
+
+  it('marks worker as blocked', async () => {
+    const tool = reportBlockedTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Need clarification',
+    }, h.state) as { success: boolean; workerStatus: string };
+
+    expect(result.success).toBe(true);
+    expect(result.workerStatus).toBe('BLOCKED');
+
+    const worker = h.state.getWorker('worker-1');
+    expect(worker?.status).toBe('BLOCKED');
+    expect(worker?.lastError).toBe('Need clarification');
+  });
+
+  it('throws for non-existent task', async () => {
+    const tool = reportBlockedTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'nonexistent', reason: 'test' }, h.state)
+    ).rejects.toThrow('Task not found');
+  });
+});
+

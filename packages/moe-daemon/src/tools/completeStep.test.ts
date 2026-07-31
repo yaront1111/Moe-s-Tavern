@@ -297,3 +297,126 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
     });
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+import { vi } from 'vitest';
+
+describe('moe.complete_step', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      status: 'WORKING',
+      implementationPlan: [
+        { stepId: 'step-1', description: 'First', status: 'IN_PROGRESS', affectedFiles: [] },
+        { stepId: 'step-2', description: 'Second', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+    await h.state.load();
+  });
+
+  it('marks step as COMPLETED and returns progress', async () => {
+    const tool = completeStepTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, h.state) as {
+      success: boolean;
+      progress: { completed: number; total: number; percentage: number };
+      nextStep: { stepId: string } | null;
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.progress.completed).toBe(1);
+    expect(result.progress.total).toBe(2);
+    expect(result.progress.percentage).toBe(50);
+    expect(result.nextStep?.stepId).toBe('step-2');
+  });
+
+  it('rejects completing a PENDING step before start_step', async () => {
+    const tool = completeStepTool(h.state);
+
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-2' }, h.state)
+    ).rejects.toMatchObject({
+      code: MoeErrorCode.INVALID_STATE,
+      context: { entity: 'Step', currentState: 'PENDING', expectedState: 'IN_PROGRESS' },
+    });
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-2' }, h.state)
+    ).rejects.toThrow('moe.start_step');
+
+    expect(h.state.getTask('task-1')?.implementationPlan[1].status).toBe('PENDING');
+    expect(h.state.getTask('task-1')?.stepsCompleted).toBeUndefined();
+  });
+
+  it('requires claimed workers to fetch context before complete_step', async () => {
+    await h.state.updateTask('task-1', { assignedWorkerId: 'worker-step', contextFetchedBy: [] });
+    const tool = completeStepTool(h.state);
+
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-step' }, h.state)
+    ).rejects.toThrow('before moe.complete_step');
+  });
+
+  it('returns null nextStep when all steps done', async () => {
+    await h.state.updateTask('task-1', {
+      implementationPlan: [
+        { stepId: 'step-1', description: 'First', status: 'IN_PROGRESS', affectedFiles: [] },
+      ],
+    });
+    const tool = completeStepTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, h.state) as { nextStep: null };
+    expect(result.nextStep).toBeNull();
+  });
+
+  it('stores note and modifiedFiles on the step', async () => {
+    const tool = completeStepTool(h.state);
+    await tool.handler({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      note: 'Used workaround for edge case',
+      modifiedFiles: ['src/foo.ts', 'src/bar.ts'],
+    }, h.state);
+
+    const task = h.state.getTask('task-1');
+    const step = task?.implementationPlan.find(s => s.stepId === 'step-1');
+    expect(step?.note).toBe('Used workaround for edge case');
+    expect(step?.modifiedFiles).toEqual(['src/foo.ts', 'src/bar.ts']);
+  });
+
+  it('does not set note or modifiedFiles when not provided', async () => {
+    const tool = completeStepTool(h.state);
+    await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, h.state);
+
+    const task = h.state.getTask('task-1');
+    const step = task?.implementationPlan.find(s => s.stepId === 'step-1');
+    expect(step?.note).toBeUndefined();
+    expect(step?.modifiedFiles).toBeUndefined();
+  });
+
+  it('refreshes worker lastActivityAt when completing a step', async () => {
+    await h.state.updateTask('task-1', { assignedWorkerId: 'worker-step', contextFetchedBy: ['worker-step'] });
+    await h.state.createWorker({
+      id: 'worker-step',
+      type: 'CLAUDE',
+      projectId: 'proj-test',
+      epicId: 'epic-1',
+      currentTaskId: 'task-1',
+      status: 'CODING',
+    });
+    const before = h.state.getWorker('worker-step')!.lastActivityAt;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const tool = completeStepTool(h.state);
+    await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-step' }, h.state);
+
+    const worker = h.state.getWorker('worker-step')!;
+    expect(new Date(worker.lastActivityAt).getTime()).toBeGreaterThan(new Date(before).getTime());
+    expect(worker.status).toBe('CODING');
+    expect(worker.currentTaskId).toBe('task-1');
+  });
+});
+

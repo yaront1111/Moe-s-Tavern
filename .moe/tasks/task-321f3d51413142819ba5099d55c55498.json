@@ -122,7 +122,7 @@
     }
   ],
   "status": "REVIEW",
-  "assignedWorkerId": "qa-04d1cb13",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -134,7 +134,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T20:33:59.212Z",
-  "updatedAt": "2026-07-31T22:04:59.207Z",
+  "updatedAt": "2026-07-31T23:43:51.161Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T20:35:39.150Z",
     "plannedStepCount": 7,
@@ -189,5 +189,16 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
     "docs/TROUBLESHOOTING.md"
+  ],
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Task is code-complete and committed as be2ce42 (working tree clean). Both silent-skip paths fixed: (1) the JetBrains launcher no longer passes -Interactive for workers, so the worker CLI exits at end_turn and the wrapper actually reaches its post-flight; (2) both wrappers resolve the final status with an exact get_context lookup instead of a truncatable unscoped list_tasks, with the epic-final check moved to an epic-scoped list_tasks. A failed lookup is now loud (WARN + PUSH-BLOCKED chat) and kept distinct from a genuine non-REVIEW status, which stays quiet. Verified: postflight.sh PASS, postflight.ps1 PASS (both were RED on the new truncation case before the fix), ./gradlew test BUILD SUCCESSFUL.",
+      "whatRemains": "QA review only. DoD item 2 (auto-commit fires in a live GUI-launched run, commit visible in git log) is NOT satisfied and must not be approved on the worker's word — it needs a human to close PyCharm, run scripts/install-all.ps1, reopen, and launch a worker from the Agents menu. The plugin zip is already built at moe-jetbrains/build/distributions/moe-jetbrains-0.6.0.zip.",
+      "pitfalls": "The approved plan's premise is wrong and the diff is wider than the plan: the list_tasks truncation is real and live (100 rows vs pagination.total 120) but did NOT cause the 2026-07-31 outage — all 8 tasks that reached DONE that day are order 1-10 and were verified on page 1. The actual cause was the interactive TUI. Also note get_context has two traps that the fake-proxy harness stub had been hiding: its task projection carries no epicId/order (the resolved epic comes back alongside), and an unknown taskId falls back to the CALLER's own current task instead of erroring — both are now guarded, see mem:gotcha-get-context-shape-and-fallback.",
+      "openQuestions": "Whether removing the worker TUI is acceptable long-term (user approved it this session; it restores what CLAUDE.md already documented). Two known limitations were left alone deliberately: auto-commit still keys on REVIEW only, so a QA approval landing before the post-flight would skip the commit; and concurrent workers still share one tree and one git add -A.",
+      "releasedAt": "2026-07-31T23:43:51.161Z",
+      "releasedBy": "worker-f5977052",
+      "reason": "qa-04d1cb13's CLI died 5 times in a row on this task and its wrapper hit the auto-resume cap and escalated to @governors (\"release_task to reassign\"). Cause is NOT this task: the transcripts are five byte-identical 30176-byte files ~33s apart, each ending in \"You've hit your monthly spend limit\". Releasing so the task is claimable by any QA once the limit is raised, instead of staying pinned to a wrapper that will never review it (its poll loop keeps lastActivityAt fresh, so the 30-min REVIEW self-heal would not fire)."
+    }
   ]
 }

@@ -110,3 +110,164 @@ describe('addCommentTool validation', () => {
     ).rejects.toThrow(`must be ${MAX_TASK_COMMENT_LENGTH} characters or fewer`);
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+import { vi } from 'vitest';
+import { MAX_COMMENTS_PER_TASK } from '../state/StateManager.js';
+
+describe('Task comments', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  const makeComments = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `comment-${i}`,
+      author: i % 2 === 0 ? 'human' : 'worker-1',
+      content: `Comment ${i}`,
+      timestamp: new Date(Date.now() + i).toISOString(),
+    }));
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING' });
+    await h.state.load();
+  });
+
+  it('adds a comment to a task', async () => {
+    const tool = addCommentTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      content: 'What does this feature do?',
+    }, h.state) as { success: boolean; commentId: string; totalComments: number };
+    expect(result.success).toBe(true);
+    expect(result.totalComments).toBe(1);
+    const task = h.state.getTask('task-1');
+    expect(task?.comments.length).toBe(1);
+    expect(task?.comments[0].content).toBe('What does this feature do?');
+    expect(task?.comments[0].author).toBe('agent');
+  });
+
+  it('uses workerId as author when provided', async () => {
+    const tool = addCommentTool(h.state);
+    await tool.handler({
+      taskId: 'task-1',
+      content: 'Response here',
+      workerId: 'worker-123',
+    }, h.state);
+    const task = h.state.getTask('task-1');
+    expect(task?.comments[0].author).toBe('worker-123');
+  });
+
+  it('preserves all comments when under limit', async () => {
+    await h.state.updateTask('task-1', { comments: makeComments(MAX_COMMENTS_PER_TASK - 1) });
+    const tool = addCommentTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      content: 'Newest under limit',
+    }, h.state) as { totalComments: number };
+
+    expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+    const task = h.state.getTask('task-1');
+    expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+    expect(task?.comments[0].content).toBe('Comment 0');
+    expect(task?.comments.at(-1)?.content).toBe('Newest under limit');
+  });
+
+  it('trims oldest comment when adding at limit', async () => {
+    await h.state.updateTask('task-1', { comments: makeComments(MAX_COMMENTS_PER_TASK) });
+    const tool = addCommentTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      content: 'Newest at limit',
+    }, h.state) as { totalComments: number };
+
+    expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+    const task = h.state.getTask('task-1');
+    expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+    expect(task?.comments.some((c) => c.content === 'Comment 0')).toBe(false);
+    expect(task?.comments[0].content).toBe('Comment 1');
+    expect(task?.comments.at(-1)?.content).toBe('Newest at limit');
+  });
+
+  it('trims task with 300 existing comments down to max preserving newest', async () => {
+    const task = h.state.getTask('task-1');
+    expect(task).toBeTruthy();
+    h.state.tasks.set('task-1', {
+      ...task!,
+      comments: makeComments(300),
+    });
+
+    const tool = addCommentTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      content: 'Newest with 300 existing',
+    }, h.state) as { totalComments: number };
+
+    expect(result.totalComments).toBe(MAX_COMMENTS_PER_TASK);
+    const updatedTask = h.state.getTask('task-1');
+    expect(updatedTask?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+    expect(updatedTask?.comments[0].content).toBe('Comment 101');
+    expect(updatedTask?.comments.at(-1)?.content).toBe('Newest with 300 existing');
+  });
+
+  it('handles null/undefined comments array gracefully', async () => {
+    const existing = h.state.getTask('task-1');
+    expect(existing).toBeTruthy();
+    h.state.tasks.set('task-1', {
+      ...existing!,
+      comments: null as unknown as Task['comments'],
+    });
+
+    const tool = addCommentTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      content: 'Comment on null comments',
+    }, h.state) as { totalComments: number };
+
+    expect(result.totalComments).toBe(1);
+    const task = h.state.getTask('task-1');
+    expect(task?.comments.length).toBe(1);
+    expect(task?.comments[0].content).toBe('Comment on null comments');
+  });
+
+  it('always preserves newest comments including newly added one', async () => {
+    const baseline = makeComments(MAX_COMMENTS_PER_TASK + 25);
+    const existing = h.state.getTask('task-1');
+    expect(existing).toBeTruthy();
+    h.state.tasks.set('task-1', {
+      ...existing!,
+      comments: baseline,
+    });
+
+    const tool = addCommentTool(h.state);
+    await tool.handler({
+      taskId: 'task-1',
+      content: 'Newest preserved',
+    }, h.state);
+
+    const task = h.state.getTask('task-1');
+    expect(task?.comments.length).toBe(MAX_COMMENTS_PER_TASK);
+    expect(task?.comments.some((c) => c.content === 'Comment 0')).toBe(false);
+    expect(task?.comments.some((c) => c.content === `Comment ${baseline.length - 1}`)).toBe(true);
+    expect(task?.comments.at(-1)?.content).toBe('Newest preserved');
+  });
+
+  it('rejects empty content', async () => {
+    const tool = addCommentTool(h.state);
+    await expect(tool.handler({
+      taskId: 'task-1',
+      content: '  ',
+    }, h.state)).rejects.toThrow();
+  });
+
+  it('rejects missing taskId', async () => {
+    const tool = addCommentTool(h.state);
+    await expect(tool.handler({
+      content: 'test',
+    }, h.state)).rejects.toThrow();
+  });
+});
+

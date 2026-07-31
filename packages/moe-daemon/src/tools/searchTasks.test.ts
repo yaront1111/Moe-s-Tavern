@@ -215,3 +215,107 @@ describe('searchTasksTool validation', () => {
     ).rejects.toThrow('Invalid limit: must be a finite number');
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+import { vi } from 'vitest';
+
+describe('moe.search_tasks', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', title: 'Fix login bug', description: 'Auth error', status: 'BACKLOG' });
+    h.createTask({ id: 'task-2', title: 'Add feature', description: 'New login feature', status: 'WORKING' });
+    h.createTask({ id: 'task-3', title: 'Update docs', description: 'Documentation update', status: 'DONE' });
+    await h.state.load();
+  });
+
+  it('searches by query in title', async () => {
+    const tool = searchTasksTool(h.state);
+    const result = await tool.handler({ query: 'login' }, h.state) as {
+      tasks: Task[];
+      totalMatches: number;
+    };
+
+    expect(result.totalMatches).toBe(2);
+    expect(result.tasks.map(t => t.id)).toContain('task-1');
+    expect(result.tasks.map(t => t.id)).toContain('task-2');
+  });
+
+  it('filters by status', async () => {
+    const tool = searchTasksTool(h.state);
+    const result = await tool.handler({
+      filters: { status: 'WORKING' },
+    }, h.state) as { tasks: Task[] };
+
+    expect(result.tasks.length).toBe(1);
+    expect(result.tasks[0].id).toBe('task-2');
+  });
+
+  it('combines query and filters', async () => {
+    const tool = searchTasksTool(h.state);
+    const result = await tool.handler({
+      query: 'login',
+      filters: { status: 'BACKLOG' },
+    }, h.state) as { tasks: Task[] };
+
+    expect(result.tasks.length).toBe(1);
+    expect(result.tasks[0].id).toBe('task-1');
+  });
+
+  it('respects limit', async () => {
+    const tool = searchTasksTool(h.state);
+    const result = await tool.handler({ limit: 1 }, h.state) as { tasks: Task[] };
+    expect(result.tasks.length).toBe(1);
+  });
+
+  it('returns compact summaries by default and full tasks only on opt-in', async () => {
+    await h.state.updateTask('task-1', {
+      description: 'Long login bug description '.repeat(30),
+      implementationPlan: [
+        { stepId: 'step-1', description: 'Fix it', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+
+    const tool = searchTasksTool(h.state);
+    const compact = await tool.handler({
+      query: 'login',
+      maxDescriptionChars: 60,
+    }, h.state) as {
+      detail: string;
+      tasks: Array<{
+        id: string;
+        description?: string;
+        descriptionPreview?: string;
+        descriptionTruncated?: boolean;
+        implementationPlan?: unknown;
+        planStepCount: number;
+      }>;
+    };
+    expect(compact.detail).toBe('summary');
+    expect(compact.tasks[0].description).toBeUndefined();
+    expect(compact.tasks[0].implementationPlan).toBeUndefined();
+    expect(compact.tasks[0].descriptionPreview!.length).toBeLessThanOrEqual(60);
+    expect(compact.tasks[0].descriptionTruncated).toBe(true);
+    expect(compact.tasks[0].planStepCount).toBe(1);
+
+    const full = await tool.handler({ query: 'login', detail: 'full', limit: 1 }, h.state) as {
+      detail: string;
+      tasks: Task[];
+    };
+    expect(full.detail).toBe('full');
+    expect(full.tasks[0].description).toContain('Long login bug description');
+    expect(full.tasks[0].implementationPlan).toHaveLength(1);
+  });
+
+  it('returns empty array when no matches', async () => {
+    const tool = searchTasksTool(h.state);
+    const result = await tool.handler({ query: 'nonexistent' }, h.state) as { tasks: Task[] };
+    expect(result.tasks.length).toBe(0);
+  });
+});
+

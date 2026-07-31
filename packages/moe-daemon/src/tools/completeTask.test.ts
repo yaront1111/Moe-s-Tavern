@@ -331,3 +331,81 @@ describe('moe.complete_task ownership + ordering enforcement', () => {
     });
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+
+describe('moe.complete_task', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      status: 'WORKING',
+      implementationPlan: [
+        { stepId: 'step-1', description: 'Done', status: 'COMPLETED', affectedFiles: ['a.ts', 'b.ts'] },
+      ],
+    });
+    await h.state.load();
+  });
+
+  it('moves task to REVIEW', async () => {
+    const tool = completeTaskTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', verification: { command: 'npm test', exitCode: 0 } }, h.state) as {
+      success: boolean;
+      status: string;
+      stats: { stepsCompleted: number; filesModified: string[] };
+    };
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('REVIEW');
+    expect(result.stats.stepsCompleted).toBe(1);
+    expect(result.stats.filesModified).toContain('a.ts');
+  });
+
+  it('sets prLink if provided', async () => {
+    const tool = completeTaskTool(h.state);
+    await tool.handler({ taskId: 'task-1', prLink: 'https://github.com/pr/123', verification: { command: 'npm test', exitCode: 0 } }, h.state);
+    const task = h.state.getTask('task-1');
+    expect(task?.prLink).toBe('https://github.com/pr/123');
+  });
+
+  it('prefers modifiedFiles over affectedFiles in stats (B24)', async () => {
+    // Update the existing task to have steps with both modifiedFiles and affectedFiles
+    await h.state.updateTask('task-1', {
+      implementationPlan: [
+        {
+          stepId: 'step-1',
+          description: 'Step with both fields',
+          status: 'COMPLETED',
+          affectedFiles: ['planned.ts', 'old.ts'],
+          modifiedFiles: ['actual.ts', 'real.ts', 'extra.ts'],
+        },
+        {
+          stepId: 'step-2',
+          description: 'Step with only affectedFiles',
+          status: 'COMPLETED',
+          affectedFiles: ['fallback.ts'],
+        },
+      ],
+    });
+
+    const tool = completeTaskTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', verification: { command: 'npm test', exitCode: 0 } }, h.state) as {
+      stats: { filesModified: string[] };
+    };
+
+    // Step 1 should use modifiedFiles (not affectedFiles)
+    expect(result.stats.filesModified).toContain('actual.ts');
+    expect(result.stats.filesModified).toContain('real.ts');
+    expect(result.stats.filesModified).toContain('extra.ts');
+    expect(result.stats.filesModified).not.toContain('planned.ts');
+    expect(result.stats.filesModified).not.toContain('old.ts');
+    // Step 2 should fall back to affectedFiles
+    expect(result.stats.filesModified).toContain('fallback.ts');
+  });
+});
+

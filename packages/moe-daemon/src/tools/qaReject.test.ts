@@ -201,3 +201,220 @@ describe('qa_reject bounded escalation', () => {
     expect(result.status).toBe('WORKING');
   });
 });
+
+// ---- migrated from tools.test.ts ----
+import { ToolTestHarness } from './toolTestHarness.js';
+import { vi } from 'vitest';
+import { getContextTool } from './getContext.js';
+
+describe('moe.qa_reject', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'REVIEW', reopenCount: 0 });
+    await h.state.load();
+  });
+
+  it('rejects task and moves back to WORKING', async () => {
+    const tool = qaRejectTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Tests are failing',
+    }, h.state) as { success: boolean; status: string; reopenCount: number };
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('WORKING');
+    expect(result.reopenCount).toBe(1);
+
+    const task = h.state.getTask('task-1');
+    expect(task?.status).toBe('WORKING');
+    expect(task?.reopenReason).toBe('Tests are failing');
+  });
+
+  it('increments reopenCount on multiple rejections', async () => {
+    await h.state.updateTask('task-1', { reopenCount: 2 });
+
+    const tool = qaRejectTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Still failing',
+    }, h.state) as { reopenCount: number };
+
+    expect(result.reopenCount).toBe(3);
+  });
+
+  it('throws for missing taskId', async () => {
+    const tool = qaRejectTool(h.state);
+    await expect(
+      tool.handler({ reason: 'test' }, h.state)
+    ).rejects.toThrow('Missing required field: taskId');
+  });
+
+  it('throws for missing reason', async () => {
+    const tool = qaRejectTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1' }, h.state)
+    ).rejects.toThrow('Missing required field: reason');
+  });
+
+  it('throws for empty reason', async () => {
+    const tool = qaRejectTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', reason: '  ' }, h.state)
+    ).rejects.toThrow('Missing required field: reason');
+  });
+
+  it('throws for non-REVIEW status', async () => {
+    await h.state.updateTask('task-1', { status: 'DONE' });
+    const tool = qaRejectTool(h.state);
+    await expect(
+      tool.handler({ taskId: 'task-1', reason: 'test' }, h.state)
+    ).rejects.toThrow('expected REVIEW');
+  });
+
+  it('stores failedDodItems on rejection', async () => {
+    const tool = qaRejectTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'DoD items failed',
+      failedDodItems: ['Tests pass', 'Code reviewed'],
+    }, h.state) as { success: boolean; rejectionDetails: { failedDodItems: string[] } };
+
+    expect(result.success).toBe(true);
+    expect(result.rejectionDetails.failedDodItems).toEqual(['Tests pass', 'Code reviewed']);
+
+    const task = h.state.getTask('task-1');
+    expect(task?.rejectionDetails?.failedDodItems).toEqual(['Tests pass', 'Code reviewed']);
+  });
+
+  it('stores structured issues on rejection', async () => {
+    // Reset task to REVIEW for this test
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+
+    const tool = qaRejectTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Multiple issues found',
+      issues: [
+        { type: 'test_failure', description: 'UserService test fails', file: 'src/UserService.test.ts', line: 42 },
+        { type: 'security', description: 'Missing input validation' },
+      ],
+    }, h.state) as { rejectionDetails: { issues: Array<{ type: string; file?: string }> } };
+
+    expect(result.rejectionDetails.issues).toHaveLength(2);
+    expect(result.rejectionDetails.issues[0].type).toBe('test_failure');
+    expect(result.rejectionDetails.issues[0].file).toBe('src/UserService.test.ts');
+
+    const task = h.state.getTask('task-1');
+    expect(task?.rejectionDetails?.issues).toHaveLength(2);
+  });
+
+  it('works with reason only (backward compat)', async () => {
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+
+    const tool = qaRejectTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Simple rejection',
+    }, h.state) as { success: boolean; rejectionDetails: null };
+
+    expect(result.success).toBe(true);
+    expect(result.rejectionDetails).toBeNull();
+  });
+
+  it('clears stale rejectionDetails after structured details are followed by reason-only rejection', async () => {
+    const rejectTool = qaRejectTool(h.state);
+
+    // Raise the reopen cap so this test (which performs three rejections)
+    // doesn't trip the auto-flip-to-PLANNING path that newer qa_reject
+    // applies once reopenCount >= maxReopens.
+    await h.state.updateTask('task-1', { maxReopens: 10 } as Partial<import('../types/schema.js').Task>);
+
+    await rejectTool.handler({
+      taskId: 'task-1',
+      reason: 'Initial structured rejection',
+      failedDodItems: ['Tests pass'],
+      issues: [{ type: 'test_failure', description: 'Old failure details', file: 'old.test.ts' }],
+    }, h.state);
+    expect(h.state.getTask('task-1')?.rejectionDetails).toEqual({
+      failedDodItems: ['Tests pass'],
+      issues: [{ type: 'test_failure', description: 'Old failure details', file: 'old.test.ts' }],
+    });
+
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    await rejectTool.handler({
+      taskId: 'task-1',
+      reason: 'Replacement structured rejection',
+      failedDodItems: ['New DoD item only'],
+    }, h.state);
+    expect(h.state.getTask('task-1')?.rejectionDetails).toEqual({
+      failedDodItems: ['New DoD item only'],
+    });
+
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    const reasonOnlyResult = await rejectTool.handler({
+      taskId: 'task-1',
+      reason: 'Reason-only rejection',
+    }, h.state) as { rejectionDetails: null };
+    expect(reasonOnlyResult.rejectionDetails).toBeNull();
+    // After omit-instead-of-null change: stale details are cleared by
+    // dropping the key entirely (schema is optional, not nullable).
+    expect(h.state.getTask('task-1')?.rejectionDetails).toBeUndefined();
+
+    const context = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      task: { rejectionDetails: null };
+    };
+    expect(context.task.rejectionDetails).toBeNull();
+
+    const claim = await claimNextTaskTool(h.state).handler({
+      statuses: ['WORKING'],
+      workerId: 'worker-after-reason-only',
+    }, h.state) as { hasNext: boolean; task: { id: string; rejectionDetails: null } };
+    expect(claim.hasNext).toBe(true);
+    expect(claim.task.id).toBe('task-1');
+    expect(claim.task.rejectionDetails).toBeNull();
+  });
+
+  it('throws for invalid issue type', async () => {
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+
+    const tool = qaRejectTool(h.state);
+    await expect(
+      tool.handler({
+        taskId: 'task-1',
+        reason: 'Bad issue type',
+        issues: [{ type: 'invalid_type', description: 'test' }],
+      }, h.state)
+    ).rejects.toThrow('invalid type');
+  });
+
+  it('get_context returns rejectionDetails to worker', async () => {
+    // Reject with structured feedback
+    const rejectTool = qaRejectTool(h.state);
+    await rejectTool.handler({
+      taskId: 'task-1',
+      reason: 'Tests fail',
+      failedDodItems: ['Tests pass'],
+      issues: [{ type: 'test_failure', description: 'Failing test in foo.test.ts' }],
+    }, h.state);
+
+    // Now check get_context as worker
+    const ctxTool = getContextTool(h.state);
+    const result = await ctxTool.handler({ taskId: 'task-1' }, h.state) as {
+      task: {
+        reopenReason: string;
+        rejectionDetails: { failedDodItems: string[]; issues: Array<{ type: string }> };
+      };
+    };
+
+    expect(result.task.reopenReason).toBe('Tests fail');
+    expect(result.task.rejectionDetails.failedDodItems).toEqual(['Tests pass']);
+    expect(result.task.rejectionDetails.issues).toHaveLength(1);
+    expect(result.task.rejectionDetails.issues[0].type).toBe('test_failure');
+  });
+});
+
