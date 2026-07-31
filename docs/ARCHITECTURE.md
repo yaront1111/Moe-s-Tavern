@@ -53,51 +53,34 @@
 
 ## Component Architecture
 
-### 1) JetBrains Plugin (Kotlin)
+### 1) JetBrains Plugin (Kotlin) — primary IDE
 
-```
-moe-jetbrains/
-├── src/main/kotlin/com/moe/
-│   ├── actions/
-│   │   └── InitMoeAction.kt
-│   ├── listeners/
-│   │   └── MoeProjectOpenListener.kt
-│   ├── model/
-│   │   └── Models.kt
-│   ├── services/
-│   │   └── MoeProjectService.kt
-│   ├── toolwindow/
-│   │   ├── MoeToolWindowFactory.kt
-│   │   ├── MoeToolWindowPanel.kt
-│   │   ├── TaskDetailDialog.kt
-│   │   └── board/
-│   │       ├── TaskCard.kt
-│   │       └── TaskColumn.kt
-│   └── util/
-│       ├── MoeJson.kt
-│       └── MoeProjectInitializer.kt
-│
-└── src/main/resources/META-INF/plugin.xml
-```
+Swing tool window: epic-grouped 5-column board, task/epic/plan dialogs, chat / metrics / activity / worker / proposal panels, settings dialog, IDE notifications, and a terminal agent launcher (incl. WSL mode). Full class inventory: `docs/PLUGIN_SPEC.md`.
 
 Key behaviors:
 - Connects to daemon WebSocket at `/ws` (port from `.moe/daemon.json`).
-- Auto-initializes `.moe` on first connect if missing.
-- Auto-starts daemon using bundled daemon (if present) or `MOE_DAEMON_COMMAND`/installer shims.
+- Auto-initializes `.moe` on first connect if missing; force-syncs bundled role docs/skills.
+- Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills it on close if it is the last project using that PID.
 - UI is Swing-based; no JCEF/webview.
+
+A VS Code / Antigravity extension (`moe-vscode/`) is a secondary client speaking the same `/ws` protocol.
 
 ### 2) Moe Daemon (Node.js/TypeScript)
 
 ```
 packages/moe-daemon/
-├── src/index.ts                # CLI entry + supervisor (start/stop/status/_run)
+├── src/index.ts                # CLI entry + supervisor (start/stop/status/doctor/_run)
+├── src/commands/               # doctor (offline health check)
 ├── src/server/
 │   ├── McpAdapter.ts           # JSON-RPC handler for MCP
 │   └── WebSocketServer.ts      # /ws and /mcp endpoints
 ├── src/state/
-│   ├── StateManager.ts         # Loads/writes .moe, mutex-protected
-│   └── FileWatcher.ts          # chokidar watch with debounce
-├── src/tools/                  # MCP tools
+│   ├── StateManager.ts         # Loads/writes .moe, mutex-protected (+ extracted modules)
+│   ├── FileWatcher.ts          # chokidar watch with debounce
+│   └── backfills/              # idempotent start-time backfills (e.g. task metrics)
+├── src/migrations/             # project.json schemaVersion migrations
+├── src/tools/                  # MCP tools (registry: tools/index.ts getTools())
+├── src/util/                   # shared helpers + generated initFiles/skillFiles
 └── src/types/schema.ts         # Canonical types
 ```
 
@@ -127,20 +110,19 @@ Key behaviors:
 
 Server → Plugin events:
 - `STATE_SNAPSHOT`
-- `TASK_UPDATED`
-- `TASK_CREATED`
-- `EPIC_UPDATED`
-- `EPIC_CREATED`
+- `TASK_CREATED` / `TASK_UPDATED` / `TASK_DELETED`
+- `EPIC_CREATED` / `EPIC_UPDATED` / `EPIC_DELETED`
+- `WORKER_CREATED` / `WORKER_UPDATED` / `WORKER_DELETED`
+- `PROPOSAL_CREATED` / `PROPOSAL_UPDATED` / `PROPOSAL_DELETED`
+- `METRICS`, `ACTIVITY_LOG`
 
 Plugin → Server commands:
-- `PING`
-- `GET_STATE`
-- `CREATE_TASK`
-- `UPDATE_TASK`
-- `REORDER_TASK`
-- `APPROVE_TASK`
-- `REJECT_TASK`
-- `REOPEN_TASK`
+- `PING`, `GET_STATE`
+- `CREATE_TASK` / `UPDATE_TASK` / `DELETE_TASK` / `REORDER_TASK`
+- `CREATE_EPIC` / `UPDATE_EPIC` / `DELETE_EPIC`
+- `APPROVE_TASK` / `REJECT_TASK` / `REOPEN_TASK`
+- `APPROVE_PROPOSAL` / `REJECT_PROPOSAL`, `APPROVE_DECISION` / `REJECT_DECISION`
+- `UPDATE_SETTINGS`
 
 ### CLI ↔ Proxy ↔ Daemon (MCP)
 
@@ -153,12 +135,15 @@ See `docs/MCP_SERVER.md` for tool definitions.
 
 ```
 .moe/
-├── project.json
-├── epics/
-├── tasks/
-├── workers/
-├── proposals/
-└── activity.log
+├── project.json       # settings + rails (tracked)
+├── daemon.json        # runtime port/pid (gitignored)
+├── activity.log       # event log + rotations (gitignored)
+├── epics/  tasks/  proposals/            # tracked task-state
+├── workers/  teams/  messages/  memory/  # runtime (gitignored)
+├── channels/  decisions/
+├── roles/             # role guides (sha-stamped, auto-upgraded)
+├── agents/            # Claude Code subagent defs (mirrored to .claude/agents/)
+└── skills/            # vendored skill pack
 ```
 
 The daemon is the only writer; all clients send actions to the daemon.
