@@ -14,65 +14,112 @@
     {
       "stepId": "step-1",
       "description": "Add the field to the handoff shape. In `packages/moe-daemon/src/types/schema.ts`, add `diskState?: string;` to `interface HandoffNote` (around line 241) with a doc comment: opaque git-derived signature of the working tree at release time, captured best-effort; `claim_next_task` recomputes it and sets `staleHandoffDiskState` when it differs, so the next claimer knows the note's claims (especially refusal reasons like 'this file does not compile') may describe a tree that no longer exists. Absent when the daemon could not compute it — absence must never be treated as 'unchanged'.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts"
       ],
-      "startedAt": "2026-07-30T23:07:25.473Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Added `diskState?: string` to HandoffNote (schema.ts:265-274) with doc comment stating absence means \"unknown\", never \"unchanged\". Verified StateManager.updateTask does NOT allow-list priorHandoffs (it spreads updates and only normalizes title/description/priority/reopenCount/definitionOfDone/implementationPlan/contextFetchedBy/stepsCompleted/comments), so the new field persists without a sanitizer edit — unlike ImplementationStep, which is rebuilt field-by-field.",
+      "startedAt": "2026-07-30T23:07:25.473Z",
+      "completedAt": "2026-07-30T23:07:53.223Z"
     },
     {
       "stepId": "step-2",
       "description": "Create `packages/moe-daemon/src/util/diskState.ts` — the daemon's first git integration, so keep it hermetic. Export `type GitRunner = (args: string[], cwd: string) => Promise<string>` and `export const defaultGitRunner: GitRunner` built on `promisify(execFile)` from `node:child_process` with `{ cwd, timeout: 3000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }`, returning stdout. Export `export async function computeDiskStateSignature(projectPath: string, run: GitRunner = defaultGitRunner): Promise<string | undefined>`: run `['--no-optional-locks', 'status', '--porcelain=v2', '--branch']` (one subprocess gives HEAD oid AND the per-path change list; `--no-optional-locks` keeps the daemon from touching the index of a tree a worker is actively using), parse the `# branch.oid <sha>` header line, count the non-`#` lines as the change count, and hash the full change-line block with `createHash('sha256')` from `node:crypto`. Return `v1:<oid>:<changeCount>:<first 12 hex of the digest>`. Error handling is the whole point of this helper: wrap everything in try/catch and return `undefined` on ANY failure — git not installed (ENOENT), not a repository (exit 128), timeout/kill, unparsable output, empty stdout. Never throw, never log-spam. Add a file header comment stating both invariants: undefined means 'unknown', never 'unchanged'; and the caller must invoke this OUTSIDE the state mutex.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/diskState.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/diskState.ts"
+      ],
+      "note": "Created util/diskState.ts: GitRunner type, defaultGitRunner (promisify(execFile), args array, timeout 3000, maxBuffer 8MB, windowsHide), computeDiskStateSignature(projectPath, run=defaultGitRunner). Runs `git --no-optional-locks status --porcelain=v2 --branch`, parses `# branch.oid <sha>`, counts non-# non-empty lines, sha256 of the joined change block, returns `v1:<oid>:<count>:<12 hex>`. Try/catch returns undefined on every failure; also returns undefined on empty stdout and on missing branch.oid. Header comment states both invariants (undefined = unknown not unchanged; must be called outside the state mutex). CRLF-tolerant line split since the daemon's primary platform is Windows.",
+      "startedAt": "2026-07-30T23:07:53.719Z",
+      "completedAt": "2026-07-30T23:08:24.005Z"
     },
     {
       "stepId": "step-3",
       "description": "Unit-test the helper in a new `packages/moe-daemon/src/util/diskState.test.ts` using an injected fake `GitRunner` so the suite never depends on a git binary or a real repository. Cases: (1) a realistic porcelain v2 payload (a `# branch.oid <sha>` header, other `#` header lines, and two change lines) produces a signature starting `v1:<sha>:2:` with a 12-char lowercase hex tail; (2) identical payloads produce identical signatures and a payload differing by one changed file produces a different one; (3) a clean tree (headers only, no change lines) yields change count 0 and is stable across calls; (4) error handling — a runner that rejects with an ENOENT-shaped error, one that rejects with a 128 'not a git repository' error, and one that resolves to an empty string each return `undefined` rather than throwing; (5) output with no `# branch.oid` line returns `undefined`. Also add one integration-flavored case that calls `computeDiskStateSignature(os.tmpdir())` with the real `defaultGitRunner` and asserts it returns `undefined` or a `v1:`-prefixed string — never a rejection — so the real subprocess path is exercised without assuming git exists. Verification: `npx vitest run src/util/diskState.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/diskState.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/diskState.test.ts"
+      ],
+      "note": "Added src/util/diskState.test.ts — 10 cases, all with an injected fake GitRunner except one real-subprocess case. Covers: v1 signature shape + exact git args/cwd asserted; determinism vs one-file-changed divergence; clean tree count 0 and stable; CRLF payload equals LF payload; undefined on ENOENT reject, exit-128 not-a-repo reject, timeout/killed reject, empty stdout, and missing `# branch.oid`; real defaultGitRunner against os.tmpdir() resolves (undefined or `v1:` prefix), never rejects. Verified: `npx vitest run src/util/diskState.test.ts` -> 1 file passed, 10 tests passed. Note on TDD ordering: the approved plan sequenced the helper (step-2) before its suite (step-3), so these were written test-after; assertions are value-exact (full oid + count + 12-hex regex) rather than truthiness so they stay mutation-resistant.",
+      "startedAt": "2026-07-30T23:08:24.562Z",
+      "completedAt": "2026-07-30T23:09:14.616Z"
     },
     {
       "stepId": "step-4",
       "description": "Capture the signature in `packages/moe-daemon/src/tools/releaseTask.ts`. Import `computeDiskStateSignature`. Compute it in the handler ONLY when `params.handoffNote` is present, and do it in the same pre-mutex region where the handoff fields are already validated (the existing comment at the top of the handler says shape validation happens before acquiring the state mutex — the git subprocess must live there too; the epic rail forbids long work inside `state.runExclusive`). Assign the result to `normalizedHandoff.diskState` only when it is a non-empty string, so a failed capture leaves the field absent rather than storing a sentinel. Both persistence paths already spread `normalizedHandoff` into `priorHandoffs` (the unassigned-repair branch and the normal release branch), so no other wiring is needed — verify both. Add `diskStateCaptured: true` to the success response when a signature was stored, so a human reading the tool output can tell capture from silent degradation. Do not change release routing, chat posts, or the no-handoff warning.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/releaseTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "note": "releaseTask.ts captures the signature. Import added; the await computeDiskStateSignature(state.projectPath) call sits in the pre-mutex region right after handoff shape validation (comment says why) and only runs when params.handoffNote is present — a no-handoff release spawns zero subprocesses. Assigned only when the result is a non-empty string, so a failed capture leaves the field absent. Verified both persistence paths spread normalizedHandoff into priorHandoffs: unassigned-repair branch (releaseTask.ts:145) and normal release branch (releaseTask.ts:188) — no extra wiring needed. `diskStateCaptured: true` added to both success responses (omitted when absent); the DONE/ARCHIVED early return still just warns \"handoffNote ignored\" since nothing persists. Routing, chat posts, and the no-handoff warning untouched. Existing suite still green: `npx vitest run src/tools/releaseTask.test.ts` -> 10 passed.",
+      "startedAt": "2026-07-30T23:09:15.121Z",
+      "completedAt": "2026-07-30T23:10:00.082Z"
     },
     {
       "stepId": "step-5",
       "description": "Compare and flag in `packages/moe-daemon/src/tools/claimNextTask.ts`. Inside the existing `state.runExclusive` block, where `hasHandoffs` is computed (around line 369), stash the newest handoff's `diskState` (`task.priorHandoffs[0]?.diskState`) into a closure variable declared outside the exclusive block. AFTER the exclusive block resolves — never inside it — and only when that variable holds a string, call `computeDiskStateSignature(state.projectPath)`; when the recomputed value is a non-empty string AND differs from the stored one, add `staleHandoffDiskState: true` to the returned object and append a sentence to `handoffHint` telling the claimer the working tree moved since that note was written, so its claims (especially any refusal or 'blocked by' reason) must be re-verified against the current tree before being trusted. Emit NO flag when: the stored value is absent, the recompute returns `undefined`, or the two match — in all three cases the response shape stays exactly as it is today. Gating on a stored diskState means a normal claim (no handoff) still spawns zero subprocesses, which matters because idle wrappers poll this tool.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "claimNextTask.ts compares and flags. Handler restructured: `const result = await state.runExclusive(...)` with two closure vars (`storedDiskState`, `baseHandoffHint`) declared above it. Inside the exclusive block, next to the existing hasHandoffs/handoffHint computation, the newest handoff's diskState is stashed only when it is a non-empty string. AFTER the block resolves, the recompute runs (`computeDiskStateSignature(state.projectPath)`) and only when it yields a non-empty string that differs does the handler return `{...result, handoffHint: base + staleNotice, staleHandoffDiskState: true}`. Three early returns of the untouched `result` cover absent-stored / undefined-recompute / match, so the response shape is byte-identical to today in all three. Gating on a stored signature means a no-handoff claim (the polling path) spawns zero subprocesses. Verified: `npx tsc --noEmit` clean; `npx vitest run src/tools/claimNextTask.test.ts` -> 7 passed.",
+      "startedAt": "2026-07-30T23:10:00.418Z",
+      "completedAt": "2026-07-30T23:11:19.144Z"
     },
     {
       "stepId": "step-6",
       "description": "Test both tools. In `packages/moe-daemon/src/tools/releaseTask.test.ts`, mock the helper module (`vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }))`) and cover: a release WITH a handoffNote persists `priorHandoffs[0].diskState` equal to the mocked signature and returns `diskStateCaptured: true`; a release with a handoffNote where the mock resolves `undefined` persists the note with NO `diskState` key and no `diskStateCaptured`; a release WITHOUT a handoffNote never calls the helper (assert the mock's call count is 0); and the unassigned-repair branch also stores the signature. In `packages/moe-daemon/src/tools/claimNextTask.test.ts`, with the same module mock, cover: stored signature + different recomputed value returns `staleHandoffDiskState: true` and a handoffHint mentioning the changed tree; stored + identical recomputed omits the flag; stored + `undefined` recomputed omits the flag (error handling degrades to silence, never to a false alarm); a task with handoffs but no stored `diskState` omits the flag AND never calls the helper; and a claim of a task with no handoffs at all never calls the helper. Reuse each suite's existing tmpdir/StateManager harness and keep every current assertion intact. Verification command: `npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/releaseTask.test.ts",
         "packages/moe-daemon/src/tools/claimNextTask.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ],
+      "note": "Both tool suites extended with vi.mock('../util/diskState.js'). releaseTask.test.ts +4 (new 'disk-state capture' describe, existing harness reused): handoffNote persists priorHandoffs[0].diskState === mocked signature and returns diskStateCaptured true (helper called once, with testDir); mock resolving undefined persists the note with `'diskState' in note === false` and no diskStateCaptured; release without handoffNote leaves the helper call count at 0; unassigned-repair branch also stores the signature. claimNextTask.test.ts +6 (new describe with its own tmpdir/StateManager harness): different recompute yields staleHandoffDiskState true with the original get_handoff_history hint PLUS the changed-tree/re-verify sentence; identical recompute omits the flag; undefined recompute omits the flag; newest-handoff-only comparison (stale older note does not flag); handoffs without a stored diskState omit the flag and never call the helper; no-handoff claim never calls the helper and emits no handoffHint. Every pre-existing assertion left intact. Verified: `npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts` -> 2 files passed, 27 tests passed (was 17).",
+      "startedAt": "2026-07-30T23:11:19.566Z",
+      "completedAt": "2026-07-30T23:13:00.086Z"
     },
     {
       "stepId": "step-7",
       "description": "Document and regression-check. In `docs/SCHEMA.md`, add `diskState?: string` to the `HandoffNote` interface block with a one-line note that it is a best-effort git-status-derived signature and that absence means 'unknown', not 'unchanged'. In `docs/MCP_SERVER.md`, extend the `moe.release_task` contract (handoffNote captures a disk-state signature automatically; failure degrades silently) and the `moe.claim_next_task` contract (adds `staleHandoffDiskState: true` when the tree moved since the newest handoff was written; the flag is informational — the daemon takes no automatic action on it). Then run the full daemon suite (`npm test` in `packages/moe-daemon`) plus `npx tsc --noEmit` and confirm no existing releaseTask/claimNextTask assertion regressed — the new code paths are all opt-in on a stored `diskState`, so any failure elsewhere means a wiring mistake, not a fixture problem.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "note": "Docs + regression check done. docs/SCHEMA.md: `diskState?: string` added to the HandoffNote block with the signature format and the \"absence means unknown, not unchanged\" line. docs/MCP_SERVER.md: release_task Returns gains `diskStateCaptured?: true` plus a side-effect bullet (capture only with handoffNote, one git status outside runExclusive, silent degradation); claim_next_task Returns gains `staleHandoffDiskState?: true` plus a Notes bullet (what it means, hint appended, informational only — no automatic action, and no subprocess unless a stored signature exists).\n\nAdversarial review findings and what I did about them:\n1. FIXED — post-mutation throw risk: in claimNextTask the recompute runs AFTER state was mutated, so a throw would report failure on a task the worker now owns. Wrapped in try/catch returning the untouched result; same catch added around the releaseTask capture (release is a recovery path and must never fail over a fingerprint). Two regression tests added (mockRejectedValue) asserting claim still succeeds/assignment holds and release still succeeds with no diskState key.\n2. KNOWN, NOT FIXED (needs a dispatch-layer change, out of scope): McpAdapter.ts:296 wraps EVERY non-blocking tool handler in state.runExclusive, so the \"pre-mutex region\" of releaseTask is only outside the tool's own inner runExclusive — under MCP dispatch the git call still holds the global mutex. Bounded by the helper's 3s execFile timeout (typical git status is 50-200ms) and only on release-with-handoff / claim-with-stored-signature, so it parks nothing; escaping it entirely would require blocking:true, which would drop lost-update protection on both tools.\n3. ACCEPTED: a release with a handoffNote against a DONE/ARCHIVED task computes a signature that is then discarded with the existing \"handoffNote ignored\" warning — status is only known inside the mutex, and the alternative (moving the git call inside) is worse.\n4. Considered and safe: StateManager.updateTask does not allow-list priorHandoffs, so no sanitizer edit is needed; get_handoff_history returns notes wholesale so diskState rides along; concurrent claims each spawn at most one bounded subprocess.\n\nVerification: `npx tsc --noEmit` exit 0. `npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts` exit 0 -> 2 files passed, 29 tests passed. Full daemon suite `npm test` exit 0 -> 49 files passed, 758 tests passed, zero regressions.",
+      "startedAt": "2026-07-30T23:13:00.716Z",
+      "completedAt": "2026-07-30T23:15:23.590Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-cf07810c",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,20 +131,32 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:28.417Z",
-  "updatedAt": "2026-07-30T23:07:25.473Z",
+  "updatedAt": "2026-07-30T23:19:48.168Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:15:41.013Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 7,
+    "doneAt": "2026-07-30T23:19:48.168Z",
+    "wallClockMs": 3847155
   },
   "contextFetchedBy": [
     "architect-6469484d",
-    "worker-cf07810c"
+    "worker-cf07810c",
+    "qa-891e690f"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-07-30T22:17:41.974Z",
   "planningNotes": {
@@ -115,5 +174,26 @@
     "wallClockMs": 7200000
   },
   "planApprovedAt": "2026-07-30T22:17:42.027Z",
-  "workStartedAt": "2026-07-30T23:07:25.473Z"
+  "workStartedAt": "2026-07-30T23:07:25.473Z",
+  "reviewStartedAt": "2026-07-30T23:15:58.371Z",
+  "verification": {
+    "command": "npx vitest run src/tools/releaseTask.test.ts src/tools/claimNextTask.test.ts",
+    "exitCode": 0,
+    "outputTail": " RUN  v4.1.10 D:/projexts/moes/packages/moe-daemon\n Test Files  2 passed (2)\n      Tests  29 passed (29)\n   Duration  536ms (transform 319ms, setup 0ms, import 423ms, tests 440ms, environment 0ms)\nEXIT=0",
+    "reportedAt": "2026-07-30T23:15:58.371Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/util/diskState.ts",
+    "packages/moe-daemon/src/util/diskState.test.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/releaseTask.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "completedAt": "2026-07-30T23:19:48.168Z",
+  "reviewCompletedAt": "2026-07-30T23:19:48.168Z",
+  "reviewSummary": "APPROVED. Re-ran: verification command + diskState.test.ts -> 39 passed; full `npm test` -> 49 files/758 tests, zero regressions; `tsc --noEmit` exit 0. Read whole diff (7 modified + 2 new, 346 insertions); scope matches plan.\n\nDoD1: releaseTask.ts:85-99 computes pre-mutex beside handoff validation, gated on params.handoffNote, try/catch, assigns only non-empty strings so failure leaves the key absent. Both persistence branches carry it (:174 repair, :236 normal). Tested: stored + diskStateCaptured; undefined -> `'diskState' in note === false`; throw -> release still succeeds.\n\nDoD2: claimNextTask.ts:384-391 stashes priorHandoffs[0].diskState inside runExclusive; :437-461 recomputes AFTER the block, returns staleHandoffDiskState:true + appended hint. Test asserts flag, hint appended not replaced, helper called once with state.projectPath.\n\nDoD3: four early returns (no stored value, undefined recompute, throw, equal) all tested, plus newest-handoff-only and two zero-call assertions keeping idle polling subprocess-free.\n\nExtra checks: StateManager has zero priorHandoffs references so nothing drops diskState on write, and the claim fixture writes diskState to disk then state.load()s it, proving the round trip. Real `git status --porcelain=v2 --branch` output here matches the test fixture shape exactly. git resolves to git.exe (not a .cmd shim) so execFile+args array is correct on Windows; windowsHide/timeout 3000/8MB maxBuffer present. Zero forbidden-pattern hits.\n\nRails: no new settings key or tool; tests beside every touched file; git call is outside both inner runExclusive blocks and bounded at 3s — the pre-existing McpAdapter.ts:296 global wrap still applies and was reported honestly. Docs landed in SCHEMA.md + MCP_SERVER.md.\n\nNit (non-blocking): a handoffNote release for a DONE/ARCHIVED or missing task still spawns one git subprocess before the inner mutex rejects it."
 }

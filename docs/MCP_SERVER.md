@@ -531,6 +531,7 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
   reopenWarning?: string,
   chatHint?: string,
   handoffHint?: string,             // present when priorHandoffs exist
+  staleHandoffDiskState?: true,     // the tree moved since the newest handoff was written
   fileCollision?: Array<{ task: string, files: string[] }>,  // advisory only
   nextAction: {
     tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance',
@@ -546,6 +547,7 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
 - After the claim, the daemon re-evaluates `task.budget` (warn at 80%, escalate at 100% to `#governors`).
 - `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`.
 - When `task.priorHandoffs` is non-empty, `nextAction.tool` is `moe.get_handoff_history` (instead of `moe.get_context`) so the worker reads the handoff before redoing finished work.
+- `staleHandoffDiskState: true` is returned when the newest handoff carries a `diskState` signature (see `moe.release_task`) and a fresh recompute differs — the working tree moved since that note was written, so its claims (especially a refusal or "blocked by" reason) describe a tree that no longer exists and must be re-verified. `handoffHint` gets a matching sentence appended. The flag is **informational**: the daemon takes no automatic action on it. No flag is emitted when the newest handoff has no `diskState`, when the recompute fails, or when the signatures match — and in those cases no git subprocess runs at all unless a stored signature exists, so ordinary polling claims stay free.
 - Governors short-circuit: a caller whose team role is `governor` gets `nextAction.tool = "moe.enter_governance"` and never claims a task.
 
 `claim_next_task` is intentionally lean: it does **not** return project rails, epic details, task descriptions, definition of done, task rails, implementation plans, chat history, or memory payloads. Call `moe.get_context` after a successful claim to fetch the full, token-budgeted context.
@@ -853,7 +855,7 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker).
+Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
 
 **Parameters:**
 ```typescript
@@ -878,6 +880,8 @@ Release a task from its assigned worker (clears `assignedWorkerId` and keeps the
   previousWorkerId: string | null,   // null if task was already unassigned
   status: TaskStatus,                // post-release status (routed via nextStatusForRelease)
   priorHandoffCount?: number,        // length of priorHandoffs after this release
+  diskStateCaptured?: true,          // present only when a disk-state signature was stored
+  cascadeTriggered?: true,           // present ONLY on the release that parked the task to BACKLOG
   message: string,
   warning?: string                   // set when called without handoffNote
 }
@@ -888,10 +892,21 @@ Release a task from its assigned worker (clears `assignedWorkerId` and keeps the
 - **DONE/ARCHIVED tasks are a strict no-op** (any `handoffNote` is ignored with a warning): release must never resurrect finished work into a claimable column.
 - Clears `needsHumanReview` when set — `release_task` is one of the documented human unpark paths for a task parked by the `qa_reject` hard cap; after release it re-enters the QA queue.
 - When `handoffNote` is provided, builds a `HandoffNote` (with `releasedBy`, `releasedAt`, optional `reason`) and **prepends** it to `task.priorHandoffs` (newest-first, capped at 20).
+- When `handoffNote` is provided, the daemon also captures a **disk-state signature** of the working tree (one `git status --porcelain=v2 --branch` run, outside the state mutex) into `handoffNote.diskState`, and echoes `diskStateCaptured: true`. Capture failure (no git, not a repo, timeout) degrades silently: the field is simply absent and no warning is raised. No signature is computed when the call carries no `handoffNote`.
 - Without `handoffNote`, the chat broadcast tags the release `(released without handoff)` and the response includes `warning: "release_task called without handoffNote; next claimer will lack context."`.
 - If the released worker exists and `worker.currentTaskId === taskId`, sets the worker to `IDLE` with `currentTaskId = null`.
 - Posts the release line to `#general`, `#workers`, and `#governors`.
 - Activity event: `WORKER_RELEASED`.
+
+**Refusal cascade (the one exception to in-place routing):** three releases inside 24h that all report *no progress* park the task to BACKLOG instead of requeueing it — same reasoning as the blocked-timeout park, since a task no claim can move only claim-thrashes the next agent. Specifics:
+
+- **Qualification comes from the structured `handoffNote.whatIsDone`** on the persisted notes, trimmed and case-folded: exactly `nothing`, `none`, `n/a`, `na`, or text starting `nothing…` / `no progress…`. Any description of real work does not count, so a normal context-switch handoff can never park a task.
+- **A release with no `handoffNote` can never count** — without a note, progress is unknown, and unknown is not zero.
+- Counting is over the existing newest-first `priorHandoffs` (capped at 20) **including the release being processed**, restricted to entries whose `releasedAt` parses to a finite time inside the 24h ending at this release. Unparseable, future, and older timestamps are skipped.
+- Only a **real assigned-worker release** counts. An already-unassigned repair/handoff call is not a claim refusal and never parks the task, and DONE/ARCHIVED/AWAITING_APPROVAL are unaffected (the park reuses the `nextStatusForRelease` `park` routing, which leaves those statuses alone).
+- On the triggering release only: `task.status` becomes `BACKLOG`, the response carries `cascadeTriggered: true` and an explanatory `message`, and a dedicated line is posted to `#governors` naming the task, the 3-in-24h threshold, and the human action needed. That post is best-effort like every other release broadcast — a chat failure never fails or rolls back the release. QA counters (`reopenCount` / `reopenReason`) are **not** touched.
+- The worker is still released and set `IDLE` exactly as in a normal release. Un-park with `set_task_status` → PLANNING/WORKING/REVIEW.
+- Disable with `settings.refusalCascadeAutoBacklog: false` (see docs/CONFIGURATION.md). Omitting the key leaves it enabled.
 
 ---
 
@@ -998,6 +1013,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 - `🚧 {worker} blocked on {taskId}: {reason}` (from `moe.report_blocked`).
 - `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
 - `🔓 {worker} released task: {title}` (from `moe.release_task`).
+- `🛑 task {id} ({title}) parked to BACKLOG after 3 empty-progress releases in 24h …` (from `moe.release_task`'s refusal cascade; needs human reprioritization).
 - `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; a presence/triage signal, not a release trigger).
 - `📋 New plan needed: {title} ({id})` (cross-post of the PLANNING announcement; informational — governors never claim PLANNING tasks).
 

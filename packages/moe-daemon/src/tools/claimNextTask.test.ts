@@ -1,10 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { claimNextTaskTool } from './claimNextTask.js';
-import type { Project, Epic, Worker, Task, TeamRole } from '../types/schema.js';
+import { computeDiskStateSignature } from '../util/diskState.js';
+import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../types/schema.js';
+
+// Mocked so the flag logic is tested without a git binary; the real subprocess
+// path lives in util/diskState.test.ts.
+vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));
+const mockedSignature = vi.mocked(computeDiskStateSignature);
 
 describe('moe.claim_next_task — role-aware routing', () => {
   let testDir: string;
@@ -246,5 +252,162 @@ describe('moe.claim_next_task — one task per worker', () => {
 
     expect(result.hasNext).toBe(true);
     expect(result.task.id).toBe('task-free');
+  });
+});
+
+describe('moe.claim_next_task — stale handoff disk state', () => {
+  const STORED = 'v1:9f2c0a1b3d4e5f60718293a4b5c6d7e8f9012345:3:0a1b2c3d4e5f';
+  const MOVED = 'v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:ffeeddccbbaa';
+
+  let testDir: string;
+  let moePath: string;
+  let state: StateManager;
+
+  function setupMoe() {
+    fs.mkdirSync(moePath, { recursive: true });
+    for (const sub of ['epics', 'tasks', 'workers', 'proposals', 'channels', 'messages', 'teams']) {
+      fs.mkdirSync(path.join(moePath, sub));
+    }
+    const project: Partial<Project> = {
+      id: 'proj-test', schemaVersion: 6, name: 'Test', rootPath: testDir,
+      globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
+      settings: {
+        approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false,
+        branchPattern: '', commitPattern: '', agentCommand: 'claude', enableAgentTeams: false,
+      },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
+    const epic: Epic = {
+      id: 'epic-1', projectId: 'proj-test', title: 'E', description: '', architectureNotes: '',
+      epicRails: [], status: 'ACTIVE', order: 1,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
+  }
+
+  function handoff(overrides: Partial<HandoffNote> = {}): HandoffNote {
+    return {
+      whatIsDone: 'nothing — this file does not compile',
+      whatRemains: 'everything',
+      releasedBy: 'worker-gone',
+      releasedAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  function writeTask(id: string, overrides: Partial<Task> = {}): Task {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id, epicId: 'epic-1', title: `Task ${id}`, description: '',
+      definitionOfDone: ['Done'], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId: null, branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      order: 1, createdAt: now, updatedAt: now,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', id + '.json'), JSON.stringify(task, null, 2));
+    return task;
+  }
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-claim-disk-'));
+    moePath = path.join(testDir, '.moe');
+    setupMoe();
+    state = new StateManager({ projectPath: testDir });
+    mockedSignature.mockReset();
+  });
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  async function claim(): Promise<Record<string, unknown>> {
+    await state.load();
+    const tool = claimNextTaskTool(state);
+    return await tool.handler({ workerId: 'w-1', statuses: ['WORKING'] }, state) as Record<string, unknown>;
+  }
+
+  it('flags a claim whose newest handoff describes a tree that has since moved', async () => {
+    mockedSignature.mockResolvedValue(MOVED);
+    writeTask('task-1', { priorHandoffs: [handoff({ diskState: STORED })] });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBe(true);
+    expect(mockedSignature).toHaveBeenCalledTimes(1);
+    expect(mockedSignature).toHaveBeenCalledWith(testDir);
+    // The original hint survives; the warning is appended to it.
+    expect(result.handoffHint).toMatch(/moe\.get_handoff_history/);
+    expect(result.handoffHint).toMatch(/working tree has CHANGED/);
+    expect(result.handoffHint).toMatch(/re-verify/i);
+  });
+
+  it('omits the flag when the recomputed signature matches the stored one', async () => {
+    mockedSignature.mockResolvedValue(STORED);
+    writeTask('task-1', { priorHandoffs: [handoff({ diskState: STORED })] });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBeUndefined();
+    expect(result.handoffHint).not.toMatch(/CHANGED/);
+  });
+
+  it('omits the flag when the recompute fails (silence, never a false alarm)', async () => {
+    mockedSignature.mockResolvedValue(undefined);
+    writeTask('task-1', { priorHandoffs: [handoff({ diskState: STORED })] });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBeUndefined();
+    expect(result.handoffHint).not.toMatch(/CHANGED/);
+  });
+
+  it('still returns the claim when the recompute throws', async () => {
+    // The claim has already mutated state by the time the signature is
+    // recomputed — a throw here must not turn a successful claim into an error.
+    mockedSignature.mockRejectedValue(new Error('git exploded'));
+    writeTask('task-1', { priorHandoffs: [handoff({ diskState: STORED })] });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBeUndefined();
+    expect(state.getTask('task-1')!.assignedWorkerId).toBe('w-1');
+  });
+
+  it('compares against the NEWEST handoff only', async () => {
+    mockedSignature.mockResolvedValue(STORED);
+    writeTask('task-1', {
+      priorHandoffs: [handoff({ diskState: STORED }), handoff({ diskState: MOVED })],
+    });
+
+    const result = await claim();
+
+    expect(result.staleHandoffDiskState).toBeUndefined();
+  });
+
+  it('never shells out when the newest handoff carries no stored signature', async () => {
+    writeTask('task-1', { priorHandoffs: [handoff()] });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBeUndefined();
+    expect(mockedSignature).toHaveBeenCalledTimes(0);
+  });
+
+  it('never shells out on an ordinary claim with no handoffs at all', async () => {
+    writeTask('task-1');
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(result.staleHandoffDiskState).toBeUndefined();
+    expect(result.handoffHint).toBeUndefined();
+    expect(mockedSignature).toHaveBeenCalledTimes(0);
   });
 });

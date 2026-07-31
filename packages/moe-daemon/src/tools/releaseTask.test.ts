@@ -1,10 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { releaseTaskTool } from './releaseTask.js';
-import type { Project, Epic, Task, Worker } from '../types/schema.js';
+import { computeDiskStateSignature } from '../util/diskState.js';
+import type { Project, Epic, HandoffNote, Task, Worker } from '../types/schema.js';
+
+// The helper shells out to git; these suites only care about the wiring, so the
+// module is mocked and the real subprocess is covered in util/diskState.test.ts.
+vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));
+const mockedSignature = vi.mocked(computeDiskStateSignature);
 
 describe('moe.release_task', () => {
   let testDir: string;
@@ -252,5 +258,328 @@ describe('moe.release_task', () => {
     await state.load();
     const tool = releaseTaskTool(state);
     await expect(tool.handler({}, state)).rejects.toThrow(/taskId/);
+  });
+
+  describe('disk-state capture', () => {
+    const SIGNATURE = 'v1:9f2c0a1b3d4e5f60718293a4b5c6d7e8f9012345:3:0a1b2c3d4e5f';
+
+    beforeEach(() => {
+      mockedSignature.mockReset();
+      mockedSignature.mockResolvedValue(SIGNATURE);
+    });
+
+    it('stores the signature on the handoff note and reports the capture', async () => {
+      writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-a',
+        handoffNote: { whatIsDone: 'half the wiring', whatRemains: 'the tests' },
+      }, state) as Record<string, unknown>;
+
+      expect(result.diskStateCaptured).toBe(true);
+      expect(mockedSignature).toHaveBeenCalledTimes(1);
+      expect(mockedSignature).toHaveBeenCalledWith(testDir);
+      expect(state.getTask('task-1')!.priorHandoffs![0].diskState).toBe(SIGNATURE);
+    });
+
+    it('leaves diskState absent when the capture fails (never a sentinel)', async () => {
+      mockedSignature.mockResolvedValue(undefined);
+      writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-a',
+        handoffNote: { whatIsDone: 'half the wiring', whatRemains: 'the tests' },
+      }, state) as Record<string, unknown>;
+
+      expect(result.diskStateCaptured).toBeUndefined();
+      const note = state.getTask('task-1')!.priorHandoffs![0];
+      expect(note.whatIsDone).toBe('half the wiring');
+      expect('diskState' in note).toBe(false);
+    });
+
+    it('still releases when the capture throws', async () => {
+      mockedSignature.mockRejectedValue(new Error('git exploded'));
+      writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-a',
+        handoffNote: { whatIsDone: 'half the wiring', whatRemains: 'the tests' },
+      }, state) as Record<string, unknown>;
+
+      expect(result.success).toBe(true);
+      expect(result.diskStateCaptured).toBeUndefined();
+      const note = state.getTask('task-1')!.priorHandoffs![0];
+      expect('diskState' in note).toBe(false);
+      expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    });
+
+    it('never shells out to git when the release carries no handoffNote', async () => {
+      writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING' });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state) as Record<string, unknown>;
+
+      expect(result.diskStateCaptured).toBeUndefined();
+      expect(mockedSignature).toHaveBeenCalledTimes(0);
+    });
+
+    it('stores the signature on the unassigned-repair path too', async () => {
+      writeTask({ assignedWorkerId: null, status: 'WORKING' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-recovering',
+        handoffNote: { whatIsDone: 'wired the new endpoint', whatRemains: 'add tests' },
+      }, state) as Record<string, unknown>;
+
+      expect(result.previousWorkerId).toBeNull();
+      expect(result.diskStateCaptured).toBe(true);
+      expect(state.getTask('task-1')!.priorHandoffs![0].diskState).toBe(SIGNATURE);
+    });
+  });
+
+  describe('refusal cascade → BACKLOG', () => {
+    const NOW = '2026-07-31T12:00:00.000Z';
+    const NOW_MS = Date.parse(NOW);
+    const HOUR_MS = 60 * 60 * 1000;
+
+    // Only Date is faked: the handler awaits real fs writes, and faking timers
+    // wholesale would stall them.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW_MS);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Newest-first `priorHandoffs` entry that qualifies as empty progress. */
+    function refusal(hoursAgo: number, overrides: Partial<HandoffNote> = {}): HandoffNote {
+      return {
+        whatIsDone: 'nothing',
+        whatRemains: 'the whole task',
+        releasedBy: `worker-${hoursAgo}h`,
+        releasedAt: new Date(NOW_MS - hoursAgo * HOUR_MS).toISOString(),
+        ...overrides,
+      };
+    }
+
+    function progress(hoursAgo: number): HandoffNote {
+      return refusal(hoursAgo, { whatIsDone: 'wired the parser and added two tests' });
+    }
+
+    function patchSettings(extra: Record<string, unknown>): void {
+      const file = path.join(moePath, 'project.json');
+      const project = JSON.parse(fs.readFileSync(file, 'utf8')) as Project;
+      project.settings = { ...project.settings, ...extra } as Project['settings'];
+      fs.writeFileSync(file, JSON.stringify(project, null, 2));
+    }
+
+    /** Third empty-progress release: two seeded refusals + this one. */
+    async function releaseWith(
+      handoffNote: Record<string, string> | undefined,
+      priorHandoffs: HandoffNote[]
+    ): Promise<Record<string, unknown>> {
+      writeTask({ assignedWorkerId: 'worker-a', status: 'WORKING', priorHandoffs });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1', status: 'CODING' });
+      await state.load();
+      const tool = releaseTaskTool(state);
+      return await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-a',
+        ...(handoffNote ? { handoffNote } : {}),
+      }, state) as Record<string, unknown>;
+    }
+
+    const EMPTY_NOTE = { whatIsDone: 'nothing — could not start', whatRemains: 'everything' };
+
+    it('parks to BACKLOG on the third empty-progress release inside 24h', async () => {
+      const posts = vi.spyOn(state, 'postToRoleChannel');
+      const result = await releaseWith(EMPTY_NOTE, [refusal(2), refusal(20)]);
+
+      expect(result.status).toBe('BACKLOG');
+      expect(result.cascadeTriggered).toBe(true);
+      expect(result.previousWorkerId).toBe('worker-a');
+
+      const task = state.getTask('task-1')!;
+      expect(task.status).toBe('BACKLOG');
+      expect(task.assignedWorkerId).toBeNull();
+      // History is preserved newest-first, not consumed by the cascade.
+      expect(task.priorHandoffs).toHaveLength(3);
+      expect(task.priorHandoffs!.map(h => h.releasedBy)).toEqual(['worker-a', 'worker-2h', 'worker-20h']);
+      // QA-owned counters stay out of it.
+      expect(task.reopenCount).toBe(0);
+      expect(task.reopenReason).toBeNull();
+
+      // The worker is still idled — a park must not strand it as CODING.
+      const worker = state.getWorker('worker-a')!;
+      expect(worker.currentTaskId).toBeNull();
+      expect(worker.status).toBe('IDLE');
+
+      const cascadeMsg = posts.mock.calls.find(
+        ([channel, content]) => channel === 'governors' && content.includes('BACKLOG')
+      );
+      expect(cascadeMsg).toBeDefined();
+      expect(cascadeMsg![1]).toContain('task-1');
+      expect(cascadeMsg![1]).toMatch(/3 empty-progress releases in 24h/);
+      expect(cascadeMsg![1]).toMatch(/human/i);
+    });
+
+    it('counts a refusal released exactly 24h ago (inclusive window)', async () => {
+      const result = await releaseWith(EMPTY_NOTE, [refusal(1), refusal(24)]);
+      expect(result.status).toBe('BACKLOG');
+      expect(result.cascadeTriggered).toBe(true);
+    });
+
+    it('ignores a refusal released just outside the 24h window', async () => {
+      const stale = refusal(0, { releasedAt: new Date(NOW_MS - 24 * HOUR_MS - 1).toISOString() });
+      const result = await releaseWith(EMPTY_NOTE, [refusal(1), stale]);
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.status).toBe('WORKING');
+    });
+
+    it('ignores malformed and future releasedAt timestamps', async () => {
+      const malformed = refusal(0, { releasedAt: 'not-a-date' });
+      const future = refusal(-1); // one hour ahead of the release
+      const result = await releaseWith(EMPTY_NOTE, [malformed, future, refusal(3)]);
+      // Only refusal(3) + the current one qualify → below threshold.
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+    });
+
+    it('does not count a release whose handoff reports concrete work', async () => {
+      const result = await releaseWith(
+        { whatIsDone: 'wired the cascade classifier', whatRemains: 'docs' },
+        [refusal(1), refusal(2)]
+      );
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.priorHandoffs).toHaveLength(3);
+    });
+
+    it('does not count prior handoffs that report concrete work', async () => {
+      const result = await releaseWith(EMPTY_NOTE, [progress(1), progress(2)]);
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+    });
+
+    it('leaves the second empty-progress release routed normally', async () => {
+      const result = await releaseWith(EMPTY_NOTE, [refusal(1)]);
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+    });
+
+    it('never counts a release that carries no handoff (progress unknown)', async () => {
+      const result = await releaseWith(undefined, [refusal(1), refusal(2)]);
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.status).toBe('WORKING');
+    });
+
+    it('leaves routing to nextStatusForRelease when refusalCascadeAutoBacklog is false', async () => {
+      patchSettings({ refusalCascadeAutoBacklog: false });
+      const result = await releaseWith(EMPTY_NOTE, [refusal(1), refusal(2)]);
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.status).toBe('WORKING');
+    });
+
+    it('keeps parking when the setting is explicitly true', async () => {
+      patchSettings({ refusalCascadeAutoBacklog: true });
+      const result = await releaseWith(EMPTY_NOTE, [refusal(1), refusal(2)]);
+      expect(result.status).toBe('BACKLOG');
+      expect(result.cascadeTriggered).toBe(true);
+    });
+
+    it('never parks an already-unassigned release (no assignee to refuse)', async () => {
+      writeTask({
+        assignedWorkerId: null,
+        status: 'WORKING',
+        priorHandoffs: [refusal(1), refusal(2)],
+      });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-recovering',
+        handoffNote: EMPTY_NOTE,
+      }, state) as Record<string, unknown>;
+
+      expect(result.status).toBe('WORKING');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.status).toBe('WORKING');
+    });
+
+    it('never parks a terminal task carrying a stale assignee', async () => {
+      writeTask({
+        assignedWorkerId: 'worker-a',
+        status: 'DONE',
+        priorHandoffs: [refusal(1), refusal(2)],
+      });
+      writeWorker({ id: 'worker-a', currentTaskId: 'task-1' });
+      await state.load();
+
+      const tool = releaseTaskTool(state);
+      const result = await tool.handler({
+        taskId: 'task-1',
+        workerId: 'worker-a',
+        handoffNote: EMPTY_NOTE,
+      }, state) as Record<string, unknown>;
+
+      expect(result.status).toBe('DONE');
+      expect(result.cascadeTriggered).toBeUndefined();
+      expect(state.getTask('task-1')!.status).toBe('DONE');
+    });
+
+    describe('refusalCascadeAutoBacklog validation', () => {
+      it('persists an explicit false through updateSettings', async () => {
+        await state.load();
+        const project = await state.updateSettings({ refusalCascadeAutoBacklog: false });
+        expect(project.settings.refusalCascadeAutoBacklog).toBe(false);
+
+        const onDisk = JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf8')) as Project;
+        expect(onDisk.settings.refusalCascadeAutoBacklog).toBe(false);
+      });
+
+      it('rejects a non-boolean without partially applying the update', async () => {
+        await state.load();
+        await expect(
+          state.updateSettings({
+            agentCommand: 'codex',
+            refusalCascadeAutoBacklog: 'yes',
+          } as unknown as Partial<Project['settings']>)
+        ).rejects.toThrow(/must be a boolean/);
+
+        expect(state.project!.settings.agentCommand).toBe('claude');
+        expect(state.project!.settings.refusalCascadeAutoBacklog).toBeUndefined();
+      });
+
+      it('defaults to enabled when the key is absent from an old project file', async () => {
+        await state.load();
+        expect(state.project!.settings.refusalCascadeAutoBacklog).toBeUndefined();
+
+        const result = await releaseWith(EMPTY_NOTE, [refusal(1), refusal(2)]);
+        expect(result.status).toBe('BACKLOG');
+      });
+    });
   });
 });

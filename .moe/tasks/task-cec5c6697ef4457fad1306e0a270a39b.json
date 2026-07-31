@@ -14,18 +14,25 @@
     {
       "stepId": "step-1",
       "description": "Add one shared role-liveness lookup to `packages/moe-daemon/src/util/workerLiveness.ts` (the file whose own comment says 'do not re-implement this check inline' — today `checkStaleWorkers` and `submit_plan` each hand-roll their own version). Export `findFreshestLiveWorkerByRole(workers: Iterable<Worker>, teams: Iterable<Team>, role: string, opts?: { nowMs?: number; timeoutMs?: number; excludeWorkerIds?: string[] }): Worker | null`. Implementation: build a Set of team ids whose `role` matches, then keep workers whose `teamId` is in that Set — resolve membership through `worker.teamId`, NOT `team.memberIds`, because StateManager explicitly warns that a worker dropped from memberIds out-of-band still points at its team. Filter with the existing `isWorkerAlive(worker, nowMs, timeoutMs)` so DEAD workers and unparsable `lastActivityAt` values are excluded by the one canonical predicate; drop any id in `excludeWorkerIds`. Return the survivor with the greatest parsed `lastActivityAt`, tie-broken by lowest worker id so the result is deterministic; return `null` when none survive. Pure function, no StateManager import (that would create an import cycle) — keep it taking plain iterables. Default `nowMs` to `Date.now()` and `timeoutMs` to the module's `LIVENESS_TIMEOUT_MS`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/workerLiveness.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/workerLiveness.ts"
+      ],
+      "note": "Added `FreshestLiveWorkerOptions` + `findFreshestLiveWorkerByRole(workers, teams, role, opts)` to util/workerLiveness.ts. Pure over plain iterables (no StateManager import, no import cycle); role membership resolved via a Set of team ids matching `role` and each worker's `teamId` (not `team.memberIds`, which StateManager warns can go stale out-of-band); liveness delegated to the existing `isWorkerAlive` so DEAD and unparsable lastActivityAt are excluded by the one canonical predicate; `excludeWorkerIds` filtered out; greatest parsed lastActivityAt wins with ties broken to the lexicographically lowest id so the result never depends on Map insertion order; returns null when no team carries the role or nothing survives. Defaults: nowMs = Date.now(), timeoutMs = LIVENESS_TIMEOUT_MS. Did NOT refactor checkStaleWorkers' hand-rolled copy — it deliberately ignores DEAD status, so switching it to isWorkerAlive would change behavior outside this task's scope. `npx tsc --noEmit` exit 0.",
+      "startedAt": "2026-07-31T13:19:50.124Z",
+      "completedAt": "2026-07-31T13:20:20.724Z"
     },
     {
       "stepId": "step-2",
       "description": "Create `packages/moe-daemon/src/util/workerLiveness.test.ts` (no test file exists for this module yet) covering both the existing predicate and the new lookup with plain object literals and an injected `nowMs` — no StateManager, no timers. Cases for `findFreshestLiveWorkerByRole`: (1) a single live architect is returned; (2) with three live architects the greatest `lastActivityAt` wins; (3) a worker on a team with a different role is never returned even when it is the freshest overall; (4) a worker whose `lastActivityAt` is older than the liveness window is skipped, and when that is the only architect the result is `null`; (5) a `DEAD` architect inside the window is skipped; (6) a worker with `teamId: null` or a `teamId` pointing at a missing team is skipped; (7) `excludeWorkerIds` removes a candidate, and excluding the only live architect yields `null`; (8) two architects with identical `lastActivityAt` resolve to the lexicographically lower id on repeated calls (determinism); (9) error handling — a malformed `lastActivityAt` string is treated as not-alive rather than throwing. Also keep/extend direct `isWorkerAlive` coverage for the boundary (exactly at the timeout is alive, one ms past is not). Verification: `npx vitest run src/util/workerLiveness.test.ts`.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/util/workerLiveness.test.ts"
-      ]
+      ],
+      "startedAt": "2026-07-31T13:20:23.751Z"
     },
     {
       "stepId": "step-3",
@@ -61,7 +68,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-5c53582f",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -73,16 +80,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.140Z",
-  "updatedAt": "2026-07-30T22:20:07.733Z",
+  "updatedAt": "2026-07-31T13:20:23.751Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:17:47.737Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-6469484d"
+    "architect-6469484d",
+    "worker-5c53582f"
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-07-30T22:20:07.684Z",
   "planningNotes": {
@@ -97,7 +108,10 @@
     ]
   },
   "budget": {
-    "wallClockMs": 5400000
+    "wallClockMs": 5400000,
+    "warnedAt": "2026-07-31T13:18:42.855Z",
+    "escalatedAt": "2026-07-31T13:18:42.855Z"
   },
-  "planApprovedAt": "2026-07-30T22:20:07.733Z"
+  "planApprovedAt": "2026-07-30T22:20:07.733Z",
+  "workStartedAt": "2026-07-31T13:19:50.124Z"
 }

@@ -113,7 +113,8 @@ The `.moe/project.json` file contains project-specific settings.
     "autoCreateBranch": true,
     "branchPattern": "moe/{epicId}/{taskId}",
     "commitPattern": "feat({epicId}): {taskTitle}",
-    "appendOnlyFiles": ["CHANGELOG.md", "docs/**/release-notes.md"]
+    "appendOnlyFiles": ["CHANGELOG.md", "docs/**/release-notes.md"],
+    "refusalCascadeAutoBacklog": true
   }
 }
 ```
@@ -134,6 +135,7 @@ The `.moe/project.json` file contains project-specific settings.
 | `taskSizing` | Plan-size thresholds enforced by `moe.submit_plan` (warn past warn values, reject past max values; distinct files = union of step `affectedFiles`). `autoCritique: true` additionally auto-blocks warn-zone plans back to PLANNING in CONTROL mode when no governor is online (capped like governor critique blocks) | `{"warnSteps": 8, "maxSteps": 12, "warnDistinctFiles": 5, "maxDistinctFiles": 10, "autoCritique": false}` (defaults) |
 | `pacePerStepMs` | Wall-clock ms budgeted per plan step; `moe.submit_plan` seeds an absent task budget as `stepCount * pacePerStepMs` (an explicit budget arg or an existing task budget wins) | Milliseconds (default: 900000 = 15 min; valid 1000-86400000) |
 | `appendOnlyFiles` | Project-relative globs for files every task appends to; claim-time `fileCollision` warnings skip them so real overlaps stay visible. Forward slashes only; supports literal paths, `*` (matches within one path segment) and `**` (crosses directories, and `**/x` also matches `x` at the root). A supplied array **replaces** the default — include `CHANGELOG.md` yourself if you still want it suppressed; `[]` disables suppression entirely | `["CHANGELOG.md"]` (default), e.g. `["CHANGELOG.md", "docs/**/release-notes.md", "docs/*.md"]` |
+| `refusalCascadeAutoBacklog` | Auto-park a task to BACKLOG when `moe.release_task` records a 3rd release inside 24h whose `handoffNote.whatIsDone` reports no progress (`nothing` / `none` / `n/a`, or text starting `nothing…` / `no progress…`). Releases that describe real work, and releases with no handoff at all, never count. Omitting the key leaves it **enabled** — only an explicit `false` disables it | `true` (default) / `false` |
 | `enableAgentTeams` | Claude Code subagents for spawned agents | `false` (default) / `true` |
 | `chatEnabled` | Agent chat system | `true` (default) / `false` |
 | `chatMaxAgentHops` | Max agent-to-agent mention hops | Number (default: 4) |

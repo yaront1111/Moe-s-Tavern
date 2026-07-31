@@ -892,6 +892,7 @@ export class StateManager {
       'qualityGate',
       'qualityGateScope',
       'appendOnlyFiles',
+      'refusalCascadeAutoBacklog',
     ], 'project setting');
 
     const next: ProjectSettings = { ...this.project.settings };
@@ -932,6 +933,15 @@ export class StateManager {
     }
     if (input.autoCommit !== undefined) {
       next.autoCommit = this.validateBooleanValue(input.autoCommit, 'autoCommit');
+    }
+    if (input.refusalCascadeAutoBacklog !== undefined) {
+      // Stored as supplied: the release path reads `!== false`, so an explicit
+      // false must survive as false and an omitted key must stay omitted
+      // (absence = enabled, for projects created before this setting existed).
+      next.refusalCascadeAutoBacklog = this.validateBooleanValue(
+        input.refusalCascadeAutoBacklog,
+        'refusalCascadeAutoBacklog'
+      );
     }
     if (input.qualityGate !== undefined) {
       // A shell command the worker wrapper runs pre-commit (same trust model

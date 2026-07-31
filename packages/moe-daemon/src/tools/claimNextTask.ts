@@ -6,6 +6,7 @@ import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
+import { computeDiskStateSignature } from '../util/diskState.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -39,8 +40,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
+      // Disk-state comparison inputs, stashed from inside the exclusive block
+      // and consumed after it releases — recomputing the signature spawns a git
+      // subprocess, which must never run under the global state mutex.
+      let storedDiskState: string | undefined;
+      let baseHandoffHint: string | undefined;
+
       // Use StateManager's mutex to prevent race conditions with plugin assignments
-      return state.runExclusive(async () => {
+      const result = await state.runExclusive(async () => {
         const params = (args || {}) as {
           statuses?: string[];
           epicId?: string;
@@ -374,6 +381,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       const handoffHint = hasHandoffs
         ? `Previous worker(s) left ${task.priorHandoffs!.length} handoff note(s). Call moe.get_handoff_history { taskId: "${task.id}" } before starting.`
         : undefined;
+      // Stash the newest handoff's disk-state signature for the post-mutex
+      // comparison. Gating on a STORED signature keeps the common claim (no
+      // handoffs at all) free of subprocesses — idle wrappers poll this tool.
+      const newestDiskState = hasHandoffs ? task.priorHandoffs![0]?.diskState : undefined;
+      if (typeof newestDiskState === 'string' && newestDiskState.length > 0) {
+        storedDiskState = newestDiskState;
+        baseHandoffHint = handoffHint;
+      }
 
       return {
         hasNext: true,
@@ -418,6 +433,32 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             }
       };
       });
+
+      // The mutex is released — safe to shell out to git. Only runs when the
+      // newest handoff carried a signature. Silence is the default: an absent
+      // stored value, a failed recompute (undefined), or a match all leave the
+      // response byte-identical to what it was before this feature. A false
+      // "stale" alarm would teach workers to ignore the flag.
+      if (storedDiskState === undefined) return result;
+      // Belt-and-braces: the claim has ALREADY mutated state by this point, so
+      // a throw here would report failure on a task the worker now owns. The
+      // helper contracts never to throw; this catch makes that non-negotiable.
+      let currentDiskState: string | undefined;
+      try {
+        currentDiskState = await computeDiskStateSignature(state.projectPath);
+      } catch {
+        return result;
+      }
+      if (typeof currentDiskState !== 'string' || currentDiskState.length === 0) return result;
+      if (currentDiskState === storedDiskState) return result;
+
+      const staleNotice =
+        'The working tree has CHANGED since the newest handoff note was written, so that note describes a tree that no longer exists — re-verify its claims (especially any refusal or "blocked by" reason, e.g. "this file does not compile") against the current tree before trusting them.';
+      return {
+        ...result,
+        handoffHint: baseHandoffHint ? `${baseHandoffHint} ${staleNotice}` : staleNotice,
+        staleHandoffDiskState: true,
+      };
     }
   };
 }

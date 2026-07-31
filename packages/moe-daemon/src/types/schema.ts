@@ -129,6 +129,15 @@ export interface ProjectSettings {
    * REPLACES that default, and `[]` disables suppression entirely.
    */
   appendOnlyFiles?: string[];
+  /**
+   * Auto-park a task to BACKLOG when a third release inside 24h reports no
+   * progress (`handoffNote.whatIsDone` says "nothing"/"none"/"n/a"). Mirrors
+   * the blocked-timeout park: a task no agent can move is human-triage work,
+   * not scheduler fuel. Omitted → enabled; only an explicit `false` disables
+   * it, so old project files keep the protection. See moe.release_task in
+   * docs/MCP_SERVER.md.
+   */
+  refusalCascadeAutoBacklog?: boolean; // default: true
 }
 
 export interface Project {
@@ -262,6 +271,16 @@ export interface HandoffNote {
   releasedBy?: string;
   releasedAt: string;
   reason?: string;
+  /**
+   * Opaque git-derived signature of the working tree at release time, captured
+   * best-effort by `release_task`. `claim_next_task` recomputes it and sets
+   * `staleHandoffDiskState` when it differs, so the next claimer knows the
+   * note's claims — especially refusal reasons like "this file does not
+   * compile" — may describe a tree that no longer exists. Absent when the
+   * daemon could not compute it (no git, not a repo, timeout); absence must
+   * never be treated as "unchanged".
+   */
+  diskState?: string;
 }
 
 /**

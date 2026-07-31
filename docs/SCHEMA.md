@@ -151,6 +151,12 @@ interface ProjectSettings {
   // [] disables suppression so every overlap is reported again.
   appendOnlyFiles?: string[];         // default: ["CHANGELOG.md"]
 
+  // Auto-park a task to BACKLOG when moe.release_task records a 3rd
+  // empty-progress release (handoffNote.whatIsDone = "nothing"/"none"/"n/a")
+  // within 24h. Omitted → enabled; only an explicit false disables it, so
+  // projects predating the setting keep the protection.
+  refusalCascadeAutoBacklog?: boolean; // default: true
+
   // Chat settings (all optional, defaults applied at runtime)
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
@@ -515,6 +521,12 @@ interface HandoffNote {
   releasedBy?: string;       // workerId
   releasedAt: string;        // ISO 8601
   reason?: string;           // ≤2000 chars; copied from release_task `reason`
+  // Best-effort git-status-derived signature of the working tree at release
+  // time (`v1:<head-oid>:<changeCount>:<digest>`; compared only for equality).
+  // `claim_next_task` recomputes it and returns `staleHandoffDiskState: true`
+  // when it differs. Absent when the daemon could not compute it (no git, not
+  // a repo, timeout) — absence means "unknown", never "unchanged".
+  diskState?: string;
 }
 
 /**

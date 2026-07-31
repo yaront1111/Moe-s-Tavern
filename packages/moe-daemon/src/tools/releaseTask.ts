@@ -3,9 +3,49 @@ import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { nextStatusForRelease } from '../state/workerLifecycle.js';
+import { computeDiskStateSignature } from '../util/diskState.js';
 
 const MAX_HANDOFFS_PER_TASK = 20;
 const MAX_HANDOFF_FIELD_LEN = 4000;
+/** Refusal cascade: this many empty-progress releases inside the window park the task. */
+const REFUSAL_CASCADE_THRESHOLD = 3;
+const REFUSAL_CASCADE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A "refusal" is a release whose handoff says, in the structured `whatIsDone`
+ * field, that nothing was done. Deliberately conservative: only the fixed
+ * shapes below count, so a handoff describing partial work — the normal
+ * context-switch case — never feeds the cascade. An empty/missing value means
+ * "unknown", not "zero progress", and does NOT count (persisted notes always
+ * carry a non-empty whatIsDone; a hand-edited .moe/ file might not).
+ */
+function isEmptyProgressHandoff(handoff: Pick<HandoffNote, 'whatIsDone'> | undefined): boolean {
+  const done = typeof handoff?.whatIsDone === 'string' ? handoff.whatIsDone.trim().toLowerCase() : '';
+  if (done.length === 0) return false;
+  if (done === 'nothing' || done === 'none' || done === 'n/a' || done === 'na') return true;
+  return /^nothing\b/.test(done) || /^no progress\b/.test(done);
+}
+
+/**
+ * Count the empty-progress releases in `handoffs` (newest-first, already capped
+ * at MAX_HANDOFFS_PER_TASK) that landed within the 24h ending at `nowMs`.
+ * Non-finite, future, and out-of-window `releasedAt` values are skipped — a
+ * timestamp we cannot place in time is not evidence of anything.
+ */
+function countRecentRefusals(handoffs: HandoffNote[] | undefined, nowMs: number): number {
+  // .moe/tasks/*.json is hand-editable: a non-array here would otherwise
+  // iterate characters (string) or throw (object).
+  if (!Array.isArray(handoffs)) return 0;
+  const cutoffMs = nowMs - REFUSAL_CASCADE_WINDOW_MS;
+  let count = 0;
+  for (const handoff of handoffs) {
+    if (!isEmptyProgressHandoff(handoff)) continue;
+    const releasedMs = Date.parse(handoff.releasedAt);
+    if (!Number.isFinite(releasedMs) || releasedMs < cutoffMs || releasedMs > nowMs) continue;
+    count++;
+  }
+  return count;
+}
 
 function clampField(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LEN): string {
   if (typeof value !== 'string') {
@@ -31,7 +71,7 @@ function clampOptional(value: unknown, field: string, max = MAX_HANDOFF_FIELD_LE
 export function releaseTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.release_task',
-    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool instead, have a human/governor use moe.set_task_status → BACKLOG.',
+    description: 'Release a task from its assigned worker (clears assignedWorkerId and keeps the task claimable in place: WORKING stays WORKING so the next worker resumes it via handoffs, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build. Release only for confirmed crashes (deregister banner, wrapper exit, human confirmation) or an explicit handoff. One exception to in-place routing: the 3rd release in 24h whose handoffNote.whatIsDone reports no progress ("nothing"/"none"/"n/a") parks the task to BACKLOG for human triage and returns cascadeTriggered:true (disable via settings.refusalCascadeAutoBacklog:false). To pull a task OUT of the agent pool yourself, have a human/governor use moe.set_task_status → BACKLOG.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -81,7 +121,22 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           openQuestions: clampOptional(params.handoffNote.openQuestions, 'openQuestions'),
           releasedAt: new Date().toISOString(),
         };
+        // Fingerprint the working tree the note is describing. This spawns a
+        // git subprocess, so it stays in the pre-mutex region with the shape
+        // validation above — never inside runExclusive, which serializes every
+        // tool fleet-wide. A failed capture leaves the field absent (absence
+        // reads as "unknown", never as "unchanged").
+        // release_task is a recovery path: it must never fail because a
+        // fingerprint could not be taken. The helper contracts never to throw;
+        // the catch makes that non-negotiable.
+        try {
+          const signature = await computeDiskStateSignature(state.projectPath);
+          if (typeof signature === 'string' && signature.length > 0) {
+            normalizedHandoff.diskState = signature;
+          }
+        } catch { /* capture is best-effort; absence reads as "unknown" */ }
       }
+      const diskStateCaptured = normalizedHandoff?.diskState !== undefined;
 
       return state.runExclusive(async () => {
         const task = state.getTask(params.taskId!);
@@ -155,6 +210,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
             previousWorkerId: null,
             status: repaired.status,
             priorHandoffCount: repairedHandoffs?.length ?? 0,
+            ...(diskStateCaptured ? { diskStateCaptured: true } : {}),
             ...(unparking ? { unparked: true } : {}),
             message: correctedStatus !== task.status
               ? `Task was unassigned but stuck in ${task.status}; repaired to ${correctedStatus}`
@@ -184,6 +240,36 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           updates.priorHandoffs = nextPriorHandoffs;
         }
 
+        // Refusal cascade. A task that three separate claims could not move at
+        // all is an environmental/spec problem, and requeueing it just claim-
+        // thrashes the next agent into the same wall — the same reasoning that
+        // makes the blocked-timeout sweep park instead of requeue. So the third
+        // empty-progress release inside 24h routes to BACKLOG (human-gated)
+        // instead of the normal in-place routing. Only real assigned-worker
+        // releases with a handoff can count: already-unassigned repair calls
+        // are not claim refusals, and a release with no handoff leaves progress
+        // unknown. Reads `!== false` so projects predating the setting keep the
+        // protection. The scan is bounded by the 20-entry handoff cap — no I/O,
+        // no unbounded work under the state mutex.
+        const cascadeEligible =
+          normalizedHandoff !== null &&
+          isEmptyProgressHandoff(normalizedHandoff) &&
+          state.project?.settings?.refusalCascadeAutoBacklog !== false;
+        // `park` is the existing blocked-timeout routing: PLANNING/WORKING/
+        // REVIEW → BACKLOG, while DONE/ARCHIVED/AWAITING_APPROVAL stay put. A
+        // status it refuses to park is left on its normal release route.
+        const parkStatus = cascadeEligible ? nextStatusForRelease(task, 'park') : undefined;
+        const refusalCount = cascadeEligible
+          ? countRecentRefusals(nextPriorHandoffs, Date.parse(normalizedHandoff!.releasedAt))
+          : 0;
+        const cascadeTriggered =
+          parkStatus === 'BACKLOG' &&
+          task.status !== 'BACKLOG' &&
+          refusalCount >= REFUSAL_CASCADE_THRESHOLD;
+        if (cascadeTriggered) {
+          updates.status = parkStatus;
+        }
+
         const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED');
 
         const worker = state.getWorker(previousWorkerId);
@@ -210,13 +296,29 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         try { await state.postToRoleChannel('workers', chatMsg); } catch { /* never block tool */ }
         try { await state.postToRoleChannel('governors', chatMsg); } catch { /* never block tool */ }
 
+        if (cascadeTriggered) {
+          // Posted after the task/worker writes landed: the release itself is
+          // already durable, so a chat failure here must not roll it back or
+          // surface as a tool error — same best-effort contract as above.
+          const cascadeMsg =
+            `🛑 task ${updated.id} (${updated.title}) parked to BACKLOG after ` +
+            `${REFUSAL_CASCADE_THRESHOLD} empty-progress releases in 24h — no claim moved it, ` +
+            `so requeueing would only thrash the next agent. A human must reprioritize, ` +
+            `re-scope, or unblock it (moe.set_task_status → PLANNING/WORKING).`;
+          try { await state.postToRoleChannel('governors', cascadeMsg); } catch { /* never block tool */ }
+        }
+
         return {
           success: true,
           taskId: updated.id,
           previousWorkerId,
           status: updated.status,
           priorHandoffCount: (nextPriorHandoffs?.length) ?? (updated.priorHandoffs?.length ?? 0),
-          message: `Task ${updated.id} released from ${previousWorkerId}${reasonSuffix}`,
+          ...(diskStateCaptured ? { diskStateCaptured: true } : {}),
+          ...(cascadeTriggered ? { cascadeTriggered: true } : {}),
+          message: cascadeTriggered
+            ? `Task ${updated.id} released from ${previousWorkerId}${reasonSuffix} and parked to BACKLOG after ${REFUSAL_CASCADE_THRESHOLD} empty-progress releases in 24h; a human must reprioritize it`
+            : `Task ${updated.id} released from ${previousWorkerId}${reasonSuffix}`,
           ...(warning ? { warning } : {}),
         };
       });
