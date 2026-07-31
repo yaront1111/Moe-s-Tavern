@@ -6,7 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { atomicWriteText } from './atomicWrite.js';
+import { atomicWriteText } from '../util/atomicWrite.js';
 
 /**
  * Full content of every SKILL.md (and its SOURCE.md, when vendored), keyed by

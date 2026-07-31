@@ -6,7 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { atomicWriteText } from './atomicWrite.js';
+import { atomicWriteText } from '../util/atomicWrite.js';
 
 /**
  * Full content of role docs, auto-generated from docs/roles/*.md.

@@ -114,7 +114,7 @@ exit 2
 
 // Marker line that stamps a Moe-generated hook so writeHookFile() can tell an
 // upgradeable Moe-generated copy apart from a user-customized one — same scheme
-// as ROLE_DOCS in util/initFiles.ts, but using a `#` shell/PowerShell comment
+// as ROLE_DOCS in generated/initFiles.ts, but using a `#` shell/PowerShell comment
 // instead of an HTML comment. A user who wants to customize the hook deletes the
 // marker line, opting the file out of future auto-upgrades.
 const HOOK_MARKER_RE = /^#\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*$/m;

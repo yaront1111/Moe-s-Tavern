@@ -1,8 +1,9 @@
+// Tests src/generated/skillFiles.ts; the subject is prebuild-generated, but this test is handwritten.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { SKILL_FILES, SKILL_MANIFEST, writeSkillFiles } from './skillFiles.js';
+import { SKILL_FILES, SKILL_MANIFEST, writeSkillFiles } from '../generated/skillFiles.js';
 
 /**
  * Skill files are vendored into the daemon by generate-skill-files.ts and

@@ -10,9 +10,73 @@
     "postflight harness test covers the regression"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CONFIRM THE ROOT CAUSE WITH HARD EVIDENCE — do not take the planning notes on faith. (a) Count the corpus: `ls .moe/tasks/*.json | wc -l` (expected ~257). (b) Reproduce the truncation directly: `bash scripts/moe-call.sh list_tasks '{}' --project D:/projexts/moes` and assert the returned `tasks` array length is exactly 100 while `pagination.total` reports the true count — that single response IS the bug. (c) Pick a task that recently reached REVIEW or DONE (e.g. one of the epic-2eb35551 splits) and confirm its id is ABSENT from that 100-row page, proving the wrapper's `Where-Object { $_.id -eq $preflightTaskId }` would match nothing. (d) Re-read moe-agent.ps1 around lines 2026-2110 and moe-agent.sh around 2626-2700 and confirm the control flow: an empty status makes the `-eq \"REVIEW\"` test false and the whole block — including every Write-Host diagnostic and the PUSH-BLOCKED chat escalation — is skipped without a single line of output. (e) Confirm the installed plugin's copy is still byte-identical: `diff -q scripts/moe-agent.ps1 \"$APPDATA/JetBrains/PyCharm2026.1/plugins/moe-jetbrains/scripts/moe-agent.ps1\"`. If it now DIFFERS, stop and re-derive — you would be fixing different code than the fleet runs (mem:moes-installed-plugin-staleness). (f) Record all of this verbatim; the first DoD item is 'root cause identified with wrapper log evidence' and this transcript is that evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ROOT CAUSE CONFIRMED — and the planning note is HALF WRONG. Two independent defects; only the second explains 2026-07-31.\n\n(a) Corpus: `ls .moe/tasks/*.json | wc -l` = 257 (137 status=ARCHIVED, so listTasks' true active total is 120).\n\n(b) TRUNCATION REPRODUCED (defect A, real + live): `bash scripts/moe-call.sh list_tasks '{}' --project D:/projexts/moes` returns `tasks.length = 100` against `pagination = {\"limit\":100,\"offset\":0,\"returned\":100,\"total\":120,\"hasMore\":true}`. Re-verified through a byte-faithful PowerShell replica of Invoke-MoeRpc (ps1:936-1002) + the post-flight lookup (ps1:2029-2058): `listResp.tasks count : 100`. 20 active tasks — all DONE, orders 15-60 — are absent from page 1 (global ascending sort by `order` puts the highest-order tasks off the end).\n\n(c) BUT the truncation is NOT what broke the fleet. All 8 tasks that reached DONE on 2026-07-31 (task-1bc9d7a8, task-db4091d0, task-5c824346, task-aa44c1be, task-aa88d8e8, task-cec5c669, task-f05cbea9, task-f56df322) have order 1-10 and were verified PRESENT in the returned page by set membership. The `Where-Object { $_.id -eq $preflightTaskId }` filter WOULD have matched. The planning note's causal claim does not hold on this box.\n\n(d) THE ACTUAL CAUSE (defect B): the post-flight block is never reached for workers, because the wrapper is still blocked inside the CLI call.\n  - `Get-CimInstance Win32_Process`: PID 23104 = `moe-agent.ps1 -Role worker ... -Command 'claude' -Team 'moes' -Interactive` (alive since 15:42Z); PID 28492 = same for worker-5c53582f; PID 52412 = `-Role qa ... -Team 'moes'` with NO -Interactive.\n  - `TerminalAgentLauncher.kt:384 shouldLaunchClaudeInteractive` returns true for architect/worker/governor, false for qa. Its own KDoc: \"Worker: always — hands-on coding sessions want the TUI.\" This contradicts CLAUDE.md (\"worker/qa to one-shot\").\n  - ps1:1888 `$usePrintMode = -not $Interactive` -> worker launches the full claude TUI at ps1:2002 and the wrapper blocks there for the TUI's entire human-driven lifetime. `Invoke-PostFlight` (2024) and the whole auto-commit block (2026) are strictly downstream.\n  - CHAT EVIDENCE (whole history, all channels): 13 `qa session ended: task=… (CLI exit=0)` messages, and ZERO `worker session ended` / `architect session ended`. The two roles launched -Interactive are exactly the two that have never once emitted a post-flight signal. `git log` confirms every commit on moe/work-2026-07-31 is human-authored (yaront1111).\n  - Isolated by controlled harness (fake proxy, FAKE_TASK_STATUS=REVIEW, instantly-exiting fake CLI): MODE=print -> commits=2, session-ended msg True, 'Post-flight: auto-commit' True; MODE=interactive -> commits=2, session-ended True, auto-commit True. The code path is fine in BOTH modes when the CLI returns — which isolates the failure to the real TUI not returning.\n  - Also proved chat_send is not the failure: a live proxy probe as worker-f5977052 to chan-b6d8273b returned success:true.\n\nControl flow re-read and confirmed: ps1:2036 `Invoke-MoeRpc -Tool \"list_tasks\" -Args @{}` -> null `$matched` -> `$finalStatus` stays $null -> the `-eq \"REVIEW\"` test at 2068 is false -> every Write-Host, the branch-safety messages and the PUSH-BLOCKED escalation (all INSIDE the block) are skipped with zero output. sh:2629 `moe_rpc list_tasks '{}'` feeding `[ \"$FINAL_STATUS\" = \"REVIEW\" ]` at 2682 is the identical defect. Second instance in the same block: `siblingMax`/`epic_final` is computed off the same truncated page.\n\n(e) `diff -q` vs %APPDATA%\\JetBrains\\PyCharm2026.1\\plugins\\moe-jetbrains\\scripts\\: IDENTICAL for both moe-agent.ps1 and moe-agent.sh — no installed-plugin drift confounding this; repo fixes are directly testable but still need buildPlugin + reinstall to reach the fleet.",
+      "startedAt": "2026-07-31T20:39:54.283Z",
+      "completedAt": "2026-07-31T20:52:09.511Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MAKE THE HARNESS CATCH IT — write the failing test BEFORE the fix, or you cannot prove the fix works. In scripts/tests/postflight.sh, the fake proxy's `case 'list_tasks'` stub (~line 105) unconditionally returns `task-postflight`, which is exactly why a green harness coexisted with a completely inert production auto-commit path. Add a `FAKE_LIST_TASKS_TRUNCATED=1` mode that makes the list_tasks stub return a page that OMITS task-postflight (return an unrelated filler row or an empty array) while `get_context` keeps returning the real task — this models the daemon paginating the task off the end. Add a test case that runs the wrapper in that mode with FAKE_TASK_STATUS=REVIEW and asserts a commit WAS created. Run it now and watch it FAIL against the current wrapper: that failure is the regression reproduced in CI-able form, and a test that passes before the fix proves nothing. Mirror the same mode and case in scripts/tests/postflight.ps1 so both platforms are covered. Do not modify any existing assertion in either harness while you are in there.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "FIX THE POWERSHELL WRAPPER. In scripts/moe-agent.ps1, replace the truncatable status lookup at ~line 2036 with an exact one. (a) Swap `Invoke-MoeRpc -Tool \"list_tasks\" -Args @{}` for `Invoke-MoeRpc -Tool \"get_context\" -Args @{ taskId = $preflightTaskId }`, reading `$resp.task.status`, `$resp.task.reopenCount` and `$resp.task.epicId` off the returned task. get_context keys on the task id and cannot be paginated away — that is the entire point. Do NOT 'fix' this by passing `limit = 500` instead: MAX_TASK_LIST_LIMIT is 500, so that silently re-breaks past 500 tasks and reproduces this exact defect at a higher threshold. (b) Fix the second instance of the same bug in the same block: `$isEpicFinal` currently computes `siblingMax` from the truncated page, so it can misjudge a mid-epic task as epic-final (running the full quality gate on it) or skip the gate on the true final task. Recompute it from an epic-SCOPED call — `list_tasks` with `@{ epicId = $taskEpicId; limit = 500 }` — which is legitimately bounded because it asks about one epic's siblings. (c) ADD THE MISSING ERROR HANDLING, which is the actual defect: today a failed or empty lookup is indistinguishable from 'the task genuinely is not in REVIEW' and both exit in total silence. Separate them. If the lookup throws or returns no task, emit a `[WARN]` line naming the task id and the reason, AND post a chat escalation (reuse the PUSH-BLOCKED message plumbing, wording it as a status-lookup failure) so the skip is never again invisible. A genuine non-REVIEW status stays a quiet no-op — that one is correct behavior. (d) Keep the whole path best-effort: a lookup failure must warn and continue, never abort the wrapper loop. (e) Do not add any new `2>&1 |` merge near the git calls — lines 2106-2109 document that native git writes progress to stderr on SUCCESS and $ErrorActionPreference='Stop' turns that into a terminating NativeCommandError.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "FIX THE BASH WRAPPER TO MATCH — both or neither. scripts/moe-agent.sh has the identical defect at line 2629 (`POSTFLIGHT_STATE=$(moe_rpc list_tasks '{}' ...)`) feeding the `[ \"$FINAL_STATUS\" = \"REVIEW\" ]` test at line 2682. Apply the same three changes: exact `get_context` lookup keyed on $PREFLIGHT_TASK_ID for status/reopenCount/epicId; epic-scoped `list_tasks` with an explicit epicId and limit for the epic-final computation; and the warn-plus-chat-escalation error handling path when the lookup fails or comes back empty, distinct from a genuine non-REVIEW status. This is not optional parity work: the JetBrains launcher picks .ps1 or .sh by platform and WSL agent mode ALWAYS uses .sh, so fixing only PowerShell leaves every Linux, macOS and WSL fleet silently broken with no signal. Match the existing bash idioms in the file — note the current code parses the RPC response with a `read -r -d $'\\x1f'` field split (~line 2664); keep whatever parsing style the surrounding code uses rather than introducing a new one. Preserve the `2>/dev/null || echo \"\"` best-effort posture on the RPC call itself, but make the EMPTY result now take the loud path instead of falling through silently.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN BOTH HARNESSES GREEN. (a) `bash scripts/tests/postflight.sh` — the truncation case added in step 2, which failed before the fix, must now PASS, and every pre-existing case must still pass. Explicitly confirm the previously-failing test is the one that flipped; a suite that was already green end-to-end means your step-2 test was not actually exercising the bug. (b) Run the PowerShell sibling `scripts/tests/postflight.ps1` and confirm the same. (c) Add one more case to each harness covering the NEW error path: make `get_context` fail or return no task, and assert the wrapper emits the warning AND writes a chat message (the harness's chat_send stub already appends to .moe/messages/<channel>.jsonl, so assert on that file's contents). That case is what keeps DoD item 3 — 'silent-failure path now posts a chat warning' — from regressing back to silence later. (d) These are shell harnesses, not vitest: they run daemon-free with a fake proxy on PATH, so they are safe to run repeatedly and do not touch the real .moe/ state.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "LIVE RUN — the DoD item the harness cannot satisfy. (a) The fleet executes the INSTALLED plugin's bundled scripts, so rebuild and reinstall first or the fix stays inert: `cd moe-jetbrains && ./gradlew buildPlugin`, then `.\\scripts\\install-all.ps1`. Do NOT edit the installed plugin files directly — that needs the user's explicit go-ahead. Restart the IDE so the new bundle is picked up. (b) BEFORE running anything, check `git status`: this tree already holds uncommitted fleet work piled up BY this very bug. Do not let a live auto-commit test sweep it into an unrelated commit — that is the exact failure this defect already caused once. Either land or stash-with-intent the unrelated work first, deliberately, and say which you did. (c) Launch a worker via the JetBrains Agents menu on a task that will reach REVIEW, and CAPTURE WRAPPER STDOUT from the IDE terminal — that capture is the 'wrapper log evidence' DoD item 1 asks for, and it was unobtainable before because the skip produced no output at all. (d) Confirm the auto-commit fires: the 'Post-flight: auto-commit+push' line appears, and `git log` shows the resulting commit on the moe/work-* branch. Paste the commit hash and subject into the completion summary. (e) If you cannot drive the JetBrains GUI in this environment, do NOT claim this passed — state plainly which sub-steps were not performed so QA can gate on a human running them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "DOCUMENT THE FAILURE MODE, then adversarially review and complete. (a) Add a section to docs/TROUBLESHOOTING.md: 'Worker finished but nothing was committed'. State the symptom (task reaches REVIEW/DONE, working tree stays dirty, NO output and no PUSH-BLOCKED chat message), the root cause (post-flight resolved the task's final status through an unbounded `list_tasks` that the daemon truncated at 100, so the status came back empty and the whole auto-commit block was skipped in silence), the fix (exact `get_context` lookup plus a loud warn-and-escalate path when the lookup fails), and the diagnostic a reader can run themselves: `scripts/moe-call.sh list_tasks '{}'` returning exactly 100 rows against a larger `pagination.total`. Note explicitly that the wrapper scripts the fleet runs come from the INSTALLED plugin bundle, so this fix requires buildPlugin + reinstall. (b) Then load the `adversarial-self-review` skill and confirm by grepping, not memory: no remaining `list_tasks` call in either wrapper is unscoped-and-unbounded; `limit: 500` was NOT used as the status-lookup fix anywhere; the ps1 and sh changes are semantically equivalent (walk them side by side — platform divergence here is invisible until someone runs the other OS); a lookup failure and a genuine non-REVIEW status now take DIFFERENT paths, one loud and one quiet; the new error handling cannot abort the wrapper loop; no new `2>&1 |` merge was introduced near the git calls; and the step-2 truncation test genuinely failed before the fix. Finally call moe.complete_task with the harness commands and their output as the `verification` payload, stating honestly which live-run sub-steps were performed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": "worker-f5977052",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -20,9 +84,41 @@
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "priority": "MEDIUM",
-  "order": 8,
+  "order": 1,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T20:33:59.212Z",
-  "updatedAt": "2026-07-31T20:33:59.212Z"
+  "updatedAt": "2026-07-31T20:52:09.511Z",
+  "metrics": {
+    "firstClaimAt": "2026-07-31T20:35:39.150Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-98d69360",
+    "worker-f5977052"
+  ],
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-07-31T20:39:07.411Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Raise the limit: `list_tasks {limit: 500}`. REJECTED — MAX_TASK_LIST_LIMIT is 500, so this is a band-aid with a known ceiling that silently re-breaks past 500 tasks, reproducing the identical silent-skip class at a higher threshold. The whole defect is that an unbounded collection was queried with a bounded call. (2) Paginate through every page until the task is found. REJECTED — O(n) RPCs on every task completion to answer a single-key question. (3) CHOSEN: exact lookup via `get_context {taskId}`, which returns the task itself with status/reopenCount/epicId and cannot be truncated, then a SEPARATE epic-scoped `list_tasks {epicId, limit: 500}` for the epic-final computation, which is legitimately bounded because it asks about one epic's siblings. Also considered leaving the epic-final logic alone — rejected: it reads the same truncated page, so `siblingMax` is computed over whichever siblings happened to make page 1 and can misjudge a mid-epic task as epic-final (running the full quality gate on it) or the reverse (skipping the gate on the real final task). Same root cause, same block, fix both together.",
+    "codebaseInsights": "ROOT CAUSE FOUND STATICALLY BEFORE PLANNING — this is a confirm-and-fix, not an open hunt. Both wrappers look up the just-completed task's final status by listing EVERY task in the project and filtering client-side: moe-agent.ps1:2036 `Invoke-MoeRpc -Tool \"list_tasks\" -Args @{}` and moe-agent.sh:2629 `moe_rpc list_tasks '{}'`. The daemon (src/tools/listTasks.ts) defaults to DEFAULT_TASK_LIST_LIMIT (100), sorts with `[...tasks].sort((a, b) => a.order - b.order)` across ALL epics, and returns `sortedTasks.slice(offset, offset + limit)`. This project has **257 task files** in .moe/tasks/. Task `order` is a small per-epic number (1, 2, 3, 2.25…), so a global sort by order interleaves every epic and the first 100 rows are the lowest order values project-wide — whether any given completed task lands in that page is essentially arbitrary. When it does not: `$matched` is null, `$finalStatus` stays $null / FINAL_STATUS stays \"\", the `-eq \"REVIEW\"` test at ps1:2068 / sh:2682 is false, and the ENTIRE auto-commit block is skipped. Every diagnostic in that path — the 'Post-flight: auto-commit+push' line, the branch-safety messages, the PUSH-BLOCKED chat escalation — lives INSIDE the skipped branch, which is exactly why the failure was silent and why no PUSH-BLOCKED message ever appeared. Verified the installed plugin at %APPDATA%\\JetBrains\\PyCharm2026.1\\plugins\\moe-jetbrains\\scripts\\moe-agent.ps1 is BYTE-IDENTICAL to the repo copy (diff -q clean), so mem:moes-installed-plugin-staleness does not confound this one and repo fixes are directly testable — but the plugin still must be rebuilt+reinstalled for the fix to take effect on this box.",
+    "risks": "THE HARNESS CANNOT CURRENTLY CATCH THIS: scripts/tests/postflight.sh's fake proxy (the `case 'list_tasks'` stub, ~line 105) ALWAYS returns `task-postflight` in its response. The stub does not model pagination at all, which is precisely why a green harness coexisted with a totally inert auto-commit path in production. A regression test that does not first make the CURRENT wrapper fail proves nothing — add the truncation mode and watch it fail before fixing.\nERROR HANDLING IS THE ACTUAL DEFECT, not a nice-to-have: a failed/empty status lookup is currently indistinguishable from 'task legitimately is not in REVIEW', and both fall out of the block in silence. The fix must separate them — lookup failure is an ERROR that warns and escalates to chat; a genuine non-REVIEW status stays a quiet no-op. Collapsing them back together re-creates the bug with extra steps.\nBOTH WRAPPERS OR NEITHER: the JetBrains launcher picks .ps1 or .sh by platform (and WSL agent mode always uses .sh). Fixing only PowerShell leaves every Linux/macOS/WSL fleet silently broken, and the divergence is invisible until someone runs the other platform.\nPLUGIN REBUILD REQUIRED: the fleet runs the INSTALLED plugin's bundled scripts. They are byte-identical to the repo today, so the fix is inert on this box until `./gradlew buildPlugin` + `.\\scripts\\install-all.ps1` (mem:moes-installed-plugin-staleness). The DoD's 'live run' item cannot pass without it.\nSHARED DIRTY TREE + THE BUG ITSELF: uncommitted fleet work is piled up in this tree precisely because of this defect. Do NOT `git add -A` and sweep it into your commit while testing the commit path — that is the failure mode this bug already caused once. Check `git status` before any live-run step and scope commits deliberately.\nDO NOT EDIT INSTALLED PLUGIN FILES directly — that needs the user's explicit go-ahead; go through buildPlugin + install.\nPOWERSHELL STDERR TRAP: the script sets $ErrorActionPreference='Stop' and native git writes progress to stderr on SUCCESS; ps1:2106-2109 documents this. Any new `2>&1 |` merge you add near the git calls can turn benign stderr into a terminating NativeCommandError.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "packages/moe-daemon/src/tools/listTasks.ts"
+    ]
+  },
+  "budget": {
+    "wallClockMs": 14400000
+  },
+  "planApprovedAt": "2026-07-31T20:39:07.495Z",
+  "workStartedAt": "2026-07-31T20:39:54.283Z"
 }

@@ -1,7 +1,7 @@
 /**
  * Reads docs/skills/<name>/SKILL.md (+ SOURCE.md per skill) and
  * docs/skills/manifest.json + LICENSE-VENDORED.md from the repo root,
- * and generates src/util/skillFiles.ts with their contents embedded
+ * and generates src/generated/skillFiles.ts with their contents embedded
  * as template-literal strings so the daemon can write them at init
  * without needing the source docs directory at runtime.
  *
@@ -17,7 +17,7 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const skillsDir = path.join(repoRoot, 'docs', 'skills');
 const manifestPath = path.join(skillsDir, 'manifest.json');
 const licensePath = path.join(skillsDir, 'LICENSE-VENDORED.md');
-const outPath = path.join(__dirname, '..', 'src', 'util', 'skillFiles.ts');
+const outPath = path.join(__dirname, '..', 'src', 'generated', 'skillFiles.ts');
 
 if (!fs.existsSync(skillsDir)) {
   console.log('docs/skills not found — skipping skillFiles.ts regeneration (using committed version)');
@@ -132,7 +132,7 @@ const output = `// =============================================================
 
 import fs from 'fs';
 import path from 'path';
-import { atomicWriteText } from './atomicWrite.js';
+import { atomicWriteText } from '../util/atomicWrite.js';
 
 /**
  * Full content of every SKILL.md (and its SOURCE.md, when vendored), keyed by
@@ -243,6 +243,7 @@ export function writeSkillFiles(moePath: string): void {
 }
 `;
 
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, output);
 console.log(
   'Generated ' +

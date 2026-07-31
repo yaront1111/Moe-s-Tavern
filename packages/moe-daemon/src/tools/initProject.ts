@@ -3,8 +3,8 @@ import type { StateManager } from '../state/StateManager.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { writeInitFiles } from '../util/initFiles.js';
-import { writeSkillFiles } from '../util/skillFiles.js';
+import { writeInitFiles } from '../generated/initFiles.js';
+import { writeSkillFiles } from '../generated/skillFiles.js';
 import { writeClaudeHook } from '../util/claudeHook.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {

@@ -1,8 +1,9 @@
+// Tests src/generated/initFiles.ts; the subject is prebuild-generated, but this test is handwritten.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { writeInitFiles, ROLE_DOCS, SUBAGENT_DOCS, GITIGNORE_CONTENT } from './initFiles.js';
+import { writeInitFiles, ROLE_DOCS, SUBAGENT_DOCS, GITIGNORE_CONTENT } from '../generated/initFiles.js';
 
 const MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
 

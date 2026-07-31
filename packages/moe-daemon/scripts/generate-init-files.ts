@@ -1,6 +1,6 @@
 /**
  * Reads docs/roles/*.md and docs/agents/moe-*.md from the repo root and
- * generates src/util/initFiles.ts with their contents embedded as template-
+ * generates src/generated/initFiles.ts with their contents embedded as template-
  * literal strings so the daemon can write them at init without needing the
  * source docs directory at runtime.
  *
@@ -23,7 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const rolesDir = path.join(repoRoot, 'docs', 'roles');
 const subagentsDir = path.join(repoRoot, 'docs', 'agents');
-const outPath = path.join(__dirname, '..', 'src', 'util', 'initFiles.ts');
+const outPath = path.join(__dirname, '..', 'src', 'generated', 'initFiles.ts');
 
 // Skip regeneration when docs dir is not available (e.g. Docker builds
 // where the build context is only packages/moe-daemon). The committed
@@ -91,7 +91,7 @@ const output = `// =============================================================
 
 import fs from 'fs';
 import path from 'path';
-import { atomicWriteText } from './atomicWrite.js';
+import { atomicWriteText } from '../util/atomicWrite.js';
 
 /**
  * Full content of role docs, auto-generated from docs/roles/*.md.
@@ -214,5 +214,6 @@ export function writeInitFiles(moePath: string): void {
 }
 `;
 
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, output);
 console.log('Generated ' + outPath + ' (' + roleFiles.length + ' role docs + ' + subagentFiles.length + ' subagents, sha-stamped)');

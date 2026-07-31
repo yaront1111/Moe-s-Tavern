@@ -80,7 +80,8 @@ packages/moe-daemon/
 │   └── backfills/              # idempotent start-time backfills (e.g. task metrics)
 ├── src/migrations/             # project.json schemaVersion migrations
 ├── src/tools/                  # MCP tools (registry: tools/index.ts getTools())
-├── src/util/                   # shared helpers + generated initFiles/skillFiles
+├── src/generated/              # prebuild output (initFiles/skillFiles)
+├── src/util/                   # shared helpers
 └── src/types/schema.ts         # Canonical types
 ```
 
