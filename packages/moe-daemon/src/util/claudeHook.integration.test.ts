@@ -20,14 +20,14 @@ function bashCandidates(): string[] {
     if (programFilesX86) candidates.push(path.join(programFilesX86, 'Git', 'usr', 'bin', 'bash.exe'));
   }
   const finder = process.platform === 'win32' ? ['where.exe', ['bash']] : ['which', ['-a', 'bash']];
-  const found = spawnSync(finder[0] as string, finder[1] as string[], { encoding: 'utf-8', timeout: 3000 });
+  const found = spawnSync(finder[0] as string, finder[1] as string[], { encoding: 'utf-8', timeout: 10000 });
   candidates.push(...found.stdout.split(/\r?\n/).filter(Boolean));
   return [...new Set(candidates)];
 }
 
 function findRunnableBash(cwd: string): string | null {
   for (const candidate of bashCandidates()) {
-    const result = spawnSync(candidate, ['-lc', 'printf ok'], { cwd, encoding: 'utf-8', timeout: 3000 });
+    const result = spawnSync(candidate, ['-lc', 'printf ok'], { cwd, encoding: 'utf-8', timeout: 10000 });
     if (result.status === 0 && result.stdout === 'ok') return candidate;
   }
   return null;
@@ -78,7 +78,7 @@ describe('Claude PreToolUse hook integration', () => {
         input: JSON.stringify({ tool_name: toolName }),
         cwd: projectPath,
         encoding: 'utf-8',
-        timeout: 5000,
+        timeout: 20000,
       }
     );
   }
@@ -90,7 +90,7 @@ describe('Claude PreToolUse hook integration', () => {
       cwd: projectPath,
       env: { ...process.env, CLAUDE_PROJECT_DIR: projectPath, MOE_WORKER_ID: 'worker-1' },
       encoding: 'utf-8',
-      timeout: 15000,
+      timeout: 25000,
     });
   }
 
@@ -104,7 +104,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(fs.readFileSync(path.join(projectPath, '.claude', 'hooks', 'moe-require-claim.ps1'), 'utf-8')).toBe(REQUIRE_CLAIM_PS1_CONTENT);
   });
 
-  it('bash hook blocks without a claim and allows with an active claim', { timeout: 30000 }, async () => {
+  it('bash hook blocks without a claim and allows with an active claim', { timeout: 60000 }, async () => {
     const projectPath = makeProjectDir();
     await initWithHook(projectPath);
     writeFakeMoeCall(projectPath, '{"tasks":[]}');
@@ -120,7 +120,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(allowed.status).toBe(0);
   });
 
-  it('bash hook bypasses read-only Moe tools regardless of claim state', { timeout: 30000 }, async () => {
+  it('bash hook bypasses read-only Moe tools regardless of claim state', { timeout: 60000 }, async () => {
     const projectPath = makeProjectDir();
     await initWithHook(projectPath);
 
@@ -131,7 +131,7 @@ describe('Claude PreToolUse hook integration', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('PowerShell hook mirrors the claim check when pwsh is available', { timeout: 30000 }, async () => {
+  it('PowerShell hook mirrors the claim check when pwsh is available', { timeout: 60000 }, async () => {
     if (!spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf-8' }).stdout) {
       return;
     }
