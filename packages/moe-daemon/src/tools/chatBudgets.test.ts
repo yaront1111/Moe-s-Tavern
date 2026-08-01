@@ -7,6 +7,13 @@ import { chatWaitTool } from './chatWait.js';
 import { MoeErrorCode } from '../util/errors.js';
 import path from 'path';
 
+// These tests deliberately live together rather than in chatRead/chatWait/
+// chatResync/chatSend.test.ts, even though the colocated-per-tool layout is the
+// norm everywhere else in this directory. Payload truncation and cursor-advance
+// budgets are ONE contract exercised through four entry points, and the tests
+// split 3/3/1/1 across them — sprayed per-tool, each file would hold 1-3
+// orphaned tests and the contract would stop being reviewable in one place.
+// Please don't "tidy" this back into per-tool files.
 describe('chat token budgets', () => {
   const h = new ToolTestHarness();
   beforeEach(() => h.init());

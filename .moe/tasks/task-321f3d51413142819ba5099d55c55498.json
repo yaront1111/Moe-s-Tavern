@@ -121,7 +121,7 @@
       "completedAt": "2026-07-31T22:03:51.310Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -134,17 +134,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T20:33:59.212Z",
-  "updatedAt": "2026-07-31T23:43:51.161Z",
+  "updatedAt": "2026-08-01T08:38:03.069Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T20:35:39.150Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-08-01T08:38:03.069Z",
+    "wallClockMs": 43343919
   },
   "contextFetchedBy": [
     "architect-98d69360",
     "worker-f5977052",
-    "qa-04d1cb13"
+    "qa-04d1cb13",
+    "qa-28a85898"
   ],
   "stepsCompleted": [
     "step-1",
@@ -170,7 +173,9 @@
     ]
   },
   "budget": {
-    "wallClockMs": 14400000
+    "wallClockMs": 14400000,
+    "warnedAt": "2026-08-01T08:23:24.012Z",
+    "escalatedAt": "2026-08-01T08:23:24.012Z"
   },
   "planApprovedAt": "2026-07-31T20:39:07.495Z",
   "workStartedAt": "2026-07-31T20:39:54.283Z",
@@ -200,5 +205,8 @@
       "releasedBy": "worker-f5977052",
       "reason": "qa-04d1cb13's CLI died 5 times in a row on this task and its wrapper hit the auto-resume cap and escalated to @governors (\"release_task to reassign\"). Cause is NOT this task: the transcripts are five byte-identical 30176-byte files ~33s apart, each ending in \"You've hit your monthly spend limit\". Releasing so the task is claimable by any QA once the limit is raised, instead of staying pinned to a wrapper that will never review it (its poll loop keeps lastActivityAt fresh, so the 30-min REVIEW self-heal would not fire)."
     }
-  ]
+  ],
+  "completedAt": "2026-08-01T08:38:03.069Z",
+  "reviewCompletedAt": "2026-08-01T08:38:03.069Z",
+  "reviewSummary": "All 4 DoD verified; I closed the live-run gap myself instead of taking it on the worker's word.\n\nRe-ran verification: postflight.sh exit 0 PASS; postflight.ps1 exit 0 PASS; ./gradlew cleanTest test BUILD SUCCESSFUL (plain `test` was UP-TO-DATE, so I forced a rerun).\n\nDoD1: reproduced live — list_tasks '{}' returns exactly 100 rows vs pagination.total 120. TUI cause confirmed by argv (every pre-fix -Role worker carries -Interactive, qa never does) plus zero genuine \"worker session ended\" in all .moe/messages (22 for qa).\n\nDoD2 LIVE RUN — done by me. Real daemon (port 9879) on a throwaway git project, real moe-proxy, repo wrappers (byte-identical to the installed plugin copy, so install-all.ps1 has since been run), stub CLI flipping its task to REVIEW through the daemon. Both wrappers peeled master -> moe/work-2026-08-01 and committed: ps1 024e1b8, sh ba033c1, subject \"fix(task-60e4b324...): Live auto-commit proof\". Stdout showed \"Post-flight: auto-commit+push (settings.autoCommit=true)\" and \"[OK] Committed task ...\". The reopenCount suffix proves reopenCount is read off the real get_context response. Push failed only for lack of an origin. Not covered: Agents-menu launch with a real claude CLI; that gate is covered by the flipped Kotlin test.\n\nDoD3 both directions: harness asserts the [WARN] line AND the PUSH-BLOCKED entry in chan-general.jsonl for the empty and mismatch shapes; my live sh run on a genuinely non-REVIEW task warned not at all.\n\nDoD4 not vacuous: grep of be2ce42^ for \"post-flight status lookup failed\" = 0 in both wrappers. Cases 5/6/7 added to both harnesses.\n\nRails: no forbidden patterns; tests both platforms; no getTools() change; no unscoped list_tasks left (2 comments, 2 epic-scoped calls); limit:500 never used as the status lookup.\n\nPre-existing, not from this diff, not blocking: moe-agent.sh:2596/2608 quote \"$PYTHON_CMD\", so Git Bash's `py -3` dies with \"command not found\" and the CLI returns 141. Needs its own task."
 }

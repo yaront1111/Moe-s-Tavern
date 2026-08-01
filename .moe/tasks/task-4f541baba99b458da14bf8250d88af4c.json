@@ -85,8 +85,8 @@
       ]
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-34a5d32d",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,20 +101,30 @@
       "author": "architect-98d69360",
       "content": "SCOPE RE-CUT — read before reviewing this task (architect, 2026-07-31).\n\nThis task is now **slice 1 of 4**, not the whole split. The original DoD describes the full job; the daemon exposes no update_task tool for architects, so the re-scope is recorded here instead. QA: judge this task against the slice-1 scope below, NOT against DoD item 1 (\"tools.test.ts deleted or reduced to shared-fixture helpers only\") — tools.test.ts is deliberately still populated when this slice lands. Slice 4 owns its deletion.\n\nWhy: tools.test.ts is 3147 lines / 32 describe blocks, needing ~30 destination files (22 new per-tool files, 6 existing to append into, 1 shared harness, plus tools.test.ts itself). submit_plan hard-rejects past 10 distinct affectedFiles. Unlike the StateManager split, no merge makes this fit — per-tool file count IS the deliverable. Human chose the 4-slice split over raising settings.taskSizing fleet-wide.\n\nSlice 1 scope (10 files):\n- NEW src/tools/__fixtures__/toolsHarness.ts — the 120-line beforeEach fixture (setupMoeFolder / createEpic / createTask / createWorker + temp-dir lifecycle), extracted so slices 2-4 import it instead of duplicating it\n- NEW getContext.test.ts, checkApproval.test.ts, heartbeat.test.ts\n- APPEND startStep.test.ts, completeStep.test.ts, completeTask.test.ts, reportBlocked.test.ts, submitPlan.test.ts\n- SHRINK tools.test.ts (8 describes removed, 24 remain)\n\nSiblings, sequenced by order and all blocked on this harness:\n- 2.25 task-a1e3148993f7413a900a44dce9429beb — slice 2, task/epic CRUD (9 describes)\n- 2.50 task-9cf38eb411b640c5a528866f9dc58a3b — slice 3, QA/claim/governance/archive (9 describes)\n- 2.75 slice 4 — chat/activity/cross-cutting, deletes tools.test.ts (6 describes)\n\nSlice 1 must record the pre-split `Tests N passed` count; slice 4's DoD checks the final count against it, which is what proves no test was lost across all four slices.",
       "timestamp": "2026-07-31T19:28:03.653Z"
+    },
+    {
+      "id": "comment-39064535885d4d58bd00ba55f1e450d5",
+      "author": "qa-28a85898",
+      "content": "QA VERIFICATION EVIDENCE (qa-28a85898, 2026-08-01) — slice 1, verified-in-place.\n\nState at review: task steps all PENDING, `verification: null`, filesModified empty. The deliverable had already landed in commit a22af4c (\"refactor(daemon): split monolithic tools.test.ts into colocated per-tool suites\"), which did all four slices atomically. I verified the OUTCOME instead of the plan's intermediate states (see mem:pattern-verify-a-stale-task-instead-of-redoing-it). No bytes authored by me.\n\nDesign deviation (accepted): the shared harness exists as `src/tools/toolTestHarness.ts` exporting a `ToolTestHarness` CLASS, not the planned `__fixtures__/toolsHarness.ts` + `useToolsHarness()`. Purpose satisfied; header comment naming it the shared fixture is present (lines 1-10). Stale-binding trap absent: `this.testDir/moePath/state` are reassigned in `init()` and tests read `h.state` per access — `grep -rnE 'const \\{[^}]*\\b(state|testDir|moePath)\\b'` over packages/moe-daemon/src returns ZERO hits.\nSecond deviation (accepted, noted): plan step 2 asked for try/catch around the teardown `fs.rmSync` (Windows EBUSY). Not implemented — `cleanup()` (toolTestHarness.ts:29-31) is a bare rmSync, identical to the original afterEach. That makes the landed code a purer move, not scope creep; full suite is green on Windows. Flagged for a future hardening task, not a DoD gap.\n\nPer-block census, pre-split `git show a22af4c^:.../tools.test.ts` (3147 lines, describes at the exact planned line numbers) vs current destinations:\n| block | pre its/expects | destination | delta its/expects |\n| get_context 162-371 | 11/29 | getContext.test.ts (new) | 11/29 |\n| submit_plan 372-428 | 5/5 | submitPlan.test.ts:1038 | +5/+5 |\n| check_approval 429-488 | 5/6 | checkApproval.test.ts (new) | 5/6 |\n| heartbeat 489-541 | 3/4 | heartbeat.test.ts (new) | 3/4 |\n| start_step 542-575 | 2/4 | startStep.test.ts:171 | +2/+4 |\n| complete_step 576-689 | 7/15 | completeStep.test.ts:305 | +7/+15 |\n| complete_task 690-759 | 3/11 | completeTask.test.ts:338 | +3/+11 |\n| report_blocked 760-791 | 2/4 | reportBlocked.test.ts:224 | +2/+4 |\nEvery moved block is a TOP-LEVEL describe with its own `new ToolTestHarness()` + `beforeEach(h.init)` / `afterEach(vi.restoreAllMocks(); h.cleanup())` — same lifecycle as the pre-split fixture, independent mkdtemp per instance.\n\nIDENTITY (not just counts): all 38 moved `it` titles and all 78 moved `expect(` lines multiset-compared against a22af4c^ after normalizing only the permitted `h.`-prefix re-point — 0 missing, 0 loosened.\nCORPUS BASELINE (the number step 1 never recorded, reconstructed): `it(` lines across packages/moe-daemon/src/**/*.test.ts = 844 at a22af4c^ vs 844 in the current worktree, delta 0. Test files 55 -> 77.\nHOISTED-MOCK AUDIT (mem:gotcha-hoisted-vi-mock-swallows-appended-tests): zero `vi.mock` in all 8 slice-1 destinations. No `.skip/.only/.todo`. Zero forbidden-pattern hits (eval(/innerHTML/dangerouslySetInnerHTML/__proto__).\n\nCOMMANDS RE-RUN BY QA (packages/moe-daemon, shared dirty tree incl. foreign slice-3 WIP claimNextTask.contract.test.ts):\n- `npx tsc --noEmit` -> exit 0\n- `npx vitest run` -> Test Files 78 passed (78) / Tests 866 passed (866), exit 0\n- each destination alone: getContext 11, checkApproval 5, heartbeat 3, startStep 6, completeStep 18, completeTask 18, reportBlocked 10, submitPlan 48 — all exit 0, each equal to its full-suite contribution (temp-dir independence proven).\n\nDoD: (1) tools.test.ts deleted — satisfied by a22af4c even though the scope re-cut comment deferred it to slice 4; (2) every moved describe runs under its per-tool file — yes, 8/8; (3) count identical — yes, by identity, stronger than a total; (4) full suite green — yes. APPROVED.",
+      "timestamp": "2026-08-01T08:43:22.117Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.241Z",
-  "updatedAt": "2026-07-31T23:50:15.436Z",
+  "updatedAt": "2026-08-01T08:43:33.625Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T18:35:30.405Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 10
+    "plannedDistinctFileCount": 10,
+    "doneAt": "2026-08-01T08:43:33.625Z",
+    "wallClockMs": 50883220
   },
   "contextFetchedBy": [
     "architect-98d69360",
     "worker-d7f1347d",
-    "worker-34a5d32d"
+    "worker-34a5d32d",
+    "worker-f5977052",
+    "qa-28a85898"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -149,5 +159,8 @@
       "releasedBy": "worker-34a5d32d",
       "reason": "Human explicitly confirmed takeover after the assigned worker remained stale for over two hours and did not respond to a direct coordination ping."
     }
-  ]
+  ],
+  "completedAt": "2026-08-01T08:43:33.625Z",
+  "reviewCompletedAt": "2026-08-01T08:43:33.625Z",
+  "reviewSummary": "Verified in place (deliverable pre-landed in commit a22af4c; task had no verification payload and PENDING steps — I verified the outcome, not the plan). Re-ran myself in packages/moe-daemon on the shared dirty tree: `npx tsc --noEmit` exit 0; `npx vitest run` -> Test Files 78 passed / Tests 866 passed, exit 0; each of the 8 slice-1 destinations alone (getContext 11, checkApproval 5, heartbeat 3, startStep 6, completeStep 18, completeTask 18, reportBlocked 10, submitPlan 48) exit 0 with counts equal to their full-suite contribution. Census vs `a22af4c^:tools.test.ts`: all 8 owned describes (get_context 11 its/29 expects, submit_plan 5/5, check_approval 5/6, heartbeat 3/4, start_step 2/4, complete_step 7/15, complete_task 3/11, report_blocked 2/4) land as top-level describes in the right files with exact deltas; all 38 it titles and 78 expect lines multiset-identical after only the permitted h.-prefix re-point — 0 lost, 0 loosened. Corpus baseline reconstructed since step 1 never recorded one: 844 `it(` lines at a22af4c^ vs 844 now, delta 0. Zero vi.mock in any slice-1 destination (the hoisted-mock trap that bit slice 3), zero .skip/.only, zero forbidden-pattern hits, zero `const { state|testDir|moePath }` stale destructures. DoD 1-4 all satisfied (tools.test.ts is deleted). Two accepted deviations recorded in comment-39064535885d4d58bd00ba55f1e450d5: harness landed as class `src/tools/toolTestHarness.ts` instead of `__fixtures__/toolsHarness.ts` + useToolsHarness() (purpose met, no stale bindings), and the planned try/catch around the rmSync teardown was NOT added — cleanup() is a bare rmSync identical to the original afterEach, i.e. a purer move, green on Windows."
 }
