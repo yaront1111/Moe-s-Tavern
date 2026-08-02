@@ -1244,6 +1244,29 @@ do {
             if (-not $claim.hasNext -and $claim.PSObject.Properties['alreadyAssigned'] -and $claim.alreadyAssigned -and $claim.alreadyAssigned.taskId) {
                 $resumeInfo = $claim.alreadyAssigned
             }
+            # BLOCKED hold: the daemon parked this worker's task via
+            # moe.report_blocked (usually waiting on a shared-resource lease)
+            # and will auto-flip it back to its pre-block status when the
+            # blocker clears. Relaunching a CLI onto it is pure waste — nothing
+            # can be done until the daemon unblocks it — and every relaunch
+            # would burn one of the MOE_RESUME_MAX_ATTEMPTS budget. Suppress
+            # the resume entirely (no chat escalation: a BLOCKED hold is
+            # expected daemon state, not a dying CLI) and clear the tracker so
+            # the eventual unblock starts the resume path fresh with its full
+            # attempt budget.
+            if ($resumeInfo -and $resumeInfo.PSObject.Properties['status'] -and [string]$resumeInfo.status -eq 'BLOCKED') {
+                $blockedDetail = "no reason given"
+                if ($resumeInfo.PSObject.Properties['blockedResourceId'] -and $resumeInfo.blockedResourceId) {
+                    $blockedDetail = "resource $($resumeInfo.blockedResourceId)"
+                } elseif ($resumeInfo.PSObject.Properties['blockedReason'] -and $resumeInfo.blockedReason) {
+                    $blockedDetail = [string]$resumeInfo.blockedReason
+                }
+                Write-Host "[blocked] $($resumeInfo.taskId) is BLOCKED ($blockedDetail) — suppressing auto-resume; will idle until the daemon un-blocks it." -ForegroundColor DarkYellow
+                $script:ResumeTrackTaskId = ""
+                $script:ResumeAttempts = 0
+                $script:ResumeEscalated = $false
+                $resumeInfo = $null
+            }
             if ($resumeInfo) {
                 if ($script:ResumeTrackTaskId -ne [string]$resumeInfo.taskId) {
                     $script:ResumeTrackTaskId = [string]$resumeInfo.taskId
@@ -1840,7 +1863,17 @@ $mentionsJson
         # synthesized true on every iteration), but they DO need an interactive
         # Claude session so the human can drive governance decisions. Skipping
         # the launch would leave the governor terminal dead.
-        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor') {
+        #
+        # Gated on $loopEnabled: with -NoLoop (or -PollInterval 0) there is no
+        # next iteration — skipping would print "will poll again" and then exit
+        # without ever launching, a silent no-op. Single-shot runs must still
+        # launch the CLI, which parks in moe.wait_for_task.
+        #
+        # Gated on routed mentions: pre-flight chat_read already consumed the
+        # unread messages and baked @mentions into the prompt; skipping the
+        # launch would discard them permanently. If anything tagged this
+        # worker, launch so the CLI can reply.
+        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor' -and $loopEnabled -and ($preflightRoutedMentions.Count -eq 0)) {
             Write-Host "[no-task] Skipping CLI launch — wrapper will poll again in $PollInterval s." -ForegroundColor DarkGray
             $script:CliExitCode = 0
             # Jump past the launch block to the post-flight cleanup.

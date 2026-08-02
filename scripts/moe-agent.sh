@@ -1764,6 +1764,8 @@ except Exception:
             RESUME_TASK_ID=""
             RESUME_TASK_TITLE=""
             RESUME_TASK_STATUS=""
+            RESUME_TASK_BLOCKED_RESOURCE=""
+            RESUME_TASK_BLOCKED_REASON=""
             if [ "$HAS_NEXT" = "false" ]; then
                 # Unit-separator (\x1f) fields, newlines sanitized: bash
                 # command substitution strips NUL bytes, so a '\0' separator
@@ -1777,16 +1779,42 @@ try:
     aa = d.get('alreadyAssigned') or {}
     tid = clean(aa.get('taskId'))
     if tid:
-        sys.stdout.write(tid + '\x1f' + clean(aa.get('title')) + '\x1f' + clean(aa.get('status')))
+        sys.stdout.write(tid + '\x1f' + clean(aa.get('title')) + '\x1f' + clean(aa.get('status')) + '\x1f' + clean(aa.get('blockedResourceId')) + '\x1f' + clean(aa.get('blockedReason')))
 except Exception:
     pass
 " <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
                 if [ -n "$PARSED_RESUME" ]; then
-                    IFS=$'\x1f' read -r RESUME_TASK_ID RESUME_TASK_TITLE RESUME_TASK_STATUS <<< "$PARSED_RESUME" || true
+                    IFS=$'\x1f' read -r RESUME_TASK_ID RESUME_TASK_TITLE RESUME_TASK_STATUS RESUME_TASK_BLOCKED_RESOURCE RESUME_TASK_BLOCKED_REASON <<< "$PARSED_RESUME" || true
                     RESUME_TASK_ID="${RESUME_TASK_ID:-}"
                     RESUME_TASK_TITLE="${RESUME_TASK_TITLE:-}"
                     RESUME_TASK_STATUS="${RESUME_TASK_STATUS:-}"
+                    RESUME_TASK_BLOCKED_RESOURCE="${RESUME_TASK_BLOCKED_RESOURCE:-}"
+                    RESUME_TASK_BLOCKED_REASON="${RESUME_TASK_BLOCKED_REASON:-}"
                 fi
+            fi
+            # BLOCKED hold: the daemon parked this worker's task via
+            # moe.report_blocked (usually waiting on a shared-resource lease)
+            # and will auto-flip it back to its pre-block status when the
+            # blocker clears. Relaunching a CLI onto it is pure waste -- nothing
+            # can be done until the daemon unblocks it -- and every relaunch
+            # would burn one of the MOE_RESUME_MAX_ATTEMPTS budget. Suppress
+            # the resume entirely (no chat escalation: a BLOCKED hold is
+            # expected daemon state, not a dying CLI) and clear the tracker so
+            # the eventual unblock starts the resume path fresh with its full
+            # attempt budget. Clearing RESUME_TASK_ID routes this iteration
+            # into the existing no-task path (same mechanism as the cap path).
+            if [ -n "$RESUME_TASK_ID" ] && [ "$RESUME_TASK_STATUS" = "BLOCKED" ]; then
+                BLOCKED_DETAIL="no reason given"
+                if [ -n "$RESUME_TASK_BLOCKED_RESOURCE" ]; then
+                    BLOCKED_DETAIL="resource $RESUME_TASK_BLOCKED_RESOURCE"
+                elif [ -n "$RESUME_TASK_BLOCKED_REASON" ]; then
+                    BLOCKED_DETAIL="$RESUME_TASK_BLOCKED_REASON"
+                fi
+                echo -e "${YELLOW}[blocked]${NC} $RESUME_TASK_ID is BLOCKED ($BLOCKED_DETAIL) -- suppressing auto-resume; will idle until the daemon un-blocks it."
+                RESUME_TRACK_TASK_ID=""
+                RESUME_ATTEMPTS=0
+                RESUME_ESCALATED=false
+                RESUME_TASK_ID=""
             fi
             if [ -n "$RESUME_TASK_ID" ]; then
                 if [ "$RESUME_TRACK_TASK_ID" != "$RESUME_TASK_ID" ]; then
@@ -2581,7 +2609,39 @@ for line in sys.stdin:
 PYEOF
 )
 
-        if [ "$AUTO_CLAIM" = true ]; then
+        # No-task fast path (parity with moe-agent.ps1): when the pre-flight
+        # reports no claimable task, skip launching the CLI entirely. The
+        # outer polling loop will sleep POLL_INTERVAL seconds and retry
+        # pre-flight. Avoids paying for a CLI session whose only job would be
+        # to call moe.wait_for_task.
+        #
+        # Governor is excluded: governors never claim tasks (PREFLIGHT_NO_TASK
+        # is synthesized true on every iteration), but they DO need an
+        # interactive Claude session so the human can drive governance
+        # decisions. Skipping the launch would leave the governor terminal
+        # dead. The interactive TUI is likewise never skipped -- the operator
+        # owns that session; only the one-shot --print mode is skippable.
+        #
+        # Gated on LOOP_ENABLED: with --no-loop (or --poll-interval 0) there is
+        # no next iteration -- skipping would print "will poll again" and then
+        # exit without ever launching, a silent no-op. Single-shot runs must
+        # still launch the CLI, which parks in moe.wait_for_task.
+        #
+        # Gated on routed mentions: pre-flight chat_read already consumed the
+        # unread messages and baked @mentions into the prompt; skipping the
+        # launch would discard them permanently. If anything tagged this
+        # worker, launch so the CLI can reply.
+        LAUNCH_SKIPPED=false
+        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$ROLE" != "governor" ] && [ "$CLAUDE_INTERACTIVE" = false ] \
+            && [ "$LOOP_ENABLED" = true ] && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
+            echo "[no-task] Skipping CLI launch -- wrapper will poll again in ${POLL_INTERVAL} s."
+            CLI_EXIT_CODE=0
+            LAUNCH_SKIPPED=true
+        fi
+
+        if [ "$LAUNCH_SKIPPED" = true ]; then
+            : # CLI spawn skipped this iteration; post-flight + loop continue below.
+        elif [ "$AUTO_CLAIM" = true ]; then
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 echo "Starting ${CLI_TYPE} with auto-claim (one-shot --print)..."
             else
