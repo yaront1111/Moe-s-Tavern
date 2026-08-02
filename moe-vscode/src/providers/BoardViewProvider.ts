@@ -415,6 +415,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         .task-card[data-status="PLANNING"] { border-left-color: #ff9800; }
         .task-card[data-status="AWAITING_APPROVAL"] { border-left-color: #ffc107; }
         .task-card[data-status="WORKING"] { border-left-color: #2196f3; }
+        .task-card[data-status="BLOCKED"] { border-left-color: #ff9800; }
         .task-card[data-status="REVIEW"] { border-left-color: #9c27b0; }
         .task-card[data-status="DONE"] { border-left-color: #4caf50; }
         .task-title-row {
@@ -495,6 +496,11 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         .chip-status {
             background: var(--vscode-badge-background);
             color: var(--vscode-badge-foreground);
+        }
+        .chip-blocked {
+            background: #ff9800;
+            color: #fff;
+            font-weight: bold;
         }
         .chip-question {
             background: #ffc107;

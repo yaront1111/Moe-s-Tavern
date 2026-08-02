@@ -164,6 +164,20 @@ interface ProjectSettings {
   // projects predating the setting keep the protection.
   refusalCascadeAutoBacklog?: boolean; // default: true
 
+  // Declared shared resources, keyed by resource id (e.g. "benchmark-box").
+  // Purely optional: moe.acquire_resource on an undeclared id auto-creates it
+  // with the defaults — declare a resource only to override them or to
+  // document it. See the Resource entity below. Updates via settings REPLACE
+  // the stored map (not a deep merge), so removal is possible.
+  resources?: Record<string, ResourceSettings>;
+  // interface ResourceSettings {
+  //   capacity?: number;     // concurrent leases; default: 1 (valid 1-100)
+  //   maxLeaseMs?: number;   // hard per-lease cap before the reaper
+  //                          // force-releases; default: 86400000 = 24h
+  //                          // (valid 60000-604800000 = 1 min - 7 days)
+  //   description?: string;  // ≤500 chars
+  // }
+
   // Chat settings (all optional, defaults applied at runtime)
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
@@ -327,6 +341,17 @@ interface Task {
   // when a compliant plan lands) — lets boards/governors see size pressure.
   planSizeWarnings?: string[];
 
+  // Block bookkeeping — all four set together on the PLANNING/WORKING/REVIEW →
+  // BLOCKED flip (moe.report_blocked, or set_task_status for the human/board
+  // path), and all cleared together on any unblock so a later resource grant
+  // or sweep can't act on stale block state.
+  blockedReason?: string | null;         // Why the task is BLOCKED
+  blockedResourceId?: string | null;     // Shared-resource id the task is queued on; the grant path
+                                         // auto-unblocks on lease grant. Null/absent = needs a human
+                                         // (chat answer / moe.unblock_worker / set_task_status)
+  blockedFromStatus?: TaskStatus | null; // Status to restore when the block clears
+  blockedAt?: string | null;             // ISO timestamp of the BLOCKED flip
+
   // Completion evidence (set by moe.complete_task; surfaced to QA via get_context)
   verification?: {
     command: string;             // Exact verification command the worker ran
@@ -365,7 +390,11 @@ type TaskStatus =
   | 'AWAITING_APPROVAL' // Plan ready for human review
   | 'WORKING'           // Worker executing plan
   | 'REVIEW'            // Work done, PR ready
-  | 'DONE';             // Merged, complete
+  | 'BLOCKED'           // Parked on something outside the fleet's control — a shared-resource
+                        // lease (blockedResourceId set; auto-unblocked on grant) or a human
+                        // answer. Not agent-claimable; the wrapper suppresses CLI relaunch
+  | 'DONE'              // Merged, complete
+  | 'ARCHIVED';         // Shelved out of agent context
 
 interface ImplementationStep {
   stepId: string;                // "step-1"
@@ -746,6 +775,71 @@ interface Team {
 
 ---
 
+## Resource
+
+**File:** `.moe/resources/{resource-id}.json`
+
+Runtime state of one shared resource — daemon-owned leases over exclusive-use infrastructure (a benchmark box, a staging DB, a GPU). Agents acquire or queue via the `moe.acquire_resource` / `moe.release_resource` / `moe.list_resources` / `moe.wait_for_resource` tools (contracts in docs/MCP_SERVER.md, `## Shared Resources`); the daemon grants FIFO-by-priority as capacity frees, and a task `BLOCKED` on a resource (`task.blockedResourceId`) is auto-unblocked when its lease is granted. Per-resource configuration lives in `settings.resources` on the Project (see `ResourceSettings` above); the file here holds only runtime state. The resource id doubles as the filename and must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
+
+```typescript
+interface ResourceState {
+  id: string;                    // "benchmark-box" — the resource id, also the filename
+  holders: ResourceLease[];      // Active leases; length ≤ resolved capacity (default 1)
+  queue: ResourceQueueEntry[];   // Waiters; granted in priority-then-FIFO order
+  createdAt: string;             // ISO 8601 — first acquire auto-creates the file
+  updatedAt: string;             // ISO 8601
+}
+
+// An active lease. Keyed by taskId — NOT workerId — so it survives CLI
+// respawns and the daemon-restart worker purge.
+interface ResourceLease {
+  taskId: string;
+  workerId: string;              // Most recent worker acting for the task
+  note?: string;                 // What the holder is running (≤500 chars)
+  etaMs?: number;                // Holder's own wall-clock estimate; informational only
+  acquiredAt: string;            // ISO 8601
+  expiresAt: string;             // Hard cap: acquiredAt + maxLeaseMs; the reap pass
+                                 // force-releases past this (bounds a crashed holder)
+}
+
+interface ResourceQueueEntry {
+  taskId: string;
+  workerId: string;
+  note?: string;
+  requestedAt: string;           // ISO 8601 — FIFO tiebreak within equal task priority
+}
+```
+
+**Example:**
+
+```json
+{
+  "id": "benchmark-box",
+  "holders": [
+    {
+      "taskId": "task-t1u2v3w4",
+      "workerId": "worker-w1x2y3z4",
+      "note": "full perf sweep on the auth service",
+      "etaMs": 7200000,
+      "acquiredAt": "2026-08-02T10:00:00Z",
+      "expiresAt": "2026-08-03T10:00:00Z"
+    }
+  ],
+  "queue": [
+    {
+      "taskId": "task-q5r6s7t8",
+      "workerId": "worker-w5x6y7z8",
+      "note": "baseline run before the cache change",
+      "requestedAt": "2026-08-02T10:15:00Z"
+    }
+  ],
+  "createdAt": "2026-08-02T10:00:00Z",
+  "updatedAt": "2026-08-02T10:15:00Z"
+}
+```
+
+---
+
 ## Chat Channel
 
 **File:** `.moe/channels/{channel-id}.json`
@@ -1014,6 +1108,8 @@ type ActivityEventType =
   | 'TASK_COMPLETED'
   | 'PR_OPENED'
   | 'TASK_REOPENED'
+  | 'TASK_BLOCKED'       // Task flipped to BLOCKED (moe.report_blocked / set_task_status)
+  | 'TASK_UNBLOCKED'     // Block cleared: resource grant, moe.unblock_worker, or set_task_status
   
   // Worker
   | 'WORKER_CONNECTED'
@@ -1022,6 +1118,13 @@ type ActivityEventType =
   | 'WORKER_BLOCKED'
   | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
   | 'WORKER_GOVERNING'   // Governor entered governance mode via moe.enter_governance
+
+  // Shared resources
+  | 'RESOURCE_ACQUIRED'      // Lease granted directly on moe.acquire_resource
+  | 'RESOURCE_QUEUED'        // Capacity full — task enqueued
+  | 'RESOURCE_RELEASED'      // Lease released (payload `forced: true` on governor/reaper force-release)
+  | 'RESOURCE_GRANTED'       // Queue entry promoted to a lease as capacity freed
+  | 'RESOURCE_LEASE_EXPIRED' // Reap pass force-released a lease past expiresAt
   
   // Proposal
   | 'PROPOSAL_CREATED'
@@ -1168,6 +1271,12 @@ function generateId(prefix: string): string {
 - Team workers: multiple workers of same role allowed per epic
 - `branch` must be unique
 
+### Resource
+- Resource ids (`settings.resources` keys, `.moe/resources/` filenames, and every tool `resourceId` param) must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (1-64 chars: letters, digits, `.`, `_`, `-`; no leading punctuation)
+- `settings.resources` updates **replace** the stored map (not a deep merge — removing a resource must be possible); unknown per-resource fields are rejected
+- `capacity` integer 1-100 (default 1); `maxLeaseMs` integer 60000-604800000 (1 min - 7 days; default 86400000 = 24h); `description` ≤500 chars
+- Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
+
 ---
 
 ## State Machines
@@ -1215,6 +1324,21 @@ function generateId(prefix: string): string {
                     │              │      (can reopen DONE)
                     └──────────────┘
 ```
+
+**BLOCKED** is a side state omitted from the diagram above:
+
+```
+  PLANNING ─┐
+  WORKING  ─┼──▶ BLOCKED     moe.report_blocked (agents) or set_task_status (human/board);
+  REVIEW   ─┘                records blockedReason / blockedResourceId / blockedFromStatus / blockedAt
+
+  BLOCKED ──▶ WORKING | PLANNING | REVIEW    restore to blockedFromStatus: the resource grant
+                                             path (auto, when blockedResourceId's lease lands),
+                                             moe.unblock_worker, or set_task_status
+  BLOCKED ──▶ BACKLOG                        manual park for human triage
+```
+
+`BLOCKED` is deliberately **not** reachable from the human-gated columns (`BACKLOG`/`AWAITING_APPROVAL`) — nothing is running there to block. It is not agent-claimable: `claim_next_task`/`wait_for_task` reject it, and the agent wrapper suppresses CLI relaunch onto a held `BLOCKED` task. Releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there; the blocked-timeout sweep parks a human-blocked task to `BACKLOG` but **skips** resource-waiting ones (`blockedResourceId` set), whose bound is the lease reaper instead. Leaving `BLOCKED` by any route clears all four `blocked*` fields.
 
 **Note:** Any column can have a WIP limit via `columnLimits` in project settings.
 

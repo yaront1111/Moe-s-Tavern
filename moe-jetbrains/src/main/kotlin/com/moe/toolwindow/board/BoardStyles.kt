@@ -27,6 +27,7 @@ object BoardStyles {
             "PLANNING" -> StatusPalette(Color(0x3B82F6), Color(0x60A5FA))
             "AWAITING_APPROVAL" -> StatusPalette(Color(0xF59E0B), Color(0xFBBF24))
             "WORKING" -> StatusPalette(Color(0x14B8A6), Color(0x2DD4BF))
+            "BLOCKED" -> StatusPalette(Color(0xF97316), Color(0xFB923C))
             "REVIEW" -> StatusPalette(Color(0x10B981), Color(0x34D399))
             "DONE" -> StatusPalette(Color(0x16A34A), Color(0x22C55E))
             "PLANNED" -> StatusPalette(Color(0x9AA0A6), Color(0x8C8F94))

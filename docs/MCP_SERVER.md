@@ -397,34 +397,43 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 ### moe.report_blocked
 
-Report a worker as blocked on a task, and page whoever can actually unblock it.
+Report a task as blocked: flips the task to `BLOCKED` (the wrapper stops relaunching sessions against the wall) and pages whoever can actually unblock it. With `resourceId`, first tries to acquire the shared resource — a free resource grants the lease and does **not** block.
 
 **Parameters:**
 ```typescript
-{ taskId: string, reason: string, needsFrom?: string, currentStepId?: string, workerId?: string }
+{ taskId: string, reason: string, needsFrom?: string, currentStepId?: string, workerId?: string, resourceId?: string }
 ```
 
 **Notes:**
-- Updates the assigned worker status to `BLOCKED` (task status is not changed).
+- **Task flip:** a task in an agent-claimable column (`PLANNING`/`WORKING`/`REVIEW`) flips to `BLOCKED`, recording `blockedReason`, `blockedResourceId` (when given), `blockedFromStatus` (the pre-block status to restore) and `blockedAt`. This is what stops wrapper churn: `claim_next_task` keeps answering `alreadyAssigned { status: "BLOCKED" }`, which the wrapper reads as "do not relaunch a CLI onto this". Tasks in other statuses keep their status (the worker is still marked `BLOCKED`).
+- Updates the assigned worker status to `BLOCKED`.
+- **Resource path** (`resourceId` set): the daemon runs the `moe.acquire_resource` grant-or-enqueue FIRST — even for an **unassigned** task (operator/plugin flow; the queue entry's `workerId` falls back to the caller, then the assignee, then `"human"`), because without a queue entry the grant path could never auto-unblock the task. Capacity free → the lease is granted, the task is **not** blocked, and the call returns `{ granted: true, lease }` — proceed, then `moe.release_resource`. Busy → the task blocks as above with `blockedResourceId` set, and the grant path auto-unblocks it (status → `blockedFromStatus`) the moment the lease is granted. `resourceId` must match the resource-id shape (see `## Shared Resources`).
 - Only the assigned worker may report a task blocked (`workerId` is auto-injected by the proxy); a `reason` is required and capped at 2000 chars.
 - **Ping routing:** the daemon direct-mentions the **architect with the freshest `lastActivityAt` inside the 120s liveness window** (`isWorkerAlive` — so a `DEAD`/deregistered architect is never picked), resolving the role through `worker.teamId`. The blocked worker itself is excluded, so an architect blocked on its own PLANNING task cannot page itself into a dead end. Ties on `lastActivityAt` break to the lowest worker id, so routing is deterministic.
 - With **no live architect**, the ping escalates to `@governors` instead.
 - Channels: the task/general system copy stays unmentioned (it lands in `#general`, which already receives the mentioned copy — prefixing both would page the same person twice); `#general` gets the mentioned copy; `#architects` additionally gets it when an architect was found; `#governors` always receives the message — unmentioned when an architect was paged (visibility without being paged), mentioned when it *is* the escalation. Every post is best-effort: a chat failure never fails `report_blocked` or skips the `BLOCKED` update.
-- This changes **only who gets paged**. Liveness rules (`LIVENESS_TIMEOUT_MS`, `isWorkerAlive`), task status, and release routing are untouched.
+- `nextAction` is emitted only when the task has an assigned worker **and no `resourceId`**. A resource block deliberately gets **no `nextAction`**: the wrapper idles (`BLOCKED` suppresses relaunch) and the grant path auto-unblocks the task, so ending the session IS the correct next step — there is nothing to wait on in-session.
+- Un-block routes: the resource grant path (auto), `moe.unblock_worker`, or a human `set_task_status`. Ordinary releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there.
 
 **Returns:**
 ```typescript
+// Resource path, capacity was free — lease granted, task NOT blocked:
+{ success: true, taskId, taskStatus: TaskStatus /* unchanged */, granted: true, lease: ResourceLease, message }
+
+// Blocked:
 {
   success: true,
   taskId: string,
-  taskStatus: TaskStatus,             // unchanged by this call
+  taskStatus: "BLOCKED" | TaskStatus, // "BLOCKED" when flipped; unchanged for non-flippable statuses
+  resourceId?: string,                // echoed when resourceId was passed …
+  granted?: false,                    // … along with the failed-grant marker
   workerStatus: "BLOCKED",
   notified: {
     target: string,                   // architect worker id, or "@governors"
     via: "freshest-live-architect" | "governors-fallback"
   },
   message: string,                    // names who was pinged
-  nextAction?: { tool: "moe.wait_for_task", ... }   // only when the task has an assigned worker
+  nextAction?: { tool: "moe.wait_for_task", ... }   // only when assigned AND not a resource block
 }
 ```
 
@@ -560,7 +569,7 @@ Return the next BACKLOG task by order.
 
 Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`. Assigns `assignedWorkerId` if provided.
 
-**Agent-claimable columns only:** `statuses` must be a subset of `PLANNING` (architect) / `WORKING` (worker) / `REVIEW` (qa) — matching the launcher status maps in `scripts/moe-agent.{ps1,sh}`. Any other value (`BACKLOG`, `AWAITING_APPROVAL`, `DONE`, `ARCHIVED`) is rejected with `INVALID_INPUT`: those columns are human-gated with no agent tool surface, so a claim there could only wedge the worker (assignment succeeds, status never transitions, `start_step`/`submit_plan`/`qa_*` all reject). This applies to explicit `taskId` claims too. To move a task out of a human-gated column, a human or governor uses `set_task_status`. The same restriction applies to `wait_for_task`'s `statuses`.
+**Agent-claimable columns only:** `statuses` must be a subset of `PLANNING` (architect) / `WORKING` (worker) / `REVIEW` (qa) — matching the launcher status maps in `scripts/moe-agent.{ps1,sh}`. Any other value (`BACKLOG`, `AWAITING_APPROVAL`, `BLOCKED`, `DONE`, `ARCHIVED`) is rejected with `INVALID_INPUT`: those columns are human-gated (or, for `BLOCKED`, waiting on an external blocker) with no agent tool surface, so a claim there could only wedge the worker (assignment succeeds, status never transitions, `start_step`/`submit_plan`/`qa_*` all reject). This applies to explicit `taskId` claims too. To move a task out of a human-gated column, a human or governor uses `set_task_status`. The same restriction applies to `wait_for_task`'s `statuses`.
 
 **Parameters:**
 ```typescript
@@ -576,7 +585,9 @@ Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`.
 
 When `taskId` is provided the priority/order ranking is bypassed — you get the named task or an error. The task must be in one of the requested `statuses`; if it's already assigned to someone else, pass `replaceExisting: true` to take over. Re-claiming a task already assigned to YOU is always allowed (resume path) and needs no `replaceExisting`.
 
-**One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
+**One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
+
+**BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason` and `blockedResourceId` (each present only when set on the task), and `nextAction` points at `moe.list_resources` instead of `get_context`. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); no `resourceId` means the block needs a human (`moe.unblock_worker` / `set_task_status`).
 
 With `preferAdjacentInEpic` on (default), candidates in the caller's currently-recorded epic (or explicit `epicId`) are ranked ahead of other epics before priority/order — so a worker waking from `wait_for_task` picks up the next adjacent task instead of jumping to an unrelated epic.
 
@@ -603,8 +614,15 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
   handoffHint?: string,             // present when priorHandoffs exist
   staleHandoffDiskState?: true,     // the tree moved since the newest handoff was written
   fileCollision?: Array<{ task: string, files: string[] }>,  // advisory only
+  alreadyAssigned?: {               // hasNext: false — you already hold an active task
+    taskId: string,
+    title: string,
+    status: TaskStatus,
+    blockedReason?: string,         // BLOCKED holds only
+    blockedResourceId?: string      // BLOCKED holds only; set = auto-unblocks on lease grant
+  },
   nextAction: {
-    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance',
+    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance' | 'moe.list_resources',
     args: object,
     reason: string,
     recommendedSkill?: { name: string, reason: string }
@@ -647,7 +665,9 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 }
 ```
 
-`statuses` is restricted to the agent-claimable columns — the same vocabulary as `claim_next_task`. Waiting on a human-gated column (`BACKLOG`, `AWAITING_APPROVAL`, `DONE`, `ARCHIVED`) is rejected: the waiter would either sleep forever or wake into a claim that is itself rejected.
+`statuses` is restricted to the agent-claimable columns — the same vocabulary as `claim_next_task`. Waiting on a human-gated column (`BACKLOG`, `AWAITING_APPROVAL`, `BLOCKED`, `DONE`, `ARCHIVED`) is rejected: the waiter would either sleep forever or wake into a claim that is itself rejected.
+
+**Own-task wake:** the caller's own *held* task matches the wait the moment it is in a requested status, even though a held task is not claimable by others. This is the un-block resume path: a session parked on `wait_for_task` while its task sat `BLOCKED` wakes as soon as the resource grant (or a human) flips the task back to `WORKING` — claiming an own-held task is the sanctioned resume (`ownedBySelf`) in `claim_next_task`.
 
 **Returns:**
 ```typescript
@@ -711,6 +731,30 @@ parked reviews, hence `BACKLOG → REVIEW`). In-flight
 states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to
 `ARCHIVED`. For archiving, prefer the dedicated `moe.archive_task` /
 `moe.archive_epic` tools below.
+
+**BLOCKED transitions:** `BLOCKED` is reachable from each agent-claimable
+column (`PLANNING`/`WORKING`/`REVIEW` → `BLOCKED`) and exits back to any of
+them or to `BACKLOG` (manual park). It is deliberately **not** reachable from
+the human-gated columns (`BACKLOG`/`AWAITING_APPROVAL`) — nothing is running
+there to block. Block bookkeeping is handled by this tool: entering `BLOCKED`
+here (the human/board path — agents use `moe.report_blocked`) records
+`blockedFromStatus` and `blockedAt` (plus `blockedReason` from `reason` when
+given); leaving `BLOCKED` by any route clears every `blocked*` field
+(`blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt`) so a
+later resource grant or sweep cannot act on stale block state. Activity
+events: `TASK_BLOCKED` on entry, `TASK_UNBLOCKED` on exit.
+
+Exits are additionally judged against **`blockedFromStatus`**: leaving
+`BLOCKED` to any status other than the one the task was blocked from requires
+that `blockedFromStatus → target` be itself a legal transition — a two-hop
+`PLANNING → BLOCKED → WORKING` must not launder past the plan-approval gate.
+Reopen accounting also keys on `blockedFromStatus` (a blocked `REVIEW` task
+sent to `WORKING` increments `reopenCount` and scrubs completion signals like
+a direct `REVIEW → WORKING` would). Assignment: entering `BLOCKED` and
+returning to `blockedFromStatus` both **preserve** `assignedWorkerId` (the
+parked worker keeps its hold); any other exit keeps the normal
+clear-on-move semantics. The plugin `/ws` board-move handler enforces the
+same rules.
 
 ---
 
@@ -891,7 +935,7 @@ Delete an epic and optionally its tasks.
 
 ### moe.unblock_worker
 
-Clear BLOCKED status on a worker, setting it back to IDLE.
+Clear BLOCKED status on a worker, setting it back to IDLE — and un-block/release the tasks it holds. This is the human "blocker resolved" lever.
 
 **Parameters:**
 ```typescript
@@ -911,9 +955,16 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
   currentTaskId: string | null,
   resolution: string,
   retryTask: boolean,
+  releasedTaskIds?: string[],   // tasks whose assignment was cleared (absent when retryTask kept them)
+  unblockedTaskIds?: string[],  // BLOCKED tasks restored to their blockedFromStatus
   message: string
 }
 ```
+
+**Notes:**
+- A `BLOCKED` task owned by the worker is un-blocked **regardless of `retryTask`** — someone explicitly asserted the blocker is gone. Its status is restored to `blockedFromStatus` (fallback `WORKING`) and every `blocked*` field (`blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt`) is cleared so the sweep/grant paths can't act on stale block state. With `retryTask: true` the worker keeps the assignment; without it, the assignment is also cleared (the task id then appears in both `unblockedTaskIds` and `releasedTaskIds`). Activity event: `TASK_UNBLOCKED`.
+- Non-`BLOCKED` active tasks are released via `nextStatusForRelease` (**requeue**, not park) when `retryTask` is false: the blocker was explicitly resolved, so the task goes straight back into its role's claim pool — the blocked-timeout sweep parks precisely because nobody resolved it.
+- Contrast with ordinary releases (daemon restart purge, `deregister_worker`, `release_task`): those deliberately keep a `BLOCKED` task `BLOCKED` — this tool is the exception.
 
 **Errors:**
 - `workerId is required`
@@ -925,7 +976,7 @@ Clear BLOCKED status on a worker, setting it back to IDLE.
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
+Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED — the blocker is still there, only `moe.unblock_worker`, the resource grant path, or `set_task_status` clears it). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
 
 **Parameters:**
 ```typescript
@@ -1022,7 +1073,7 @@ List all registered workers with presence derived from `lastActivityAt`. **Displ
 
 ### moe.deregister_worker
 
-Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING stays WORKING-unassigned, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
+Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING stays WORKING-unassigned, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
 
 **Parameters:**
 ```typescript
@@ -1731,6 +1782,162 @@ Governor-only. Record a structured critique of a submitted plan. `verdict='block
 - `block` only flips the task back to `PLANNING` when its current status is `AWAITING_APPROVAL` or `WORKING`. If a human has already advanced the task past those, the critique becomes purely advisory.
 - On `block`, posts `🚫 plan blocked on <id>` to `#architects` (with bulleted concerns) and a one-line summary to `#governors`. On `pass`, posts `✅ critique passed: <id>` to `#governors`.
 - Clears `task.pendingPlanCritique` once a critique lands (idempotent).
+
+---
+
+## Shared Resources
+
+Daemon-owned admission control for exclusive-use infrastructure (a benchmark box, a staging DB, a GPU) — replaces per-project marker files + pid probes. Leases are keyed by **task id**, not worker id, so they survive CLI respawns and the daemon-restart worker purge (the underlying work — a detached multi-hour run — survives them too). Runtime state is persisted at `.moe/resources/<id>.json` (daemon sole-writer, like all of `.moe/`).
+
+Resource ids must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (1–64 chars). Acquiring an **undeclared** id auto-creates the resource with the defaults — capacity `1`, `maxLeaseMs` `86400000` (24h; generous because real leases cover multi-hour benchmark runs). Declare overrides in `.moe/project.json` `settings.resources` (see docs/CONFIGURATION.md). The queue is ordered by task priority (`CRITICAL` > `HIGH` > `MEDIUM` > `LOW`; missing task → `MEDIUM`), then FIFO.
+
+The grant path is the point: when capacity frees (release, lease expiry, or reaping), the daemon promotes the best queue entry to a lease — and if that task is `BLOCKED` on the resource (`blockedResourceId` set via `moe.report_blocked`), flips it back to its `blockedFromStatus`, which wakes the fleet (a `🟢` grant line is also posted to the task channel and `#general`). The blocked-timeout sweep also runs a **reap pass** under the same mutex: leases past `expiresAt` are force-released (with a `⏱️` escalation to `#general` + `#governors` — the analogue of the heartbeat sidecar's max-duration cap, bounding a crashed holder), leases/queue entries whose task is gone or left the active statuses (`PLANNING`/`WORKING`/`REVIEW`/`BLOCKED`) are dropped, and freed capacity is granted onward. That sweep deliberately does **not** park a resource-waiting `BLOCKED` task to BACKLOG — it is waiting legitimately, and its bound is the lease reaper, not the blocked timeout.
+
+### moe.acquire_resource
+
+Acquire (or queue for) a lease on a shared resource. Granted immediately if capacity is free; otherwise you are queued FIFO-by-priority.
+
+**Parameters:**
+```typescript
+{
+  resourceId: string,   // 1-64 chars: letters, digits, ".", "_", "-". Undeclared ids auto-create with defaults
+  taskId: string,       // Lease owner — leases are task-keyed so they survive CLI restarts
+  workerId: string,
+  note?: string,        // What you will run (≤500 chars) — shown to queued agents and list_resources
+  etaMs?: number        // Your own wall-clock estimate in ms (informational only)
+}
+```
+
+**Returns:**
+```typescript
+// Capacity free (or you already hold a lease — renewal):
+{ success: true, granted: true, resourceId, lease: ResourceLease, message }
+
+// Busy — queued:
+{
+  success: true, granted: false, resourceId,
+  position: number,       // 1-based, in grant order (priority then FIFO)
+  queueLength: number,
+  holders: Array<{ taskId, workerId, note?, etaMs?, acquiredAt, expiresAt }>,
+  message,
+  nextAction: { tool: "moe.report_blocked", args: { taskId, workerId, reason, resourceId }, reason }
+}
+```
+
+**Notes:**
+- Caller must own the task (`assertWorkerOwns`); the task must exist.
+- **Idempotent per `taskId`:** re-acquiring an existing lease renews `expiresAt` (now + `maxLeaseMs`) and refreshes `note`/`etaMs`; re-acquiring an existing queue entry refreshes `note` without losing queue age. A direct grant also drops any stale queue entry from an earlier queued attempt.
+- `lease.expiresAt` is the hard cap (acquiredAt + `maxLeaseMs`, default 24h): the reap pass force-releases past it, so a crashed holder cannot strand the resource forever. Release explicitly when the run finishes — the cap is a crash bound, not the release mechanism.
+- When queued with no other work left on the task, follow the `nextAction`: `moe.report_blocked` with the `resourceId` parks the task (`BLOCKED`), the wrapper stops relaunching sessions, and the daemon auto-unblocks the task the moment the lease is granted. If you DO have non-resource work left, do that first and re-check with another `acquire_resource` call later — never poll in a tight loop.
+- Activity events: `RESOURCE_ACQUIRED` on grant, `RESOURCE_QUEUED` on first enqueue.
+
+---
+
+### moe.release_resource
+
+Release your lease on a shared resource (and/or leave its queue). The freed capacity is granted to the next waiter immediately, auto-unblocking its task.
+
+**Parameters:**
+```typescript
+{
+  resourceId: string,
+  workerId: string,
+  taskId?: string,   // Limit the release to this task's lease/queue entry. Default: everything held by workerId
+  force?: boolean    // Governor/human override: release regardless of ownership.
+                     // With taskId: that lease; without: ALL leases and queue entries
+}
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  resourceId: string,
+  released: string[],          // taskIds whose leases were released
+  removedFromQueue: string[],  // taskIds dropped from the queue
+  grantedTo: string[],         // taskIds granted leases from the freed capacity
+  message: string
+}
+```
+
+**Notes:**
+- **Idempotent:** releasing a resource you neither hold nor queue on is a no-op, not an error — release paths run from exit traps.
+- **Ownership is task-keyed like the lease itself:** the caller matches a lease/queue entry when its `workerId` equals the recorded one **or** when the caller is the **current assignee of the entry's task** — so a successor wrapper session (fresh `workerId` after a daemon-restart worker purge) that re-claimed the task can release the predecessor's lease.
+- The grant runs inline: the next waiter(s) in grant order get leases, and each granted task that is `BLOCKED` on this resource is flipped back to its `blockedFromStatus` (auto-unblock) with a `🟢` post to the task channel and `#general`.
+- `force: true` is the governor/human lever for a stuck lease (crashed holder that never released). Without `taskId` it clears **all** leases and queue entries on the resource — scope it with `taskId` unless you mean that.
+- Activity events: `RESOURCE_RELEASED` per released lease (with `forced` flag), then `RESOURCE_GRANTED` per grant.
+
+---
+
+### moe.list_resources
+
+List every shared resource: declared config, current lease holders (with notes/ETAs/expiry) and the wait queue in grant order.
+
+**Parameters:**
+```typescript
+{ workerId?: string }   // Optional; refreshes the caller's heartbeat when present
+```
+
+**Returns:**
+```typescript
+{
+  success: true,
+  resources: Array<{
+    id: string,
+    capacity: number,       // resolved: declared or default 1
+    maxLeaseMs: number,     // resolved: declared or default 86400000 (24h)
+    description?: string,   // from settings.resources
+    holders: Array<{ taskId, workerId, note?, etaMs?, acquiredAt, expiresAt, taskTitle? }>,
+    queue: Array<{ taskId, workerId, note?, requestedAt, position, taskTitle?, taskStatus? }>
+  }>
+}
+```
+
+**Notes:**
+- The listing is the **union** of runtime state and `settings.resources` declarations, so a declared-but-idle resource is visible before its first acquire.
+- Resources are sorted by id; each queue is sorted by grant order (priority then FIFO) with a 1-based `position`.
+- Governors use this to spot convoys, stale leases and merge opportunities.
+
+---
+
+### moe.wait_for_resource
+
+Block until this task's lease on a shared resource is granted (or the timeout fires). Ensures you are queued first (same grant-or-enqueue semantics as `moe.acquire_resource`), so a bare `wait_for_resource` call is safe.
+
+**Parameters:**
+```typescript
+{
+  resourceId: string,
+  taskId: string,
+  workerId: string,     // Your worker ID (used for cleanup on disconnect)
+  timeoutMs?: number    // Max wait in ms (default 300000, clamped to 1000–600000)
+}
+```
+
+**Returns:**
+```typescript
+// Lease granted (immediately, or on a RESOURCE_UPDATED wake):
+{ granted: true, resourceId, lease: ResourceLease,
+  nextAction: { tool: "moe.release_resource", args, reason } }  // run the work, then release
+
+// Timeout elapsed:
+{ granted: false, timedOut: true, resourceId,
+  position: number | null,   // current 1-based queue position
+  nextAction: { tool: "moe.wait_for_resource", args, reason } } // re-enter wait — or report_blocked to park
+
+// Cancelled (superseded wait, MCP client disconnect, or stale-waiter sweep):
+{ granted: false, cancelled: true }
+
+// Internal failure subscribing to state events:
+{ granted: false, error: "subscribe_failed" }
+```
+
+**Notes:**
+- Marked `blocking` — like `moe.wait_for_task` / `moe.chat_wait`, the MCP dispatch layer does **not** wrap it in the global state mutex (it can park for minutes; all other tools stay serialized). It takes the mutex only for the grant-or-enqueue mutation on entry.
+- Caller must own the task (`assertWorkerOwns`).
+- Calling `wait_for_resource` again with the same `workerId` cancels the previous wait (the earlier call resolves `{ granted: false, cancelled: true }`). The same cancellation fires on MCP client disconnect and when the stale-waiter sweep finds the worker no longer tracked.
+- Refreshes the worker heartbeat on entry and again on timeout, so a parked worker is not treated as idle.
+- **Prefer `moe.report_blocked` + session exit for waits expected to run hours** — the wrapper idles and the grant path auto-unblocks the task without burning an open session. This tool is for short waits inside a live session.
 
 ---
 

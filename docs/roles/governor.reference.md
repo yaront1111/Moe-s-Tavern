@@ -15,6 +15,15 @@ What to do instead, in order:
 3. **Look for a death signal**: a deregister banner in chat, a wrapper exit, the human confirming the process is gone. No death signal → keep waiting or ask the human.
 4. **Release only on a confirmed crash, and with the human's nod.** When you do release, pass a `handoffNote` if any context is recoverable from chat or the task's comments.
 
+## Shared resources
+
+Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-owned; your levers:
+
+- **Visibility**: `moe.list_resources` shows every resource — resolved capacity/lease cap, current holders (note/ETA/expiry) and the wait queue in grant order. Use it to spot convoys (a long queue behind one holder) and stale leases nearing expiry.
+- **Stuck lease**: `moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }` force-releases another holder's lease and grants the queue onward. Omitting `taskId` with `force: true` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past `maxLeaseMs` (default 24h) and posts a ⏱️ line to `#governors`, so force is for when the queue can't wait for the cap.
+- **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, description } }` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
+- **Leave resource-blocked tasks alone**: a task BLOCKED with `blockedResourceId` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
+
 ## Rail proposal patterns
 
 When a rail blocks a task you're trying to unblock, file a proposal. Common patterns:

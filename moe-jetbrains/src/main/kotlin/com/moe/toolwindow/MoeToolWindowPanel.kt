@@ -470,7 +470,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             }
 
             fun displayStatus(taskStatus: String): String {
-                return if (taskStatus == "AWAITING_APPROVAL") "PLANNING" else taskStatus
+                return when (taskStatus) {
+                    "AWAITING_APPROVAL" -> "PLANNING"
+                    "BLOCKED" -> "WORKING"
+                    else -> taskStatus
+                }
             }
 
             fun mapEpicStatus(taskStatus: String): String {
@@ -575,6 +579,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                         val existing = tasks.filter { displayStatus(it.status) == newStatus && it.epicId != epicId }
                         var order = existing.maxOfOrNull { it.order } ?: 0.0
                         for (task in epicTasks) {
+                            // BLOCKED tasks are daemon-parked (shared-resource lease /
+                            // human blocker); an epic-header sweep must never silently
+                            // un-block them. The daemon flips them back when the
+                            // blocker clears.
+                            if (task.status == "BLOCKED") continue
                             order += 1.0
                             service.updateTaskStatus(task.id, newStatus, order)
                         }

@@ -16,6 +16,10 @@ export type TaskStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'WORKING'
+  // Waiting on a shared-resource lease or a human. Not a board column of its
+  // own — the board display-maps BLOCKED into the WORKING column (matching
+  // the JetBrains plugin) and renders a BLOCKED badge on the card.
+  | 'BLOCKED'
   | 'REVIEW'
   | 'DONE'
   | 'ARCHIVED';

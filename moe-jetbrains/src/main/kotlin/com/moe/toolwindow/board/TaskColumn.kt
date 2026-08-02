@@ -64,10 +64,14 @@ class TaskColumn(
                 val taskId = parseTaskId(raw) ?: return false
                 val order = if (tasks.isEmpty()) 1.0 else (tasks.maxOf { it.order } + 1.0)
                 val existing = tasks.find { it.id == taskId }
-                val nextStatus = if (status == "PLANNING" && existing?.status == "AWAITING_APPROVAL") {
-                    "AWAITING_APPROVAL"
-                } else {
-                    status
+                // Same-column reorders must preserve display-mapped statuses: an
+                // AWAITING_APPROVAL card lives in the Planning column and a BLOCKED
+                // card lives in the Working column — re-sending the column status
+                // would silently approve/unblock the task on the daemon.
+                val nextStatus = when {
+                    status == "PLANNING" && existing?.status == "AWAITING_APPROVAL" -> "AWAITING_APPROVAL"
+                    status == "WORKING" && existing?.status == "BLOCKED" -> "BLOCKED"
+                    else -> status
                 }
                 onDrop(taskId, nextStatus, order)
                 return true

@@ -327,6 +327,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         .status-PLANNING { background: #ff9800; }
         .status-AWAITING_APPROVAL { background: #ffc107; color: #000; }
         .status-WORKING { background: #2196f3; }
+        .status-BLOCKED { background: #ff9800; }
         .status-REVIEW { background: #9c27b0; }
         .status-DONE { background: #4caf50; }
         .task-id-header {

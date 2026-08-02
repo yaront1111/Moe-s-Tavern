@@ -144,6 +144,7 @@ The `.moe/project.json` file contains project-specific settings.
 | `columnLimits` | Max tasks per board column (UI hint) | e.g. `{"WORKING": 5}` |
 | `staleWorkerTimeoutMs` | Silent-worker prune threshold: workers idle past this that own **no** active work are deleted from the worker map; owners of WORKING/PLANNING tasks are preserved (never idle-released) | Milliseconds (default: 1800000 = 30 min) |
 | `reviewStaleTimeoutMs` | REVIEW-only exception: a QA owner silent past this has its REVIEW task released (unassigned, stays REVIEW) so another QA can claim it | Milliseconds (default: 1800000 = 30 min) |
+| `resources` | Declared shared resources for `moe.acquire_resource` leases, keyed by resource id (`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). Per resource: `capacity` (concurrent leases, 1-100), `maxLeaseMs` (hard cap on any one lease before the sweep force-releases it — bounds a crashed holder; 60000-604800000 ms) and `description` (≤500 chars). Declaring is **optional**: acquiring an undeclared id auto-creates the resource with the defaults, so declare only to override them or to document the resource. A settings update **replaces** the whole map (removal must be possible). Defaults live in `packages/moe-daemon/src/state/resourceStore.ts` (`DEFAULT_RESOURCE_CAPACITY`, `DEFAULT_MAX_LEASE_MS`) | e.g. `{"benchmark-box": {"capacity": 1, "maxLeaseMs": 86400000, "description": "perf rig"}}`; defaults: capacity 1, maxLeaseMs 86400000 (24h) |
 
 ### Rails Reference
 
@@ -192,6 +193,7 @@ The `.moe/project.json` file contains project-specific settings.
 ├── workers/           # Worker registrations (worker-*.json)
 ├── teams/             # Team definitions
 ├── proposals/         # Pending proposals (proposal-*.json)
+├── resources/         # Shared-resource lease state (<resource-id>.json, daemon-written)
 ├── channels/          # Chat channels
 ├── messages/          # Chat messages
 ├── decisions/         # Pinned chat decisions

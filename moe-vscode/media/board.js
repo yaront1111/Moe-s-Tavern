@@ -9,6 +9,13 @@
             'DONE': 'Done'
         };
 
+        // Column a task is displayed in. BLOCKED has no column of its own —
+        // it is display-mapped into WORKING (mirrors the JetBrains board) so
+        // blocked tasks never silently vanish. Everything else is identity.
+        function displayStatus(status) {
+            return status === 'BLOCKED' ? 'WORKING' : status;
+        }
+
         // Restore persisted webview state if available
         const savedState = vscode.getState() || {};
         let currentState = null;
@@ -474,7 +481,11 @@
                     var stepsFp = (t.implementationPlan || []).map(function(s) {
                         return (s.stepId || '') + ':' + (s.status || '');
                     }).join(';');
-                    return [t.id, t.order, t.title, t.priority,
+                    // t.status is part of the fingerprint: the WORKING column
+                    // holds both WORKING and (display-mapped) BLOCKED tasks, so
+                    // status is no longer implied by column membership and a
+                    // WORKING<->BLOCKED flip must dirty the column.
+                    return [t.id, t.status, t.order, t.title, t.priority,
                         t.assignedWorkerId || '', (t.comments || []).length,
                         t.hasPendingQuestion || false, stepsFp].join(':');
                 }).join('|');
@@ -560,7 +571,7 @@
                     // First render or board was cleared - build all columns
                     var html = '';
                     columns.forEach(function(status) {
-                        var colTasks = filteredTasks.filter(function(t) { return t.status === status; });
+                        var colTasks = filteredTasks.filter(function(t) { return displayStatus(t.status) === status; });
                         var groupedHtml = renderGroupedTasks(colTasks, epics, status);
                         var addBtn = (status === 'BACKLOG')
                             ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
@@ -584,7 +595,7 @@
                 } else {
                     // Incremental update - only re-render changed columns
                     columns.forEach(function(status) {
-                        var colTasks = filteredTasks.filter(function(t) { return t.status === status; });
+                        var colTasks = filteredTasks.filter(function(t) { return displayStatus(t.status) === status; });
                         var colFp = computeColumnFingerprint(colTasks, epics, status);
 
                         if (colFp && colFp === columnFingerprints[status]) {
@@ -632,7 +643,7 @@
                 columnFingerprints = {};
                 var fallbackHtml = '';
                 columns.forEach(function(status) {
-                    var colTasks = filteredTasks.filter(function(t) { return t.status === status; });
+                    var colTasks = filteredTasks.filter(function(t) { return displayStatus(t.status) === status; });
                     var groupedHtml = renderGroupedTasks(colTasks, epics, status);
                     var addBtn = (status === 'BACKLOG')
                         ? '<button class="create-task-btn" data-action="createTask" title="Create Task">+</button>'
@@ -872,8 +883,15 @@
                 }
             }
 
-            // Status sub-chip (if task status differs from column)
-            if (task.status && task.status !== columnStatus) {
+            // Blocked badge: BLOCKED cards are display-mapped into the Working
+            // column, so mark them with a distinct amber chip.
+            if (task.status === 'BLOCKED') {
+                chips += '<span class="chip chip-blocked" title="Waiting on a shared-resource lease or a human">BLOCKED</span>';
+            }
+
+            // Status sub-chip (if task status differs from column; BLOCKED
+            // already has its dedicated chip above)
+            if (task.status && task.status !== 'BLOCKED' && task.status !== columnStatus) {
                 const statusLabel = task.status.toLowerCase().replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
                 chips += '<span class="chip chip-status">' + escapeHtml(statusLabel) + '</span>';
             }
@@ -993,12 +1011,18 @@
         function onDrop(event, newStatus) {
             event.preventDefault();
             if (draggedEpicId && currentState && currentState.tasks) {
-                // Epic header drop: move all tasks in this epic to the new column status
+                // Epic header drop: move all tasks in this epic to the new column status.
+                // Compare on displayStatus (identity except BLOCKED->WORKING) so tasks
+                // already displayed in the target column are not re-sent.
+                // BLOCKED tasks are skipped entirely: they are daemon-parked and an
+                // epic sweep must never emit a status update that silently un-blocks
+                // them, regardless of target column.
                 var tasksToMove = currentState.tasks.filter(function(t) {
                     return t.epicId === draggedEpicId;
                 });
                 tasksToMove.forEach(function(t) {
-                    if (t.status !== newStatus) {
+                    if (t.status === 'BLOCKED') { return; }
+                    if (displayStatus(t.status) !== newStatus) {
                         vscode.postMessage({
                             type: 'updateTaskStatus',
                             taskId: t.id,
@@ -1008,6 +1032,14 @@
                 });
                 draggedEpicId = null;
             } else if (draggedTaskId) {
+                // Same-column drop of a BLOCKED card (displayed in WORKING) must
+                // not emit a silent BLOCKED -> WORKING status change.
+                var draggedTask = currentState && currentState.tasks
+                    ? currentState.tasks.find(function(t) { return t.id === draggedTaskId; })
+                    : null;
+                if (draggedTask && draggedTask.status === 'BLOCKED' && displayStatus(draggedTask.status) === newStatus) {
+                    return;
+                }
                 vscode.postMessage({
                     type: 'updateTaskStatus',
                     taskId: draggedTaskId,
