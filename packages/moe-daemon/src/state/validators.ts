@@ -179,6 +179,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'consolidationBranch',
     'appendOnlyFiles',
     'refusalCascadeAutoBacklog',
+    'resources',
   ], 'project setting');
 
   const next: ProjectSettings = { ...project.settings };
@@ -287,11 +288,40 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     }
     next.taskSizing = merged;
   }
+  if (input.resources !== undefined) {
+    // Shared-resource declarations. REPLACES the stored map (not a deep merge):
+    // removing a resource must be possible, and per-key merge semantics would
+    // make removal impossible from this path.
+    const incoming = requirePlainObject(input.resources, 'resources');
+    const validated: NonNullable<ProjectSettings['resources']> = {};
+    for (const [key, value] of Object.entries(incoming)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(key)) {
+        throw invalidInput('resources', `invalid resource id "${key}" — use 1-64 chars of letters, digits, ".", "_", "-"`);
+      }
+      const spec = requirePlainObject(value, `resources.${key}`);
+      rejectUnknownFields(spec, ['capacity', 'maxLeaseMs', 'description'], `resources.${key} setting`);
+      const entry: NonNullable<ProjectSettings['resources']>[string] = {};
+      if (spec.capacity !== undefined) {
+        entry.capacity = validateIntegerValue(spec.capacity, `resources.${key}.capacity`, 1, 100);
+      }
+      if (spec.maxLeaseMs !== undefined) {
+        entry.maxLeaseMs = validateIntegerValue(spec.maxLeaseMs, `resources.${key}.maxLeaseMs`, 60000, 604800000);
+      }
+      if (spec.description !== undefined) {
+        entry.description = validateStringValue(spec.description, `resources.${key}.description`, {
+          maxLength: 500,
+          trim: true,
+        });
+      }
+      validated[key] = entry;
+    }
+    next.resources = validated;
+  }
   if (input.columnLimits !== undefined) {
     const incoming = requirePlainObject(input.columnLimits, 'columnLimits');
     const merged: Record<string, number> = { ...(next.columnLimits || {}) };
     for (const [key, value] of Object.entries(incoming)) {
-      validateEnumValue(key, 'columnLimits key', ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'DONE', 'ARCHIVED'] as const);
+      validateEnumValue(key, 'columnLimits key', ['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'BLOCKED', 'DONE', 'ARCHIVED'] as const);
       merged[key] = validateIntegerValue(value, `columnLimits.${key}`, 1, 1000);
     }
     next.columnLimits = merged;

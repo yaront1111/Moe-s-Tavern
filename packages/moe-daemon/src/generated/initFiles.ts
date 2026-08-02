@@ -205,7 +205,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=81ea7e05636b -->
+  'governor.reference.md': `<!-- moe-generated: sha=c6bbadd9b263 -->
 
 # Governor — Reference
 
@@ -223,6 +223,15 @@ What to do instead, in order:
 2. **Read the worker record.** \`lastError\` and \`errorCount\` are stronger signals than wall-clock silence — \`errorCount > 3\` with a recent \`lastError\` is real trouble; quiet-with-no-errors usually is not.
 3. **Look for a death signal**: a deregister banner in chat, a wrapper exit, the human confirming the process is gone. No death signal → keep waiting or ask the human.
 4. **Release only on a confirmed crash, and with the human's nod.** When you do release, pass a \`handoffNote\` if any context is recoverable from chat or the task's comments.
+
+## Shared resources
+
+Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-owned; your levers:
+
+- **Visibility**: \`moe.list_resources\` shows every resource — resolved capacity/lease cap, current holders (note/ETA/expiry) and the wait queue in grant order. Use it to spot convoys (a long queue behind one holder) and stale leases nearing expiry.
+- **Stuck lease**: \`moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }\` force-releases another holder's lease and grants the queue onward. Omitting \`taskId\` with \`force: true\` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past \`maxLeaseMs\` (default 24h) and posts a ⏱️ line to \`#governors\`, so force is for when the queue can't wait for the cap.
+- **Declaration**: tune capacity/lease caps in \`.moe/project.json\` \`settings.resources\` — \`{ "<id>": { capacity, maxLeaseMs, description } }\` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
+- **Leave resource-blocked tasks alone**: a task BLOCKED with \`blockedResourceId\` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
 
 ## Rail proposal patterns
 
@@ -357,7 +366,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.`,
-  'worker.reference.md': `<!-- moe-generated: sha=eef302e11e5d -->
+  'worker.reference.md': `<!-- moe-generated: sha=6b8e906e69d9 -->
 
 # Worker — Reference
 
@@ -403,6 +412,14 @@ moe.propose_rail {
 \`\`\`
 
 Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in \`.moe/proposals/\`; once approved, retry the step.
+
+## Shared resources (exclusive infra)
+
+When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a GPU), take a daemon lease instead of hoping nobody else is on it:
+
+1. **Acquire before you touch it**: \`moe.acquire_resource { resourceId, taskId, workerId, note }\`. Granted → do the work. Undeclared ids auto-create (capacity 1, 24h lease cap); leases are keyed by task, so a CLI respawn or daemon restart doesn't lose yours — re-acquiring just renews it.
+2. **Busy → park, never poll**: follow the returned \`nextAction\` — \`moe.report_blocked\` with the same \`resourceId\`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling \`acquire_resource\`. For a short wait inside a live session, \`moe.wait_for_resource\` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
+3. **Release when done**: \`moe.release_resource { resourceId, workerId }\` — the next waiter unparks immediately. The 24h \`maxLeaseMs\` auto-expiry is a crash bound, not a substitute for releasing.
 
 ## Quality memory
 

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import type { TaskStatus } from '../types/schema.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
 import { nextStatusForRelease } from '../state/workerLifecycle.js';
 
@@ -61,9 +62,34 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
       // claim pool. The sweep parks precisely because nobody resolved it. MCP
       // handlers run under the state mutex, so the worker + task writes stay
       // atomic.
+      // A BLOCKED task is un-blocked here regardless of retryTask — this tool
+      // IS the human "blocker resolved" lever. Restore blockedFromStatus and
+      // clear the block bookkeeping so the sweep/grant paths can't act on
+      // stale block state. nextStatusForRelease deliberately keeps BLOCKED
+      // tasks BLOCKED on ordinary releases (restart/deregister); this path is
+      // the exception because a human asserted the blocker is gone.
+      const unblockUpdates = (owned: { blockedFromStatus?: TaskStatus | null }) => ({
+        status: (owned.blockedFromStatus ?? 'WORKING') as TaskStatus,
+        blockedReason: null,
+        blockedResourceId: null,
+        blockedFromStatus: null,
+        blockedAt: null,
+      });
+
       const releasedTaskIds: string[] = [];
-      if (!params.retryTask) {
-        for (const owned of state.getActiveTasksAssignedToWorker(params.workerId)) {
+      const unblockedTaskIds: string[] = [];
+      for (const owned of state.getActiveTasksAssignedToWorker(params.workerId)) {
+        if (owned.status === 'BLOCKED') {
+          // assignedWorkerId is explicit on BOTH arms: updateTask clears the
+          // assignment on any status change when the caller omits it, which
+          // would strip the retrying worker of the very task it is resuming.
+          await state.updateTask(owned.id, {
+            ...unblockUpdates(owned),
+            assignedWorkerId: params.retryTask ? owned.assignedWorkerId : null,
+          }, 'TASK_UNBLOCKED');
+          unblockedTaskIds.push(owned.id);
+          if (!params.retryTask) releasedTaskIds.push(owned.id);
+        } else if (!params.retryTask) {
           await state.updateTask(owned.id, {
             assignedWorkerId: null,
             status: nextStatusForRelease(owned),
@@ -82,6 +108,7 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         resolution: params.resolution,
         retryTask: params.retryTask || false,
         ...(releasedTaskIds.length ? { releasedTaskIds } : {}),
+        ...(unblockedTaskIds.length ? { unblockedTaskIds } : {}),
         message: `Worker ${updated.id} unblocked. Resolution: ${params.resolution}`
       };
     }

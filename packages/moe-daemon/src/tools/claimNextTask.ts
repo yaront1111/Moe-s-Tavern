@@ -102,18 +102,35 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             .filter((t) => t.id !== params.taskId);
           if (held.length > 0) {
             const current = held[0];
+            // A BLOCKED hold is not resumable work: the wrapper reads this
+            // status and skips the CLI relaunch entirely; a live session
+            // should end rather than spin. blockedResourceId means the daemon
+            // will auto-unblock the task when its lease is granted.
+            const blockedHold = current.status === 'BLOCKED';
             return {
               hasNext: false,
               alreadyAssigned: {
                 taskId: current.id,
                 title: current.title,
                 status: current.status,
+                ...(blockedHold
+                  ? {
+                      blockedReason: current.blockedReason ?? undefined,
+                      blockedResourceId: current.blockedResourceId ?? undefined,
+                    }
+                  : {}),
               },
-              nextAction: {
-                tool: 'moe.get_context',
-                args: { taskId: current.id, workerId: params.workerId },
-                reason: `One task per worker: you already hold ${current.id} (${current.status}). Resume it, finish it (submit_plan / complete_task / qa_approve / qa_reject), or release it (moe.release_task) before claiming another.`
-              }
+              nextAction: blockedHold
+                ? {
+                    tool: 'moe.list_resources',
+                    args: { workerId: params.workerId },
+                    reason: `You hold ${current.id} but it is BLOCKED${current.blockedResourceId ? ` waiting on resource ${current.blockedResourceId} (auto-unblocks when the lease is granted)` : ` (${current.blockedReason ?? 'needs a human'})`}. Do NOT work on it. End your session and let the wrapper idle, or check the queue with list_resources.`,
+                  }
+                : {
+                    tool: 'moe.get_context',
+                    args: { taskId: current.id, workerId: params.workerId },
+                    reason: `One task per worker: you already hold ${current.id} (${current.status}). Resume it, finish it (submit_plan / complete_task / qa_approve / qa_reject), or release it (moe.release_task) before claiming another.`
+                  }
             };
           }
         }

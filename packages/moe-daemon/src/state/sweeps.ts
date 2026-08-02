@@ -25,10 +25,14 @@ import type { RailProposal, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { isWorkerAlive, nextStatusForRelease } from './workerLifecycle.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
+import { cleanupStaleResourceWaiters } from '../tools/waitForResource.js';
+import { reapResources } from './resourceStore.js';
 
 // Copied verbatim from StateManager: the statuses that count as an ACTIVE
 // assignment for stale-worker cleanup. Kept in sync by step-9's move.
-const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW']);
+// BLOCKED added with the shared-resource feature — a resource-queued task is
+// an active hold (see workerStore.ts).
+const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW', 'BLOCKED']);
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 export const PROPOSAL_PURGE_AGE_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_AGE_MS || `${7 * DAY_IN_MS}`, 10);
@@ -194,6 +198,14 @@ export async function checkBlockedTimeouts(state: StateManager): Promise<void> {
   } catch (error) {
     logger.error({ error }, 'Failed to clean stale wait_for_task waiters');
   }
+  try {
+    const staleResourceWaitersCleaned = cleanupStaleResourceWaiters(state);
+    if (staleResourceWaitersCleaned > 0) {
+      logger.info({ staleResourceWaitersCleaned }, 'Cleaned stale wait_for_resource waiters');
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to clean stale wait_for_resource waiters');
+  }
 }
 
 /** Mutating body of checkBlockedTimeouts; always invoked under state.mutex. */
@@ -219,12 +231,15 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
       // loop). Park in-flight tasks (PLANNING/WORKING/REVIEW → BACKLOG) for
       // human triage instead; un-park via set_task_status.
       for (const owned of state.getTasksAssignedToWorker(worker.id)) {
-        if (ACTIVE_ASSIGNMENT_STATUSES.has(owned.status)) {
-          await state.updateTask(owned.id, {
-            assignedWorkerId: null,
-            status: nextStatusForRelease(owned, 'park'),
-          }, 'WORKER_TIMEOUT');
-        }
+        if (!ACTIVE_ASSIGNMENT_STATUSES.has(owned.status)) continue;
+        // A resource-queued BLOCKED task is waiting legitimately — parking it
+        // to BACKLOG would lose the auto-unblock-on-grant. Its bound is the
+        // lease reaper (maxLeaseMs) plus queue-entry reaping, not this sweep.
+        if (owned.status === 'BLOCKED' && owned.blockedResourceId) continue;
+        await state.updateTask(owned.id, {
+          assignedWorkerId: null,
+          status: nextStatusForRelease(owned, 'park'),
+        }, 'WORKER_TIMEOUT');
       }
 
       await state.updateWorker(worker.id, {
@@ -269,6 +284,18 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
     if (owner.currentTaskId === task.id) {
       await state.updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt });
     }
+  }
+
+  // Shared-resource hygiene: force-release leases past their hard cap, drop
+  // leases/queue entries whose task left the active statuses, and grant the
+  // freed capacity onward. Runs under the same mutex as the rest of the sweep.
+  try {
+    const reaped = await reapResources(state, now);
+    if (reaped > 0) {
+      logger.info({ reaped }, 'Reaped stale resource leases/queue entries');
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to reap resources');
   }
 
   // Layer 3: Sweep stale workers whose lastActivityAt exceeds threshold

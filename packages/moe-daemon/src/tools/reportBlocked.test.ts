@@ -124,7 +124,10 @@ describe('moe.report_blocked', () => {
     // same channel, so a second prefixed copy would page architect-a twice.
     expect(mentionedGeneralPosts()).toHaveLength(1);
     expect(mentionedGeneralPosts()[0]).toMatch(/^@architect-a 🚧 worker-1 blocked on task-1: /);
-    expect(generalPosts).toHaveLength(2);
+    // Three unprefixed+prefixed general posts total: the taskStore's
+    // "Task moved to BLOCKED" status-change message (report_blocked now flips
+    // the task), postSystemMessage's general forward, and the mentioned copy.
+    expect(generalPosts).toHaveLength(3);
 
     expect(rolePosts).toContainEqual(['architects', mentionedGeneralPosts()[0]]);
   });
@@ -202,19 +205,123 @@ describe('moe.report_blocked', () => {
     expect(state.getWorker('worker-1')!.lastError).toBe('npm install fails behind the proxy');
   });
 
-  it('keeps the existing validation and nextAction contract', async () => {
+  it('keeps the validation contract and flips the task to BLOCKED', async () => {
     await expect(report({ reason: '   ' })).rejects.toThrow(/reason/);
     await expect(report({ reason: 'x'.repeat(2001) })).rejects.toThrow(/too long/);
     await expect(report({ taskId: 'task-nope' })).rejects.toThrow(/not found|NOT_FOUND/i);
 
     const result = await report();
     expect(result.success).toBe(true);
-    expect(result.taskStatus).toBe('WORKING');
+    // The task itself parks: this is what stops the wrapper's resume-loop
+    // churn (claim_next_task answers alreadyAssigned{status:BLOCKED} and the
+    // wrapper skips the CLI relaunch).
+    expect(result.taskStatus).toBe('BLOCKED');
     expect(result.workerStatus).toBe('BLOCKED');
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('BLOCKED');
+    // REGRESSION GUARD: updateTask clears assignment on any status change when
+    // the caller omits it — the flip must pass it explicitly, or the parked
+    // worker loses its hold, alreadyAssigned{BLOCKED} never fires and the
+    // wrapper suppression is dead code.
+    expect(task.assignedWorkerId).toBe('worker-1');
+    expect(task.blockedFromStatus).toBe('WORKING');
+    expect(task.blockedReason).toBe('npm install fails behind the proxy');
+    expect(task.blockedResourceId).toBeNull();
+    expect(task.blockedAt).toEqual(expect.any(String));
+    // Non-resource block keeps the wait_for_task hint (statuses from the
+    // pre-flip status, since BLOCKED itself is not waitable).
     expect(result.nextAction).toMatchObject({
       tool: 'moe.wait_for_task',
       args: { workerId: 'worker-1', statuses: ['WORKING'] },
     });
+  });
+
+  it('resourceId: grants a free resource instead of blocking', async () => {
+    const result = await report({ resourceId: 'benchmark-box' });
+    expect(result.granted).toBe(true);
+    expect(result.lease).toMatchObject({ taskId: 'task-1', workerId: 'worker-1' });
+    // Nothing blocked anywhere: the resource was free, so work proceeds.
+    expect(result.taskStatus).toBe('WORKING');
+    expect(state.getTask('task-1')!.status).toBe('WORKING');
+    expect(state.getWorker('worker-1')!.status).not.toBe('BLOCKED');
+    expect(state.getResource('benchmark-box')!.holders).toHaveLength(1);
+  });
+
+  it('resourceId: queues behind a holder, parks the task, and auto-unblocks on grant', async () => {
+    // Another task holds the box.
+    const now = new Date().toISOString();
+    const holderTask = {
+      id: 'task-holder', epicId: 'epic-1', title: 'Holder', description: '',
+      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      status: 'WORKING' as const, assignedWorkerId: 'worker-holder', branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN' as const, parentTaskId: null,
+      priority: 'MEDIUM' as const, order: 2, comments: [],
+      createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', 'task-holder.json'), JSON.stringify(holderTask, null, 2));
+    await state.load();
+    await addWorker('worker-holder', 'worker', 1);
+    // load() re-created maps; re-stub the chat spies' target state object.
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async () => {});
+    vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
+    await state.acquireResource({ resourceId: 'benchmark-box', taskId: 'task-holder', workerId: 'worker-holder' });
+
+    const result = await report({ resourceId: 'benchmark-box' });
+    expect(result.granted).toBe(false);
+    expect(result.taskStatus).toBe('BLOCKED');
+    // Resource blocks emit NO nextAction: ending the session is the correct
+    // next step (the wrapper idles; the daemon auto-unblocks on grant).
+    expect(result.nextAction).toBeUndefined();
+    const blocked = state.getTask('task-1')!;
+    expect(blocked.status).toBe('BLOCKED');
+    expect(blocked.assignedWorkerId).toBe('worker-1');
+    expect(blocked.blockedResourceId).toBe('benchmark-box');
+    expect(blocked.blockedFromStatus).toBe('WORKING');
+
+    // Holder releases → lease granted to task-1 → task auto-unblocks BACK TO
+    // ITS PARKED WORKER (assignment must survive both status flips).
+    await state.releaseResource({ resourceId: 'benchmark-box', workerId: 'worker-holder' });
+    const unblocked = state.getTask('task-1')!;
+    expect(unblocked.status).toBe('WORKING');
+    expect(unblocked.assignedWorkerId).toBe('worker-1');
+    expect(unblocked.blockedResourceId).toBeNull();
+    expect(unblocked.blockedReason).toBeNull();
+    expect(unblocked.blockedAt).toBeNull();
+    expect(state.getResource('benchmark-box')!.holders.map((h) => h.taskId)).toEqual(['task-1']);
+  });
+
+  it('resourceId on an UNASSIGNED task still enqueues, so the grant can un-block it', async () => {
+    // Holder occupies the box; task-1 is released (unassigned) mid-block.
+    const now = new Date().toISOString();
+    const holderTask = {
+      id: 'task-holder', epicId: 'epic-1', title: 'Holder', description: '',
+      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      status: 'WORKING' as const, assignedWorkerId: 'worker-holder', branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN' as const, parentTaskId: null,
+      priority: 'MEDIUM' as const, order: 2, comments: [],
+      createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', 'task-holder.json'), JSON.stringify(holderTask, null, 2));
+    await state.load();
+    await state.updateTask('task-1', { assignedWorkerId: null });
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async () => {});
+    vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
+    await state.acquireResource({ resourceId: 'benchmark-box', taskId: 'task-holder', workerId: 'worker-holder' });
+
+    // Operator flow: no workerId on the call, task unassigned.
+    const tool = reportBlockedTool(state);
+    const result = await tool.handler(
+      { taskId: 'task-1', reason: 'needs the box', resourceId: 'benchmark-box' }, state
+    ) as Record<string, unknown>;
+    expect(result.taskStatus).toBe('BLOCKED');
+    // The queue entry exists even though nobody is assigned — without it the
+    // grant path could never auto-unblock this task.
+    expect(state.getResource('benchmark-box')!.queue.map((q) => q.taskId)).toEqual(['task-1']);
+
+    await state.releaseResource({ resourceId: 'benchmark-box', workerId: 'worker-holder' });
+    const unblocked = state.getTask('task-1')!;
+    expect(unblocked.status).toBe('WORKING');
+    expect(unblocked.assignedWorkerId).toBeNull();
   });
 });
 

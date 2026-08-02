@@ -8,6 +8,13 @@ export type TaskStatus =
   | 'AWAITING_APPROVAL'
   | 'WORKING'
   | 'REVIEW'
+  // Waiting on something outside the fleet's control — a shared resource lease
+  // (task.blockedResourceId set; auto-unblocked by the resource grant path) or
+  // a human answer (no resourceId; unblocked via moe.unblock_worker or
+  // set_task_status). NOT agent-claimable and NOT counted as churn: the agent
+  // wrapper suppresses CLI relaunch for a held BLOCKED task instead of burning
+  // resume attempts against a wall.
+  | 'BLOCKED'
   | 'DONE'
   | 'ARCHIVED';
 
@@ -147,6 +154,13 @@ export interface ProjectSettings {
    * docs/MCP_SERVER.md.
    */
   refusalCascadeAutoBacklog?: boolean; // default: true
+  /**
+   * Declared shared resources, keyed by resource id (e.g. "benchmark-box").
+   * Purely optional: acquiring an undeclared id auto-creates it with the
+   * ResourceSettings defaults (capacity 1, maxLeaseMs 24h). Declare a resource
+   * here only to override those or to document it.
+   */
+  resources?: Record<string, ResourceSettings>;
 }
 
 export interface Project {
@@ -544,6 +558,18 @@ export interface Task {
    * cap or reopen metrics.
    */
   critiqueBlockCount?: number;
+  /** Why the task is BLOCKED (from report_blocked). Cleared on unblock. */
+  blockedReason?: string | null;
+  /**
+   * Shared-resource id the task is queued on while BLOCKED. When the lease is
+   * granted the daemon auto-unblocks the task (status → blockedFromStatus).
+   * Null/absent means the block needs a human (chat answer / unblock_worker).
+   */
+  blockedResourceId?: string | null;
+  /** Status to restore when the block clears. Set on the WORKING/PLANNING/REVIEW → BLOCKED flip. */
+  blockedFromStatus?: TaskStatus | null;
+  /** ISO timestamp of the BLOCKED flip. Cleared on unblock. */
+  blockedAt?: string | null;
 }
 
 export interface Worker {
@@ -561,6 +587,52 @@ export interface Worker {
   errorCount: number;
   teamId: string | null;
   chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
+}
+
+// =============================================================================
+// Shared resources — daemon-owned leases over exclusive-use infrastructure
+// (a benchmark box, a staging DB, a GPU). Replaces per-project marker files +
+// pid-probe scripts: agents acquire/queue via moe.* tools, the daemon grants
+// FIFO-by-priority as capacity frees, and a task BLOCKED on a resource is
+// auto-unblocked when its lease is granted.
+// =============================================================================
+
+/** An active lease. Keyed by taskId so it survives CLI respawns and daemon-restart worker purges. */
+export interface ResourceLease {
+  taskId: string;
+  workerId: string;
+  /** What the holder is doing — surfaced to queued agents and list_resources. */
+  note?: string;
+  /** Holder's own wall-clock estimate (ms), informational only. */
+  etaMs?: number;
+  acquiredAt: string;
+  /** Hard cap: the reaper force-releases past this (acquiredAt + maxLeaseMs). */
+  expiresAt: string;
+}
+
+export interface ResourceQueueEntry {
+  taskId: string;
+  workerId: string;
+  note?: string;
+  requestedAt: string;
+}
+
+/** Runtime state of one shared resource; persisted at .moe/resources/<id>.json (daemon sole-writer). */
+export interface ResourceState {
+  id: string;
+  holders: ResourceLease[];
+  queue: ResourceQueueEntry[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Optional per-resource declaration in settings.resources; undeclared resources get the defaults. */
+export interface ResourceSettings {
+  /** Concurrent leases allowed. default: 1 */
+  capacity?: number;
+  /** Hard lease cap in ms before the reaper force-releases. default: 86400000 (24h) */
+  maxLeaseMs?: number;
+  description?: string;
 }
 
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
@@ -617,6 +689,12 @@ export const ACTIVITY_EVENT_TYPES = [
   'WORKER_GOVERNING',
   'WORKER_TIMEOUT',
   'TASK_BLOCKED',
+  'TASK_UNBLOCKED',
+  'RESOURCE_ACQUIRED',
+  'RESOURCE_QUEUED',
+  'RESOURCE_RELEASED',
+  'RESOURCE_GRANTED',
+  'RESOURCE_LEASE_EXPIRED',
   'PROPOSAL_CREATED',
   'PROPOSAL_APPROVED',
   'PROPOSAL_REJECTED',
@@ -662,6 +740,7 @@ export interface MoeStateSnapshot {
   teams: Team[];
   channels: ChatChannel[];
   decisions: Decision[];
+  resources: ResourceState[];
 }
 
 // =============================================================================

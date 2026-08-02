@@ -86,6 +86,13 @@ export function nextStatusForRelease(
     case 'WORKING':
       if (context === 'park') return 'BACKLOG';
       return allStepsCompleted(task) ? 'REVIEW' : 'WORKING';
+    case 'BLOCKED':
+      // A release (restart purge, deregister, manual release_task) must NOT
+      // un-block the task: the blocker is still there. It stays BLOCKED and
+      // unassigned; the resource grant path (or a human) flips it back to
+      // blockedFromStatus, where the next agent claims it. Park still routes
+      // to BACKLOG for human triage.
+      return context === 'park' ? 'BACKLOG' : 'BLOCKED';
     case 'DONE':
       return 'DONE';
     case 'ARCHIVED':

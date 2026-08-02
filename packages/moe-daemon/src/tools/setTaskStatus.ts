@@ -14,6 +14,7 @@ const VALID_STATUSES: TaskStatus[] = [
   'AWAITING_APPROVAL',
   'WORKING',
   'REVIEW',
+  'BLOCKED',
   'DONE',
   'ARCHIVED'
 ];
@@ -30,11 +31,17 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // BACKLOG → REVIEW is the un-park path: the blocked-timeout sweep parks
   // in-flight tasks (including REVIEW) in BACKLOG, and a human restoring a
   // parked review must be able to send it straight back to the QA queue.
+  // BLOCKED ↔ the agent-claimable columns: report_blocked (or a human) parks
+  // an in-flight task on an external blocker; the resource grant path,
+  // unblock_worker, or a human flips it back. BLOCKED → BACKLOG is the manual
+  // park; BLOCKED is deliberately NOT reachable from human-gated columns
+  // (BACKLOG/AWAITING_APPROVAL) — nothing is running there to block.
   BACKLOG: ['PLANNING', 'WORKING', 'REVIEW', 'ARCHIVED'],
-  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED'],
   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED'],
+  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
+  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
+  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG'],
   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
   ARCHIVED: ['BACKLOG', 'WORKING']
 };
@@ -90,6 +97,22 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         );
       }
 
+      // BLOCKED is a parking state, not a lifecycle column: exits are judged
+      // against the status the task was blocked FROM, or a two-hop
+      // PLANNING → BLOCKED → WORKING would launder past gates the direct
+      // transition enforces (plan approval, reopen accounting). Returning to
+      // blockedFromStatus itself is always fine.
+      const effectiveFrom: TaskStatus = task.status === 'BLOCKED'
+        ? (task.blockedFromStatus ?? 'WORKING')
+        : task.status;
+      if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED'
+        && newStatus !== effectiveFrom && !isValidTransition(effectiveFrom, newStatus)) {
+        throw notAllowed(
+          'status transition',
+          `BLOCKED -> ${newStatus} would bypass the ${effectiveFrom} gates (task was blocked from ${effectiveFrom}; ${effectiveFrom} -> ${newStatus} is not a legal transition). Un-block to ${effectiveFrom} first.`
+        );
+      }
+
       // Guard the human-approval gate: AWAITING_APPROVAL→WORKING is a plan
       // approval, not a free status flip. The board's APPROVE_TASK path goes
       // through state.approveTask (which stamps planApprovedAt + emits
@@ -129,9 +152,37 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         status: newStatus
       };
 
+      // Block bookkeeping. Entering BLOCKED via this tool (human/board path —
+      // agents use report_blocked) records where to restore to; leaving BLOCKED
+      // by any route clears every blocked field so a later grant/sweep cannot
+      // act on stale block state. Assignment is preserved EXPLICITLY on both
+      // edges (updateTask clears it on any status change when omitted): a
+      // parked worker keeps its task through block-and-unblock — except the
+      // BLOCKED → BACKLOG park, which keeps the normal clear-on-move semantics.
+      if (newStatus === 'BLOCKED' && task.status !== 'BLOCKED') {
+        updates.blockedFromStatus = task.status;
+        updates.blockedAt = new Date().toISOString();
+        updates.assignedWorkerId = task.assignedWorkerId;
+        if (params.reason) updates.blockedReason = params.reason;
+      } else if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
+        updates.blockedReason = null;
+        updates.blockedResourceId = null;
+        updates.blockedFromStatus = null;
+        updates.blockedAt = null;
+        // Preserve the parked worker only when the task RETURNS to where it was
+        // blocked from; any other exit (park to BACKLOG, reopen to WORKING from
+        // a blocked REVIEW) keeps the normal clear-on-move semantics so the
+        // right role re-claims it.
+        if (newStatus === effectiveFrom) {
+          updates.assignedWorkerId = task.assignedWorkerId;
+        }
+      }
+
       // Determine if this is a reopen (transitioning from a terminal-ish column
-      // — REVIEW / DONE / ARCHIVED — back to active work).
-      const isReopening = (task.status === 'REVIEW' || task.status === 'DONE' || task.status === 'ARCHIVED') &&
+      // — REVIEW / DONE / ARCHIVED — back to active work). Judged against
+      // effectiveFrom so a REVIEW task parked in BLOCKED and then sent to
+      // WORKING still gets its reopen accounting + completion-signal scrub.
+      const isReopening = (effectiveFrom === 'REVIEW' || effectiveFrom === 'DONE' || effectiveFrom === 'ARCHIVED') &&
         (newStatus === 'WORKING' || newStatus === 'BACKLOG' || newStatus === 'PLANNING');
 
       if (params.reason) {
@@ -159,6 +210,10 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         event = 'TASK_REOPENED';
       } else if (isPlanApproval) {
         event = 'PLAN_APPROVED';
+      } else if (newStatus === 'BLOCKED' && task.status !== 'BLOCKED') {
+        event = 'TASK_BLOCKED';
+      } else if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
+        event = 'TASK_UNBLOCKED';
       } else if (newStatus === 'WORKING' && task.status !== 'WORKING') {
         event = 'TASK_STARTED';
       } else if (newStatus === 'DONE') {

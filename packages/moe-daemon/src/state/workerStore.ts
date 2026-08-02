@@ -28,7 +28,10 @@ import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schem
 import { logger } from '../util/logger.js';
 import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
 
-const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW']);
+// BLOCKED counts as an active hold: a worker parked on a resource queue still
+// owns its task (one-task-per-worker), so claim_next_task keeps returning
+// alreadyAssigned for it and the wrapper idles instead of taking second work.
+const ACTIVE_ASSIGNMENT_STATUSES = new Set<TaskStatus>(['PLANNING', 'WORKING', 'REVIEW', 'BLOCKED']);
 
 /**
  * A task is exposed as claimable when it is unassigned, or when the recorded

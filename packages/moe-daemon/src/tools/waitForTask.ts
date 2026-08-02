@@ -98,6 +98,24 @@ function findMatchingTask(
   epicId?: string,
   workerId?: string
 ): { id: string; title: string; status: string; priority: string; epicId: string } | null {
+  // The caller's OWN held task wakes the waiter the moment it is in a
+  // requested status — this is the un-block resume path: a worker parked on
+  // wait_for_task while its task sat BLOCKED must wake when the resource
+  // grant flips it back to WORKING. Not a spin risk: claiming an own-held
+  // task is the sanctioned resume (ownedBySelf) in claim_next_task, and the
+  // alreadyAssigned answer it may get instead still carries the task to act on.
+  if (workerId) {
+    const own = Array.from(state.tasks.values()).find(
+      (t) =>
+        t.assignedWorkerId === workerId &&
+        statuses.includes(t.status) &&
+        (epicId ? t.epicId === epicId : true) &&
+        !(t.status === 'REVIEW' && t.needsHumanReview === true)
+    );
+    if (own) {
+      return { id: own.id, title: own.title, status: own.status, priority: own.priority, epicId: own.epicId };
+    }
+  }
   // Eligibility here must be at least as strict as claim_next_task's ranked
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot

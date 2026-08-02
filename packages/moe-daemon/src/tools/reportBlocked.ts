@@ -5,13 +5,17 @@ import { AGENT_CLAIMABLE_STATUSES } from '../util/claimableStatuses.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { findFreshestLiveWorkerByRole } from '../util/workerLiveness.js';
+import { RESOURCE_ID_RE } from '../state/resourceStore.js';
 
 const MAX_REASON_LENGTH = 2000;
+
+/** Statuses report_blocked will flip to BLOCKED (the agent-claimable columns). */
+const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a worker as blocked on a task',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks and is auto-unblocked when the lease is granted.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -19,7 +23,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         reason: { type: 'string' },
         needsFrom: { type: 'string' },
         currentStepId: { type: 'string' },
-        workerId: { type: 'string' }
+        workerId: { type: 'string' },
+        resourceId: { type: 'string', description: 'Shared resource you are waiting on (see moe.acquire_resource). Enables auto-unblock on grant.' }
       },
       required: ['taskId', 'reason'],
       additionalProperties: false
@@ -31,12 +36,16 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         needsFrom?: string;
         currentStepId?: string;
         workerId?: string;
+        resourceId?: string;
       };
 
       if (!params.taskId) throw missingRequired('taskId');
       if (!params.reason || params.reason.trim().length === 0) throw missingRequired('reason');
       if (params.reason.length > MAX_REASON_LENGTH) {
         throw invalidInput('reason', `too long (${params.reason.length} chars). Maximum ${MAX_REASON_LENGTH} characters allowed.`);
+      }
+      if (params.resourceId !== undefined && !RESOURCE_ID_RE.test(params.resourceId)) {
+        throw invalidInput('resourceId', 'use 1-64 chars of letters, digits, ".", "_", "-"');
       }
 
       const task = state.getTask(params.taskId);
@@ -45,6 +54,51 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // Only the assigned worker may report this task as blocked. The "no
       // assigned worker" case is permitted (e.g. plugin/human flow).
       assertWorkerOwns(task, params.workerId, 'moe.report_blocked');
+
+      // Resource path: try the lease FIRST. A free resource means there is no
+      // block at all — return the lease and keep working. Runs even for an
+      // unassigned task (plugin/human flow): without the queue entry the grant
+      // path could never auto-unblock it. The lease is task-keyed; workerId is
+      // informational, falling back to 'human' for operator-initiated blocks.
+      if (params.resourceId) {
+        const acquired = await state.acquireResource({
+          resourceId: params.resourceId,
+          taskId: task.id,
+          workerId: params.workerId || task.assignedWorkerId || 'human',
+          note: params.reason,
+        });
+        if (acquired.granted) {
+          return {
+            success: true,
+            taskId: task.id,
+            taskStatus: task.status,
+            granted: true,
+            lease: acquired.lease,
+            message: `Resource ${params.resourceId} was free — lease granted, task NOT blocked. Proceed, then moe.release_resource.`,
+          };
+        }
+      }
+
+      // Flip the task itself to BLOCKED. This is what stops the wrapper churn:
+      // claim_next_task keeps answering alreadyAssigned{status:BLOCKED}, which
+      // the wrapper reads as "do not relaunch a CLI onto this". Restore target
+      // is remembered in blockedFromStatus; the resource grant path (or
+      // unblock_worker / set_task_status) flips it back.
+      // assignedWorkerId is passed EXPLICITLY: taskStore.updateTask clears the
+      // assignment on any status change when the caller omits it, and a BLOCKED
+      // task must stay owned — the whole hold/suppression/resume design keys on
+      // alreadyAssigned{status:BLOCKED} coming back to the parked worker.
+      const flipped = BLOCKABLE_STATUSES.has(task.status);
+      if (flipped) {
+        await state.updateTask(task.id, {
+          status: 'BLOCKED',
+          assignedWorkerId: task.assignedWorkerId,
+          blockedReason: params.reason,
+          blockedResourceId: params.resourceId ?? null,
+          blockedFromStatus: task.status,
+          blockedAt: new Date().toISOString(),
+        }, 'TASK_BLOCKED');
+      }
 
       if (task.assignedWorkerId) {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');
@@ -100,7 +154,10 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       const waitStatuses = (AGENT_CLAIMABLE_STATUSES as readonly string[]).includes(task.status)
         ? [task.status]
         : [task.status === 'AWAITING_APPROVAL' ? 'PLANNING' : 'WORKING'];
-      const nextAction = task.assignedWorkerId
+      // Resource-blocked tasks need no in-session waiting: the wrapper idles
+      // (BLOCKED suppresses relaunch) and the grant path auto-unblocks. Ending
+      // the session IS the correct next step, so no nextAction is emitted.
+      const nextAction = task.assignedWorkerId && !params.resourceId
         ? {
             tool: 'moe.wait_for_task',
             args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
@@ -112,7 +169,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       return {
         success: true,
         taskId: task.id,
-        taskStatus: task.status,
+        taskStatus: flipped ? 'BLOCKED' : task.status,
+        ...(params.resourceId ? { resourceId: params.resourceId, granted: false } : {}),
         workerStatus: 'BLOCKED',
         // Who was actually paged — assertable, and readable by a human eyeing
         // the tool output instead of the chat channels.

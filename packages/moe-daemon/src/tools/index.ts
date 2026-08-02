@@ -57,6 +57,10 @@ import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import { amendPlanStepTool } from './amendPlanStep.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
 import { heartbeatTool } from './heartbeat.js';
+import { acquireResourceTool } from './acquireResource.js';
+import { releaseResourceTool } from './releaseResource.js';
+import { listResourcesTool } from './listResources.js';
+import { waitForResourceTool } from './waitForResource.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -131,5 +135,9 @@ export function getTools(state: StateManager): ToolDefinition[] {
     amendPlanStepTool(state),
     deregisterWorkerTool(state),
     heartbeatTool(state),
+    acquireResourceTool(state),
+    releaseResourceTool(state),
+    listResourcesTool(state),
+    waitForResourceTool(state),
   ];
 }

@@ -44,6 +44,8 @@ import type {
   Project,
   ProjectSettings,
   RailProposal,
+  ResourceLease,
+  ResourceState,
   StepAmendment,
   StepStatus,
   Task,
@@ -155,6 +157,19 @@ import {
   togglePinDone,
   unpinMessage,
 } from './chatStore.js';
+import {
+  acquireResource,
+  getResource,
+  grantNextLeases,
+  reapResources,
+  releaseResource,
+  resolveResourceConfig,
+  type AcquireParams,
+  type AcquireResult,
+  type ReleaseParams,
+  type ReleaseResourceResult,
+  type ResourceConfig,
+} from './resourceStore.js';
 import {
   appendActivity,
   appendActivityAsync,
@@ -318,7 +333,8 @@ export type StateChangeEvent =
   | { type: 'CHANNEL_DELETED'; payload: ChatChannel }
   | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
   | { type: 'DECISION_PROPOSED'; payload: Decision }
-  | { type: 'DECISION_RESOLVED'; payload: Decision };
+  | { type: 'DECISION_RESOLVED'; payload: Decision }
+  | { type: 'RESOURCE_UPDATED'; payload: ResourceState };
 
 type StateSubscriber = (event: StateChangeEvent) => void;
 
@@ -348,6 +364,7 @@ export class StateManager {
   teams = new Map<string, Team>();
   channels = new Map<string, ChatChannel>();
   decisions = new Map<string, Decision>();
+  resources = new Map<string, ResourceState>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -655,6 +672,35 @@ export class StateManager {
 
   async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
     return checkStaleWorkers(this, livenessTimeoutMs);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Resource delegating API (implementation in ./resourceStore.ts). Signatures
+  // generated from the extracted functions, never hand-written.
+  // ---------------------------------------------------------------------------
+
+  getResource(resourceId: string): ResourceState | null {
+    return getResource(this, resourceId);
+  }
+
+  resolveResourceConfig(resourceId: string): ResourceConfig {
+    return resolveResourceConfig(this, resourceId);
+  }
+
+  async acquireResource(params: AcquireParams): Promise<AcquireResult> {
+    return acquireResource(this, params);
+  }
+
+  async releaseResource(params: ReleaseParams): Promise<ReleaseResourceResult> {
+    return releaseResource(this, params);
+  }
+
+  async grantNextLeases(resourceId: string): Promise<ResourceLease[]> {
+    return grantNextLeases(this, resourceId);
+  }
+
+  async reapResources(nowMs?: number): Promise<number> {
+    return reapResources(this, nowMs);
   }
 
   async checkBlockedTimeouts(): Promise<void> {
@@ -982,6 +1028,7 @@ export class StateManager {
       ensureChatInfrastructure(this);
       this.decisions = loadEntities<Decision>(path.join(this.moePath, 'decisions'));
       this.proposals = loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
+      this.resources = loadEntities<ResourceState>(path.join(this.moePath, 'resources'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {
@@ -1052,6 +1099,9 @@ export class StateManager {
       ),
       decisions: Array.from(this.decisions.values()).sort(
         (a, b) => a.createdAt.localeCompare(b.createdAt)
+      ),
+      resources: Array.from(this.resources.values()).sort(
+        (a, b) => a.id.localeCompare(b.id)
       )
     };
   }

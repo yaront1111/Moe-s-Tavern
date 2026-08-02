@@ -11,6 +11,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { activeWaiters } from '../tools/waitForTask.js';
 import { activeChatWaiters } from '../tools/chatWait.js';
+import { activeResourceWaiters } from '../tools/waitForResource.js';
 import { MAX_TASK_COMMENT_LENGTH } from '../tools/addComment.js';
 import { releaseTaskTool } from '../tools/releaseTask.js';
 import {
@@ -55,6 +56,13 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // payload echoing the old owner across a WORKING→REVIEW drag would defeat
   // updateTask's clear-worker-on-status-change invariant.
   'assignedWorkerId',
+  // Block bookkeeping is owned by report_blocked / the resource grant path /
+  // the BLOCKED-transition handling below — a client-supplied blockedResourceId
+  // could fake a resource wait and exempt the task from the blocked-timeout park.
+  'blockedReason',
+  'blockedResourceId',
+  'blockedFromStatus',
+  'blockedAt',
 ]);
 
 export type PluginMessage =
@@ -118,6 +126,7 @@ export class MoeWebSocketServer {
   // re-registers the waiter (the tool itself cancels+replaces the prior entry).
   private waiterOwners = new Map<string, WebSocket>();
   private chatWaiterOwners = new Map<string, WebSocket>();
+  private resourceWaiterOwners = new Map<string, WebSocket>();
   private isClosed = false;
   private closePromise: Promise<void> | null = null;
 
@@ -301,10 +310,11 @@ export class MoeWebSocketServer {
                 // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE).
                 const VALID_TRANSITIONS: Record<string, string[]> = {
                   BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
-                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG'],
+                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED'],
                   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
-                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG'],
-                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED'],
+                  WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
+                  REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
+                  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG'],
                   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                   ARCHIVED: ['BACKLOG', 'WORKING']
                 };
@@ -313,6 +323,37 @@ export class MoeWebSocketServer {
                   const allowed = VALID_TRANSITIONS[existing.status];
                   if (!allowed || !allowed.includes(newStatus)) {
                     throw new Error(`Cannot move task from ${existing.status} to ${newStatus}. Allowed: ${allowed?.join(', ') || 'none'}`);
+                  }
+                  // BLOCKED is a parking state: judge exits against the status
+                  // the task was blocked FROM (a two-hop BLOCKED hop must not
+                  // launder past the direct transition's gates), clear the
+                  // block bookkeeping, and preserve the parked worker only
+                  // when returning to that same status. Mirrors
+                  // src/tools/setTaskStatus.ts.
+                  if (existing.status === 'BLOCKED') {
+                    const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
+                    if (newStatus !== effectiveFrom
+                      && !(VALID_TRANSITIONS[effectiveFrom] ?? []).includes(newStatus)) {
+                      throw new Error(`Cannot move task from BLOCKED to ${newStatus}: it was blocked from ${effectiveFrom} and ${effectiveFrom} -> ${newStatus} is not legal. Un-block to ${effectiveFrom} first.`);
+                    }
+                    safeUpdates = {
+                      ...safeUpdates,
+                      blockedReason: null,
+                      blockedResourceId: null,
+                      blockedFromStatus: null,
+                      blockedAt: null,
+                      ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
+                    };
+                  }
+                  // Entering BLOCKED from the board parks the task in place:
+                  // record the restore target and keep the assignee.
+                  if (newStatus === 'BLOCKED') {
+                    safeUpdates = {
+                      ...safeUpdates,
+                      blockedFromStatus: existing.status,
+                      blockedAt: new Date().toISOString(),
+                      assignedWorkerId: existing.assignedWorkerId,
+                    };
                   }
                   const columnLimits = this.state.project?.settings?.columnLimits;
                   if (columnLimits && typeof columnLimits[newStatus] === 'number') {
@@ -339,8 +380,14 @@ export class MoeWebSocketServer {
                   // stale done-signals and can't be vacuously re-completed with
                   // every step still COMPLETED. The denylist above already
                   // stripped these fields from the client payload, so we own them.
+                  // Judged against blockedFromStatus for BLOCKED tasks so a
+                  // blocked REVIEW dragged to Working still gets its reopen
+                  // accounting (mirrors setTaskStatus's effectiveFrom).
+                  const reopenFrom = existing.status === 'BLOCKED'
+                    ? (existing.blockedFromStatus ?? 'WORKING')
+                    : existing.status;
                   const isReopening =
-                    (existing.status === 'REVIEW' || existing.status === 'DONE' || existing.status === 'ARCHIVED') &&
+                    (reopenFrom === 'REVIEW' || reopenFrom === 'DONE' || reopenFrom === 'ARCHIVED') &&
                     (newStatus === 'WORKING' || newStatus === 'BACKLOG' || newStatus === 'PLANNING');
                   if (isReopening) {
                     // Record this as a TASK_REOPENED activity event (not a generic
@@ -940,6 +987,8 @@ export class MoeWebSocketServer {
       this.waiterOwners.set(workerId, ws);
     } else if (toolName === 'moe.chat_wait') {
       this.chatWaiterOwners.set(workerId, ws);
+    } else if (toolName === 'moe.wait_for_resource') {
+      this.resourceWaiterOwners.set(workerId, ws);
     }
   }
 
@@ -1000,6 +1049,24 @@ export class MoeWebSocketServer {
         }
       } catch (err) {
         logger.warn({ workerId, err }, 'Error cleaning up chat waiter');
+      }
+
+      // Cancel any active wait_for_resource waiter — same ownership guard.
+      // The queue entry itself survives (task-keyed): only the parked RPC dies.
+      try {
+        if (this.resourceWaiterOwners.get(workerId) === ws) {
+          const resourceWaiter = activeResourceWaiters.get(workerId);
+          if (resourceWaiter) {
+            clearTimeout(resourceWaiter.timer);
+            resourceWaiter.unsubscribe();
+            resourceWaiter.resolve({ granted: false, cancelled: true });
+            activeResourceWaiters.delete(workerId);
+            logger.info({ workerId }, 'Cancelled active resource waiter for disconnected MCP client');
+          }
+          this.resourceWaiterOwners.delete(workerId);
+        }
+      } catch (err) {
+        logger.warn({ workerId, err }, 'Error cleaning up resource waiter');
       }
     }
 

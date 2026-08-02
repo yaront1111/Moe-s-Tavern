@@ -22,7 +22,9 @@ export function assertAgentClaimableStatuses(statuses: string[]): void {
     `${invalid.join(', ')} is not agent-claimable. Agents claim only PLANNING (architect), ` +
       `WORKING (worker), or REVIEW (qa). BACKLOG, AWAITING_APPROVAL, DONE and ARCHIVED are ` +
       `human-gated columns with no agent tool surface — claiming there wedges the worker ` +
-      `(start_step/submit_plan/qa_* all reject with INVALID_STATE). Ask a human or governor ` +
-      `to route the task with moe.set_task_status instead.`
+      `(start_step/submit_plan/qa_* all reject with INVALID_STATE) — and BLOCKED tasks are ` +
+      `waiting on a resource/human and un-block themselves (resource grant) or via ` +
+      `moe.unblock_worker. Ask a human or governor to route the task with ` +
+      `moe.set_task_status instead.`
   );
 }
