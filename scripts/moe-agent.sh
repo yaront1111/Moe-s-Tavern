@@ -2953,11 +2953,37 @@ except Exception:
                     COMMIT_MSG="$COMMIT_TYPE($PREFLIGHT_TASK_ID): ${PREFLIGHT_TASK_TITLE:-completed task}$COMMIT_SUFFIX
 
 Completed via Moe worker session."
-                    # Stage everything in the worktree. The worker may have
-                    # already committed mid-session; in that case `git diff
-                    # --cached --quiet` returns 0 and we skip the commit, then
-                    # still push to ship those mid-session commits.
-                    git -C "$PROJECT" add -A 2>/dev/null || true
+                    # Stage by the task's OWN pathspec (epic rail: a whole-tree
+                    # commit at completion is forbidden -- it absorbs other live
+                    # agents' in-flight files and mis-attributes their work).
+                    # `filesModified` is the task's durable file report; when it
+                    # is absent we fall back to -A LOUDLY so rollout is graceful
+                    # but the hole is never silent.
+                    TASK_JSON="$PROJECT/.moe/tasks/task-$PREFLIGHT_TASK_ID.json"
+                    TASK_FILES=""
+                    if [ -f "$TASK_JSON" ] && command -v node >/dev/null 2>&1; then
+                        TASK_FILES=$(node -e "
+                          try {
+                            const t = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+                            const files = Array.isArray(t.filesModified) ? t.filesModified : [];
+                            console.log(files.filter((f) => typeof f === 'string' && f).join('\n'));
+                          } catch {}
+                        " "$TASK_JSON" 2>/dev/null)
+                    fi
+                    if [ -n "$TASK_FILES" ]; then
+                        # Per-path add tolerating misses: a reported path that never
+                        # existed must not abort staging of the real ones.
+                        while IFS= read -r TASK_PATH; do
+                            [ -n "$TASK_PATH" ] && git -C "$PROJECT" add -- "$TASK_PATH" 2>/dev/null || true
+                        done <<< "$TASK_FILES"
+                        LEFTOVER=$(git -C "$PROJECT" status --porcelain 2>/dev/null | grep -c '^[ ?]' || true)
+                        if [ "${LEFTOVER:-0}" -gt 0 ]; then
+                            echo -e "${BLUE}[info]${NC} Pathspec staging left $LEFTOVER dirty path(s) untouched (other agents' in-flight work)."
+                        fi
+                    else
+                        echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID reports no filesModified; falling back to whole-tree 'git add -A' (may absorb other agents' in-flight files)."
+                        git -C "$PROJECT" add -A 2>/dev/null || true
+                    fi
                     # COMMIT_SKIP_PUSH stays true only when a commit was attempted
                     # and actually failed -- in that case we must NOT push (there is
                     # nothing new to ship and the tree is in an unknown state).

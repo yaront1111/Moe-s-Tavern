@@ -2300,10 +2300,38 @@ $mentionsJson
                     $commitSuffix = if ($finalReopenCount -gt 0) { " (retry after qa_reject #$finalReopenCount)" } else { "" }
                     $titleText = if ($preflightTaskTitle) { $preflightTaskTitle } else { "completed task" }
                     $commitMsg = "$commitType($preflightTaskId): $titleText$commitSuffix`n`nCompleted via Moe worker session."
-                    # Stage everything. Worker may have already committed mid-session;
-                    # in that case commit is a no-op and we still push any local
-                    # commits ahead of upstream.
-                    & git -C $projectPath add -A 2>$null | Out-Null
+                    # Stage by the task's OWN pathspec (epic rail: a whole-tree
+                    # commit at completion is forbidden — it absorbs other live
+                    # agents' in-flight files and mis-attributes their work).
+                    # `filesModified` is the task's durable file report; when it
+                    # is absent we fall back to -A LOUDLY so rollout is graceful
+                    # but the hole is never silent.
+                    $taskFilePaths = @()
+                    try {
+                        $taskJsonPath = Join-Path $projectPath ".moe/tasks/task-$preflightTaskId.json"
+                        if (Test-Path $taskJsonPath) {
+                            $taskJson = Get-Content $taskJsonPath -Raw | ConvertFrom-Json
+                            if ($taskJson.PSObject.Properties['filesModified'] -and $taskJson.filesModified) {
+                                $taskFilePaths = @($taskJson.filesModified | Where-Object { $_ -is [string] -and $_ })
+                            }
+                        }
+                    } catch { $taskFilePaths = @() }
+                    if ($taskFilePaths.Count -gt 0) {
+                        foreach ($taskPath in $taskFilePaths) {
+                            # Per-path add tolerating misses: a reported path that
+                            # never existed (or is outside the tree) must not
+                            # abort staging of the real ones.
+                            & git -C $projectPath add -- $taskPath 2>$null | Out-Null
+                        }
+                        $leftover = (& git -C $projectPath status --porcelain 2>$null |
+                            Where-Object { $_ -and ($_[0] -eq ' ' -or $_[0] -eq '?') }).Count
+                        if ($leftover -gt 0) {
+                            Write-Host "[info] Pathspec staging left $leftover dirty path(s) untouched (other agents' in-flight work)." -ForegroundColor Cyan
+                        }
+                    } else {
+                        Write-Host "[WARN] task $preflightTaskId reports no filesModified; falling back to whole-tree 'git add -A' (may absorb other agents' in-flight files)." -ForegroundColor Yellow
+                        & git -C $projectPath add -A 2>$null | Out-Null
+                    }
                     & git -C $projectPath diff --cached --quiet 2>$null
                     $nothingStaged = ($LASTEXITCODE -eq 0)
                     if (-not $nothingStaged) {
