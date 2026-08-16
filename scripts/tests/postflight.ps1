@@ -233,10 +233,28 @@ switch (tool) {
         # would fail. Requires git in PATH. ---
         $gateAvailable = [bool](Get-Command git -ErrorAction SilentlyContinue)
         if ($gateAvailable) {
+            # Writes the durable task record the post-flight reads to derive its
+            # commit pathspec. The fake proxy claims `task-postflight`, and the
+            # daemon stores a task at `.moe/tasks/<taskId>.json` — the id ALREADY
+            # carries the `task-` prefix, so the on-disk name is
+            # `task-postflight.json` and never `task-task-postflight.json`.
+            # Getting that resolution wrong is silent: the record simply never
+            # loads and the hook degrades to whole-tree staging.
+            function Write-TaskRecord([string]$dir, [string[]]$filesModified) {
+                New-Item -ItemType Directory -Force -Path (Join-Path $dir '.moe\tasks') | Out-Null
+                $rec = [ordered]@{
+                    id = 'task-postflight'
+                    title = 'Postflight smoke'
+                    status = 'REVIEW'
+                    filesModified = @($filesModified)
+                } | ConvertTo-Json -Depth 5
+                Set-Content -Path (Join-Path $dir '.moe\tasks\task-postflight.json') -Value $rec -Encoding UTF8
+            }
             function New-GateProject([string]$dir, [string]$gateCmd) {
                 New-Item -ItemType Directory -Force -Path (Join-Path $dir '.moe\messages') | Out-Null
                 $cfg = @{ id = 'proj-gate'; name = 'postflight-gate'; settings = @{ qualityGate = $gateCmd } } | ConvertTo-Json -Depth 5
                 Set-Content -Path (Join-Path $dir '.moe\project.json') -Value $cfg -Encoding UTF8
+                Write-TaskRecord $dir @('work.txt')
                 Set-Content -Path (Join-Path $dir '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
                 & git -C $dir init -q 2>$null | Out-Null
                 & git -C $dir config user.email 'moe@test.local' 2>$null | Out-Null
@@ -244,7 +262,7 @@ switch (tool) {
                 Set-Content -Path (Join-Path $dir 'seed.txt') -Value 'seed'
                 & git -C $dir add seed.txt 2>$null | Out-Null
                 & git -C $dir commit -qm init 2>$null | Out-Null
-                # Leave a dirty file for the post-flight `git add -A` to pick up.
+                # Leave the task's own owned path dirty for the post-flight to commit.
                 Set-Content -Path (Join-Path $dir 'work.txt') -Value 'dirty'
             }
             function Invoke-GateWrapper([string]$dir, [string]$outFile) {
@@ -337,6 +355,187 @@ switch (tool) {
                     $gateMismatchCode = Invoke-GateWrapper $gateMismatchDir $wrapperGateMismatchOut
                 } finally {
                     Remove-Item Env:FAKE_GET_CONTEXT_FAIL -ErrorAction SilentlyContinue
+                }
+
+                # --- Completion-hook COMMIT SCOPE, scenarios A-D --------------
+                # Twin of the same four scenarios in postflight.sh. The twins
+                # drift easily, so these are matched case by case against that
+                # scenario list rather than by reading the two files side by
+                # side. Two distinct leaks are covered and they are NOT the same
+                # bug: staging scope (`git add -A` when the task record did not
+                # load) and commit scope (a BARE `git commit` commits the SHARED
+                # INDEX, so a peer's already-staged file rides along). Scenario B
+                # is the only one that discriminates the second: a
+                # dirty-working-tree fixture stays green under both the broken
+                # and the fixed commit. Every scenario runs against a disposable
+                # repo under $tempRoot — a post-flight test that commits into a
+                # live tree reproduces the defect it is meant to test.
+                $scopeScenariosRun = 0
+                function New-ScopeProject([string]$dir, [string[]]$filesModified) {
+                    New-Item -ItemType Directory -Force -Path (Join-Path $dir '.moe\messages') | Out-Null
+                    $cfg = @{ id = 'proj-scope'; name = 'postflight-scope'; settings = @{} } | ConvertTo-Json -Depth 5
+                    Set-Content -Path (Join-Path $dir '.moe\project.json') -Value $cfg -Encoding UTF8
+                    Write-TaskRecord $dir $filesModified
+                    Set-Content -Path (Join-Path $dir '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+                    & git -C $dir init -q 2>$null | Out-Null
+                    & git -C $dir config user.email 'moe@test.local' 2>$null | Out-Null
+                    & git -C $dir config user.name 'Moe Test' 2>$null | Out-Null
+                    Set-Content -Path (Join-Path $dir 'seed.txt') -Value 'seed'
+                    & git -C $dir add seed.txt 2>$null | Out-Null
+                    & git -C $dir commit -qm init 2>$null | Out-Null
+                }
+                function Get-CommittedPaths([string]$dir) {
+                    return (@(& git -C $dir show --pretty=format: --name-only HEAD 2>$null |
+                        Where-Object { $_ } | Sort-Object) -join ' ')
+                }
+                function Assert-ScopeRun([string]$name, [int]$code, [string]$outFile) {
+                    if ($code -ne 0) {
+                        Get-Content $outFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        throw "SCENARIO ${name} FAILED: wrapper exited with $code"
+                    }
+                }
+
+                # Scenario A — dirty peer. Owned X and Y commit; a peer's
+                # MODIFIED tracked file and a peer's UNTRACKED file must both
+                # survive the completion untouched.
+                Write-Host '[scenario A] dirty peer files are never captured'
+                $scopeADir = Join-Path $tempRoot 'scope-a'
+                New-ScopeProject $scopeADir @('owned-a.txt', 'owned-b.txt')
+                Set-Content -Path (Join-Path $scopeADir 'peer-mod.txt') -Value 'peer-base'
+                & git -C $scopeADir add peer-mod.txt 2>$null | Out-Null
+                & git -C $scopeADir commit -qm peer-base 2>$null | Out-Null
+                Set-Content -Path (Join-Path $scopeADir 'owned-a.txt') -Value 'owned-a'
+                Set-Content -Path (Join-Path $scopeADir 'owned-b.txt') -Value 'owned-b'
+                Set-Content -Path (Join-Path $scopeADir 'peer-mod.txt') -Value 'peer-dirty'
+                Set-Content -Path (Join-Path $scopeADir 'peer-untracked.txt') -Value 'peer-new'
+                $scopeAOut = Join-Path $tempRoot 'scope-a.out'
+                Assert-ScopeRun 'A' (Invoke-GateWrapper $scopeADir $scopeAOut) $scopeAOut
+                $scopeAFiles = Get-CommittedPaths $scopeADir
+                if ($scopeAFiles -ne 'owned-a.txt owned-b.txt') {
+                    Get-Content $scopeAOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO A FAILED: commit must contain EXACTLY the owned paths; got [$scopeAFiles]"
+                }
+                $scopeAStatus = @(& git -C $scopeADir status --porcelain 2>$null)
+                if ($scopeAStatus -notcontains ' M peer-mod.txt') {
+                    throw "SCENARIO A FAILED: peer-mod.txt must still be modified-and-unstaged; status was [$($scopeAStatus -join '|')]"
+                }
+                if ($scopeAStatus -notcontains '?? peer-untracked.txt') {
+                    throw "SCENARIO A FAILED: peer-untracked.txt must still be untracked; status was [$($scopeAStatus -join '|')]"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario A] ok'
+
+                # Scenario B — pre-staged foreign index. The discriminating case:
+                # a peer stages Z into the SHARED INDEX before the hook runs.
+                # Pathspec STAGING cannot help here; only a pathspec-scoped
+                # COMMIT keeps Z out.
+                Write-Host "[scenario B] a peer's pre-staged index entry never rides along"
+                $scopeBDir = Join-Path $tempRoot 'scope-b'
+                New-ScopeProject $scopeBDir @('owned-a.txt')
+                Set-Content -Path (Join-Path $scopeBDir 'owned-a.txt') -Value 'owned-a'
+                Set-Content -Path (Join-Path $scopeBDir 'peer-staged.txt') -Value 'peer-staged'
+                & git -C $scopeBDir add peer-staged.txt 2>$null | Out-Null
+                $scopeBOut = Join-Path $tempRoot 'scope-b.out'
+                Assert-ScopeRun 'B' (Invoke-GateWrapper $scopeBDir $scopeBOut) $scopeBOut
+                $scopeBFiles = Get-CommittedPaths $scopeBDir
+                if ($scopeBFiles -ne 'owned-a.txt') {
+                    Get-Content $scopeBOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO B FAILED: commit must contain ONLY owned-a.txt; got [$scopeBFiles]"
+                }
+                & git -C $scopeBDir cat-file -e HEAD:peer-staged.txt 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    Get-Content $scopeBOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO B FAILED: the peer's pre-staged file reached HEAD — the commit is still index-scoped"
+                }
+                if (@(& git -C $scopeBDir diff --cached --name-only 2>$null) -notcontains 'peer-staged.txt') {
+                    throw "SCENARIO B FAILED: the peer's file must remain STAGED and uncommitted"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario B] ok'
+
+                # Scenario C — empty filesModified. Fails CLOSED under its own
+                # stable code and commits nothing. The dirty peer file is
+                # load-bearing: without it a restored `git add -A` would have
+                # nothing to sweep and this would pass while testing nothing.
+                Write-Host '[scenario C] empty owned-path set refuses with MOE_COMMIT_REFUSED_NO_OWNED_PATHS'
+                $scopeCDir = Join-Path $tempRoot 'scope-c'
+                New-ScopeProject $scopeCDir @()
+                Set-Content -Path (Join-Path $scopeCDir 'peer-untracked.txt') -Value 'peer-new'
+                $scopeCHead = (& git -C $scopeCDir rev-parse HEAD 2>$null)
+                $scopeCOut = Join-Path $tempRoot 'scope-c.out'
+                Assert-ScopeRun 'C' (Invoke-GateWrapper $scopeCDir $scopeCOut) $scopeCOut
+                $scopeCText = Get-Content -Raw -Path $scopeCOut
+                if ($scopeCText -notlike '*MOE_COMMIT_REFUSED_NO_OWNED_PATHS*') {
+                    Write-Host $scopeCText
+                    throw 'SCENARIO C FAILED: expected the literal reason code MOE_COMMIT_REFUSED_NO_OWNED_PATHS'
+                }
+                if ($scopeCText -like '*MOE_COMMIT_REFUSED_OWNED_PATH_MISSING*') {
+                    Write-Host $scopeCText
+                    throw 'SCENARIO C FAILED: an empty owned-path set must NOT report the missing-path code — the two causes are distinct'
+                }
+                if ((& git -C $scopeCDir rev-parse HEAD 2>$null) -ne $scopeCHead) {
+                    throw 'SCENARIO C FAILED: a refusal must commit NOTHING; HEAD moved'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario C] ok'
+
+                # Scenario D — every declared owned path is absent from disk.
+                # Distinct cause, distinct code: collapsing it into C would make
+                # a later guard change invisible.
+                Write-Host '[scenario D] all owned paths missing refuses with MOE_COMMIT_REFUSED_OWNED_PATH_MISSING'
+                $scopeDDir = Join-Path $tempRoot 'scope-d'
+                New-ScopeProject $scopeDDir @('ghost-owned.txt')
+                Set-Content -Path (Join-Path $scopeDDir 'peer-untracked.txt') -Value 'peer-new'
+                $scopeDHead = (& git -C $scopeDDir rev-parse HEAD 2>$null)
+                $scopeDOut = Join-Path $tempRoot 'scope-d.out'
+                Assert-ScopeRun 'D' (Invoke-GateWrapper $scopeDDir $scopeDOut) $scopeDOut
+                $scopeDText = Get-Content -Raw -Path $scopeDOut
+                if ($scopeDText -notlike '*MOE_COMMIT_REFUSED_OWNED_PATH_MISSING*') {
+                    Write-Host $scopeDText
+                    throw 'SCENARIO D FAILED: expected the literal reason code MOE_COMMIT_REFUSED_OWNED_PATH_MISSING'
+                }
+                if ($scopeDText -like '*MOE_COMMIT_REFUSED_NO_OWNED_PATHS*') {
+                    Write-Host $scopeDText
+                    throw 'SCENARIO D FAILED: a declared-but-absent path must NOT report the empty-set code'
+                }
+                if ((& git -C $scopeDDir rev-parse HEAD 2>$null) -ne $scopeDHead) {
+                    throw 'SCENARIO D FAILED: a refusal must commit NOTHING; HEAD moved'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario D] ok'
+
+                # Scenario E — a GLOB in filesModified. A git pathspec is a glob
+                # by default, so an entry of `*` walks straight back out to a
+                # whole-tree stage through the very "explicit pathspec" route
+                # this fix installs. Measured on a throwaway repo:
+                # `git add -- '*'` staged every file; `git add -- ':(literal)*'`
+                # matched nothing. Only this scenario can catch that escape.
+                Write-Host '[scenario E] a glob in filesModified cannot widen the commit'
+                $scopeEDir = Join-Path $tempRoot 'scope-e'
+                New-ScopeProject $scopeEDir @('*')
+                Set-Content -Path (Join-Path $scopeEDir 'peer-untracked.txt') -Value 'peer-new'
+                $scopeEHead = (& git -C $scopeEDir rev-parse HEAD 2>$null)
+                $scopeEOut = Join-Path $tempRoot 'scope-e.out'
+                Assert-ScopeRun 'E' (Invoke-GateWrapper $scopeEDir $scopeEOut) $scopeEOut
+                $scopeEText = Get-Content -Raw -Path $scopeEOut
+                if ($scopeEText -notlike '*MOE_COMMIT_REFUSED_OWNED_PATH_MISSING*') {
+                    Write-Host $scopeEText
+                    throw 'SCENARIO E FAILED: a glob must match NO literal path and refuse with MOE_COMMIT_REFUSED_OWNED_PATH_MISSING'
+                }
+                if ((& git -C $scopeEDir rev-parse HEAD 2>$null) -ne $scopeEHead) {
+                    throw 'SCENARIO E FAILED: a glob owned path swept the tree into a commit; HEAD moved'
+                }
+                if (@(& git -C $scopeEDir status --porcelain 2>$null) -notcontains '?? peer-untracked.txt') {
+                    throw 'SCENARIO E FAILED: peer-untracked.txt must still be untracked'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario E] ok'
+
+                # A harness that silently generated zero scenarios exits 0 and
+                # reads as green.
+                Write-Host "commit-scope scenarios run: $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 5) {
+                    throw "Expected 5 commit-scope scenarios (A-E); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

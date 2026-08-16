@@ -2953,13 +2953,27 @@ except Exception:
                     COMMIT_MSG="$COMMIT_TYPE($PREFLIGHT_TASK_ID): ${PREFLIGHT_TASK_TITLE:-completed task}$COMMIT_SUFFIX
 
 Completed via Moe worker session."
-                    # Stage by the task's OWN pathspec (epic rail: a whole-tree
-                    # commit at completion is forbidden -- it absorbs other live
-                    # agents' in-flight files and mis-attributes their work).
-                    # `filesModified` is the task's durable file report; when it
-                    # is absent we fall back to -A LOUDLY so rollout is graceful
-                    # but the hole is never silent.
-                    TASK_JSON="$PROJECT/.moe/tasks/task-$PREFLIGHT_TASK_ID.json"
+                    # Stage AND commit by the task's OWN pathspec (epic rail: a
+                    # whole-tree commit at completion is forbidden -- it absorbs
+                    # other live agents' in-flight files and mis-attributes
+                    # their work). `filesModified` is the task's durable file
+                    # report. When it cannot be derived we now REFUSE with a
+                    # stable reason code; there is no whole-tree fallback,
+                    # because a fallback that fires silently is how a peer's
+                    # in-flight files reached another task's commit.
+                    #
+                    # Path resolution: the daemon stores a task at
+                    # `.moe/tasks/<taskId>.json` and the id ALREADY carries the
+                    # `task-` prefix, so the old `task-$ID.json` resolved to
+                    # `task-task-<uuid>.json` and never existed (measured: 309
+                    # live task files, zero named `task-task-*`). That miss was
+                    # silent -- the record simply didn't load -- so EVERY
+                    # completion degraded to `git add -A`. Canonical name first;
+                    # the prefixed form stays as tolerance for a bare id.
+                    TASK_JSON="$PROJECT/.moe/tasks/$PREFLIGHT_TASK_ID.json"
+                    if [ ! -f "$TASK_JSON" ]; then
+                        TASK_JSON="$PROJECT/.moe/tasks/task-$PREFLIGHT_TASK_ID.json"
+                    fi
                     TASK_FILES=""
                     if [ -f "$TASK_JSON" ] && command -v node >/dev/null 2>&1; then
                         TASK_FILES=$(node -e "
@@ -2970,31 +2984,71 @@ Completed via Moe worker session."
                           } catch {}
                         " "$TASK_JSON" 2>/dev/null)
                     fi
-                    if [ -n "$TASK_FILES" ]; then
-                        # Per-path add tolerating misses: a reported path that never
-                        # existed must not abort staging of the real ones.
-                        while IFS= read -r TASK_PATH; do
-                            [ -n "$TASK_PATH" ] && git -C "$PROJECT" add -- "$TASK_PATH" 2>/dev/null || true
-                        done <<< "$TASK_FILES"
-                        LEFTOVER=$(git -C "$PROJECT" status --porcelain 2>/dev/null | grep -c '^[ ?]' || true)
-                        if [ "${LEFTOVER:-0}" -gt 0 ]; then
-                            echo -e "${BLUE}[info]${NC} Pathspec staging left $LEFTOVER dirty path(s) untouched (other agents' in-flight work)."
-                        fi
+                    # Stable reason codes, spelled IDENTICALLY in moe-agent.ps1 so
+                    # an operator grepping either transcript finds the same string.
+                    # The two causes are deliberately DISTINCT: "the task declared
+                    # no paths" and "every declared path is absent" are different
+                    # failures, and collapsing them would make a later guard change
+                    # invisible.
+                    #
+                    # Every path is passed as a `:(literal)` pathspec. A git
+                    # pathspec is a GLOB by default, so a `filesModified` entry
+                    # of `*` -- or any name containing `*`, `?` or `[` -- would
+                    # walk straight back out to a whole-tree stage through the
+                    # "explicit pathspec" route this fix installs. Measured:
+                    # `git add -- '*'` staged every file in a throwaway repo;
+                    # `git add -- ':(literal)*'` matched nothing. The magic
+                    # prefix also makes a leading `-` or a leading `:` inert.
+                    COMMIT_REFUSAL=""
+                    OWNED_SPECS=()
+                    if [ -z "$TASK_FILES" ]; then
+                        COMMIT_REFUSAL="MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
                     else
-                        echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID reports no filesModified; falling back to whole-tree 'git add -A' (may absorb other agents' in-flight files)."
-                        git -C "$PROJECT" add -A 2>/dev/null || true
+                        # Per-path add tolerating misses: a reported path that never
+                        # existed must not abort staging of the real ones. COUNT the
+                        # survivors -- a pathspec naming an UNTRACKED file matches
+                        # nothing at commit time, so `git commit` exiting 0 is NOT
+                        # proof a deliverable landed. `add` is what makes the path
+                        # known to the index and therefore matchable.
+                        while IFS= read -r TASK_PATH; do
+                            [ -n "$TASK_PATH" ] || continue
+                            if git -C "$PROJECT" add -- ":(literal)$TASK_PATH" 2>/dev/null; then
+                                OWNED_SPECS+=(":(literal)$TASK_PATH")
+                            fi
+                        done <<< "$TASK_FILES"
+                        if [ "${#OWNED_SPECS[@]}" -eq 0 ]; then
+                            COMMIT_REFUSAL="MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
+                        else
+                            LEFTOVER=$(git -C "$PROJECT" status --porcelain 2>/dev/null | grep -c '^[ ?]' || true)
+                            if [ "${LEFTOVER:-0}" -gt 0 ]; then
+                                echo -e "${BLUE}[info]${NC} Pathspec staging left $LEFTOVER dirty path(s) untouched (other agents' in-flight work)."
+                            fi
+                        fi
                     fi
                     # COMMIT_SKIP_PUSH stays true only when a commit was attempted
                     # and actually failed -- in that case we must NOT push (there is
                     # nothing new to ship and the tree is in an unknown state).
                     COMMIT_SKIP_PUSH=false
-                    if ! git -C "$PROJECT" diff --cached --quiet 2>/dev/null; then
+                    if [ -n "$COMMIT_REFUSAL" ]; then
+                        # Fail CLOSED. Push still runs: any commits the worker made
+                        # mid-session are already pathspec-scoped by epic rail 3 and
+                        # must still reach the remote, so refusing to COMMIT never
+                        # strands work the worker already committed.
+                        echo -e "${YELLOW}[WARN]${NC} $COMMIT_REFUSAL: task $PREFLIGHT_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
+                    elif ! git -C "$PROJECT" diff --cached --quiet -- "${OWNED_SPECS[@]}" 2>/dev/null; then
                         # Capture output AND exit code separately: piping commit into
                         # `tail` would make the `if` test tail's status (always 0) and
                         # report success even on a failed commit. The substitution
                         # lives in the `if` condition so `set -e` won't abort on a
                         # non-zero commit.
-                        if COMMIT_OUT=$(git -C "$PROJECT" commit -m "$COMMIT_MSG" 2>&1); then
+                        #
+                        # `-- "${OWNED_SPECS[@]}"` is the load-bearing part: a BARE
+                        # `git commit` commits the SHARED INDEX, so a peer that
+                        # staged a file before this hook ran had it swept into this
+                        # task's commit regardless of what this hook staged. The
+                        # pathspec form commits only these paths and leaves the
+                        # peer's index entry staged and uncommitted.
+                        if COMMIT_OUT=$(git -C "$PROJECT" commit -m "$COMMIT_MSG" -- "${OWNED_SPECS[@]}" 2>&1); then
                             COMMIT_RC=0
                         else
                             COMMIT_RC=$?

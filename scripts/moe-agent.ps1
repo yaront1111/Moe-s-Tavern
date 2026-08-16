@@ -2300,15 +2300,29 @@ $mentionsJson
                     $commitSuffix = if ($finalReopenCount -gt 0) { " (retry after qa_reject #$finalReopenCount)" } else { "" }
                     $titleText = if ($preflightTaskTitle) { $preflightTaskTitle } else { "completed task" }
                     $commitMsg = "$commitType($preflightTaskId): $titleText$commitSuffix`n`nCompleted via Moe worker session."
-                    # Stage by the task's OWN pathspec (epic rail: a whole-tree
-                    # commit at completion is forbidden — it absorbs other live
-                    # agents' in-flight files and mis-attributes their work).
-                    # `filesModified` is the task's durable file report; when it
-                    # is absent we fall back to -A LOUDLY so rollout is graceful
-                    # but the hole is never silent.
+                    # Stage AND commit by the task's OWN pathspec (epic rail: a
+                    # whole-tree commit at completion is forbidden — it absorbs
+                    # other live agents' in-flight files and mis-attributes
+                    # their work). `filesModified` is the task's durable file
+                    # report. When it cannot be derived we now REFUSE with a
+                    # stable reason code; there is no whole-tree fallback,
+                    # because a fallback that fires silently is how a peer's
+                    # in-flight files reached another task's commit.
+                    #
+                    # Path resolution: the daemon stores a task at
+                    # `.moe/tasks/<taskId>.json` and the id ALREADY carries the
+                    # `task-` prefix, so the old `task-$id.json` resolved to
+                    # `task-task-<uuid>.json` and never existed (measured: 309
+                    # live task files, zero named `task-task-*`). That miss was
+                    # silent — the record simply didn't load — so EVERY
+                    # completion degraded to `git add -A`. Canonical name first;
+                    # the prefixed form stays as tolerance for a bare id.
                     $taskFilePaths = @()
                     try {
-                        $taskJsonPath = Join-Path $projectPath ".moe/tasks/task-$preflightTaskId.json"
+                        $taskJsonPath = Join-Path $projectPath ".moe/tasks/$preflightTaskId.json"
+                        if (-not (Test-Path $taskJsonPath)) {
+                            $taskJsonPath = Join-Path $projectPath ".moe/tasks/task-$preflightTaskId.json"
+                        }
                         if (Test-Path $taskJsonPath) {
                             $taskJson = Get-Content $taskJsonPath -Raw | ConvertFrom-Json
                             if ($taskJson.PSObject.Properties['filesModified'] -and $taskJson.filesModified) {
@@ -2316,27 +2330,76 @@ $mentionsJson
                             }
                         }
                     } catch { $taskFilePaths = @() }
-                    if ($taskFilePaths.Count -gt 0) {
+                    # Stable reason codes, spelled IDENTICALLY in moe-agent.sh so
+                    # an operator grepping either transcript finds the same
+                    # string. The two causes are deliberately DISTINCT: "the task
+                    # declared no paths" and "every declared path is absent" are
+                    # different failures, and collapsing them would make a later
+                    # guard change invisible.
+                    #
+                    # Every path is passed as a `:(literal)` pathspec. A git
+                    # pathspec is a GLOB by default, so a `filesModified` entry
+                    # of `*` — or any name containing `*`, `?` or `[` — would
+                    # walk straight back out to a whole-tree stage through the
+                    # "explicit pathspec" route this fix installs. Measured:
+                    # `git add -- '*'` staged every file in a throwaway repo;
+                    # `git add -- ':(literal)*'` matched nothing. The magic
+                    # prefix also makes a leading `-` or a leading `:` inert.
+                    $commitRefusal = ""
+                    $ownedSpecs = @()
+                    if ($taskFilePaths.Count -eq 0) {
+                        $commitRefusal = "MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
+                    } else {
                         foreach ($taskPath in $taskFilePaths) {
                             # Per-path add tolerating misses: a reported path that
                             # never existed (or is outside the tree) must not
-                            # abort staging of the real ones.
-                            & git -C $projectPath add -- $taskPath 2>$null | Out-Null
+                            # abort staging of the real ones. COUNT the survivors —
+                            # a pathspec naming an UNTRACKED file matches nothing at
+                            # commit time, so `git commit` exiting 0 is NOT proof a
+                            # deliverable landed. `add` is what makes the path known
+                            # to the index and therefore matchable. Read the add's
+                            # own exit code immediately so no earlier `git` call's
+                            # $LASTEXITCODE can be mistaken for this one's.
+                            & git -C $projectPath add -- ":(literal)$taskPath" 2>$null | Out-Null
+                            if ($LASTEXITCODE -eq 0) { $ownedSpecs += ":(literal)$taskPath" }
                         }
-                        $leftover = (& git -C $projectPath status --porcelain 2>$null |
-                            Where-Object { $_ -and ($_[0] -eq ' ' -or $_[0] -eq '?') }).Count
-                        if ($leftover -gt 0) {
-                            Write-Host "[info] Pathspec staging left $leftover dirty path(s) untouched (other agents' in-flight work)." -ForegroundColor Cyan
+                        if ($ownedSpecs.Count -eq 0) {
+                            $commitRefusal = "MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
+                        } else {
+                            $leftover = (& git -C $projectPath status --porcelain 2>$null |
+                                Where-Object { $_ -and ($_[0] -eq ' ' -or $_[0] -eq '?') }).Count
+                            if ($leftover -gt 0) {
+                                Write-Host "[info] Pathspec staging left $leftover dirty path(s) untouched (other agents' in-flight work)." -ForegroundColor Cyan
+                            }
                         }
-                    } else {
-                        Write-Host "[WARN] task $preflightTaskId reports no filesModified; falling back to whole-tree 'git add -A' (may absorb other agents' in-flight files)." -ForegroundColor Yellow
-                        & git -C $projectPath add -A 2>$null | Out-Null
                     }
-                    & git -C $projectPath diff --cached --quiet 2>$null
-                    $nothingStaged = ($LASTEXITCODE -eq 0)
-                    if (-not $nothingStaged) {
-                        & git -C $projectPath commit -m $commitMsg 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
-                        if ($LASTEXITCODE -eq 0) {
+                    $nothingStaged = $true
+                    if (-not $commitRefusal) {
+                        & git -C $projectPath diff --cached --quiet -- $ownedSpecs 2>$null
+                        $nothingStaged = ($LASTEXITCODE -eq 0)
+                    }
+                    if ($commitRefusal) {
+                        # Fail CLOSED. The push below still runs: any commits the
+                        # worker made mid-session are already pathspec-scoped by
+                        # epic rail 3 and must still reach the remote, so refusing
+                        # to COMMIT never strands work the worker already committed.
+                        Write-Host "[WARN] ${commitRefusal}: task $preflightTaskId — refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]" -ForegroundColor Yellow
+                    } elseif (-not $nothingStaged) {
+                        # Capture output AND exit code separately (same deliberate
+                        # split as moe-agent.sh): reading $LASTEXITCODE after the
+                        # printing pipeline risks reporting a downstream cmdlet's
+                        # state, turning a failed commit into a reported success.
+                        #
+                        # `-- $ownedSpecs` is the load-bearing part: a BARE
+                        # `git commit` commits the SHARED INDEX, so a peer that
+                        # staged a file before this hook ran had it swept into this
+                        # task's commit regardless of what this hook staged. The
+                        # pathspec form commits only these paths and leaves the
+                        # peer's index entry staged and uncommitted.
+                        $commitOut = & git -C $projectPath commit -m $commitMsg -- $ownedSpecs 2>&1
+                        $commitRc = $LASTEXITCODE
+                        $commitOut | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+                        if ($commitRc -eq 0) {
                             Write-Host "[OK] Committed task $preflightTaskId on $currentBranch." -ForegroundColor Green
                         } else {
                             # NOTE: we deliberately fall through to the push below —

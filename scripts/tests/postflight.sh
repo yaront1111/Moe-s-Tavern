@@ -56,6 +56,20 @@ if ! command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
+# write_task_record PROJECT_DIR FILES_MODIFIED_JSON
+# Writes the durable task record the post-flight reads to derive its commit
+# pathspec. The fake proxy claims `task-postflight`, and the daemon stores a
+# task at `.moe/tasks/<taskId>.json` -- the id ALREADY carries the `task-`
+# prefix, so the on-disk name is `task-postflight.json` and never
+# `task-task-postflight.json`. Getting that resolution wrong is silent: the
+# record simply never loads and the hook degrades to whole-tree staging.
+write_task_record() {
+  local dir="$1" files_json="$2"
+  mkdir -p "$dir/.moe/tasks"
+  "$NODE_FOR_TEST" -e 'const [d,f]=process.argv.slice(1);require("fs").writeFileSync(d, JSON.stringify({id:"task-postflight",title:"Postflight smoke",status:"REVIEW",filesModified:JSON.parse(f)})+"\n");' \
+    "$dir/.moe/tasks/task-postflight.json" "$files_json"
+}
+
 PROJECT_DIR="$TMP_DIR/project"
 HOME_DIR="$TMP_DIR/home"
 mkdir -p "$PROJECT_DIR/.moe/messages" "$HOME_DIR"
@@ -355,9 +369,12 @@ if command -v git >/dev/null 2>&1; then
   make_gate_project() {
     # $1 = dir, $2 = qualityGate command (raw string, JSON-escaped here)
     local dir="$1" gate_cmd="$2"
-    mkdir -p "$dir/.moe/messages"
+    mkdir -p "$dir/.moe/messages" "$dir/.moe/tasks"
     "$NODE_FOR_TEST" -e 'const [d,g]=process.argv.slice(1);require("fs").writeFileSync(d, JSON.stringify({id:"proj-gate",name:"postflight-gate",settings:{qualityGate:g}})+"\n");' \
       "$dir/.moe/project.json" "$gate_cmd"
+    # The task record the post-flight reads to derive its commit pathspec. Its
+    # FILENAME is `<taskId>.json` and the id already carries the `task-` prefix.
+    write_task_record "$dir" '["work.txt"]'
     : > "$dir/.moe/messages/chan-general.jsonl"
     git -C "$dir" init -q
     git -C "$dir" config user.email moe@test.local
@@ -365,7 +382,7 @@ if command -v git >/dev/null 2>&1; then
     echo seed > "$dir/seed.txt"
     git -C "$dir" add seed.txt >/dev/null
     git -C "$dir" commit -qm init >/dev/null
-    # Leave a dirty file for the post-flight `git add -A` to pick up.
+    # Leave the task's own owned path dirty for the post-flight to commit.
     echo dirty > "$dir/work.txt"
   }
 
@@ -555,6 +572,209 @@ if command -v git >/dev/null 2>&1; then
   fi
 else
   echo "SKIP qualityGate cases: git not available"
+fi
+
+# --- Completion-hook COMMIT SCOPE, scenarios A-D --------------------------
+# The post-flight auto-commit must land ONLY the completing task's own paths
+# (its task record's `filesModified`). Two distinct leaks were measured in
+# production and they are NOT the same bug:
+#   * staging scope -- `git add -A` whenever the task record did not load;
+#   * commit scope  -- a BARE `git commit -m ...` commits the SHARED INDEX, so
+#     a peer's already-staged file rides along no matter what this hook staged.
+# Scenario B is the only one that discriminates the second leak: a
+# dirty-working-tree fixture stays green under both the broken and fixed
+# commit. Every scenario runs against a disposable repo under $TMP_DIR -- a
+# post-flight test that commits into a live tree reproduces the defect it is
+# supposed to be testing.
+if command -v git >/dev/null 2>&1; then
+  SCOPE_SCENARIOS_RUN=0
+
+  scope_fail() { # $1 = scenario letter, $2 = message, $3 = wrapper log
+    cat "$3" >&2 || true
+    echo "SCENARIO $1 FAILED: $2" >&2
+    exit 1
+  }
+
+  make_scope_project() { # $1 = dir, $2 = filesModified JSON array literal
+    local dir="$1" files_json="$2"
+    mkdir -p "$dir/.moe/messages"
+    "$NODE_FOR_TEST" -e 'const [d]=process.argv.slice(1);require("fs").writeFileSync(d, JSON.stringify({id:"proj-scope",name:"postflight-scope",settings:{}})+"\n");' \
+      "$dir/.moe/project.json"
+    write_task_record "$dir" "$files_json"
+    : > "$dir/.moe/messages/chan-general.jsonl"
+    git -C "$dir" init -q
+    git -C "$dir" config user.email moe@test.local
+    git -C "$dir" config user.name "Moe Test"
+    echo seed > "$dir/seed.txt"
+    git -C "$dir" add seed.txt >/dev/null
+    git -C "$dir" commit -qm init >/dev/null
+  }
+
+  run_scope_wrapper() { # $1 = project dir, $2 = output file
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS=REVIEW timeout 30s \
+      "$WRAPPER" \
+      --project "$1" \
+      --worker-id worker-scope \
+      --role worker \
+      --team Smoke \
+      --no-start-daemon \
+      --command /bin/true \
+      --no-loop \
+      --poll-interval 0 \
+      >"$2" 2>&1
+  }
+
+  committed_paths() { # $1 = dir -- space-terminated sorted file list of HEAD
+    git -C "$1" show --pretty=format: --name-only HEAD | sed '/^$/d' | sort | tr '\n' ' '
+  }
+
+  # Scenario A -- dirty peer. Owned X and Y commit; a peer's MODIFIED tracked
+  # file and a peer's UNTRACKED file must both survive the completion untouched.
+  echo "[scenario A] dirty peer files are never captured"
+  SCOPE_A_DIR="$TMP_DIR/scope-a"
+  make_scope_project "$SCOPE_A_DIR" '["owned-a.txt","owned-b.txt"]'
+  echo peer-base > "$SCOPE_A_DIR/peer-mod.txt"
+  git -C "$SCOPE_A_DIR" add peer-mod.txt >/dev/null
+  git -C "$SCOPE_A_DIR" commit -qm peer-base >/dev/null
+  echo owned-a    > "$SCOPE_A_DIR/owned-a.txt"
+  echo owned-b    > "$SCOPE_A_DIR/owned-b.txt"
+  echo peer-dirty > "$SCOPE_A_DIR/peer-mod.txt"
+  echo peer-new   > "$SCOPE_A_DIR/peer-untracked.txt"
+  set +e
+  run_scope_wrapper "$SCOPE_A_DIR" "$TMP_DIR/scope-a.out"
+  scope_a_code=$?
+  set -e
+  [ "$scope_a_code" -eq 0 ] || scope_fail A "wrapper exited with $scope_a_code" "$TMP_DIR/scope-a.out"
+  scope_a_files="$(committed_paths "$SCOPE_A_DIR")"
+  if [ "$scope_a_files" != "owned-a.txt owned-b.txt " ]; then
+    scope_fail A "commit must contain EXACTLY the owned paths; got [$scope_a_files]" "$TMP_DIR/scope-a.out"
+  fi
+  if ! git -C "$SCOPE_A_DIR" status --porcelain | grep -q '^ M peer-mod\.txt$'; then
+    git -C "$SCOPE_A_DIR" status --porcelain >&2 || true
+    scope_fail A "peer-mod.txt must still be modified-and-unstaged after the completion" "$TMP_DIR/scope-a.out"
+  fi
+  if ! git -C "$SCOPE_A_DIR" status --porcelain | grep -q '^?? peer-untracked\.txt$'; then
+    git -C "$SCOPE_A_DIR" status --porcelain >&2 || true
+    scope_fail A "peer-untracked.txt must still be untracked after the completion" "$TMP_DIR/scope-a.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario A] ok"
+
+  # Scenario B -- pre-staged foreign index. This is the discriminating case: a
+  # peer stages Z into the SHARED INDEX before the hook runs. Pathspec STAGING
+  # cannot help here; only a pathspec-scoped COMMIT keeps Z out.
+  echo "[scenario B] a peer's pre-staged index entry never rides along"
+  SCOPE_B_DIR="$TMP_DIR/scope-b"
+  make_scope_project "$SCOPE_B_DIR" '["owned-a.txt"]'
+  echo owned-a     > "$SCOPE_B_DIR/owned-a.txt"
+  echo peer-staged > "$SCOPE_B_DIR/peer-staged.txt"
+  git -C "$SCOPE_B_DIR" add peer-staged.txt >/dev/null
+  set +e
+  run_scope_wrapper "$SCOPE_B_DIR" "$TMP_DIR/scope-b.out"
+  scope_b_code=$?
+  set -e
+  [ "$scope_b_code" -eq 0 ] || scope_fail B "wrapper exited with $scope_b_code" "$TMP_DIR/scope-b.out"
+  scope_b_files="$(committed_paths "$SCOPE_B_DIR")"
+  if [ "$scope_b_files" != "owned-a.txt " ]; then
+    scope_fail B "commit must contain ONLY owned-a.txt; got [$scope_b_files]" "$TMP_DIR/scope-b.out"
+  fi
+  if git -C "$SCOPE_B_DIR" cat-file -e HEAD:peer-staged.txt 2>/dev/null; then
+    scope_fail B "the peer's pre-staged file reached HEAD -- the commit is still index-scoped" "$TMP_DIR/scope-b.out"
+  fi
+  if ! git -C "$SCOPE_B_DIR" diff --cached --name-only | grep -q '^peer-staged\.txt$'; then
+    git -C "$SCOPE_B_DIR" status --porcelain >&2 || true
+    scope_fail B "the peer's file must remain STAGED and uncommitted" "$TMP_DIR/scope-b.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario B] ok"
+
+  # Scenario C -- empty filesModified. Fails CLOSED under its own stable code
+  # and commits nothing. The dirty peer file is load-bearing: without it a
+  # restored `git add -A` would have nothing to sweep and this would pass while
+  # testing nothing.
+  echo "[scenario C] empty owned-path set refuses with MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
+  SCOPE_C_DIR="$TMP_DIR/scope-c"
+  make_scope_project "$SCOPE_C_DIR" '[]'
+  echo peer-new > "$SCOPE_C_DIR/peer-untracked.txt"
+  scope_c_head="$(git -C "$SCOPE_C_DIR" rev-parse HEAD)"
+  set +e
+  run_scope_wrapper "$SCOPE_C_DIR" "$TMP_DIR/scope-c.out"
+  scope_c_code=$?
+  set -e
+  [ "$scope_c_code" -eq 0 ] || scope_fail C "wrapper exited with $scope_c_code" "$TMP_DIR/scope-c.out"
+  if ! grep -Fq 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS' "$TMP_DIR/scope-c.out"; then
+    scope_fail C "expected the literal reason code MOE_COMMIT_REFUSED_NO_OWNED_PATHS" "$TMP_DIR/scope-c.out"
+  fi
+  if grep -Fq 'MOE_COMMIT_REFUSED_OWNED_PATH_MISSING' "$TMP_DIR/scope-c.out"; then
+    scope_fail C "an empty owned-path set must NOT report the missing-path code -- the two causes are distinct" "$TMP_DIR/scope-c.out"
+  fi
+  if [ "$(git -C "$SCOPE_C_DIR" rev-parse HEAD)" != "$scope_c_head" ]; then
+    scope_fail C "a refusal must commit NOTHING; HEAD moved" "$TMP_DIR/scope-c.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario C] ok"
+
+  # Scenario D -- every declared owned path is absent from disk. Distinct cause,
+  # distinct code: collapsing it into C would make a later guard change
+  # invisible.
+  echo "[scenario D] all owned paths missing refuses with MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
+  SCOPE_D_DIR="$TMP_DIR/scope-d"
+  make_scope_project "$SCOPE_D_DIR" '["ghost-owned.txt"]'
+  echo peer-new > "$SCOPE_D_DIR/peer-untracked.txt"
+  scope_d_head="$(git -C "$SCOPE_D_DIR" rev-parse HEAD)"
+  set +e
+  run_scope_wrapper "$SCOPE_D_DIR" "$TMP_DIR/scope-d.out"
+  scope_d_code=$?
+  set -e
+  [ "$scope_d_code" -eq 0 ] || scope_fail D "wrapper exited with $scope_d_code" "$TMP_DIR/scope-d.out"
+  if ! grep -Fq 'MOE_COMMIT_REFUSED_OWNED_PATH_MISSING' "$TMP_DIR/scope-d.out"; then
+    scope_fail D "expected the literal reason code MOE_COMMIT_REFUSED_OWNED_PATH_MISSING" "$TMP_DIR/scope-d.out"
+  fi
+  if grep -Fq 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS' "$TMP_DIR/scope-d.out"; then
+    scope_fail D "a declared-but-absent path must NOT report the empty-set code" "$TMP_DIR/scope-d.out"
+  fi
+  if [ "$(git -C "$SCOPE_D_DIR" rev-parse HEAD)" != "$scope_d_head" ]; then
+    scope_fail D "a refusal must commit NOTHING; HEAD moved" "$TMP_DIR/scope-d.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario D] ok"
+
+  # Scenario E -- a GLOB in filesModified. A git pathspec is a glob by default,
+  # so an entry of `*` walks straight back out to a whole-tree stage through the
+  # very "explicit pathspec" route this fix installs. Measured on a throwaway
+  # repo: `git add -- '*'` staged every file; `git add -- ':(literal)*'` matched
+  # nothing. This is the only scenario that can catch that escape.
+  echo "[scenario E] a glob in filesModified cannot widen the commit"
+  SCOPE_E_DIR="$TMP_DIR/scope-e"
+  make_scope_project "$SCOPE_E_DIR" '["*"]'
+  echo peer-new > "$SCOPE_E_DIR/peer-untracked.txt"
+  scope_e_head="$(git -C "$SCOPE_E_DIR" rev-parse HEAD)"
+  set +e
+  run_scope_wrapper "$SCOPE_E_DIR" "$TMP_DIR/scope-e.out"
+  scope_e_code=$?
+  set -e
+  [ "$scope_e_code" -eq 0 ] || scope_fail E "wrapper exited with $scope_e_code" "$TMP_DIR/scope-e.out"
+  if ! grep -Fq 'MOE_COMMIT_REFUSED_OWNED_PATH_MISSING' "$TMP_DIR/scope-e.out"; then
+    scope_fail E "a glob must match NO literal path and refuse with MOE_COMMIT_REFUSED_OWNED_PATH_MISSING" "$TMP_DIR/scope-e.out"
+  fi
+  if [ "$(git -C "$SCOPE_E_DIR" rev-parse HEAD)" != "$scope_e_head" ]; then
+    scope_fail E "a glob owned path swept the tree into a commit; HEAD moved" "$TMP_DIR/scope-e.out"
+  fi
+  if ! git -C "$SCOPE_E_DIR" status --porcelain | grep -q '^?? peer-untracked\.txt$'; then
+    git -C "$SCOPE_E_DIR" status --porcelain >&2 || true
+    scope_fail E "peer-untracked.txt must still be untracked" "$TMP_DIR/scope-e.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario E] ok"
+
+  # A harness that silently generated zero scenarios exits 0 and reads as green.
+  echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 5 ]; then
+    echo "Expected 5 commit-scope scenarios (A-E); ran $SCOPE_SCENARIOS_RUN" >&2
+    exit 1
+  fi
+else
+  echo "SKIP commit-scope scenarios: git not available"
 fi
 
 echo "PASS postflight.sh"
