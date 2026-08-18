@@ -48,7 +48,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         throw invalidInput('resourceId', 'use 1-64 chars of letters, digits, ".", "_", "-"');
       }
 
-      const task = state.getTask(params.taskId);
+      let task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
       // Only the assigned worker may report this task as blocked. The "no
@@ -96,13 +96,12 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
               : `Resource ${params.resourceId} was free — lease granted, task NOT blocked. Proceed, then moe.release_resource.`,
           };
         }
+        // A queued acquisition crosses an await too; derive results from current task truth.
+        task = state.getTask(task.id) ?? task;
       }
 
-      // Flip the task itself to BLOCKED. This is what stops the wrapper churn:
-      // claim_next_task keeps answering alreadyAssigned{status:BLOCKED}, which
-      // the wrapper reads as "do not relaunch a CLI onto this". Restore target
-      // is remembered in blockedFromStatus; the resource grant path (or
-      // unblock_worker / set_task_status) flips it back.
+      // Flip to BLOCKED to stop wrapper churn; blockedFromStatus remembers the
+      // restore target used by the resource grant or explicit unblock paths.
       // assignedWorkerId is passed EXPLICITLY: taskStore.updateTask clears the
       // assignment on any status change when the caller omits it, and a BLOCKED
       // task must stay owned — the whole hold/suppression/resume design keys on

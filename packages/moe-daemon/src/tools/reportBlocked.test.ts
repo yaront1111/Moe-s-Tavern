@@ -559,6 +559,67 @@ describe('moe.report_blocked', () => {
     expect(late.reasonUpdated).toBe(false);
     expect(String(late.message)).toMatch(/task NOT blocked/i);
   });
+
+  it('re-blocks from the post-await task when a queued acquire races an unblock', async () => {
+    const now = new Date().toISOString();
+    const holderTask: Task = {
+      id: 'task-holder', epicId: 'epic-1', title: 'Holder', description: '',
+      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId: 'worker-holder', branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      priority: 'MEDIUM', order: 2, comments: [], createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', holderTask.id + '.json'), JSON.stringify(holderTask, null, 2));
+    await state.load();
+    await addWorker('worker-holder', 'worker', 1);
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async () => {});
+    vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
+    await state.acquireResource({ resourceId: 'benchmark-box', taskId: holderTask.id, workerId: 'worker-holder' });
+
+    await report({ reason: 'first reason' });
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+
+    const realAcquire = state.acquireResource.bind(state);
+    vi.spyOn(state, 'acquireResource').mockImplementation(async (params) => {
+      const queued = await realAcquire(params);
+      expect(queued).toMatchObject({
+        granted: false, resourceId: 'benchmark-box', position: 1, queueLength: 1,
+      });
+      await state.updateTask('task-1', {
+        status: 'WORKING', assignedWorkerId: 'worker-1', blockedReason: null,
+        blockedResourceId: null, blockedFromStatus: null, blockedAt: null,
+      });
+      return queued;
+    });
+
+    const late = await report({ reason: 'late correction', resourceId: 'benchmark-box' });
+
+    const blocked = state.getTask('task-1')!;
+    expect(blocked.status).toBe('BLOCKED');
+    expect(blocked.blockedReason).toBe('late correction');
+    expect(blocked.blockedResourceId).toBe('benchmark-box');
+    expect(blocked.blockedFromStatus).toBe('WORKING');
+    expect(blocked.blockedAt).toEqual(expect.any(String));
+    expect(blocked.assignedWorkerId).toBe('worker-1');
+    expect(state.getResource('benchmark-box')!.queue.map((entry) => entry.taskId)).toEqual(['task-1']);
+
+    expect(late).toMatchObject({
+      success: true, granted: false, resourceId: 'benchmark-box', taskStatus: 'BLOCKED',
+      alreadyBlocked: false, reasonUpdated: true, workerStatus: 'BLOCKED',
+    });
+    expect(late.nextAction).toBeUndefined();
+
+    const released = await state.releaseResource({ resourceId: 'benchmark-box', workerId: 'worker-holder' });
+    expect(released.granted.map((lease) => lease.taskId)).toEqual(['task-1']);
+    const restored = state.getTask('task-1')!;
+    expect(restored.status).toBe('WORKING');
+    expect(restored.assignedWorkerId).toBe('worker-1');
+    expect(restored.blockedReason).toBeNull();
+    expect(restored.blockedResourceId).toBeNull();
+    expect(restored.blockedFromStatus).toBeNull();
+    expect(restored.blockedAt).toBeNull();
+    expect(state.getResource('benchmark-box')!.holders.map((holder) => holder.taskId)).toEqual(['task-1']);
+  });
 });
 
 // ---- migrated from tools.test.ts ----
@@ -599,4 +660,3 @@ describe('moe.report_blocked', () => {
     ).rejects.toThrow('Task not found');
   });
 });
-
