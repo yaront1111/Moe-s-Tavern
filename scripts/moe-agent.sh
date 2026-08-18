@@ -2040,12 +2040,103 @@ except Exception:
                 qa)        ROLE_GROUP_TAG="qa" ;;
                 governor)  ROLE_GROUP_TAG="governors" ;;
             esac
+            # Exit code is captured SEPARATELY instead of being swallowed by
+            # `|| true`: that swallow is exactly the habit being removed here.
+            # A routed mention that vanishes is the same harm class as one whose
+            # body was replaced, so an extraction failure must reach the
+            # recipient as a marker, not as an empty block.
+            set +e
             MENTIONS_RESULT=$(PREFLIGHT_GENERAL_UNREAD="$PREFLIGHT_GENERAL_UNREAD" \
                               PREFLIGHT_TASK_UNREAD="$PREFLIGHT_TASK_UNREAD" \
-                              "$PYTHON_CMD" - "$WORKER_ID" "$ROLE_GROUP_TAG" <<'PYEOF' 2>/dev/null || true
-import sys, json, os
+                              MOE_PROJECT_DIR="$PROJECT" \
+                              "$PYTHON_CMD" - "$WORKER_ID" "$ROLE_GROUP_TAG" <<'PYEOF' 2>/dev/null
+import sys, json, os, re
 worker_id  = sys.argv[1]
 role_group = sys.argv[2]
+project    = os.environ.get("MOE_PROJECT_DIR", "")
+
+# A routed @mention body is text written by someone else that gets injected
+# into a teammate's session context, so the delivery path is an injection
+# surface. Confirmed 11+ times: the delivered body was replaced with unrelated
+# instruction-shaped content while the at-rest record stayed correct. The RPC
+# response is therefore NOT authoritative for the body -- the jsonl is. Reason
+# codes below are spelled IDENTICALLY in moe-agent.ps1.
+MARKER = "MOE_MENTION_DELIVERY_FAILED"
+# Whitelisted, not sanitised: the channel id reaches a path join, and a crafted
+# id like "../../secrets" must be refused outright rather than rewritten.
+SAFE_CHANNEL = re.compile(r"^[A-Za-z0-9_-]+$")
+_store_cache = {}
+
+def load_store(channel):
+    if channel in _store_cache:
+        return _store_cache[channel]
+    recs = {}
+    path = os.path.join(project, ".moe", "messages", channel + ".jsonl")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    # A partial trailing line from a concurrent append simply
+                    # fails to parse and is skipped -- the mention then fails
+                    # CLOSED to a marker rather than being served half a body.
+                    continue
+                if isinstance(obj, dict) and isinstance(obj.get("id"), str):
+                    recs[obj["id"]] = obj
+    except Exception:
+        recs = None
+    _store_cache[channel] = recs
+    return recs
+
+def stored_record(channel, mid):
+    if not mid:
+        return (False, "MOE_MENTION_ID_MISSING", None)
+    if not channel or not SAFE_CHANNEL.match(channel):
+        return (False, "MOE_MENTION_CHANNEL_UNSAFE", None)
+    recs = load_store(channel)
+    if recs is None:
+        return (False, "MOE_MENTION_STORE_UNREADABLE", None)
+    rec = recs.get(mid)
+    if rec is None:
+        return (False, "MOE_MENTION_ID_NOT_IN_STORE", None)
+    if not isinstance(rec.get("content"), str):
+        return (False, "MOE_MENTION_CONTENT_MISSING", None)
+    return (True, "", rec)
+
+def verified_mention(msg, mid):
+    ok, reason, rec = stored_record(msg.get("channel"), mid)
+    if not ok:
+        return {
+            "id": mid, "channel": msg.get("channel"), "sender": msg.get("sender"),
+            "content": "%s reason=%s id=%s channel=%s" % (MARKER, reason, mid, msg.get("channel")),
+            "provenance": reason,
+        }
+    # Identity comes from the store too, not just the body. An RPC response that
+    # lied about `sender` could otherwise put words in a named teammate's mouth
+    # while every byte of the body verified clean.
+    body = rec["content"]
+    sender = rec.get("sender") if isinstance(rec.get("sender"), str) else msg.get("sender")
+    channel = rec.get("channel") if isinstance(rec.get("channel"), str) else msg.get("channel")
+    rpc = msg.get("content")
+    rpc = rpc if isinstance(rpc, str) else ""
+    if body == rpc:
+        prov = "VERIFIED"
+    elif rpc and body.startswith(rpc):
+        # chat_read truncates at maxContentChars. Legitimate, but delivering
+        # silently truncated bytes as "the message" is the same defect wearing a
+        # different hat -- deliver the FULL stored body and label the RPC copy.
+        prov = "VERIFIED_RPC_TRUNCATED"
+    else:
+        prov = "MOE_MENTION_CONTENT_DIVERGED"
+    return {
+        "id": mid, "channel": channel, "sender": sender,
+        "content": body, "provenance": prov,
+    }
+
 def extract_msgs(raw):
     if not raw:
         return []
@@ -2070,25 +2161,45 @@ for env_name in ("PREFLIGHT_GENERAL_UNREAD", "PREFLIGHT_TASK_UNREAD"):
                 matched = True
                 break
         if matched:
-            hits.append({
-                "id":      mid,
-                "channel": msg.get("channel"),
-                "sender":  msg.get("sender"),
-                "content": msg.get("content"),
-            })
+            hits.append(verified_mention(msg, mid))
             if mid is not None:
                 seen.add(mid)
-print(json.dumps({"count": len(hits), "messages": hits}))
+out = json.dumps({"count": len(hits), "messages": hits}, ensure_ascii=True)
+# JSON's structural syntax uses no '<' and no '>', so those can only have come
+# from a string VALUE. Escaping them is lossless -- a JSON reader decodes them
+# back -- but it stops a body containing "</routed_mentions>" from closing the
+# fence and landing instruction text OUTSIDE the block (measured: it did).
+# ensure_ascii above does the same for non-ASCII, which crosses an environment
+# variable on Windows.
+print(out.replace("<", "\\u003c").replace(">", "\\u003e"))
 PYEOF
             )
-            if [ -n "$MENTIONS_RESULT" ]; then
+            MENTIONS_RC=$?
+            set -e
+            MENTION_FAIL_REASON=""
+            if [ "$MENTIONS_RC" -ne 0 ] || [ -z "$MENTIONS_RESULT" ]; then
+                MENTION_FAIL_REASON="MOE_MENTION_EXTRACTION_FAILED"
+            else
                 PREFLIGHT_ROUTED_MENTIONS_JSON="$MENTIONS_RESULT"
-                PREFLIGHT_ROUTED_MENTIONS_COUNT=$("$PYTHON_CMD" -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" <<<"$MENTIONS_RESULT" 2>/dev/null || echo 0)
-                if [ "$PREFLIGHT_ROUTED_MENTIONS_COUNT" -gt 0 ] 2>/dev/null; then
-                    echo -e "${MAGENTA:-\033[0;35m}[mention]${NC} $PREFLIGHT_ROUTED_MENTIONS_COUNT unread message(s) tagging $WORKER_ID -- will surface in system prompt."
+                set +e
+                PREFLIGHT_ROUTED_MENTIONS_COUNT=$("$PYTHON_CMD" -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" <<<"$MENTIONS_RESULT" 2>/dev/null)
+                COUNT_RC=$?
+                set -e
+                # `|| echo 0` used to turn an unparseable count into "no
+                # mentions" -- a silent drop dressed as a quiet inbox.
+                if [ "$COUNT_RC" -ne 0 ] || ! [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-x}" -ge 0 ] 2>/dev/null; then
+                    MENTION_FAIL_REASON="MOE_MENTION_COUNT_UNPARSEABLE"
                 fi
             fi
-            unset MENTIONS_RESULT ROLE_GROUP_TAG
+            if [ -n "$MENTION_FAIL_REASON" ]; then
+                echo -e "${YELLOW:-\033[1;33m}[WARN]${NC} $MENTION_FAIL_REASON: routed-mention delivery failed; surfacing a marker instead of an empty block."
+                PREFLIGHT_ROUTED_MENTIONS_JSON="{\"count\":1,\"messages\":[{\"id\":\"unknown\",\"channel\":\"unknown\",\"sender\":\"moe-agent\",\"content\":\"MOE_MENTION_DELIVERY_FAILED reason=$MENTION_FAIL_REASON id=unknown channel=unknown\",\"provenance\":\"$MENTION_FAIL_REASON\"}]}"
+                PREFLIGHT_ROUTED_MENTIONS_COUNT=1
+            fi
+            if [ "$PREFLIGHT_ROUTED_MENTIONS_COUNT" -gt 0 ] 2>/dev/null; then
+                echo -e "${MAGENTA:-\033[0;35m}[mention]${NC} $PREFLIGHT_ROUTED_MENTIONS_COUNT unread message(s) tagging $WORKER_ID -- will surface in system prompt."
+            fi
+            unset MENTIONS_RESULT ROLE_GROUP_TAG MENTIONS_RC COUNT_RC MENTION_FAIL_REASON
         fi
     fi
     # -------- End pre-flight --------

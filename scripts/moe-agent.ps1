@@ -1001,6 +1001,141 @@ function Invoke-MoeRpc {
     return $null
 }
 
+# ---- Routed-@mention provenance -------------------------------------------
+# A routed @mention body is text written by someone else that gets injected
+# into a teammate's session context, so the delivery path is an injection
+# surface. Confirmed 11+ times across distinct message ids and distinct
+# receiving sessions: the body delivered inside <routed_mentions> had been
+# replaced with unrelated, instruction-shaped content (a block impersonating a
+# "SessionStart:startup hook success" notice), while the at-rest record in
+# .moe/messages/<channel>.jsonl stayed correct every time.
+#
+# So the RPC response is NOT authoritative for the body -- the jsonl is. Every
+# delivered body is re-read from the store BY MESSAGE ID and delivered from
+# there. When the store cannot answer, the recipient gets the id, the channel
+# and a stable marker instead of substitute content, and the mention is never
+# silently dropped: a mention that vanishes is the same harm class as one that
+# is replaced.
+#
+# Reason codes below are spelled IDENTICALLY in moe-agent.sh so an operator
+# grepping either transcript finds the same string.
+$script:MoeMentionFailedMarker = 'MOE_MENTION_DELIVERY_FAILED'
+# Per-channel record cache. RESET at the top of every pre-flight, never left to
+# live across wrapper iterations: a cached channel would serve iteration 1's
+# bytes for a message appended during iteration 2, which is a staleness bug
+# wearing this fix's clothes.
+$script:MoeMentionStoreCache = @{}
+
+function Get-MoeStoredMentionRecord {
+    param([string]$ProjectPath, [string]$Channel, [string]$MessageId)
+    if (-not $MessageId) { return @{ ok = $false; reason = 'MOE_MENTION_ID_MISSING' } }
+    # The channel id reaches a path join. It is whitelisted rather than
+    # sanitised, because sanitising invites an escape: a crafted id like
+    # "../../../etc/passwd" or an absolute path must be refused outright, not
+    # rewritten. Real ids are "chan-<hex>".
+    if (-not $Channel -or ($Channel -notmatch '^[A-Za-z0-9_-]+$')) {
+        return @{ ok = $false; reason = 'MOE_MENTION_CHANNEL_UNSAFE' }
+    }
+    if (-not $script:MoeMentionStoreCache.ContainsKey($Channel)) {
+        $script:MoeMentionStoreCache[$Channel] = $null
+        $storePath = Join-Path (Join-Path (Join-Path $ProjectPath '.moe') 'messages') "$Channel.jsonl"
+        # Test-Path then read is a TOCTOU window; the try/catch is what actually
+        # decides, so a file deleted in between still lands on the same code.
+        if (Test-Path -LiteralPath $storePath) {
+            try {
+                $records = @{}
+                foreach ($line in [System.IO.File]::ReadAllLines($storePath, [System.Text.UTF8Encoding]::new($false))) {
+                    if (-not $line) { continue }
+                    # A partial trailing line from a concurrent append simply
+                    # fails to parse and is skipped -- the mention then fails
+                    # CLOSED to a marker rather than being served half a body.
+                    try { $rec = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+                    if ($rec -and $rec.id -is [string]) { $records[$rec.id] = $rec }
+                }
+                $script:MoeMentionStoreCache[$Channel] = $records
+            } catch {
+                $script:MoeMentionStoreCache[$Channel] = $null
+            }
+        }
+    }
+    $store = $script:MoeMentionStoreCache[$Channel]
+    if ($null -eq $store) { return @{ ok = $false; reason = 'MOE_MENTION_STORE_UNREADABLE' } }
+    if (-not $store.ContainsKey($MessageId)) { return @{ ok = $false; reason = 'MOE_MENTION_ID_NOT_IN_STORE' } }
+    $rec = $store[$MessageId]
+    if ($rec.content -isnot [string]) {
+        return @{ ok = $false; reason = 'MOE_MENTION_CONTENT_MISSING' }
+    }
+    return @{ ok = $true; content = $rec.content; sender = $rec.sender; channel = $rec.channel }
+}
+
+function New-MoeVerifiedMention {
+    param([string]$ProjectPath, $Message)
+    $stored = Get-MoeStoredMentionRecord -ProjectPath $ProjectPath -Channel $Message.channel -MessageId $Message.id
+    # Identity comes from the store too, not just the body. An RPC response that
+    # lied about `sender` could otherwise put words in a named teammate's mouth
+    # while every byte of the body verified clean.
+    $senderOut = if ($stored.ok -and $stored.sender -is [string]) { $stored.sender } else { $Message.sender }
+    $channelOut = if ($stored.ok -and $stored.channel -is [string]) { $stored.channel } else { $Message.channel }
+    if ($stored.ok) {
+        $body = $stored.content
+        $rpcBody = if ($Message.content -is [string]) { $Message.content } else { '' }
+        if ($body -eq $rpcBody) {
+            $prov = 'VERIFIED'
+        } elseif ($rpcBody.Length -gt 0 -and $body.StartsWith($rpcBody, [System.StringComparison]::Ordinal)) {
+            # chat_read truncates at maxContentChars (default 1000). That is a
+            # legitimate transform, but delivering silently-truncated bytes as
+            # "the message" is the same defect wearing a different hat, so the
+            # DECISION is: deliver the FULL stored body and label the RPC's copy
+            # as truncated. The store is being read anyway.
+            $prov = 'VERIFIED_RPC_TRUNCATED'
+        } else {
+            $prov = 'MOE_MENTION_CONTENT_DIVERGED'
+        }
+    } else {
+        $body = "$script:MoeMentionFailedMarker reason=$($stored.reason) id=$($Message.id) channel=$($Message.channel)"
+        $prov = $stored.reason
+    }
+    return [ordered]@{
+        id         = $Message.id
+        channel    = $channelOut
+        sender     = $senderOut
+        content    = $body
+        provenance = $prov
+    }
+}
+
+function New-MoeMentionFailure {
+    param([string]$Reason)
+    return [ordered]@{
+        id         = 'unknown'
+        channel    = 'unknown'
+        sender     = 'moe-agent'
+        content    = "$script:MoeMentionFailedMarker reason=$Reason id=unknown channel=unknown"
+        provenance = $Reason
+    }
+}
+
+function ConvertTo-MoeFencedJson {
+    param([string]$Json)
+    # JSON's structural syntax uses no '<', no '>' and no non-ASCII, so those
+    # can only have come from a string VALUE. Escaping them as \uXXXX is
+    # lossless -- a JSON reader decodes them back to the same characters -- but
+    # it removes two hazards from the RAW prompt text a model reads: a body
+    # containing "</routed_mentions>" can no longer close the fence and land
+    # instruction text OUTSIDE the block (measured: it did), and a non-ASCII
+    # body can no longer be mangled by a console code page on the way out.
+    $sb = [System.Text.StringBuilder]::new($Json.Length)
+    foreach ($ch in $Json.ToCharArray()) {
+        $code = [int]$ch
+        if ($ch -eq '<' -or $ch -eq '>' -or $code -gt 126) {
+            [void]$sb.AppendFormat('\u{0:x4}', $code)
+        } else {
+            [void]$sb.Append($ch)
+        }
+    }
+    return $sb.ToString()
+}
+
 # The CLI invocation below blocks this process for the CLI's entire runtime
 # with no interleaved activity of our own. moe-proxy opens a fresh connection
 # per RPC call rather than holding one for the CLI's lifetime (see
@@ -1376,24 +1511,35 @@ do {
         $buckets = @()
         if ($preflightGeneralUnread -and $preflightGeneralUnread.messages) { $buckets += ,$preflightGeneralUnread.messages }
         if ($preflightTaskUnread    -and $preflightTaskUnread.messages)    { $buckets += ,$preflightTaskUnread.messages }
-        foreach ($bucket in $buckets) {
-            foreach ($msg in $bucket) {
-                if (-not $msg -or -not $msg.mentions) { continue }
-                $hit = $false
-                foreach ($m in $msg.mentions) {
-                    if ($m -eq $WorkerId) { $hit = $true; break }
-                    if ($m -eq "all") { $hit = $true; break }
-                    if ($roleGroupTag -and $m -eq $roleGroupTag) { $hit = $true; break }
-                }
-                if ($hit) {
-                    $preflightRoutedMentions += [ordered]@{
-                        id      = $msg.id
-                        channel = $msg.channel
-                        sender  = $msg.sender
-                        content = $msg.content
+        # Whole extraction is guarded: a throw here used to leave the block
+        # simply absent, which reads to the recipient as "nobody tagged you".
+        # Fail CLOSED instead -- one marker entry saying delivery broke.
+        try {
+            $script:MoeMentionStoreCache = @{}
+            $seenMentionIds = @{}
+            foreach ($bucket in $buckets) {
+                foreach ($msg in $bucket) {
+                    if (-not $msg -or -not $msg.mentions) { continue }
+                    if ($msg.id -and $seenMentionIds.ContainsKey([string]$msg.id)) { continue }
+                    $hit = $false
+                    foreach ($m in $msg.mentions) {
+                        if ($m -eq $WorkerId) { $hit = $true; break }
+                        if ($m -eq "all") { $hit = $true; break }
+                        if ($roleGroupTag -and $m -eq $roleGroupTag) { $hit = $true; break }
+                    }
+                    if ($hit) {
+                        $preflightRoutedMentions += (New-MoeVerifiedMention -ProjectPath $projectPath -Message $msg)
+                        if ($msg.id) { $seenMentionIds[[string]$msg.id] = $true }
                     }
                 }
             }
+        } catch {
+            Write-Host "[WARN] MOE_MENTION_EXTRACTION_FAILED: $_" -ForegroundColor Yellow
+            $preflightRoutedMentions = @(New-MoeMentionFailure -Reason 'MOE_MENTION_EXTRACTION_FAILED')
+        }
+        $diverged = @($preflightRoutedMentions | Where-Object { $_.provenance -ne 'VERIFIED' -and $_.provenance -ne 'VERIFIED_RPC_TRUNCATED' })
+        if ($diverged.Count -gt 0) {
+            Write-Host "[mention] $($diverged.Count) mention(s) failed provenance: $(($diverged | ForEach-Object { $_.provenance }) -join ', ')" -ForegroundColor Yellow
         }
         if ($preflightRoutedMentions.Count -gt 0) {
             Write-Host "[mention] $($preflightRoutedMentions.Count) unread message(s) tagging $WorkerId -- will surface in system prompt." -ForegroundColor Magenta
@@ -1571,6 +1717,13 @@ If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.ch
     # Protocol section.
     if ($preflightRoutedMentions -and $preflightRoutedMentions.Count -gt 0) {
         $mentionsJson = $preflightRoutedMentions | ConvertTo-Json -Depth 8 -Compress
+        # PowerShell 5.1 unwraps a one-element array into a bare object, so a
+        # single routed mention would arrive with a different shape than two.
+        # -AsArray does not exist before PS6; re-wrap by hand.
+        if ($preflightRoutedMentions.Count -eq 1 -and -not $mentionsJson.StartsWith('[')) {
+            $mentionsJson = "[$mentionsJson]"
+        }
+        $mentionsJson = ConvertTo-MoeFencedJson $mentionsJson
         $mentionCount = $preflightRoutedMentions.Count
         $dynamicContext += @"
 
