@@ -435,16 +435,16 @@ export function validateTeamMaxSize(value: unknown): number {
   return validateIntegerValue(value, 'maxSize', 1, 1000);
 }
 
-export function validateMemberIds(value: unknown): string[] {
+export function validateMemberIds(value: unknown, field = 'memberIds'): string[] {
   if (!Array.isArray(value)) {
-    throw invalidInput('memberIds', 'must be an array');
+    throw invalidInput(field, 'must be an array');
   }
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const rawId of value) {
-    const id = validateEntityId(rawId, 'memberIds');
+    const id = validateEntityId(rawId, field);
     if (seen.has(id)) {
-      throw invalidInput('memberIds', 'must not contain duplicate IDs');
+      throw invalidInput(field, 'must not contain duplicate IDs');
     }
     seen.add(id);
     ids.push(id);
@@ -465,7 +465,7 @@ export function validateCreateTeamInput(input: { name: string; role?: TeamRole |
 
 export function validateTeamUpdates(team: Team, updates: Partial<Team>): Partial<Team> {
   const input = requirePlainObject(updates, 'updates');
-  rejectUnknownFields(input, ['name', 'role', 'memberIds', 'maxSize'], 'team update');
+  rejectUnknownFields(input, ['name', 'role', 'memberIds', 'formerMemberIds', 'maxSize'], 'team update');
 
   const sanitized: Partial<Team> = {};
   if (input.name !== undefined) {
@@ -476,6 +476,11 @@ export function validateTeamUpdates(team: Team, updates: Partial<Team>): Partial
   }
   if (input.memberIds !== undefined) {
     sanitized.memberIds = validateMemberIds(input.memberIds);
+  }
+  if (input.formerMemberIds !== undefined) {
+    // Deliberately NOT bounded by maxSize: a tombstone records who was evicted,
+    // it is not a seat on the team.
+    sanitized.formerMemberIds = validateMemberIds(input.formerMemberIds, 'formerMemberIds');
   }
   if (input.maxSize !== undefined) {
     sanitized.maxSize = validateTeamMaxSize(input.maxSize);

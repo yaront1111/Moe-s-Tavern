@@ -27,6 +27,7 @@ import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
+import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
 // owns its task (one-task-per-worker), so claim_next_task keeps returning
@@ -267,12 +268,15 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
       }
     }
 
-    // Remove from team memberIds
+    // Remove from team memberIds, leaving a tombstone. The record (and with it
+    // worker.teamId) is gone, so the team is the only place membership can
+    // survive an eviction — see util/teamMembershipHeal.ts.
     for (const team of state.teams.values()) {
       if (team.memberIds.includes(workerId)) {
         const updated = {
           ...team,
           memberIds: team.memberIds.filter((id) => id !== workerId),
+          formerMemberIds: withEvictionTombstones(team, [workerId]),
           updatedAt: new Date().toISOString()
         };
         state.teams.set(team.id, updated);
@@ -360,9 +364,16 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     }
 
     // Clear stale memberIds from teams; all worker records have been purged.
+    // Each cleared id is tombstoned so a returning worker rejoins its own team
+    // instead of coming back as a solo — see util/teamMembershipHeal.ts.
     for (const team of state.teams.values()) {
       if (team.memberIds.length === 0) continue;
-      const updated = { ...team, memberIds: [], updatedAt: new Date().toISOString() };
+      const updated = {
+        ...team,
+        memberIds: [],
+        formerMemberIds: withEvictionTombstones(team, team.memberIds),
+        updatedAt: new Date().toISOString()
+      };
       state.teams.set(team.id, updated);
       try {
         await state.writeEntity('teams', team.id, updated);

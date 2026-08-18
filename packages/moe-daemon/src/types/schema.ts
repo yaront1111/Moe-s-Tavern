@@ -199,6 +199,15 @@ export interface Team {
   name: string;
   role: TeamRole | null;
   memberIds: string[];
+  /**
+   * Members whose WORKER RECORD was evicted (stale sweep, DEAD prune, startup
+   * purge) while they still belonged to this team. The record — and with it
+   * worker.teamId — dies on eviction, so the membership tombstone has to live
+   * on the team, which survives. Read only to auto-rejoin a returning worker;
+   * never counted toward maxSize and never routed to. Cleared the moment the
+   * worker joins, or deliberately leaves, any team.
+   */
+  formerMemberIds?: string[];
   maxSize: number;
   createdAt: string;
   updatedAt: string;

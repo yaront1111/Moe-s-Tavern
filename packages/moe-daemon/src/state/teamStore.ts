@@ -120,17 +120,41 @@ export async function deleteTeam(state: StateManager, teamId: string): Promise<T
   return team;
 }
 
+/**
+ * A worker belongs to exactly one team, so its eviction tombstone
+ * (Team.formerMemberIds, written when the worker RECORD is deleted) must exist
+ * in at most one place. Clear it everywhere whenever membership is decided
+ * explicitly — joining a team, or leaving one. Without the clear on leave, a
+ * deliberately removed worker would silently rejoin on its next claim.
+ */
+async function clearMembershipTombstone(state: StateManager, workerId: string): Promise<void> {
+  for (const team of Array.from(state.teams.values())) {
+    if (!team.formerMemberIds?.includes(workerId)) continue;
+    await state.updateTeam(team.id, {
+      formerMemberIds: team.formerMemberIds.filter((id) => id !== workerId)
+    });
+  }
+}
+
 export async function addTeamMember(state: StateManager, teamId: string, workerId: string): Promise<Team> {
-  const team = state.teams.get(teamId);
-  if (!team) throw new Error(`Team not found: ${teamId}`);
+  const existing = state.teams.get(teamId);
+  if (!existing) throw new Error(`Team not found: ${teamId}`);
 
-  if (team.memberIds.includes(workerId)) {
-    return team; // Already a member, idempotent
+  if (existing.memberIds.includes(workerId)) {
+    await clearMembershipTombstone(state, workerId);
+    return state.teams.get(teamId)!; // Already a member, idempotent
   }
 
-  if (team.memberIds.length >= team.maxSize) {
-    throw new Error(`Team ${team.name} is full (max ${team.maxSize} members)`);
+  // Order matters: refuse a full team BEFORE clearing the tombstone. Clearing
+  // first would strip the worker's only route back to its team as a side
+  // effect of a join that then failed.
+  if (existing.memberIds.length >= existing.maxSize) {
+    throw new Error(`Team ${existing.name} is full (max ${existing.maxSize} members)`);
   }
+
+  await clearMembershipTombstone(state, workerId);
+  // Re-read: clearing the tombstone may have rewritten this very team.
+  const team = state.teams.get(teamId)!;
 
   // A worker belongs to exactly one team (worker.teamId is single-valued).
   // Remove it from any previous team's memberIds first, otherwise the old
@@ -175,12 +199,17 @@ export async function removeTeamMember(state: StateManager, teamId: string, work
     await state.updateWorker(workerId, { teamId: null });
   }
 
-  if (!team.memberIds.includes(workerId)) {
-    return team; // Not a member, idempotent (teamId already repaired above)
+  // Leaving is deliberate: drop any eviction tombstone so the next claim does
+  // not auto-rejoin a worker that was removed on purpose.
+  await clearMembershipTombstone(state, workerId);
+  const current = state.teams.get(teamId)!;
+
+  if (!current.memberIds.includes(workerId)) {
+    return current; // Not a member, idempotent (teamId already repaired above)
   }
 
   const updated = await state.updateTeam(teamId, {
-    memberIds: team.memberIds.filter((id) => id !== workerId)
+    memberIds: current.memberIds.filter((id) => id !== workerId)
   });
 
   state.appendActivity('TEAM_MEMBER_REMOVED', { teamId, workerId });

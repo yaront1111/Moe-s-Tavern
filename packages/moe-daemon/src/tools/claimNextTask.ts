@@ -8,6 +8,11 @@ import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
+import {
+  healTeamMembership,
+  noTeamMembershipRefusal,
+  resolveEffectiveTeam
+} from '../util/teamMembershipHeal.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -193,6 +198,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // Try each candidate task in priority order; fall through on concurrency conflicts
       let task = tasks[0];
       let claimed = false;
+      // Set when a candidate is skipped ONLY because the claimer has no team.
+      // Without it the drained loop falls through to the concurrent-claim tail
+      // and reports a race on a board where nothing raced.
+      let skippedForNoTeam = false;
       for (const candidate of tasks) {
         task = candidate;
 
@@ -232,9 +241,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             !state.isTaskAssignedToInactiveWorker(t)
           );
           if (otherActiveOnSameStatus && !params.replaceExisting) {
-            const claimingWorkerTeam = state.getTeamForWorker(params.workerId);
+            // Effective, not live, membership: a worker whose record was evicted
+            // still belongs to its team via the tombstone, and is rejoined for
+            // real once its record is rebuilt below.
+            const claimingWorkerTeam = resolveEffectiveTeam(state, params.workerId);
             if (!claimingWorkerTeam) {
               // Solo worker -> epic+status already taken, try next candidate
+              skippedForNoTeam = true;
               continue;
             }
           }
@@ -280,6 +293,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               status: 'READING_CONTEXT'
             });
           }
+
+          // The record now exists (rebuilt above if eviction had deleted it),
+          // so durable membership can be restored. No-op when membership is
+          // already present, so an ordinary claim emits no join event.
+          await healTeamMembership(state, params.workerId);
         }
 
         // Successfully claimed this task
@@ -288,6 +306,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       if (!claimed) {
+        // Two very different dead ends share this tail. Only one of them is a
+        // race; reporting the other as one costs real diagnosis time.
+        if (skippedForNoTeam && params.workerId) {
+          return noTeamMembershipRefusal(params.workerId);
+        }
         return {
           hasNext: false,
           nextAction: {

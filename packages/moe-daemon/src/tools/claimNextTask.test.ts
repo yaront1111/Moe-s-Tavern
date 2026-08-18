@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { claimNextTaskTool } from './claimNextTask.js';
+import { joinTeamTool } from './joinTeam.js';
 import { activeWaiters, waitForTaskTool } from './waitForTask.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../types/schema.js';
@@ -483,5 +484,228 @@ describe('moe.claim_next_task — stale handoff disk state', () => {
     expect(result.staleHandoffDiskState).toBeUndefined();
     expect(result.handoffHint).toBeUndefined();
     expect(mockedSignature).toHaveBeenCalledTimes(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A claimer whose team membership is absent hits the solo epic+status block
+// (claimNextTask block (3)) and used to fall through to the genuine-race tail
+// message — "all candidates taken" on a visibly full board. These pin the
+// truthful refusal, its discrimination from a real race, and the auto-heal
+// that stops eviction silently demoting a team member to a solo.
+// ---------------------------------------------------------------------------
+describe('moe.claim_next_task — team-membership refusal and auto-heal', () => {
+  let testDir: string;
+  let moePath: string;
+  let state: StateManager;
+
+  function setupMoe() {
+    fs.mkdirSync(moePath, { recursive: true });
+    for (const sub of ['epics', 'tasks', 'workers', 'proposals', 'channels', 'messages', 'teams']) {
+      fs.mkdirSync(path.join(moePath, sub));
+    }
+    const project: Partial<Project> = {
+      id: 'proj-test', schemaVersion: 6, name: 'Test', rootPath: testDir,
+      globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
+      settings: {
+        approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false,
+        branchPattern: '', commitPattern: '', agentCommand: 'claude', enableAgentTeams: false,
+      },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
+    const epic: Epic = {
+      id: 'epic-1', projectId: 'proj-test', title: 'E', description: '', architectureNotes: '',
+      epicRails: [], status: 'ACTIVE', order: 1,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
+  }
+
+  function writeWorker(id: string, overrides: Partial<Worker> = {}): void {
+    const now = new Date().toISOString();
+    const worker: Worker = {
+      id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE', branch: '', modifiedFiles: [],
+      startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0, teamId: null,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'workers', id + '.json'), JSON.stringify(worker, null, 2));
+  }
+
+  function writeTask(id: string, overrides: Partial<Task> = {}): void {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id, epicId: 'epic-1', title: 'Task ' + id, description: '',
+      definitionOfDone: ['Done'], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId: null, branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      order: 1, createdAt: now, updatedAt: now,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', id + '.json'), JSON.stringify(task, null, 2));
+  }
+
+  /** A full board: one free task, plus a peer holding a DIFFERENT task in the
+   *  same epic+status — exactly the shape that arms the solo block. */
+  function seedFullBoard(): void {
+    writeTask('task-free', { status: 'WORKING', order: 1 });
+    writeTask('task-peer', { status: 'WORKING', order: 2, assignedWorkerId: 'w-peer' });
+    writeWorker('w-peer', { currentTaskId: 'task-peer', status: 'CODING' });
+    writeWorker('w-solo');
+  }
+
+  async function claim(workerId = 'w-solo'): Promise<Record<string, unknown>> {
+    const tool = claimNextTaskTool(state);
+    return await tool.handler({ workerId, statuses: ['WORKING'] }, state) as Record<string, unknown>;
+  }
+
+  beforeEach(() => {
+    mockedSignature.mockReset();
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-claim-team-'));
+    moePath = path.join(testDir, '.moe');
+    setupMoe();
+    state = new StateManager({ projectPath: testDir });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('refuses a teamless claimer with NO_TEAM_MEMBERSHIP and a join_team exit, not the race message', async () => {
+    seedFullBoard();
+    await state.load();
+    expect(state.getTeamForWorker('w-solo')).toBeNull();
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(false);
+    expect(result.code).toBe('NO_TEAM_MEMBERSHIP');
+    const next = result.nextAction as { tool: string; args: Record<string, unknown>; reason: string };
+    expect(next.tool).toBe('moe.join_team');
+    expect(next.args.workerId).toBe('w-solo');
+    // The reason must name the rule that actually refused, so a reader stops
+    // hunting for a race that never happened.
+    expect(next.reason).toMatch(/team/i);
+    expect(next.reason).toMatch(/epic/i);
+    // The lie itself: the concurrent-claim wording must not appear anywhere.
+    expect(JSON.stringify(result)).not.toContain('taken by concurrent workers');
+  });
+
+  it('lets a TEAM member claim the same board (teams parallelize an epic+status)', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-free');
+    expect(result.code).toBeUndefined();
+  });
+
+  it('still reports a GENUINE concurrent claim as a race, not as a membership miss', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+    // Simulate the optimistic-concurrency loss: another worker assigns the
+    // candidate between the ranked filter and our write.
+    const realUpdateTask = state.updateTask.bind(state);
+    vi.spyOn(state, 'updateTask').mockImplementation(async (taskId, updates, event) => {
+      if (taskId === 'task-free' && (updates as { assignedWorkerId?: string }).assignedWorkerId === 'w-solo') {
+        throw new Error('Task already assigned to w-other');
+      }
+      return realUpdateTask(taskId, updates, event);
+    });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(false);
+    expect(result.code).not.toBe('NO_TEAM_MEMBERSHIP');
+    const next = result.nextAction as { tool: string; reason: string };
+    expect(next.tool).toBe('moe.wait_for_task');
+    expect(next.reason).toContain('taken by concurrent workers');
+  });
+
+  it('claims successfully once the refused worker joins a team (the documented workaround)', async () => {
+    seedFullBoard();
+    await state.load();
+    const refused = await claim();
+    expect(refused.code).toBe('NO_TEAM_MEMBERSHIP');
+
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await joinTeamTool(state).handler({ teamId: team.id, workerId: 'w-solo' }, state);
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-free');
+  });
+
+  it('auto-heals membership after presence eviction deleted the worker record', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+
+    // Presence eviction: the stale sweep and the DEAD-worker prune both call
+    // deleteWorker, which drops the record (and with it worker.teamId).
+    await state.deleteWorker('w-solo');
+    expect(state.getWorker('w-solo')).toBeNull();
+    expect(state.getTeam(team.id)?.memberIds).not.toContain('w-solo');
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-free');
+    expect(state.getTeamForWorker('w-solo')?.id).toBe(team.id);
+    expect(state.getTeam(team.id)?.memberIds).toContain('w-solo');
+  });
+
+  it('never resurrects a worker removed from the team AFTER it was evicted', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+    // Eviction first, so the tombstone really is written...
+    await state.deleteWorker('w-solo');
+    expect(state.getTeam(team.id)?.formerMemberIds).toContain('w-solo');
+    // ...then the deliberate removal, which must retract it. Ordered this way
+    // round the assertion below is only reachable if leave_team clears the
+    // tombstone: the reverse order never writes one, and passed either way.
+    await state.removeTeamMember(team.id, 'w-solo');
+    expect(state.getTeam(team.id)?.formerMemberIds).not.toContain('w-solo');
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(false);
+    expect(result.code).toBe('NO_TEAM_MEMBERSHIP');
+    expect(state.getTeamForWorker('w-solo')).toBeNull();
+  });
+
+  it('auto-heals membership after a startup purge wiped every team roster', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+
+    await state.purgeAllWorkers();
+    expect(state.getWorker('w-solo')).toBeNull();
+    expect(state.getTeam(team.id)?.memberIds).toEqual([]);
+
+    // The peer record died with the purge too, so re-seed the live peer that
+    // arms the solo block — otherwise the claim would succeed for the wrong
+    // reason (nothing left to block it).
+    writeWorker('w-peer', { currentTaskId: 'task-peer', status: 'CODING' });
+    await state.load();
+    await state.updateTask('task-peer', { assignedWorkerId: 'w-peer' });
+
+    const result = await claim();
+
+    expect(result.hasNext).toBe(true);
+    expect(state.getTeamForWorker('w-solo')?.id).toBe(team.id);
   });
 });

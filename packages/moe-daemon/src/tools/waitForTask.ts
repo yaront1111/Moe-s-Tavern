@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
+import { resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
 
@@ -138,7 +139,9 @@ function findMatchingTask(
     // candidate when a live OTHER worker holds a different task in the same
     // epic+status — mirror that too.
     .filter((t) => {
-      if (!workerId || state.getTeamForWorker(workerId)) return true;
+      // Effective membership, exactly as claim_next_task resolves it: an
+      // evicted team member must not go invisible here and park forever.
+      if (!workerId || resolveEffectiveTeam(state, workerId)) return true;
       const otherActiveOnSameStatus = Array.from(state.tasks.values()).some((o) =>
         o.id !== t.id &&
         o.epicId === t.epicId &&
