@@ -1293,6 +1293,35 @@ $script:ResumeEscalated = $false
 $resumeMaxAttempts = 5
 if ($env:MOE_RESUME_MAX_ATTEMPTS -match '^\d+$') { $resumeMaxAttempts = [int]$env:MOE_RESUME_MAX_ATTEMPTS }
 
+# --- Self-restart when this script's own bytes change on disk -----------------
+# PowerShell parses the ENTIRE script at process start, so a long-lived polling
+# loop executes its ORIGINAL bytes for its whole life. A fix can therefore be
+# correct, installed, and still unreachable for days. Measured 2026-08-18
+# (task-965c37da): four whole-tree commits -- 9b9e44e, 76e7396, 39a1b2c and
+# ceb0370, the last of which captured a peer's live mutation drill into HEAD --
+# were produced by wrappers launched BEFORE the pathspec fix landed at 06:26:51,
+# while every copy on disk already carried the fix.
+#
+# The hash is captured ONCE, here, so one on-disk change triggers exactly one
+# restart: the relaunched process captures the new hash and cannot thrash if the
+# file is touched again mid-flight.
+$script:MoeWrapperPath = $PSCommandPath
+$script:MoeWrapperLaunchHash = $null
+$script:MoeWrapperHostExe = $null
+$script:MoeWrapperRelaunchArgs = @()
+try {
+    if ($script:MoeWrapperPath -and (Test-Path -LiteralPath $script:MoeWrapperPath)) {
+        $script:MoeWrapperLaunchHash =
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
+        $script:MoeWrapperHostExe = (Get-Process -Id $PID).Path
+        $script:MoeWrapperRelaunchArgs = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
+    }
+} catch {
+    # FAIL-OPEN. A wrapper that dies because it could not stat itself is a fleet
+    # outage; a stale wrapper is merely the status quo this guard improves on.
+    $script:MoeWrapperLaunchHash = $null
+}
+
 try {
 do {
     if (-not $firstRun) {
@@ -1301,6 +1330,28 @@ do {
         Start-Sleep -Seconds $PollInterval
         Write-Host "Relaunching agent..."
     }
+
+    # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
+    # a restart can never interleave with a half-done completion.
+    if ($script:MoeWrapperLaunchHash) {
+        $moeCurrentHash = $null
+        try {
+            $moeCurrentHash =
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
+        } catch {
+            $moeCurrentHash = $null   # FAIL-OPEN: keep running the current bytes
+        }
+        if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash) {
+            Write-Host "wrapper source changed on disk; restarting to load it"
+            try {
+                Start-Process -FilePath $script:MoeWrapperHostExe -ArgumentList $script:MoeWrapperRelaunchArgs -WorkingDirectory (Get-Location).Path | Out-Null
+            } catch {
+                Write-Host "wrapper relaunch failed; continuing on current bytes"
+            }
+            break
+        }
+    }
+
     $isFirstIteration = $firstRun
     $firstRun = $false
 

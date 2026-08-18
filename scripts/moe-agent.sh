@@ -1653,6 +1653,26 @@ case "$RESUME_MAX_ATTEMPTS" in
     ''|*[!0-9]*) RESUME_MAX_ATTEMPTS=5 ;;
 esac
 
+# --- Self-restart when this script's own bytes change on disk -----------------
+# The shell reads this file incrementally, so an edit to a running script can
+# even corrupt the current execution; either way a long-lived loop keeps serving
+# whatever it already parsed. A fix can therefore be correct, installed, and
+# still unreachable for days. Measured 2026-08-18 (task-965c37da): four
+# whole-tree commits -- 9b9e44e, 76e7396, 39a1b2c and ceb0370, the last of which
+# captured a peer's live mutation drill into HEAD -- were produced by wrappers
+# launched BEFORE the pathspec fix landed, while every copy on disk had the fix.
+#
+# The hash is captured ONCE, here, so one on-disk change triggers exactly one
+# restart: the re-exec'd process captures the new hash and cannot thrash.
+MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
+MOE_WRAPPER_LAUNCH_HASH=""
+if [ -f "$MOE_WRAPPER_PATH" ]; then
+    # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
+    # outage; a stale wrapper is merely the status quo this guard improves on.
+    MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
+fi
+MOE_WRAPPER_ARGV=("$@")
+
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
@@ -1662,6 +1682,18 @@ while [ "$LOOP_RUNNING" = true ]; do
         sleep "$POLL_INTERVAL"
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
+
+    # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
+    # a restart can never interleave with a half-done completion.
+    if [ -n "$MOE_WRAPPER_LAUNCH_HASH" ]; then
+        MOE_WRAPPER_CURRENT_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
+        if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ]; then
+            echo "wrapper source changed on disk; restarting to load it"
+            exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+            echo "wrapper relaunch failed; continuing on current bytes"
+        fi
+    fi
+
     IS_FIRST_ITERATION="$FIRST_RUN"
     FIRST_RUN=false
 
