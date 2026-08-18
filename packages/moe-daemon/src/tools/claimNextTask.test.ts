@@ -665,6 +665,36 @@ describe('moe.claim_next_task — team-membership refusal and auto-heal', () => 
     expect(state.getTeam(team.id)?.memberIds).toContain('w-solo');
   });
 
+  it('keeps that evicted member VISIBLE to wait_for_task instead of parking it forever', async () => {
+    seedFullBoard();
+    await state.load();
+    const team = await state.createTeam({ name: 'workers', role: 'worker' });
+    await state.addTeamMember(team.id, 'w-solo');
+
+    // The same eviction as the claim-side twin above. wait_for_task resolves
+    // effective membership but must NOT rejoin -- a read may not mutate the
+    // roster -- so live membership really is gone here and only the tombstone
+    // keeps the waiter eligible.
+    await state.deleteWorker('w-solo');
+    expect(state.getTeamForWorker('w-solo')).toBeNull();
+    expect(state.getTeam(team.id)?.formerMemberIds).toContain('w-solo');
+
+    // Drive the production tool rather than restating its predicate: this is
+    // the only assertion holding waitForTask's eligibility filter to
+    // claim_next_task's. Reverting that one resolveEffectiveTeam call back to
+    // getTeamForWorker answers { hasNext: false, timedOut: true } here -- the
+    // evicted member goes invisible to the queue and parks until the timeout,
+    // which is precisely the drift that opened this defect.
+    const result = await waitForTaskTool(state).handler(
+      { statuses: ['WORKING'], workerId: 'w-solo', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-free');
+    expect(result.timedOut).toBeUndefined();
+  });
+
   it('never resurrects a worker removed from the team AFTER it was evicted', async () => {
     seedFullBoard();
     await state.load();
