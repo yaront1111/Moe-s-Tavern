@@ -376,8 +376,12 @@ describe('moe.report_blocked', () => {
     await state.updateTask('task-1', { status: 'REVIEW', assignedWorkerId: 'worker-1' });
 
     await report({ reason: 'first reason' });
-    await report({ reason: 'corrected reason' });
+    const correction = await report({ reason: 'corrected reason' });
     expect(state.getTask('task-1')!.blockedFromStatus).toBe('REVIEW');
+    // The repeat's OWN status is BLOCKED, which is not agent-claimable, so a
+    // hint resolved from it would tell a REVIEW-blocked owner to wait on
+    // WORKING -- a wait its own task can never satisfy.
+    expect(correction.nextAction).toMatchObject({ args: { statuses: ['REVIEW'] } });
 
     const unblock = unblockWorkerTool(state);
     await unblock.handler(

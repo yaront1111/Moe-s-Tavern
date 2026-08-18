@@ -181,9 +181,13 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // human-gated one (e.g. AWAITING_APPROVAL while the architect still
       // holds the task) would also be guaranteed to throw — map it to the
       // pool the owner's role actually waits on.
-      const waitStatuses = (AGENT_CLAIMABLE_STATUSES as readonly string[]).includes(task.status)
-        ? [task.status]
-        : [task.status === 'AWAITING_APPROVAL' ? 'PLANNING' : 'WORKING'];
+      // On a REPEAT the task's own status is already BLOCKED, which is not
+      // agent-claimable, so resolving from it would hint ['WORKING'] even for a
+      // task blocked out of REVIEW. The restore target is the honest source.
+      const statusForWait = alreadyBlocked ? (task.blockedFromStatus ?? task.status) : task.status;
+      const waitStatuses = (AGENT_CLAIMABLE_STATUSES as readonly string[]).includes(statusForWait)
+        ? [statusForWait]
+        : [statusForWait === 'AWAITING_APPROVAL' ? 'PLANNING' : 'WORKING'];
       // Resource-blocked tasks need no in-session waiting: the wrapper idles
       // (BLOCKED suppresses relaunch) and the grant path auto-unblocks. Ending
       // the session IS the correct next step, so no nextAction is emitted.
