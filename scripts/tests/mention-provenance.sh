@@ -91,7 +91,7 @@ mkdir -p "$PROJECT_DIR/.moe/messages" "$HOME_DIR"
 printf '{"id":"proj-provenance","name":"provenance","settings":{"autoCommit":false}}\n' \
   > "$PROJECT_DIR/.moe/project.json"
 
-CASE_COUNT="$("$PY" "$SEED_PY" seed "$PROJECT_DIR" "$CHANNEL" "$WORKER_ID")"
+CASE_COUNT="$("$PY" -B "$SEED_PY" seed "$PROJECT_DIR" "$CHANNEL" "$WORKER_ID")"
 if [ "${CASE_COUNT:-0}" -lt 8 ]; then
   echo "Seed produced $CASE_COUNT cases; a sweep that generates nothing must not pass" >&2
   exit 1
@@ -127,7 +127,7 @@ run_mode() {
   # Re-seed per mode: the wrapper's post-flight appends its own session-ended
   # message to the same #general jsonl, so a second run would otherwise read a
   # fixture the first run had already grown.
-  "$PY" "$SEED_PY" seed "$PROJECT_DIR" "$CHANNEL" "$WORKER_ID" >/dev/null
+  "$PY" -B "$SEED_PY" seed "$PROJECT_DIR" "$CHANNEL" "$WORKER_ID" >/dev/null
   local fail_kind=""
   case "$mode" in
     extractfail) fail_kind="extract" ;;
@@ -170,9 +170,9 @@ run_mode() {
   esac
   set +e
   if [ -n "$expect_reason" ]; then
-    "$PY" "$SEED_PY" verify-marker-only "$PROJECT_DIR" "$CHANNEL" "$capture" "$expect_reason"
+    "$PY" -B "$SEED_PY" verify-marker-only "$PROJECT_DIR" "$CHANNEL" "$capture" "$expect_reason"
   else
-    "$PY" "$SEED_PY" verify "$PROJECT_DIR" "$CHANNEL" "$capture" "$mode"
+    "$PY" -B "$SEED_PY" verify "$PROJECT_DIR" "$CHANNEL" "$capture" "$mode"
   fi
   local vrc=$?
   set -e

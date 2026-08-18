@@ -48,7 +48,7 @@ New-Item -ItemType Directory -Force -Path $homeDir | Out-Null
     '{"id":"proj-provenance","name":"provenance","settings":{"autoCommit":false}}' + "`n",
     [System.Text.UTF8Encoding]::new($false))
 
-$caseCount = (& $py $seedPy seed $projectDir $channel $workerId | Select-Object -Last 1)
+$caseCount = (& $py -B $seedPy seed $projectDir $channel $workerId | Select-Object -Last 1)
 if ([int]$caseCount -lt 8) {
     Write-Host "Seed produced $caseCount cases; a sweep that generates nothing must not pass" -ForegroundColor Red
     exit 1
@@ -85,7 +85,7 @@ function Invoke-ProvenanceMode {
     # Re-seed per mode: the wrapper's post-flight appends its own session-ended
     # message to the same #general jsonl, so a second run would otherwise read a
     # fixture the first run had already grown.
-    & $py $seedPy seed $projectDir $channel $workerId | Out-Null
+    & $py -B $seedPy seed $projectDir $channel $workerId | Out-Null
     $saved = @{
         proxy = $env:MOE_PROXY_PATH; profile = $env:USERPROFILE; temp = $env:TEMP
         mode = $env:MOE_PROVENANCE_MODE; worker = $env:MOE_PROVENANCE_WORKER
@@ -132,7 +132,7 @@ function Invoke-ProvenanceMode {
     # pipeline would be folded into this function's return value, and the
     # caller's `-ne 0` test would then compare an ARRAY of report lines instead
     # of the exit code -- a green/red decision made on the wrong operand.
-    & $py $seedPy verify $projectDir $channel $capture $Mode 2>&1 |
+    & $py -B $seedPy verify $projectDir $channel $capture $Mode 2>&1 |
         ForEach-Object { Write-Host "  $_" }
     return $LASTEXITCODE
 }
