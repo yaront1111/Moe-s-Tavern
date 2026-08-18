@@ -15,7 +15,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks and is auto-unblocked when the lease is granted.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat writes nothing, pages nobody, and answers reasonUpdated:false.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -89,6 +89,21 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // task must stay owned — the whole hold/suppression/resume design keys on
       // alreadyAssigned{status:BLOCKED} coming back to the parked worker.
       const flipped = BLOCKABLE_STATUSES.has(task.status);
+
+      // A repeat report on an already-BLOCKED task used to skip every write
+      // below while still answering success:true, so a CORRECTION left the
+      // stale reason on disk and the next claimer worked from it. Two rules:
+      // the correction is durable, and it writes ONLY the reason (plus the
+      // resource when one is supplied). Re-running the block update instead
+      // would stamp blockedFromStatus:'BLOCKED' -- task.status IS 'BLOCKED' by
+      // now -- and unblock_worker would then "restore" the task to BLOCKED
+      // forever, trading a stale string for a permanent wedge.
+      const alreadyBlocked = task.status === 'BLOCKED';
+      const identicalRepeat = alreadyBlocked
+        && task.blockedReason === params.reason
+        && (params.resourceId === undefined || (task.blockedResourceId ?? null) === params.resourceId);
+      const reasonUpdated = flipped || (alreadyBlocked && !identicalRepeat);
+
       if (flipped) {
         await state.updateTask(task.id, {
           status: 'BLOCKED',
@@ -98,15 +113,28 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           blockedFromStatus: task.status,
           blockedAt: new Date().toISOString(),
         }, 'TASK_BLOCKED');
+      } else if (alreadyBlocked && !identicalRepeat) {
+        // No status change here, so neither the assignedWorkerId hazard above
+        // nor the block bookkeeping applies: this lands a TASK_UPDATED event
+        // carrying the corrected reason, which keeps the activity log able to
+        // tell a correction apart from the block that opened it.
+        await state.updateTask(task.id, {
+          blockedReason: params.reason,
+          ...(params.resourceId !== undefined ? { blockedResourceId: params.resourceId } : {}),
+        });
       }
 
-      if (task.assignedWorkerId) {
+      // An identical repeat writes nothing anywhere -- no worker churn, no
+      // second page. Anything else lets a retrying caller spam #governors.
+      if (task.assignedWorkerId && !identicalRepeat) {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');
       }
 
       // Cross-post blocked message to task channel, general, and #governors
       // so the on-call governor's chat_wait wakes on the block event.
-      const blockedMsg = `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
+      const blockedMsg = alreadyBlocked
+        ? `🚧 ${task.assignedWorkerId || 'worker'} UPDATED the block reason on ${task.id}: ${params.reason}`
+        : `🚧 ${task.assignedWorkerId || 'worker'} blocked on ${task.id}: ${params.reason}`;
 
       // Page a real person, not whoever happened to plan the task: the
       // architect with the freshest lastActivityAt inside the liveness window.
@@ -132,16 +160,18 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // unprefixed — prefixing both copies would page the same person twice in
       // the same channel. Every post keeps its own try/catch: chat is
       // best-effort and must never fail report_blocked or skip the BLOCKED update.
-      try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
-      try { await state.postToGeneral(mentionPrefix + blockedMsg); } catch { /* never block tool */ }
-      if (architect) {
-        try { await state.postToRoleChannel('architects', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
-        // Governors keep full visibility of every block without being paged.
-        try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
-      } else {
-        // No live architect: the governors channel is the escalation, so it
-        // carries the mention.
-        try { await state.postToRoleChannel('governors', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+      if (!identicalRepeat) {
+        try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
+        try { await state.postToGeneral(mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+        if (architect) {
+          try { await state.postToRoleChannel('architects', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+          // Governors keep full visibility of every block without being paged.
+          try { await state.postToRoleChannel('governors', blockedMsg); } catch { /* never block tool */ }
+        } else {
+          // No live architect: the governors channel is the escalation, so it
+          // carries the mention.
+          try { await state.postToRoleChannel('governors', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
+        }
       }
 
       // wait_for_task requires both workerId and statuses. Only emit the hint
@@ -157,11 +187,18 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // Resource-blocked tasks need no in-session waiting: the wrapper idles
       // (BLOCKED suppresses relaunch) and the grant path auto-unblocks. Ending
       // the session IS the correct next step, so no nextAction is emitted.
+      // The guidance must never claim a recording that did not happen -- that
+      // is the whole defect this branch exists to close.
+      const nextActionReason = identicalRepeat
+        ? 'Task was already BLOCKED with this exact reason -- NOTHING was recorded. Use moe.add_comment to add detail, then wait for the human unblock.'
+        : alreadyBlocked
+          ? 'Block reason UPDATED on the already-BLOCKED task; wait for human to unblock (via chat) or for a different task to pick up.'
+          : 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.';
       const nextAction = task.assignedWorkerId && !params.resourceId
         ? {
             tool: 'moe.wait_for_task',
             args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
-            reason: 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.',
+            reason: nextActionReason,
             recommendedSkill: recommendSkillFor('worker', 'task_blocked')
           }
         : undefined;
@@ -170,16 +207,31 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         success: true,
         taskId: task.id,
         taskStatus: flipped ? 'BLOCKED' : task.status,
+        // Both flags report what was WRITTEN, never what the status happens to
+        // read: taskStatus already printed 'BLOCKED' on the broken no-op path,
+        // which is exactly why the silent failure was invisible.
+        alreadyBlocked,
+        reasonUpdated,
         ...(params.resourceId ? { resourceId: params.resourceId, granted: false } : {}),
-        workerStatus: 'BLOCKED',
+        workerStatus: identicalRepeat && task.assignedWorkerId
+          ? state.getWorker(task.assignedWorkerId)?.status ?? 'BLOCKED'
+          : 'BLOCKED',
         // Who was actually paged — assertable, and readable by a human eyeing
         // the tool output instead of the chat channels.
-        notified: architect
-          ? { target: architect.id, via: 'freshest-live-architect' as const }
-          : { target: '@governors', via: 'governors-fallback' as const },
-        message: architect
-          ? `Worker marked as blocked. Pinged ${architect.id} (freshest live architect).`
-          : 'Worker marked as blocked. No live architect — escalated to @governors.',
+        notified: identicalRepeat
+          ? { target: null, via: 'suppressed-identical-repeat' as const }
+          : architect
+            ? { target: architect.id, via: 'freshest-live-architect' as const }
+            : { target: '@governors', via: 'governors-fallback' as const },
+        message: identicalRepeat
+          ? 'Task was already BLOCKED with this exact reason -- nothing was written and nobody was re-paged. Use moe.add_comment to add detail.'
+          : alreadyBlocked
+            ? (architect
+                ? `Block reason updated. Pinged ${architect.id} (freshest live architect).`
+                : 'Block reason updated. No live architect — escalated to @governors.')
+            : architect
+              ? `Worker marked as blocked. Pinged ${architect.id} (freshest live architect).`
+              : 'Worker marked as blocked. No live architect — escalated to @governors.',
         ...(nextAction ? { nextAction } : {})
       };
     }

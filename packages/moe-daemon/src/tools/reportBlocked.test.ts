@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { reportBlockedTool } from './reportBlocked.js';
+import { unblockWorkerTool } from './unblockWorker.js';
 import { LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 import type { Epic, Project, Task, TeamRole } from '../types/schema.js';
 
@@ -187,7 +188,10 @@ describe('moe.report_blocked', () => {
 
     rolePosts = [];
     await state.updateWorker('architect-a', { lastActivityAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() });
-    await report();
+    // A DIFFERENT reason on purpose: this arm's subject is the @governors
+    // mention once no architect is live, and a byte-identical repeat is now
+    // deliberately silent (it writes nothing, so it pages nobody).
+    await report({ reason: 'proxy still down, and the mirror is gone too' });
     expect(rolePosts.find(([role]) => role === 'governors')![1]).toMatch(/^@governors 🚧 /);
   });
 
@@ -322,6 +326,131 @@ describe('moe.report_blocked', () => {
     const unblocked = state.getTask('task-1')!;
     expect(unblocked.status).toBe('WORKING');
     expect(unblocked.assignedWorkerId).toBeNull();
+  });
+
+  // ---- repeat report_blocked on an already-BLOCKED task ----
+  // A correction used to return success:true while storing nothing, so the next
+  // claimer was served the STALE recipe. These arms pin the store, not the
+  // response: an assertion that only reads the returned object cannot tell an
+  // overwrite from the no-op that shipped.
+
+  it('overwrites the stored reason on a repeat report and preserves the block provenance', async () => {
+    const first = await report({ reason: 'bump 93 -> 94, one constant' });
+    const blocked = state.getTask('task-1')!;
+    expect(blocked.blockedReason).toBe('bump 93 -> 94, one constant');
+    const firstBlockedAt = blocked.blockedAt;
+    expect(firstBlockedAt).toEqual(expect.any(String));
+
+    const second = await report({ reason: 'CORRECTED: bump 93 -> 96, three constants' });
+
+    // STORE FIRST, deliberately: the shipped defect returned a perfectly
+    // truthful-looking response while storing nothing, so an assertion order
+    // that reads the response first would redden on the flags and never prove
+    // the durable write.
+    const corrected = state.getTask('task-1')!;
+    expect(corrected.blockedReason).toBe('CORRECTED: bump 93 -> 96, three constants');
+
+    // The correction must NOT re-stamp the block's provenance: blockedFromStatus
+    // is the restore target, and writing it here (task.status is now BLOCKED)
+    // would wedge the task in BLOCKED forever on unblock.
+    expect(corrected.blockedFromStatus).toBe('WORKING');
+    expect(corrected.blockedAt).toBe(firstBlockedAt);
+    expect(corrected.assignedWorkerId).toBe('worker-1');
+    expect(corrected.status).toBe('BLOCKED');
+
+    // Only then the response shape: a caller must be able to tell a first block
+    // (alreadyBlocked:false) from a correction (true), and a correction that
+    // changed the stored reason (reasonUpdated:true) from one that did not.
+    expect(first.alreadyBlocked).toBe(false);
+    expect(first.reasonUpdated).toBe(true);
+    expect(second.success).toBe(true);
+    expect(second.alreadyBlocked).toBe(true);
+    expect(second.reasonUpdated).toBe(true);
+    expect(second.taskStatus).toBe('BLOCKED');
+  });
+
+  it('block -> correct -> unblock restores the ORIGINAL pre-block status', async () => {
+    // REVIEW, not WORKING: unblock_worker falls back to 'WORKING' when
+    // blockedFromStatus is missing, so a WORKING fixture would stay green even
+    // if the correction wiped the restore target.
+    await state.updateTask('task-1', { status: 'REVIEW', assignedWorkerId: 'worker-1' });
+
+    await report({ reason: 'first reason' });
+    await report({ reason: 'corrected reason' });
+    expect(state.getTask('task-1')!.blockedFromStatus).toBe('REVIEW');
+
+    const unblock = unblockWorkerTool(state);
+    await unblock.handler(
+      { workerId: 'worker-1', resolution: 'blocker resolved', retryTask: true }, state
+    );
+
+    const restored = state.getTask('task-1')!;
+    expect(restored.status).toBe('REVIEW');
+    expect(restored.blockedReason).toBeNull();
+    expect(restored.blockedFromStatus).toBeNull();
+  });
+
+  it('an identical-reason repeat reports reasonUpdated:false and writes nothing', async () => {
+    const reason = 'npm install fails behind the proxy';
+    await report({ reason });
+    await state.flushActivityLog();
+    const eventsBefore = state.getActivityLog(500).length;
+    const generalBefore = generalPosts.length;
+    const roleBefore = rolePosts.length;
+    const updatedAtBefore = state.getTask('task-1')!.updatedAt;
+
+    const repeat = await report({ reason });
+
+    await state.flushActivityLog();
+    // A retried identical report must not churn the activity log or re-page
+    // #governors — the caller that fires twice is the common case. Asserted
+    // before the response flags so this arm reddens on the WRITE, not the shape.
+    expect(state.getActivityLog(500)).toHaveLength(eventsBefore);
+    expect(generalPosts).toHaveLength(generalBefore);
+    expect(rolePosts).toHaveLength(roleBefore);
+    expect(state.getTask('task-1')!.updatedAt).toBe(updatedAtBefore);
+
+    expect(repeat.success).toBe(true);
+    expect(repeat.alreadyBlocked).toBe(true);
+    expect(repeat.reasonUpdated).toBe(false);
+  });
+
+  it('a correction records blockedResourceId only when the repeat supplies one', async () => {
+    const now = new Date().toISOString();
+    const holderTask = {
+      id: 'task-holder', epicId: 'epic-1', title: 'Holder', description: '',
+      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      status: 'WORKING' as const, assignedWorkerId: 'worker-holder', branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN' as const, parentTaskId: null,
+      priority: 'MEDIUM' as const, order: 2, comments: [],
+      createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', 'task-holder.json'), JSON.stringify(holderTask, null, 2));
+    await state.load();
+    await addWorker('worker-holder', 'worker', 1);
+    // load() re-created the maps; re-stub the chat spies' target state object.
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async () => {});
+    vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
+    await state.acquireResource({ resourceId: 'benchmark-box', taskId: 'task-holder', workerId: 'worker-holder' });
+
+    await report({ reason: 'plain block, no resource' });
+    expect(state.getTask('task-1')!.blockedResourceId).toBeNull();
+
+    // Repeat that DOES supply a (busy) resource: the correction records it.
+    const queued = await report({ reason: 'now waiting on the box', resourceId: 'benchmark-box' });
+    const withResource = state.getTask('task-1')!;
+    expect(withResource.blockedReason).toBe('now waiting on the box');
+    expect(withResource.blockedResourceId).toBe('benchmark-box');
+    expect(withResource.blockedFromStatus).toBe('WORKING');
+    expect(queued.alreadyBlocked).toBe(true);
+    expect(queued.reasonUpdated).toBe(true);
+
+    // Repeat that omits it must RETAIN it — nulling would strand the task
+    // outside the queue's auto-unblock path.
+    await report({ reason: 'reason moved on, still queued' });
+    const retained = state.getTask('task-1')!;
+    expect(retained.blockedReason).toBe('reason moved on, still queued');
+    expect(retained.blockedResourceId).toBe('benchmark-box');
   });
 });
 
