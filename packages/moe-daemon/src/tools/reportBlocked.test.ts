@@ -456,6 +456,109 @@ describe('moe.report_blocked', () => {
     expect(retained.blockedReason).toBe('reason moved on, still queued');
     expect(retained.blockedResourceId).toBe('benchmark-box');
   });
+
+  it('a correction lands even when the repeat also acquires a FREE resource', async () => {
+    // The resource path takes the lease FIRST and returns early on a grant. That
+    // early return used to sit ABOVE the correction branch, so this exact input --
+    // a repeat carrying a corrected reason AND a resource that happens to be free --
+    // dropped the correction, answered with both flags undefined, and told the
+    // caller "task NOT blocked" about a task the store still reads as BLOCKED.
+    // The busy-resource arm above never reaches this branch: it queues instead.
+    await report({ reason: 'STALE-93-94' });
+    const first = state.getTask('task-1')!;
+    expect(first.status).toBe('BLOCKED');
+    expect(first.blockedResourceId).toBeNull();
+    const firstBlockedAt = first.blockedAt;
+
+    // benchmark-box has no holder, so this acquire is GRANTED.
+    const granted = await report({ reason: 'CORRECTED-93-96', resourceId: 'benchmark-box' });
+
+    // STORE FIRST: the shipped bug returned a response that read as success, so
+    // asserting the flags first would redden on the shape and never prove the
+    // durable write.
+    const corrected = state.getTask('task-1')!;
+    expect(corrected.blockedReason).toBe('CORRECTED-93-96');
+    // REASON ONLY. blockedResourceId means "parked in this resource's QUEUE",
+    // and sweeps.ts:238 skips the blocked-timeout sweep for any task carrying
+    // it. This task HOLDS the lease, so no grant is coming to auto-unblock it;
+    // stamping the field here would exempt it from that sweep forever.
+    expect(corrected.blockedResourceId).toBeNull();
+    // Provenance survives a correction taken on the grant path too: writing
+    // blockedFromStatus here (task.status is BLOCKED by now) would wedge the
+    // task in BLOCKED forever on unblock.
+    expect(corrected.blockedFromStatus).toBe('WORKING');
+    expect(corrected.blockedAt).toBe(firstBlockedAt);
+    expect(corrected.assignedWorkerId).toBe('worker-1');
+    expect(corrected.status).toBe('BLOCKED');
+
+    // The lease is still handed over -- the fix must not cost the caller its grant.
+    expect(granted.granted).toBe(true);
+    expect(granted.lease).toMatchObject({ taskId: 'task-1', workerId: 'worker-1' });
+    expect(state.getResource('benchmark-box')!.holders).toHaveLength(1);
+
+    // ...and the response tells the truth about BOTH facts.
+    expect(granted.alreadyBlocked).toBe(true);
+    expect(granted.reasonUpdated).toBe(true);
+    expect(granted.taskStatus).toBe('BLOCKED');
+    expect(String(granted.message)).toMatch(/remains BLOCKED/i);
+    expect(String(granted.message)).not.toMatch(/task NOT blocked/i);
+  });
+
+  it('a same-reason repeat on the grant path writes nothing and says so', async () => {
+    await report({ reason: 'same reason' });
+    await state.flushActivityLog();
+    const eventsBefore = state.getActivityLog(500).length;
+    const updatedAtBefore = state.getTask('task-1')!.updatedAt;
+
+    // Same reason, free resource: the lease is still granted, but the task file
+    // must not move -- otherwise a retrying caller churns the store on every hit.
+    const repeat = await report({ reason: 'same reason', resourceId: 'benchmark-box' });
+
+    await state.flushActivityLog();
+    const after = state.getTask('task-1')!;
+    expect(after.updatedAt).toBe(updatedAtBefore);
+    expect(after.blockedReason).toBe('same reason');
+    expect(after.blockedResourceId).toBeNull();
+    expect(after.status).toBe('BLOCKED');
+    // RESOURCE_ACQUIRED is the only new event; no task write rode along.
+    expect(state.getActivityLog(500).length).toBe(eventsBefore + 1);
+
+    expect(repeat.granted).toBe(true);
+    expect(repeat.alreadyBlocked).toBe(true);
+    expect(repeat.reasonUpdated).toBe(false);
+    expect(String(repeat.message)).toMatch(/remains BLOCKED/i);
+    expect(String(repeat.message)).not.toMatch(/task NOT blocked/i);
+  });
+
+  it('re-reads the task after the acquire, so a concurrent unblock is not resurrected', async () => {
+    await report({ reason: 'first reason' });
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+
+    // acquireResource is awaited, so anything the daemon does in that window is
+    // real: here a peer unblocks the task while the lease is being taken. Every
+    // flag and the write itself must come from the POST-await task, or this call
+    // stamps a dead blockedReason back onto a task that is running again.
+    const realAcquire = state.acquireResource.bind(state);
+    vi.spyOn(state, 'acquireResource').mockImplementation(async (p) => {
+      await state.updateTask('task-1', {
+        status: 'WORKING', assignedWorkerId: 'worker-1',
+        blockedReason: null, blockedFromStatus: null, blockedAt: null,
+      });
+      return realAcquire(p);
+    });
+
+    const late = await report({ reason: 'late correction', resourceId: 'benchmark-box' });
+
+    const after = state.getTask('task-1')!;
+    expect(after.status).toBe('WORKING');
+    expect(after.blockedReason).toBeNull();
+
+    expect(late.granted).toBe(true);
+    expect(late.taskStatus).toBe('WORKING');
+    expect(late.alreadyBlocked).toBe(false);
+    expect(late.reasonUpdated).toBe(false);
+    expect(String(late.message)).toMatch(/task NOT blocked/i);
+  });
 });
 
 // ---- migrated from tools.test.ts ----

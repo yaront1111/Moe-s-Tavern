@@ -55,11 +55,12 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // assigned worker" case is permitted (e.g. plugin/human flow).
       assertWorkerOwns(task, params.workerId, 'moe.report_blocked');
 
-      // Resource path: try the lease FIRST. A free resource means there is no
-      // block at all — return the lease and keep working. Runs even for an
-      // unassigned task (plugin/human flow): without the queue entry the grant
-      // path could never auto-unblock it. The lease is task-keyed; workerId is
-      // informational, falling back to 'human' for operator-initiated blocks.
+      // Resource path: try the lease FIRST. On a task that is NOT yet blocked a
+      // free resource means there is no block at all — return the lease and keep
+      // working. Runs even for an unassigned task (plugin/human flow): without
+      // the queue entry the grant path could never auto-unblock it. The lease is
+      // task-keyed; workerId is informational, falling back to 'human' for
+      // operator-initiated blocks.
       if (params.resourceId) {
         const acquired = await state.acquireResource({
           resourceId: params.resourceId,
@@ -68,13 +69,31 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
           note: params.reason,
         });
         if (acquired.granted) {
+          // A grant does NOT unblock an already-BLOCKED task (only the queued
+          // grantNextLeases path restores a status), so this return used to drop
+          // a correction arriving with a FREE resourceId and then claim "task
+          // NOT blocked" about a task the store reads BLOCKED. Re-read rather
+          // than reuse the pre-await snapshot: a concurrent unblock would
+          // otherwise get a dead blockedReason stamped back onto a running task.
+          const current = state.getTask(task.id) ?? task;
+          const heldWhileBlocked = current.status === 'BLOCKED';
+          // REASON ONLY, never blockedResourceId: that field means "parked in
+          // this resource's QUEUE, auto-unblocks on grant", and sweeps.ts (:238)
+          // skips the blocked-timeout sweep for any task carrying it. A task
+          // HOLDING the lease is in no queue, so no grant is ever coming.
+          const grantCorrects = heldWhileBlocked && current.blockedReason !== params.reason;
+          if (grantCorrects) await state.updateTask(task.id, { blockedReason: params.reason });
           return {
             success: true,
             taskId: task.id,
-            taskStatus: task.status,
+            taskStatus: current.status,
             granted: true,
+            alreadyBlocked: heldWhileBlocked,
+            reasonUpdated: grantCorrects,
             lease: acquired.lease,
-            message: `Resource ${params.resourceId} was free — lease granted, task NOT blocked. Proceed, then moe.release_resource.`,
+            message: heldWhileBlocked
+              ? `Resource ${params.resourceId} was free — lease granted, but ${task.id} remains BLOCKED; the lease does not unblock it. ${grantCorrects ? 'Block reason UPDATED.' : 'Same reason as the stored one — nothing written.'}`
+              : `Resource ${params.resourceId} was free — lease granted, task NOT blocked. Proceed, then moe.release_resource.`,
           };
         }
       }
