@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { claimNextTaskTool } from './claimNextTask.js';
+import { activeWaiters, waitForTaskTool } from './waitForTask.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../types/schema.js';
 
@@ -252,6 +253,79 @@ describe('moe.claim_next_task — one task per worker', () => {
 
     expect(result.hasNext).toBe(true);
     expect(result.task.id).toBe('task-free');
+  });
+
+  // --- Block-holding worker: the two tools must answer identically.
+  // Filed as task-9d5dfec6 from a measured spin; the claim side already
+  // refused, but pointed at moe.list_resources, which cannot clear a
+  // non-resource block, and told the worker to end its session while
+  // wait_for_task kept offering it work.
+
+  it('a BLOCKED hold refuses the claim and names release_task as the actionable exit', async () => {
+    writeTask('task-blocked', { status: 'BLOCKED', assignedWorkerId: 'w-1', blockedReason: 'needs a human' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-blocked', status: 'BLOCKED' });
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler({ workerId: 'w-1', statuses: ['WORKING'] }, state) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    const assigned = result.alreadyAssigned as { taskId: string; status: string; blockedReason?: string };
+    expect(assigned.taskId).toBe('task-blocked');
+    expect(assigned.status).toBe('BLOCKED');
+    expect(assigned.blockedReason).toBe('needs a human');
+    const next = result.nextAction as { tool: string; args: Record<string, unknown>; reason: string };
+    expect(next.tool).toBe('moe.release_task');
+    expect(next.args).toEqual({ taskId: 'task-blocked', workerId: 'w-1' });
+    expect(next.reason).toContain('moe.release_task');
+    expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+  });
+
+  it('wait_for_task and claim_next_task give a block-holding worker the SAME answer', async () => {
+    writeTask('task-blocked', { status: 'BLOCKED', assignedWorkerId: 'w-1', blockedReason: 'needs a human' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-blocked', status: 'BLOCKED' });
+    writeWorker('w-2', { currentTaskId: null, status: 'IDLE' });
+    await state.load();
+
+    // Drive BOTH production tools against one board and compare their actual
+    // answers. Restating either tool's predicate in the test would leave this
+    // green through exactly the drift it exists to catch.
+    const waitResult = await waitForTaskTool(state).handler(
+      { statuses: ['WORKING'], workerId: 'w-1', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+    const claimResult = await claimNextTaskTool(state).handler(
+      { workerId: 'w-1', statuses: ['WORKING'] },
+      state
+    ) as Record<string, unknown>;
+
+    // Neither offers task-free...
+    expect(waitResult.hasNext).toBe(false);
+    expect(claimResult.hasNext).toBe(false);
+    expect(waitResult.task).toBeUndefined();
+    // ...and both decline with the identical refusal payload and identical
+    // actionable guidance: one predicate, one hint source, two consumers.
+    expect(waitResult.alreadyAssigned).toEqual(claimResult.alreadyAssigned);
+    expect(waitResult.nextAction).toEqual(claimResult.nextAction);
+
+    // POSITIVE CONTROL: task-free really was claimable and wait-visible to an
+    // unencumbered worker on this same board, so the agreement above is a
+    // narrowing of the caller-encumbered case and not a dead queue.
+    const freeWait = await waitForTaskTool(state).handler(
+      { statuses: ['WORKING'], workerId: 'w-2', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+    expect(freeWait.hasNext).toBe(true);
+    expect((freeWait.task as { id: string }).id).toBe('task-free');
+
+    const freeClaim = await claimNextTaskTool(state).handler(
+      { workerId: 'w-2', statuses: ['WORKING'] },
+      state
+    ) as { hasNext: boolean; task: { id: string } };
+    expect(freeClaim.hasNext).toBe(true);
+    expect(freeClaim.task.id).toBe('task-free');
   });
 });
 

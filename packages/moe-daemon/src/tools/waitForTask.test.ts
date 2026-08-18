@@ -223,4 +223,70 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
     expect(result.hasNext).toBe(false);
     expect(result.timedOut).toBe(true);
   });
+
+  // --- Caller-eligibility: wait must not wake a worker for work claim refuses.
+  // Measured spin (worker-0b2f9c35, 2026-08-18, twice in one session): wait
+  // answered hasNext:true naming a CRITICAL task; claim then refused with
+  // alreadyAssigned on the caller's BLOCKED hold. A BLOCKED hold is the one
+  // active status the own-task resume above cannot cover, because BLOCKED is
+  // not agent-claimable and so can never appear in a waiter's statuses.
+
+  it('does NOT offer foreign work to a worker holding a BLOCKED task (claim would refuse it → spin)', async () => {
+    writeTask('task-held', { status: 'BLOCKED', assignedWorkerId: 'worker-w', blockedReason: 'needs a human' });
+    writeTask('task-free', { status: 'WORKING', assignedWorkerId: null, order: 2 });
+    writeWorker('worker-w', { currentTaskId: 'task-held', status: 'BLOCKED' });
+    writeWorker('worker-free');
+    await state.load();
+
+    const tool = waitForTaskTool(state);
+    const result = await tool.handler(
+      { statuses: ['WORKING'], workerId: 'worker-w', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    expect(result.task).toBeUndefined();
+    // It idles on its own unblock instead of being handed foreign work — and
+    // the answer it does get is not a bare timeout: it carries the same
+    // refusal payload claim_next_task gives, so the loop has an exit.
+    expect(result.timedOut).toBe(true);
+    expect((result.alreadyAssigned as { taskId: string; status: string }).taskId).toBe('task-held');
+    expect((result.alreadyAssigned as { taskId: string; status: string }).status).toBe('BLOCKED');
+    expect((result.nextAction as { tool: string }).tool).toBe('moe.release_task');
+
+    // POSITIVE CONTROL — the fix must not dim the queue. Without this, the
+    // assertions above would also pass against a wait_for_task that offered
+    // nothing to anyone, which is the opposite failure.
+    const free = await tool.handler(
+      { statuses: ['WORKING'], workerId: 'worker-free', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+    expect(free.hasNext).toBe(true);
+    expect((free.task as { id: string }).id).toBe('task-free');
+  });
+
+  it('still PARKS a resource-blocked holder and wakes it when its own task is granted', async () => {
+    // Preserved deliberately (the own-task path at the top of findMatchingTask):
+    // a worker parked on wait_for_task while its task sits BLOCKED on a resource
+    // must wake when the lease is granted. Suppressing foreign offers must not
+    // cost that wake — an immediate refusal here would silently delete it.
+    writeTask('task-held', { status: 'BLOCKED', assignedWorkerId: 'worker-w', blockedResourceId: 'res-1' });
+    writeTask('task-free', { status: 'WORKING', assignedWorkerId: null, order: 2 });
+    writeWorker('worker-w', { currentTaskId: 'task-held', status: 'BLOCKED' });
+    await state.load();
+
+    const pending = waitForTaskTool(state).handler(
+      { statuses: ['WORKING'], workerId: 'worker-w', timeoutMs: 5000 },
+      state
+    ) as Promise<Record<string, unknown>>;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // It parked rather than answering — and it was not handed task-free.
+    expect(activeWaiters.has('worker-w')).toBe(true);
+
+    await state.updateTask('task-held', { status: 'WORKING', blockedResourceId: null });
+    const result = await pending;
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-held');
+  });
 });

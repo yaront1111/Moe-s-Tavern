@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
+import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
@@ -92,46 +93,18 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         assertAgentClaimableStatuses(statuses);
 
         // One task per worker: a worker already holding an active task
-        // (PLANNING/WORKING/REVIEW) must finish or release it before claiming
-        // another. Re-claiming the SAME task is the resume path (fresh CLI
-        // respawn mid-task) and stays allowed — both by explicit taskId and by
-        // steering the ranked claim back to the held task.
+        // (PLANNING/WORKING/REVIEW/BLOCKED — see workerStore's active set) must
+        // finish, release or unblock it before claiming another. Re-claiming
+        // the SAME task is the resume path (fresh CLI respawn mid-task) and
+        // stays allowed — both by explicit taskId and by steering the ranked
+        // claim back to the held task.
         if (params.workerId) {
-          const held = state
-            .getActiveTasksAssignedToWorker(params.workerId)
-            .filter((t) => t.id !== params.taskId);
-          if (held.length > 0) {
-            const current = held[0];
-            // A BLOCKED hold is not resumable work: the wrapper reads this
-            // status and skips the CLI relaunch entirely; a live session
-            // should end rather than spin. blockedResourceId means the daemon
-            // will auto-unblock the task when its lease is granted.
-            const blockedHold = current.status === 'BLOCKED';
-            return {
-              hasNext: false,
-              alreadyAssigned: {
-                taskId: current.id,
-                title: current.title,
-                status: current.status,
-                ...(blockedHold
-                  ? {
-                      blockedReason: current.blockedReason ?? undefined,
-                      blockedResourceId: current.blockedResourceId ?? undefined,
-                    }
-                  : {}),
-              },
-              nextAction: blockedHold
-                ? {
-                    tool: 'moe.list_resources',
-                    args: { workerId: params.workerId },
-                    reason: `You hold ${current.id} but it is BLOCKED${current.blockedResourceId ? ` waiting on resource ${current.blockedResourceId} (auto-unblocks when the lease is granted)` : ` (${current.blockedReason ?? 'needs a human'})`}. Do NOT work on it. End your session and let the wrapper idle, or check the queue with list_resources.`,
-                  }
-                : {
-                    tool: 'moe.get_context',
-                    args: { taskId: current.id, workerId: params.workerId },
-                    reason: `One task per worker: you already hold ${current.id} (${current.status}). Resume it, finish it (submit_plan / complete_task / qa_approve / qa_reject), or release it (moe.release_task) before claiming another.`
-                  }
-            };
+          // Same predicate wait_for_task uses, from the same held-task source:
+          // if these two ever disagree, a worker is woken for work it will be
+          // refused (see util/claimEligibility.ts).
+          const hold = blockingHold(state, params.workerId, params.taskId);
+          if (hold) {
+            return heldTaskRefusal(hold, params.workerId);
           }
         }
 

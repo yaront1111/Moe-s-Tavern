@@ -193,11 +193,21 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // the session IS the correct next step, so no nextAction is emitted.
       // The guidance must never claim a recording that did not happen -- that
       // is the whole defect this branch exists to close.
+      // The wait this hint points at is a wait for YOUR OWN unblock, and
+      // nothing else: while you hold a BLOCKED task no other task is claimable
+      // by you, so wait_for_task will not offer you one and claim_next_task
+      // would refuse it. The old text promised "a different task to pick up",
+      // which sent the worker into a wait -> claim -> refuse spin (task-9d5dfec6).
+      // Name the same alternative exit the other two tools name.
+      const waitHintTail =
+        'wait for the unblock of THIS task (resource grant, chat, or moe.unblock_worker) -- ' +
+        'wait_for_task will not hand you other work while you hold it. To work something ' +
+        'else instead, release this one first with moe.release_task; its blockedReason is preserved.';
       const nextActionReason = identicalRepeat
-        ? 'Task was already BLOCKED with this exact reason -- NOTHING was recorded. Use moe.add_comment to add detail, then wait for the human unblock.'
+        ? `Task was already BLOCKED with this exact reason -- NOTHING was recorded. Use moe.add_comment to add detail, then ${waitHintTail}`
         : alreadyBlocked
-          ? 'Block reason UPDATED on the already-BLOCKED task; wait for human to unblock (via chat) or for a different task to pick up.'
-          : 'Block reported; wait for human to unblock (via chat) or for a different task to pick up.';
+          ? `Block reason UPDATED on the already-BLOCKED task; ${waitHintTail}`
+          : `Block reported; ${waitHintTail}`;
       const nextAction = task.assignedWorkerId && !params.resourceId
         ? {
             tool: 'moe.wait_for_task',

@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
+import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -116,6 +117,12 @@ function findMatchingTask(
       return { id: own.id, title: own.title, status: own.status, priority: own.priority, epicId: own.epicId };
     }
   }
+  // The CALLER's own eligibility is part of that pool and was the one part this
+  // filter never consulted. It bites only on a BLOCKED hold: every other active
+  // hold is answered by the own-task match above, while BLOCKED is not
+  // agent-claimable and so can never be a requested status. Measured spin,
+  // twice in one session (task-9d5dfec6).
+  if (workerId && blockingHold(state, workerId)) return null;
   // Eligibility here must be at least as strict as claim_next_task's ranked
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot
@@ -260,14 +267,25 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           void state.touchWorker(workerId)
             .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on wait_for_task timeout'))
             .finally(() => {
+              // An encumbered caller idled here on purpose: parking is how it
+              // catches its OWN unblock (a grant or moe.unblock_worker flips the
+              // task into a requested status and the own-task path fires). What
+              // it must NOT be told is to re-enter the wait for other work —
+              // none is claimable while the hold stands — so hand back the same
+              // payload and exits claim_next_task gives.
+              const hold = blockingHold(state, workerId);
+              const refusal = hold ? heldTaskRefusal(hold, workerId) : null;
               resolve({
                 hasNext: false,
                 timedOut: true,
-                nextAction: {
-                  tool: 'moe.wait_for_task',
-                  args: { statuses, workerId, epicId: params.epicId, timeoutMs },
-                  reason: 'Timeout elapsed; re-enter wait to keep listening.'
-                }
+                ...(refusal ? { alreadyAssigned: refusal.alreadyAssigned } : {}),
+                nextAction: refusal
+                  ? refusal.nextAction
+                  : {
+                      tool: 'moe.wait_for_task',
+                      args: { statuses, workerId, epicId: params.epicId, timeoutMs },
+                      reason: 'Timeout elapsed; re-enter wait to keep listening.'
+                    }
               });
             });
         }, timeoutMs);
