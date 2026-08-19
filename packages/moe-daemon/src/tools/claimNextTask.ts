@@ -4,6 +4,7 @@ import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
+import { assertNoLiveLease, claimLostRace } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { maybeApplyBudgetWarnings } from '../util/budget.js';
@@ -222,6 +223,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             if (!params.replaceExisting) {
               continue;
             }
+            // replaceExisting evicts a live owner — but not one who is mid-step.
+            // A granted start_step has to be a LEASE, or a worker can lose the
+            // row minutes into a build and only discover it at complete_step.
+            assertNoLiveLease(candidate, false, params.workerId);
             const incumbent = candidate.assignedWorkerId;
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
             await state.touchWorker(incumbent, { status: 'IDLE', currentTaskId: null });
@@ -255,9 +260,15 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           try {
             task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId });
           } catch (err: unknown) {
-            // Optimistic concurrency failure — task was claimed between filter and assign
+            // Optimistic concurrency failure — the row was claimed between our
+            // eligibility snapshot and this write. Tell the caller it LOST, and
+            // name the winner: silently moving on to another candidate hands
+            // back a row the caller never asked for, and hides the contention
+            // that a fleet-level timeline later has to reconstruct.
             if (err instanceof Error && err.message.startsWith('Task already assigned')) {
-              continue; // Try next candidate
+              const winner = state.getTask(candidate.id)?.assignedWorkerId;
+              if (winner) throw claimLostRace(candidate.id, winner, params.workerId);
+              continue; // Winner already gone — the row is free again, keep looking.
             }
             throw err; // Unexpected error — propagate
           }

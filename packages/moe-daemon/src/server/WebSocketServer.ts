@@ -77,7 +77,7 @@ export type PluginMessage =
   | { type: 'DELETE_EPIC'; payload: { epicId: string } }
   | { type: 'REORDER_TASK'; payload: { taskId: string; beforeId: string | null; afterId: string | null } }
   | { type: 'APPROVE_TASK'; payload: { taskId: string } }
-  | { type: 'RELEASE_TASK'; payload: { taskId: string; reason?: string } }
+  | { type: 'RELEASE_TASK'; payload: { taskId: string; reason?: string; force?: boolean } }
   | { type: 'REJECT_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'APPROVE_PROPOSAL'; payload: { proposalId: string } }
@@ -502,8 +502,17 @@ export class MoeWebSocketServer {
           const releaseReason = typeof message.payload.reason === 'string' && message.payload.reason.trim().length > 0
             ? message.payload.reason.trim()
             : 'Released from board';
+          // Forward `force` so the board keeps a way past the step lease. The
+          // lease refuses a release while the holder is mid-step, and this call
+          // carries no workerId, so without this the documented human override
+          // would be unreachable from the UI that most needs it. Absent/false
+          // still means "refuse a leased row" — the human opts in explicitly.
           await releaseTaskTool(this.state).handler(
-            { taskId: message.payload.taskId, reason: releaseReason },
+            {
+              taskId: message.payload.taskId,
+              reason: releaseReason,
+              force: message.payload.force === true,
+            },
             this.state
           );
           const releasedTask = this.state.getTask(message.payload.taskId);

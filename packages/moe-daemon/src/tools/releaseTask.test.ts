@@ -583,3 +583,185 @@ describe('moe.release_task', () => {
     });
   });
 });
+
+// =============================================================================
+// task-6df8a07b: release CAS + honest banner attribution.
+//
+// Both 2026-08-19 incidents were an architect handoff release landing on a row
+// the wrapper had already re-dispatched: release_task cleared whoever happened
+// to hold the row, and the banner named the STRIPPED party as the releaser.
+// taskStore's optimistic-concurrency guard cannot see this — it is truthy-gated
+// on the incoming assignedWorkerId, so a release (null) skips it entirely.
+//
+// ANTI-TAUTOLOGY (governor note 4): these assertions never pin the incident
+// prose and never compare against text produced by the renderer under test.
+// They assert structured facts — the refusal's stable codeName and named
+// holder, the result's caller/stripped fields, and how many distinct agent ids
+// the banner mentions (one actor for a self-release, two for a strip).
+// =============================================================================
+describe('moe.release_task — caller attribution and CAS (task-6df8a07b)', () => {
+  let testDir: string;
+  let moePath: string;
+  let state: StateManager;
+
+  /** Every agent id the banner mentions, deduped. One id = one actor. */
+  function agentIdsIn(message: string): string[] {
+    return [...new Set(message.match(/(?:worker|governor|architect)-[a-z0-9]+/g) ?? [])].sort();
+  }
+
+  function seedTask(assignedWorkerId: string | null): void {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id: 'task-1', epicId: 'epic-1', title: 'Some task', description: '',
+      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId, branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      priority: 'MEDIUM', order: 1, comments: [],
+      createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', 'task-1.json'), JSON.stringify(task, null, 2));
+  }
+
+  function seedWorker(id: string): void {
+    const now = new Date().toISOString();
+    const worker: Worker = {
+      id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: 'task-1', status: 'CODING', branch: '', modifiedFiles: [],
+      startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0, teamId: null,
+    };
+    fs.writeFileSync(path.join(moePath, 'workers', id + '.json'), JSON.stringify(worker, null, 2));
+  }
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-release-cas-'));
+    moePath = path.join(testDir, '.moe');
+    fs.mkdirSync(moePath, { recursive: true });
+    for (const sub of ['epics', 'tasks', 'workers', 'proposals']) {
+      fs.mkdirSync(path.join(moePath, sub));
+    }
+    fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify({
+      id: 'proj-test', schemaVersion: 6, name: 'Test', rootPath: testDir,
+      globalRails: { techStack: [], forbiddenPatterns: [], requiredPatterns: [], formatting: '', testing: '', customRules: [] },
+      settings: {
+        approvalMode: 'TURBO', speedModeDelayMs: 2000, autoCreateBranch: false,
+        branchPattern: '', commitPattern: '', agentCommand: 'claude', enableAgentTeams: false,
+      },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }, null, 2));
+    fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify({
+      id: 'epic-1', projectId: 'proj-test', title: 'E', description: '', architectureNotes: '',
+      epicRails: [], status: 'ACTIVE', order: 1,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }, null, 2));
+    state = new StateManager({ projectPath: testDir });
+  });
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  // (a) NEGATIVE CONTROL. A silent no-op would satisfy "caller must be the
+  // assignee" on paper; this fails unless the call actually REFUSES, by stable
+  // codeName, naming the live holder.
+  it('refuses a non-assignee release with RELEASE_NOT_ASSIGNEE naming the live holder', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    let thrown: unknown;
+    try {
+      await tool.handler({ taskId: 'task-1', workerId: 'governor-1' }, state);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const error = thrown as Error & { codeName?: string; context?: Record<string, unknown> };
+    expect(error.codeName).toBe('RELEASE_NOT_ASSIGNEE');
+    expect(error.context?.holder).toBe('worker-a');
+    expect(error.context?.caller).toBe('governor-1');
+    // The refusal must leave the row untouched — a refusal that already mutated
+    // is the strip it was written to prevent.
+    expect(state.getTask('task-1')!.assignedWorkerId).toBe('worker-a');
+  });
+
+  // (b) The legitimate case stays legitimate.
+  it('allows a self-release by the current assignee', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.previousWorkerId).toBe('worker-a');
+    expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+  });
+
+  // (c) The tool's contract says anyone can call for confirmed-crash recovery.
+  // Legacy/TUI/plugin callers supply no workerId and must keep working.
+  it('keeps the no-workerId crash-recovery path working', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+  });
+
+  // (d) The single override door, so a row held by a dead worker is still
+  // recoverable — and auditable, because the result names both parties.
+  it('releases a foreign row with force:true and names both parties', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler(
+      { taskId: 'task-1', workerId: 'governor-1', force: true }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.previousWorkerId).toBe('worker-a');
+    expect(result.releasedBy).toBe('governor-1');
+    expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+  });
+
+  // (e) BANNER, arm 1 — the strip must be legible AS a strip: two distinct
+  // agent ids. This is the arm that reproduces the incident.
+  it('renders a forced strip with BOTH the caller and the stripped party', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+    const posted: string[] = [];
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => { posted.push(content); });
+
+    const tool = releaseTaskTool(state);
+    await tool.handler({ taskId: 'task-1', workerId: 'governor-1', force: true }, state);
+
+    expect(posted).toHaveLength(1);
+    expect(agentIdsIn(posted[0])).toEqual(['governor-1', 'worker-a']);
+  });
+
+  // (e) BANNER, arm 2 — the opposite corruption. A fix that renders EVERY
+  // release as "X stripped by Y" would turn the legitimate self-release into a
+  // false two-actor line, and an assertion written only against arm 1 stays
+  // green through it.
+  it('renders a genuine self-release as exactly ONE actor', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+    const posted: string[] = [];
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => { posted.push(content); });
+
+    const tool = releaseTaskTool(state);
+    await tool.handler({ taskId: 'task-1', workerId: 'worker-a' }, state);
+
+    expect(posted).toHaveLength(1);
+    expect(agentIdsIn(posted[0])).toEqual(['worker-a']);
+  });
+});

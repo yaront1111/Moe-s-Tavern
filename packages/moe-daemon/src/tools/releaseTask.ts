@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
+import { assertNoLiveLease, assertReleaseCaller, releaseActors } from '../util/claimGuards.js';
 import { nextStatusForRelease } from '../state/workerLifecycle.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 
@@ -89,7 +90,11 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           required: ['whatIsDone', 'whatRemains'],
           additionalProperties: false
         },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        force: {
+          type: 'boolean',
+          description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD).'
+        }
       },
       required: ['taskId'],
       additionalProperties: false
@@ -105,10 +110,12 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           openQuestions?: unknown;
         };
         workerId?: string;
+        force?: boolean;
       };
       if (!params.taskId) {
         throw missingRequired('taskId');
       }
+      const force = params.force === true;
 
       // Validate handoff shape BEFORE acquiring the state mutex so we don't
       // hold the lock while throwing on bad input.
@@ -145,6 +152,13 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         }
 
         const previousWorkerId = task.assignedWorkerId;
+
+        // Ownership gates, INSIDE the mutex and BEFORE any mutation: a refusal
+        // that has already cleared the assignee is the strip it exists to
+        // prevent. Both no-op on an unassigned row, so the repair/no-op paths
+        // below are unaffected.
+        assertReleaseCaller(task, params.workerId, force);
+        assertNoLiveLease(task, force, params.workerId);
 
         if (!previousWorkerId) {
           // Terminal tasks are never "stuck": a duplicate/late release_task on
@@ -281,7 +295,14 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         }
 
         const reasonSuffix = params.reason ? ` (${params.reason})` : '';
-        const baseMsg = `🔓 ${previousWorkerId} released task: ${updated.title}${reasonSuffix}`;
+        // Name the CALLER, not the stripped party. The old form rendered
+        // `${previousWorkerId} released task` unconditionally, so a handoff
+        // release landing on a re-dispatched row recorded the victim as the
+        // releaser — twice in the durable log, in the shape of misconduct.
+        const actors = releaseActors(params.workerId, previousWorkerId);
+        const baseMsg = actors.strippedFrom
+          ? `🔓 ${actors.actor} released task: ${updated.title} (stripped from ${actors.strippedFrom})${reasonSuffix}`
+          : `🔓 ${actors.actor} released task: ${updated.title}${reasonSuffix}`;
         let chatMsg: string;
         let warning: string | undefined;
         if (normalizedHandoff) {
@@ -312,6 +333,11 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           success: true,
           taskId: updated.id,
           previousWorkerId,
+          // Who actually performed it. Present on every release so a caller
+          // never has to infer the actor from previousWorkerId — the inference
+          // that produced two false attributions in the durable log.
+          releasedBy: actors.actor,
+          ...(actors.strippedFrom ? { strippedFrom: actors.strippedFrom } : {}),
           status: updated.status,
           priorHandoffCount: (nextPriorHandoffs?.length) ?? (updated.priorHandoffs?.length ?? 0),
           ...(diskStateCaptured ? { diskStateCaptured: true } : {}),
