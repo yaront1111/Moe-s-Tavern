@@ -4,8 +4,9 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { releaseTaskTool } from './releaseTask.js';
+import { UNIDENTIFIED_RELEASER } from '../util/claimGuards.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
-import type { Project, Epic, HandoffNote, Task, Worker } from '../types/schema.js';
+import type { Project, Epic, HandoffNote, ImplementationStep, Task, Worker } from '../types/schema.js';
 
 // The helper shells out to git; these suites only care about the wiring, so the
 // module is mocked and the real subprocess is covered in util/diskState.test.ts.
@@ -609,11 +610,11 @@ describe('moe.release_task — caller attribution and CAS (task-6df8a07b)', () =
     return [...new Set(message.match(/(?:worker|governor|architect)-[a-z0-9]+/g) ?? [])].sort();
   }
 
-  function seedTask(assignedWorkerId: string | null): void {
+  function seedTask(assignedWorkerId: string | null, plan: ImplementationStep[] = []): void {
     const now = new Date().toISOString();
     const task: Task = {
       id: 'task-1', epicId: 'epic-1', title: 'Some task', description: '',
-      definitionOfDone: [], taskRails: [], implementationPlan: [],
+      definitionOfDone: [], taskRails: [], implementationPlan: plan,
       status: 'WORKING', assignedWorkerId, branch: null, prLink: null,
       reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
       priority: 'MEDIUM', order: 1, comments: [],
@@ -763,5 +764,65 @@ describe('moe.release_task — caller attribution and CAS (task-6df8a07b)', () =
 
     expect(posted).toHaveLength(1);
     expect(agentIdsIn(posted[0])).toEqual(['worker-a']);
+    // Two-sided control with arm 3: a fix that stamped the unidentified-caller
+    // marker onto EVERY release would leave the id count at one and slip past
+    // the assertion above, because the marker is not an agent id.
+    expect(posted[0]).not.toContain(UNIDENTIFIED_RELEASER);
+  });
+
+  // (e) BANNER, arm 3 — the CALLER-LESS strip. agentIdsIn is blind here by
+  // construction (it matches worker|governor|architect ids only, and a caller
+  // that supplied no id has none), which is exactly how arms 1 and 2 stayed
+  // green over a strip rendered as `worker-a released task`: byte-identical to
+  // a self-release, naming the victim as releaser. So this arm asserts the
+  // structured roles instead — who released vs who was stripped.
+  it('renders a caller-less release of a live holder as a strip, not a self-release', async () => {
+    seedTask('worker-a');
+    seedWorker('worker-a');
+    await state.load();
+    const posted: string[] = [];
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => { posted.push(content); });
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({ taskId: 'task-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.previousWorkerId).toBe('worker-a');
+    // The victim must not be recorded as the releaser.
+    expect(result.releasedBy).not.toBe('worker-a');
+    expect(result.releasedBy).toBe(UNIDENTIFIED_RELEASER);
+    expect(result.strippedFrom).toBe('worker-a');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain(UNIDENTIFIED_RELEASER);
+  });
+
+  // (e) BANNER, arm 4 — the shape the force-forwarding opened: a board/plugin
+  // override strips a holder who is MID-STEP (the expensive case the lease
+  // exists for) while supplying no caller id. Same attribution requirement,
+  // plus the durable handoff record.
+  it('attributes a caller-less forced strip of a mid-step holder to a non-agent actor', async () => {
+    seedTask('worker-a', [{
+      stepId: 'step-1', description: 'long build', status: 'IN_PROGRESS', affectedFiles: [],
+    }]);
+    seedWorker('worker-a');
+    await state.load();
+    const posted: string[] = [];
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => { posted.push(content); });
+
+    const tool = releaseTaskTool(state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      force: true,
+      handoffNote: { whatIsDone: 'partial', whatRemains: 'the rest' },
+    }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.releasedBy).toBe(UNIDENTIFIED_RELEASER);
+    expect(result.strippedFrom).toBe('worker-a');
+    // The persisted handoff carries the same attribution as the banner: this
+    // field used to fall back to the stripped worker's id, writing the victim
+    // into the durable record as its own releaser.
+    expect(state.getTask('task-1')!.priorHandoffs![0].releasedBy).toBe(UNIDENTIFIED_RELEASER);
+    expect(posted[0]).toContain(UNIDENTIFIED_RELEASER);
   });
 });

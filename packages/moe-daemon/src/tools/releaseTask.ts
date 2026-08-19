@@ -2,7 +2,12 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { HandoffNote } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
-import { assertNoLiveLease, assertReleaseCaller, releaseActors } from '../util/claimGuards.js';
+import {
+  assertNoLiveLease,
+  assertReleaseCaller,
+  releaseActors,
+  UNIDENTIFIED_RELEASER,
+} from '../util/claimGuards.js';
 import { nextStatusForRelease } from '../state/workerLifecycle.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 
@@ -201,7 +206,7 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           if (unparking) repairUpdates.needsHumanReview = false;
           let repairedHandoffs = task.priorHandoffs;
           if (normalizedHandoff) {
-            normalizedHandoff.releasedBy = params.workerId || 'unknown';
+            normalizedHandoff.releasedBy = params.workerId || UNIDENTIFIED_RELEASER;
             if (params.reason) normalizedHandoff.reason = params.reason.slice(0, 2000);
             repairedHandoffs = [normalizedHandoff, ...(task.priorHandoffs ?? [])].slice(
               0,
@@ -232,6 +237,11 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
           };
         }
 
+        // Decided once, here, so the persisted handoff and the banner below
+        // cannot disagree about who released what. previousWorkerId is
+        // non-null past the guard above.
+        const actors = releaseActors(params.workerId, previousWorkerId);
+
         // Build the update payload. Route via the single release-routing
         // helper (same as the auto/deregister paths): WORKING stays WORKING
         // (unassigned = claimable by the next worker), all-steps-done → REVIEW,
@@ -245,7 +255,9 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         };
         let nextPriorHandoffs = task.priorHandoffs;
         if (normalizedHandoff) {
-          normalizedHandoff.releasedBy = params.workerId || previousWorkerId;
+          // NOT `params.workerId || previousWorkerId`: that fallback wrote the
+          // STRIPPED worker into the durable record as its own releaser.
+          normalizedHandoff.releasedBy = actors.actor;
           if (params.reason) normalizedHandoff.reason = params.reason.slice(0, 2000);
           nextPriorHandoffs = [normalizedHandoff, ...(task.priorHandoffs ?? [])].slice(
             0,
@@ -299,7 +311,6 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         // `${previousWorkerId} released task` unconditionally, so a handoff
         // release landing on a re-dispatched row recorded the victim as the
         // releaser — twice in the durable log, in the shape of misconduct.
-        const actors = releaseActors(params.workerId, previousWorkerId);
         const baseMsg = actors.strippedFrom
           ? `🔓 ${actors.actor} released task: ${updated.title} (stripped from ${actors.strippedFrom})${reasonSuffix}`
           : `🔓 ${actors.actor} released task: ${updated.title}${reasonSuffix}`;

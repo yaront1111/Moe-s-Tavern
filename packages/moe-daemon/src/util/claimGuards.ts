@@ -29,6 +29,19 @@ export const CLAIM_LOST_RACE = 'CLAIM_LOST_RACE';
 export const STEP_LEASE_HELD = 'STEP_LEASE_HELD';
 
 /**
+ * The actor recorded when a release carries no caller id.
+ *
+ * Deliberately not 'board': the caller-less path is reached from the plugin
+ * board, the legacy TUI and a bare human CLI call alike, and the daemon
+ * verifies none of them. Epic rail 4 — unverifiable evidence stays UNKNOWN and
+ * never gains authority — so the record says what is true, that the releaser
+ * was not identified. Matches the value releaseTask.ts already writes on the
+ * already-unassigned repair path, and carries no agent-id prefix, so it can
+ * never be mistaken for a worker/governor/architect.
+ */
+export const UNIDENTIFIED_RELEASER = 'unknown';
+
+/**
  * The step a worker is mid-way through, or null. A granted `start_step` is what
  * makes the row expensive to lose: the holder may be minutes into a build by
  * the time anything else touches it.
@@ -110,8 +123,17 @@ export interface ReleaseActors {
  * one actor; a strip renders both, in distinguishable roles.
  */
 export function releaseActors(caller: string | undefined, previousWorkerId: string): ReleaseActors {
-  if (!caller || caller === previousWorkerId) {
+  if (caller === previousWorkerId) {
     return { actor: previousWorkerId, strippedFrom: null };
+  }
+  // No caller id, but somebody IS being stripped. Folding this into the
+  // self-release branch made the two byte-identical, so a board/TUI/plugin
+  // release of a live holder rendered as `worker-a released task` — the same
+  // victim-as-releaser line this function exists to eliminate, on the one path
+  // that carries no id to name instead. `force` is forwarded from the board
+  // (WebSocketServer), so it reaches mid-step holders too.
+  if (!caller) {
+    return { actor: UNIDENTIFIED_RELEASER, strippedFrom: previousWorkerId };
   }
   return { actor: caller, strippedFrom: previousWorkerId };
 }
