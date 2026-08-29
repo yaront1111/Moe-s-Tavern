@@ -25,6 +25,7 @@ import type {
   StepStatus,
   Task,
   TaskComment,
+  TaskCommit,
   Team,
   TeamRole,
 } from '../types/schema.js';
@@ -41,6 +42,26 @@ const ACTIVITY_TRUNCATED_SUFFIX = ' [truncated]';
 export const MAX_COMMENTS_PER_TASK = Number.isFinite(MAX_COMMENTS_PER_TASK_ENV) && MAX_COMMENTS_PER_TASK_ENV > 0
   ? MAX_COMMENTS_PER_TASK_ENV
   : MAX_COMMENTS_PER_TASK_DEFAULT;
+
+// Cap on the per-task commit ledger written by moe.record_commit (newest kept).
+// Same env-override pattern as MAX_COMMENTS_PER_TASK; bounds both the task
+// file and the raw-updates activity payload updateTask logs on every record.
+const MAX_COMMITS_PER_TASK_DEFAULT = 50;
+const MAX_COMMITS_PER_TASK_ENV = parseInt(process.env.MOE_MAX_COMMITS_PER_TASK || `${MAX_COMMITS_PER_TASK_DEFAULT}`, 10);
+
+export const MAX_COMMITS_PER_TASK = Number.isFinite(MAX_COMMITS_PER_TASK_ENV) && MAX_COMMITS_PER_TASK_ENV > 0
+  ? MAX_COMMITS_PER_TASK_ENV
+  : MAX_COMMITS_PER_TASK_DEFAULT;
+
+export function trimCommits(commits: TaskCommit[] | null | undefined): TaskCommit[] {
+  if (!Array.isArray(commits) || commits.length === 0) {
+    return [];
+  }
+  if (commits.length <= MAX_COMMITS_PER_TASK) {
+    return commits;
+  }
+  return commits.slice(-MAX_COMMITS_PER_TASK);
+}
 
 export function trimComments(comments: TaskComment[] | null | undefined): TaskComment[] {
   if (!Array.isArray(comments) || comments.length === 0) {
@@ -172,6 +193,11 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'chatEnabled',
     'chatMaxAgentHops',
     'autoCommit',
+    'checkpointCommits',
+    'checkpointPush',
+    'commitBoardState',
+    'commitHooks',
+    'attribution',
     'taskSizing',
     'pacePerStepMs',
     'qualityGate',
@@ -220,6 +246,40 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   if (input.autoCommit !== undefined) {
     next.autoCommit = validateBooleanValue(input.autoCommit, 'autoCommit');
+  }
+  // Wrapper landing switches. Stored as supplied (the wrapper and
+  // get_commit_scope read `!== false` / `=== true`), so an explicit value
+  // survives and an omitted key keeps its default.
+  if (input.checkpointCommits !== undefined) {
+    next.checkpointCommits = validateBooleanValue(input.checkpointCommits, 'checkpointCommits');
+  }
+  if (input.checkpointPush !== undefined) {
+    next.checkpointPush = validateBooleanValue(input.checkpointPush, 'checkpointPush');
+  }
+  if (input.commitBoardState !== undefined) {
+    next.commitBoardState = validateBooleanValue(input.commitBoardState, 'commitBoardState');
+  }
+  if (input.commitHooks !== undefined) {
+    next.commitHooks = validateBooleanValue(input.commitHooks, 'commitHooks');
+  }
+  if (input.attribution !== undefined) {
+    const incoming = requirePlainObject(input.attribution, 'attribution');
+    rejectUnknownFields(incoming, ['undeclared', 'contested', 'exclude'], 'attribution setting');
+    const merged: NonNullable<ProjectSettings['attribution']> = { ...(next.attribution || {}) };
+    if (incoming.undeclared !== undefined) {
+      merged.undeclared = validateEnumValue(incoming.undeclared, 'attribution.undeclared', ['solo', 'never', 'always'] as const);
+    }
+    if (incoming.contested !== undefined) {
+      merged.contested = validateEnumValue(incoming.contested, 'attribution.contested', ['commit', 'skip'] as const);
+    }
+    if (incoming.exclude !== undefined) {
+      // Bounded string array, then the affected-file canonicalization so the
+      // stored DENY prefixes are project-relative, traversal-free and
+      // forward-slashed. An explicit `[]` survives (no extra exclusions).
+      const entries = validateStringArrayValue(incoming.exclude, 'attribution.exclude', 100, 500);
+      merged.exclude = normalizeAffectedFiles(entries, 'attribution.exclude');
+    }
+    next.attribution = merged;
   }
   if (input.refusalCascadeAutoBacklog !== undefined) {
     // Stored as supplied: the release path reads `!== false`, so an explicit

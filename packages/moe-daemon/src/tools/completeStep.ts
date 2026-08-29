@@ -9,13 +9,13 @@ import { activeAmendment, effectiveStepDescription } from '../util/planAmendment
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.complete_step',
-    description: 'Mark a step as COMPLETED',
+    description: 'Mark a step as COMPLETED. Report EVERY path you created or modified in modifiedFiles — the agent wrapper commits the task from a completed step\'s modifiedFiles (falling back to the step\'s planned affectedFiles), so an omitted list degrades attribution to planned/measured paths and returns a warning.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string' },
         stepId: { type: 'string' },
-        modifiedFiles: { type: 'array', items: { type: 'string' } },
+        modifiedFiles: { type: 'array', items: { type: 'string' }, description: 'Every project-relative path this step created or modified (ASSERTED attribution tier for the auto-commit). Omit nothing.' },
         note: { type: 'string' },
         workerId: { type: 'string' }
       },
@@ -113,6 +113,15 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(task.id, `Step ${stepNum} completed: ${completedDescription}`);
       } catch { /* never block tool */ }
 
+      // Attribution warning: the wrapper's ASSERTED tier is built from
+      // complete_step.modifiedFiles (falling back to affectedFiles), so a step
+      // that reports nothing leaves its real edits to planned/measured
+      // attribution — or unattributed when peers are active.
+      const modifiedFilesOmitted = !Array.isArray(params.modifiedFiles) || params.modifiedFiles.length === 0;
+      const warning = modifiedFilesOmitted
+        ? `MODIFIED-FILES-OMITTED: step ${params.stepId} completed without modifiedFiles — the wrapper attributes this task's commit from complete_step.modifiedFiles and fell back to the step's affectedFiles (${(existingStep.affectedFiles || []).length} path(s)). Report every path you created or modified, or declare them with moe.declare_files.`
+        : undefined;
+
       const completed = steps.filter((s) => s.status === 'COMPLETED').length;
       // A step still "remains" if it's PENDING or IN_PROGRESS. start_step allows
       // out-of-order starts, so a PENDING-only scan misses an IN_PROGRESS step
@@ -198,6 +207,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           : {}),
         nextStep: nextStep ? { stepId: nextStep.stepId, description: nextDescription } : null,
         ...(chatHint ? { chatHint } : {}),
+        ...(warning ? { warning } : {}),
         nextAction
       };
     }

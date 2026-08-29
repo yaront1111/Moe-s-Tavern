@@ -31,8 +31,13 @@ What you'll see in `#governors`:
 | `📋` | `StateManager` (PLANNING task created) | New plan needed | Cross-posted from `#architects` — informational; no action needed |
 | `⚠️` | Stale-worker watcher | Worker quiet past the presence window while holding a task | Ping the worker first. Quiet ≠ dead (builds/tests are silent) — NEVER release on idle time alone; release needs a confirmed crash plus the human's nod |
 | `❌` | `moe.qa_reject` | QA rejected a task | Check `rejectionDetails`; if it's the same task being rejected repeatedly, flip back to PLANNING; otherwise let the worker fix |
-| `🚧` | `moe.report_blocked` | Worker self-reported blocked | Read the reason; if rail conflict, consider `propose_rail`; if requirements gap, ping the architect |
+| `🚧` | `moe.report_blocked` | Worker self-reported blocked | Read the reason; if rail conflict, consider `propose_rail`; if requirements gap, ping the architect. "Prerequisite absent at HEAD" → check the prerequisite task's `task.commits` / `git log --grep 'Moe-Task: <sibling>'`. Clear a resolved block with `unblock_worker { resolveBlocks: true }` or `set_task_status`, never a bare `unblock_worker` (seat-only) |
 | `🔓` | `moe.release_task` | Task assignment was cleared | Informational — next claim will pick it up |
+| `🚫` `PUSH-BLOCKED:` | Wrapper post-flight | `qualityGate` failed (bytes in a rescue ref, worker loop stopped) or the status lookup failed (`status=UNKNOWN` checkpoint landed) | Read the output tail on the task comment; a new worker session fixes the gate. Never hand-land the sources |
+| `MOE_RESCUE_REF` | Wrapper / `record_commit { kind: 'rescue' }` | A landing failed (`gate-failed` / `peel-failed` / `commit-failed` / `ref-contention` / `teardown`); bytes parked under `refs/moe/rescue/<task>/` | Self-heals at the task's next session (baseline kept); `git show <ref> --stat` only if the checkout is gone |
+| `CHECKPOINT-UNPUSHED` / `PUSH FAILED` | Wrapper post-flight | Commit exists locally only (`pull --rebase` refuses in a dirty shared checkout) | Visibility, not loss — push by hand or let the next landing retry |
+| `MOE_ATTRIBUTION_UNRESOLVED` | `record_commit` (once per task per 24h) | Changed paths nobody declared were left unstaged because another worker was live | Find the owner; `moe.declare_files { taskId, paths }` onto that task so its next exit lands them |
+| `NO-COMPLETION-COMMIT` | `moe.qa_approve` | QA approved with no completion commit recorded for this review round | Re-check `task.commits` a minute later (post-flight race); still empty → read `task.lastCommitOutcome` |
 
 ## Runtime-driven workflow
 
@@ -40,7 +45,7 @@ Follow `nextAction` on every Moe tool response. On `moe.claim_next_task` the dae
 
 1. `moe.chat_wait` blocks until a signal lands in `#governors` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict).
+3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `declare_files` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If `nextAction` includes `recommendedSkill`, load that skill before calling the hinted tool.
@@ -52,10 +57,13 @@ For a worker that is in trouble, escalate in this order — only move down a ste
 1. **Ping the worker** in `#workers` or the task channel. Ask what's blocking them. Many "stale" workers are alive but slow.
 2. **Ping the architect** in `#architects` if the plan looks wrong. Architects own re-planning; they may flip the task themselves.
 3. **`moe.propose_rail`** if a rail is the root cause. Land a proposal in `.moe/proposals/` for human review.
-4. **`moe.release_task`** only on a confirmed crash — a deregister banner, a wrapper exit, or the human confirming the process is gone — AND with the human's nod. Idle time alone, however long, is never grounds for release: a worker mid-build is silent by design, and the daemon deliberately never auto-releases WORKING/PLANNING on idle.
-5. **`moe.set_task_status` back to PLANNING** if QA has rejected twice on the same fundamental issue. This is the explicit "needs re-plan" handoff; the architect picks it up.
+4. **Unblock deliberately.** A bare `moe.unblock_worker` frees the seat and keeps the task BLOCKED with its `blockedReason`; add `resolveBlocks: true` only when the blocker is actually gone. Never hand-land a stranded task's sources yourself — read `task.commits`, look for `refs/moe/rescue/<task>/`, or `moe.declare_files` the paths onto the task and let its next session land them.
+5. **`moe.release_task`** only on a confirmed crash — a deregister banner, a wrapper exit, or the human confirming the process is gone — AND with the human's nod. Idle time alone, however long, is never grounds for release: a worker mid-build is silent by design, and the daemon deliberately never auto-releases WORKING/PLANNING on idle.
+6. **`moe.set_task_status` back to PLANNING** if QA has rejected twice on the same fundamental issue. This is the explicit "needs re-plan" handoff; the architect picks it up.
 
-Never combine 4 and 5 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state.
+Never combine 5 and 6 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state (its bytes are checkpointed, but its context is not).
+
+Unassigned BLOCKED tasks — a seat freed without resolving the block — are never auto-parked; they stay in the Working column until someone acts. Sweep them each tick with `moe.list_tasks { status: "BLOCKED" }` and route each one: resource-blocked (leave alone), human-blocked (get the answer, then `resolveBlocks`), or BLOCKED misused as "done" (every step COMPLETED → the worker should `complete_task`).
 
 ## Plan critique (CONTROL mode)
 

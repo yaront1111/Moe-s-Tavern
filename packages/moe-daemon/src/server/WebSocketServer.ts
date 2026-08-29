@@ -63,6 +63,18 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'blockedResourceId',
   'blockedFromStatus',
   'blockedAt',
+  // Commit ledger + attribution evidence are owned by moe.record_commit /
+  // moe.declare_files / complete_task / qa_approve. A full-task board echo
+  // must not clobber them — a wiped ledger reads as "never committed".
+  'commits',
+  'declaredFiles',
+  'touchedFiles',
+  'inferredPaths',
+  'unattributedPaths',
+  'lastCommitOutcome',
+  'filesModified',
+  'verification',
+  'reviewSummary',
 ]);
 
 export type PluginMessage =

@@ -322,6 +322,64 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK strips the commit ledger and attribution/verification evidence from plugin payloads', async () => {
+      const ledger = [{
+        sha: 'abc1234abc1234', ref: 'moe/work-2026-08-28', kind: 'completion' as const, role: 'worker',
+        sessionId: 'w@t', paths: ['src/a.ts'], pushed: true, recordedBy: 'worker-1', recordedAt: '2026-08-28T10:05:00.000Z',
+      }];
+      await state.updateTask('task-1', {
+        commits: ledger,
+        declaredFiles: ['src/decl.ts'],
+        touchedFiles: ['src/touched.ts'],
+        inferredPaths: ['src/inf.ts'],
+        unattributedPaths: ['src/un.ts'],
+        lastCommitOutcome: { outcome: 'committed', kind: 'completion', sessionId: 'w@t', at: '2026-08-28T10:05:00.000Z' },
+        filesModified: ['src/fm.ts'],
+        verification: { command: 'npm test', exitCode: 0, reportedAt: '2026-08-28T10:00:00.000Z' },
+        reviewSummary: 'verified by QA',
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: {
+          taskId: 'task-1',
+          updates: {
+            title: 'Renamed Again',
+            commits: [],
+            declaredFiles: [],
+            touchedFiles: [],
+            inferredPaths: [],
+            unattributedPaths: [],
+            lastCommitOutcome: null,
+            filesModified: ['evil.ts'],
+            verification: { command: 'echo pwned', exitCode: 0, reportedAt: '2020-01-01T00:00:00.000Z' },
+            reviewSummary: 'rubber stamp',
+          },
+        },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      expect(parsed.payload.title).toBe('Renamed Again');
+
+      const stored = state.getTask('task-1')!;
+      expect(stored.title).toBe('Renamed Again');
+      expect(stored.commits).toEqual(ledger);
+      expect(stored.declaredFiles).toEqual(['src/decl.ts']);
+      expect(stored.touchedFiles).toEqual(['src/touched.ts']);
+      expect(stored.inferredPaths).toEqual(['src/inf.ts']);
+      expect(stored.unattributedPaths).toEqual(['src/un.ts']);
+      expect(stored.lastCommitOutcome).toMatchObject({ outcome: 'committed', kind: 'completion' });
+      expect(stored.filesModified).toEqual(['src/fm.ts']);
+      expect(stored.verification?.command).toBe('npm test');
+      expect(stored.reviewSummary).toBe('verified by QA');
+
+      ws.close();
+    });
+
     it('UPDATE_TASK WORKING→REVIEW releases the worker even when the payload echoes the old owner', async () => {
       await state.createWorker({
         id: 'w-owner',

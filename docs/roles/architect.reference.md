@@ -63,6 +63,10 @@ moe.propose_rail {
 
 The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
 
+## Checkpoint commits of architect sessions
+
+The wrapper lands a `wip(task-<id>): <title> [status=<STATUS> role=architect cli-exit=<N>]` checkpoint on every exit of a session that holds a task — including yours, when the task moves to AWAITING_APPROVAL. Only paths attributed to the task are staged (a scaffold you created, a doc or test you touched, the task's own `.moe/tasks/<id>.json`), never the shared checkout's foreign dirt. Two consequences: exploratory edits you do not want landed belong in a step note, not on disk; and your plan's `affectedFiles`/`newFiles` are the worker's PLANNED attribution tier — name every path a step will touch, because an undeclared, unreported edit made while another worker is live is left unstaged (`MOE_ATTRIBUTION_UNRESOLVED`). Do not use `using-git-worktrees` on your own initiative: the post-flight commits from the project root only.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.

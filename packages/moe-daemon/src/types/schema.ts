@@ -10,10 +10,13 @@ export type TaskStatus =
   | 'REVIEW'
   // Waiting on something outside the fleet's control — a shared resource lease
   // (task.blockedResourceId set; auto-unblocked by the resource grant path) or
-  // a human answer (no resourceId; unblocked via moe.unblock_worker or
-  // set_task_status). NOT agent-claimable and NOT counted as churn: the agent
-  // wrapper suppresses CLI relaunch for a held BLOCKED task instead of burning
-  // resume attempts against a wall.
+  // a human answer (no resourceId; cleared ONLY via
+  // moe.unblock_worker { resolveBlocks: true } or set_task_status — a plain
+  // moe.unblock_worker frees the worker's SEAT and leaves the task BLOCKED).
+  // NOT agent-claimable and NOT counted as churn: the agent wrapper suppresses
+  // CLI relaunch for a held BLOCKED task instead of burning resume attempts
+  // against a wall. BLOCKED is a wait state, never a terminal — delivered work
+  // still goes through moe.complete_task.
   | 'BLOCKED'
   | 'DONE'
   | 'ARCHIVED';
@@ -71,6 +74,27 @@ export interface TaskSizingSettings {
   autoCritique?: boolean;
 }
 
+/**
+ * How the agent wrapper attributes dirty paths the task never declared
+ * (neither a completed step's modifiedFiles/affectedFiles, task.filesModified,
+ * declare_files, nor a tool-write harvest). Read by the wrapper from
+ * project.json and echoed by moe.get_commit_scope as `policy`.
+ */
+export interface AttributionSettings {
+  /**
+   * 'solo' (default): an undeclared path changed since the task's baseline is
+   * committed as MEASURED (marked inferred) only when no other worker is
+   * active; otherwise it is reported as unattributed. 'never': declared-only.
+   * 'always': commit measured changes even with peers active (single-worker
+   * projects). Env `MOE_ATTRIBUTION=declared` forces 'never' per run.
+   */
+  undeclared?: 'solo' | 'never' | 'always';
+  /** A path both this task asserted and a peer declared: 'commit' (default) or 'skip'. */
+  contested?: 'commit' | 'skip';
+  /** Extra project-relative prefixes the wrapper never stages (added to the built-in DENY list). */
+  exclude?: string[];
+}
+
 export interface ProjectSettings {
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
   speedModeDelayMs: number;
@@ -114,13 +138,41 @@ export interface ProjectSettings {
    */
   consolidationBranch?: string;
   /**
-   * Auto-commit + push on worker `complete_task`. When true (default), the
-   * agent wrapper runs `git add -A && git commit && git push` on the current
-   * branch after a worker moves a task to REVIEW (first pass OR retry after
-   * qa_reject). Commits use the user's configured git identity — no
-   * Claude/Codex attribution. Set false to disable.
+   * Master switch for the agent wrapper's git activity. When true (default)
+   * the wrapper lands the task's attributed paths on every session exit: a
+   * `feat|fix(task-<id>)` completion commit when a worker session ends in
+   * REVIEW/DONE, a `wip(task-<id>)` checkpoint on every other exit (see
+   * `checkpointCommits`), and a `refs/moe/rescue/<taskId>/<ts>` rescue ref
+   * when a commit cannot land on the branch. Staging is pathspec-only
+   * (`:(literal)` per attributed path via a temp index) — never `git add -A`.
+   * Commits use the user's configured git identity. `false` disables
+   * completion, checkpoint and rescue commits alike (logged, not silent).
    */
   autoCommit?: boolean;               // default: true
+  /**
+   * `wip(task-<id>)` checkpoint commits on non-REVIEW exits and for
+   * architect/qa sessions holding a task. Env `MOE_DISABLE_CHECKPOINT=1`
+   * skips them per run. default: true
+   */
+  checkpointCommits?: boolean;
+  /** Push checkpoint commits to origin; `false` keeps them local. default: true */
+  checkpointPush?: boolean;
+  /**
+   * Let the wrapper commit board state alongside the task's paths: the task's
+   * own `.moe/tasks/<id>.json` always, plus `.moe/epics/*.json`,
+   * `.moe/project.json` and task records not held by a live peer when they
+   * changed this session. default: true
+   */
+  commitBoardState?: boolean;
+  /**
+   * `true` → completion commits use porcelain `git commit -- <specs>` so
+   * pre-commit/commit-msg hooks run (rescue-ref fallback on rejection);
+   * checkpoints always use plumbing. default: false (plumbing everywhere —
+   * `settings.qualityGate` is the sanctioned gate).
+   */
+  commitHooks?: boolean;
+  /** Attribution policy for paths the task never declared; see AttributionSettings. */
+  attribution?: AttributionSettings;
   /**
    * How long (ms) a worker may go without a moe.* tool call before Layer-3
    * staleness sweeps act on it. Raise this for projects whose verification
@@ -265,6 +317,13 @@ export interface ImplementationStep {
   startedAt?: string;
   completedAt?: string;
   note?: string;
+  /**
+   * Every path the worker created or modified while doing this step, as
+   * reported to moe.complete_step. This is the ASSERTED attribution tier: a
+   * completed step's `modifiedFiles ?? affectedFiles` is committed by the
+   * wrapper regardless of the pre-task baseline, so omitting it degrades the
+   * task's commit to planned/measured attribution.
+   */
   modifiedFiles?: string[];
   /**
    * Append-only revision history from moe.amend_plan_step, oldest first.
@@ -424,6 +483,56 @@ export interface TaskVerification {
   reportedAt: string; // ISO
 }
 
+export type TaskCommitKind = 'completion' | 'checkpoint' | 'rescue';
+
+export type TaskCommitOutcome = 'committed' | 'nothing' | 'refused' | 'failed';
+
+/**
+ * One git landing recorded by moe.record_commit (the agent wrapper's
+ * post-flight, best-effort). Append-only ledger, idempotent by sha, capped at
+ * MAX_COMMITS_PER_TASK (newest kept). `kind`: 'completion' = feat|fix commit on
+ * the shared branch after a worker session ended in REVIEW/DONE; 'checkpoint'
+ * = wip commit on any other exit; 'rescue' = snapshot on
+ * refs/moe/rescue/<taskId>/<ts> (never a branch, never pushed). The daemon
+ * never runs git — this is attestation, verified by QA via `git show <sha>`.
+ */
+export interface TaskCommit {
+  sha: string;
+  /** Rebase-stable tree id (`rev-parse <sha>^{tree}`); absent when the wrapper could not compute it. */
+  treeId?: string;
+  /** Branch name or `refs/moe/rescue/…` ref the commit landed on. */
+  ref: string;
+  kind: TaskCommitKind;
+  /** Task status the wrapper resolved at landing time (e.g. REVIEW, BLOCKED, UNKNOWN). */
+  status?: string;
+  role: string;
+  /** `<workerId>@<preflight-iso>` — matches the commit's `Moe-Session:` trailer. */
+  sessionId: string;
+  /** Project-relative paths the commit carried (≤500; see pathsTruncated). */
+  paths: string[];
+  pathsTruncated?: boolean;
+  /** Subset of `paths` attributed by measurement only (never promoted to filesModified). */
+  inferredPaths?: string[];
+  /** Paths a peer task also declared, committed under the `contested: 'commit'` policy. */
+  contested?: { path: string; taskId: string }[];
+  pushed?: boolean;
+  recordedBy: string;
+  recordedAt: string; // ISO
+  /** Worker that landed another task's lingering baseline (orphan recovery). */
+  recoveredBy?: string;
+  message?: string;
+}
+
+/** Result of the most recent moe.record_commit call for the task, whatever its outcome. */
+export interface TaskLastCommitOutcome {
+  outcome: TaskCommitOutcome;
+  kind: TaskCommitKind;
+  /** Refusal/failure code (e.g. MOE_COMMIT_REFUSED_NO_OWNED_PATHS, MOE_COMMIT_FAILED_REF_CONTENTION). */
+  code?: string;
+  sessionId: string;
+  at: string; // ISO
+}
+
 /**
  * Per-DoD-item rejection record. Multiple rejections on the same item
  * indicate a structural problem the architect — not the worker — should fix.
@@ -534,9 +643,33 @@ export interface Task {
   /**
    * Union of per-step modifiedFiles (falling back to affectedFiles) captured
    * at complete_task, so QA sees the changed-file set without depending on
-   * the worker having volunteered it per step.
+   * the worker having volunteered it per step. moe.record_commit unions each
+   * committed commit's non-inferred paths into it, so it grows across
+   * checkpoint/completion landings. ASSERTED attribution tier.
    */
   filesModified?: string[];
+  /**
+   * Git landings recorded for this task by moe.record_commit (newest last,
+   * capped at MAX_COMMITS_PER_TASK). Survives qa_reject reopens — it is
+   * history, not completion evidence; qa_approve looks for a completion
+   * commit recorded after `reviewStartedAt`.
+   */
+  commits?: TaskCommit[];
+  /** Paths explicitly declared via moe.declare_files (ASSERTED tier; governor/worker lever). */
+  declaredFiles?: string[];
+  /** Paths the agent's editing tools were observed writing (stream-json harvest; ASSERTED tier). */
+  touchedFiles?: string[];
+  /** Paths committed by measurement only (MEASURED tier); PLANNED tier next session, never promoted. */
+  inferredPaths?: string[];
+  /**
+   * Dirty paths the last session changed but could not attribute (peers
+   * active, policy 'solo'/'never'). Reported, never staged. Replaced on every
+   * record_commit that reports them; cleared by declaring them
+   * (moe.declare_files) and landing them.
+   */
+  unattributedPaths?: string[];
+  /** Outcome of the most recent moe.record_commit for this task, every outcome included. */
+  lastCommitOutcome?: TaskLastCommitOutcome;
   /** Auto-populated lifecycle metrics; see TaskMetrics. */
   metrics?: TaskMetrics;
   /** Soft wall-clock budget on first-claim → DONE; see TaskBudget. */
@@ -567,17 +700,23 @@ export interface Task {
    * cap or reopen metrics.
    */
   critiqueBlockCount?: number;
-  /** Why the task is BLOCKED (from report_blocked). Cleared on unblock. */
+  /**
+   * Why the task is BLOCKED (from report_blocked). Cleared only when the
+   * block itself is resolved — resource grant, set_task_status, or
+   * moe.unblock_worker { resolveBlocks: true }. A plain unblock_worker frees
+   * the worker's seat and leaves this intact on the still-BLOCKED task.
+   */
   blockedReason?: string | null;
   /**
    * Shared-resource id the task is queued on while BLOCKED. When the lease is
    * granted the daemon auto-unblocks the task (status → blockedFromStatus).
-   * Null/absent means the block needs a human (chat answer / unblock_worker).
+   * Null/absent means the block needs a human (chat answer, set_task_status,
+   * or unblock_worker { resolveBlocks: true }).
    */
   blockedResourceId?: string | null;
   /** Status to restore when the block clears. Set on the WORKING/PLANNING/REVIEW → BLOCKED flip. */
   blockedFromStatus?: TaskStatus | null;
-  /** ISO timestamp of the BLOCKED flip. Cleared on unblock. */
+  /** ISO timestamp of the BLOCKED flip. Cleared when the block is resolved (not on a seat-only unblock). */
   blockedAt?: string | null;
 }
 
@@ -699,6 +838,10 @@ export const ACTIVITY_EVENT_TYPES = [
   'WORKER_TIMEOUT',
   'TASK_BLOCKED',
   'TASK_UNBLOCKED',
+  // Reserved for the (deferred, not yet built) unassigned-BLOCKED park sweep.
+  'TASK_BLOCK_PARKED',
+  'TASK_COMMIT_RECORDED',
+  'TASK_FILES_DECLARED',
   'RESOURCE_ACQUIRED',
   'RESOURCE_QUEUED',
   'RESOURCE_RELEASED',

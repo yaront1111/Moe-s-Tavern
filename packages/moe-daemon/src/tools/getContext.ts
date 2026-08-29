@@ -1,8 +1,49 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import type { Task, TaskCommit } from '../types/schema.js';
 import { invalidState } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { collectAssertedPaths } from '../util/attributionTiers.js';
+
+/** Newest commits surfaced per task (the ledger itself is capped at MAX_COMMITS_PER_TASK). */
+const MAX_CONTEXT_COMMITS = 20;
+/** Epic prerequisites (lower order) surfaced for the landed/not-landed check. */
+const MAX_EPIC_SIBLINGS = 20;
+
+function taskCommits(task: Pick<Task, 'commits'>): TaskCommit[] {
+  return Array.isArray(task.commits) ? task.commits.filter((c) => c && typeof c.sha === 'string') : [];
+}
+
+function lastOfKind(commits: TaskCommit[], kind: TaskCommit['kind']): TaskCommit | undefined {
+  for (let i = commits.length - 1; i >= 0; i--) {
+    if (commits[i].kind === kind) return commits[i];
+  }
+  return undefined;
+}
+
+/** `landing` block: where the task's work last reached git, by kind. */
+function buildLanding(commits: TaskCommit[]) {
+  const completion = lastOfKind(commits, 'completion');
+  const checkpoint = lastOfKind(commits, 'checkpoint');
+  return {
+    ...(completion
+      ? { lastCompletion: { sha: completion.sha, ref: completion.ref, pushed: completion.pushed ?? null, recordedAt: completion.recordedAt } }
+      : {}),
+    ...(checkpoint ? { lastCheckpoint: { sha: checkpoint.sha, recordedAt: checkpoint.recordedAt } } : {}),
+  };
+}
+
+/**
+ * A prerequisite has "landed" when a completion commit for it was pushed, or
+ * it is already in REVIEW/DONE (its worker session ended and the wrapper's
+ * completion landing ran or is running).
+ */
+function taskLanded(task: Task, commits: TaskCommit[]): boolean {
+  return commits.some((c) => c.kind === 'completion' && c.pushed === true)
+    || task.status === 'REVIEW'
+    || task.status === 'DONE';
+}
 import { DEFAULT_CHAT_CONTEXT_CHARS, DEFAULT_CHAT_CONTEXT_LIMIT, truncateChatMessage } from '../util/chatPayload.js';
 import {
   compactTaskComments,
@@ -119,6 +160,44 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         ? state.getWorker(task.assignedWorkerId) ?? null
         : null;
 
+      // Commit ledger + attribution evidence (moe.record_commit / declare_files).
+      const commits = task ? taskCommits(task) : [];
+      const commitProjection = commits.slice(-MAX_CONTEXT_COMMITS).map((c) => ({
+        sha: c.sha,
+        treeId: c.treeId ?? null,
+        ref: c.ref,
+        kind: c.kind,
+        status: c.status ?? null,
+        pushed: c.pushed ?? null,
+        recordedAt: c.recordedAt,
+        recordedBy: c.recordedBy,
+        pathCount: Array.isArray(c.paths) ? c.paths.length : 0,
+        inferredCount: Array.isArray(c.inferredPaths) ? c.inferredPaths.length : 0,
+      }));
+      const rescueRefs = commits.filter((c) => c.kind === 'rescue').map((c) => c.ref);
+      const unattributedPaths = task && Array.isArray(task.unattributedPaths) ? task.unattributedPaths : [];
+      // Prerequisites in the same epic (lower order), nearest first, bounded.
+      const epicSiblings = task
+        ? Array.from(state.tasks.values())
+            .filter((t) => t.epicId === task.epicId && t.id !== task.id && t.order < task.order)
+            .sort((a, b) => b.order - a.order)
+            .slice(0, MAX_EPIC_SIBLINGS)
+            .sort((a, b) => a.order - b.order)
+            .map((t) => {
+              const siblingCommits = taskCommits(t);
+              const landed = taskLanded(t, siblingCommits);
+              const landing = buildLanding(siblingCommits);
+              return {
+                id: t.id,
+                title: t.title,
+                order: t.order,
+                status: t.status,
+                landing: { ...(landing.lastCompletion ? { lastCompletion: landing.lastCompletion } : {}), merged: landed },
+                landed,
+              };
+            })
+        : [];
+
       // Record ownership bookkeeping so start_step can enforce context-fetched ordering.
       if (task && callerWorkerId) {
         const existing = Array.isArray(task.contextFetchedBy) ? task.contextFetchedBy : [];
@@ -178,6 +257,27 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               // (newest-first) so repeat failures are visible without digging.
               verification: task.verification || null,
               filesModified: task.filesModified || [],
+              // Git landing evidence: what the wrapper recorded (moe.record_commit),
+              // the ASSERTED attribution tier the next exit will commit, and the
+              // paths the last session changed but could not attribute.
+              commits: commitProjection,
+              commitCount: commits.length,
+              lastCommitOutcome: task.lastCommitOutcome ?? null,
+              landing: buildLanding(commits),
+              declaredPaths: collectAssertedPaths(task),
+              inferredPaths: Array.isArray(task.inferredPaths) ? task.inferredPaths : [],
+              unattributedPaths,
+              ...(unattributedPaths.length > 0
+                ? {
+                    unattributedHint: `${unattributedPaths.length} path(s) were changed in an earlier session of this task but not attributed to it (peers active / declared-only policy): ${unattributedPaths.join(', ')}. If they are yours, call moe.declare_files { taskId: "${task.id}", paths: [...] } so the next exit commits them under this task.`
+                  }
+                : {}),
+              ...(rescueRefs.length > 0
+                ? {
+                    rescueRefsHint: `Earlier sessions of this task left rescue checkpoints: ${rescueRefs.join(', ')}. Recover with \`git show <ref> --stat\` / \`git checkout <ref> -- <path>\` before redoing work.`
+                  }
+                : {}),
+              epicSiblings,
               ...(task.rejectionHistory && task.rejectionHistory.length > 0
                 ? { rejectionHistory: task.rejectionHistory.slice(0, 5) }
                 : {}),
@@ -273,7 +373,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
                   return {
                     tool: 'moe.qa_approve',
                     args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Verify DoD + rails; re-run the verification command from task.verification yourself; approve or moe.qa_reject with actionable issues.',
+                    reason: 'Verify DoD + rails; re-run the verification command from task.verification yourself; confirm a completion commit is recorded in task.commits (`git show <sha>`) before approving; approve or moe.qa_reject with actionable issues.',
                     recommendedSkill: recommendSkillFor('qa', 'review_entry')
                   };
                 }

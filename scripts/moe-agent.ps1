@@ -221,6 +221,9 @@ if (-not $WorkerId) {
     $WorkerId = "$Role-$shortId"
 }
 $env:MOE_WORKER_ID = $WorkerId
+# Never let a git call (push/pull/fetch in the post-flight) block on a
+# credential or host-key prompt: the wrapper is unattended for its lifetime.
+$env:GIT_TERMINAL_PROMPT = '0'
 
 # Graceful deregister, fired from multiple exit paths. The top-level `finally`
 # below covers normal exits, but it is SKIPPED on a console-window close
@@ -259,6 +262,11 @@ try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEn
 # Event can't bind a static .NET event). TreatControlCAsInput stays false so the
 # default terminate-after-handler behaviour is preserved; we just deregister on
 # the way out.
+# Measured on Windows PowerShell 5.1: this scriptblock and the PowerShell.Exiting
+# handler above are INERT (no runspace is available on the foreign thread they
+# fire on). What actually runs on Ctrl+C is the outer `finally` at the bottom of
+# this script — that is where the teardown rescue + deregister live. Never put
+# git work in these handlers.
 try {
     [Console]::TreatControlCAsInput = $false
     [Console]::add_CancelKeyPress({ Invoke-MoeDeregister })
@@ -1206,7 +1214,17 @@ function Invoke-PostFlight {
     # now lives in Serena (the agent writes a `task-<id>-handoff` note before it
     # stops). The post-flight chat message below remains the session-ended signal.
     if ($generalChannelId) {
-        $content = "$Role session ended: task=$preflightTaskId (CLI exit=$exitCode)"
+        # Landing summary appended so the session-ended line doubles as the
+        # commit evidence: commit=<sha|none> kind=<k> paths=<n> inferred=<m>
+        # unattributed=<u> (identical shape in moe-agent.sh).
+        $landingSummary = "commit=none kind=none paths=0 inferred=0 unattributed=0"
+        $ll = $script:MoeLastLanding
+        if ($ll) {
+            $llSha = if ($ll.Sha) { $ll.Sha } else { 'none' }
+            $landingSummary = "commit=$llSha kind=$($ll.Kind) paths=$($ll.PathCount) inferred=$($ll.InferredCount) unattributed=$($ll.UnattributedCount)"
+            if ($ll.Outcome -ne 'committed' -and $ll.Code) { $landingSummary += " outcome=$($ll.Outcome) code=$($ll.Code)" }
+        }
+        $content = "$Role session ended: task=$preflightTaskId (CLI exit=$exitCode) $landingSummary"
         try {
             $result = Invoke-MoeRpc -Tool "chat_send" -Args @{
                 channel  = $generalChannelId
@@ -1217,6 +1235,1648 @@ function Invoke-PostFlight {
         } catch {
             Write-Warning "post-flight chat_send failed: $_"
         }
+    }
+}
+
+# ============================================================================
+# Land-on-every-exit: baseline / attribution / temp-index landing helpers.
+#
+# Every helper RETURNS a value and never `break`s or `continue`s: PowerShell
+# leaks those to the nearest loop in the CALLER (the wrapper's do/while), so a
+# helper that `continue`d would silently skip the rest of the iteration. The
+# loop body decides on `$result.StopLoop`. Every native git call runs inside an
+# $ErrorActionPreference='Continue' region with $LASTEXITCODE read immediately
+# (Windows PowerShell 5.1 turns native stderr into a terminating error under
+# 'Stop', even with 2>$null). $env:GIT_INDEX_FILE is set only around one
+# plumbing call at a time and removed in a finally — a leak would make every
+# later git call (including the CLI's own) use the temp index.
+#
+# Reason codes, banners, settings keys and env names below are spelled
+# IDENTICALLY in moe-agent.sh (scripts/tests/parity-check.ps1 greps both).
+# ============================================================================
+$script:MoeCaseFoldPaths = $true
+if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $script:MoeCaseFoldPaths = [bool]($IsWindows -or $IsMacOS)
+}
+$script:MoeLastLanding = $null
+$script:MoeTeardownDone = $false
+$script:MoeToolWritten = @{}
+
+function Get-MoePathKey([string]$Path) {
+    if ($script:MoeCaseFoldPaths) { return $Path.ToLowerInvariant() }
+    return $Path
+}
+
+function Get-MoeProp($Obj, [string]$Name) {
+    if ($null -eq $Obj) { return $null }
+    if ($Obj -is [System.Collections.IDictionary]) {
+        if ($Obj.Contains($Name)) { return $Obj[$Name] }
+        return $null
+    }
+    $p = $Obj.PSObject.Properties[$Name]
+    if ($p) { return $p.Value }
+    return $null
+}
+
+# Emits the strings one by one (normal pipeline unrolling); callers wrap the
+# call in @(...) to collect. A `,$out` return + @(call) would NEST the array.
+function Get-MoeStringList($Value) {
+    if ($null -eq $Value) { return }
+    if ($Value -is [string]) { if ($Value) { Write-Output $Value }; return }
+    foreach ($v in @($Value)) { if ($v -is [string] -and $v) { Write-Output $v } }
+}
+
+# Mirrors daemon util/affectedFiles.ts normalizeAffectedFile: backslashes ->
+# '/', leading './' stripped, '.'/empty segments dropped; absolute or
+# traversing paths yield '' (never staged).
+function ConvertTo-MoeNormalPath([string]$Raw) {
+    if ($null -eq $Raw) { return '' }
+    $t = $Raw.Trim()
+    if (-not $t) { return '' }
+    $p = $t -replace '\\', '/'
+    if ($p.StartsWith('./')) { $p = $p.Substring(2) }
+    if ($p.StartsWith('/') -or ($p -match '^[A-Za-z]:/')) { return '' }
+    $segs = @($p -split '/' | Where-Object { $_ -ne '' -and $_ -ne '.' })
+    foreach ($s in $segs) { if ($s -eq '..') { return '' } }
+    return ($segs -join '/')
+}
+
+# ROOT-relative declared path -> TOP-relative (REL is `git rev-parse --show-prefix`).
+function ConvertTo-MoeTopPath([string]$RootRelative, [string]$Rel) {
+    $n = ConvertTo-MoeNormalPath $RootRelative
+    if (-not $n) { return '' }
+    return "$Rel$n"
+}
+
+function ConvertTo-MoeTopPathFromAbsolute([string]$Absolute, [string]$Top) {
+    if (-not $Absolute -or -not $Top) { return '' }
+    $a = ($Absolute -replace '\\', '/')
+    $t = ($Top -replace '\\', '/').TrimEnd('/')
+    if ($a.Length -le ($t.Length + 1)) { return '' }
+    if ((Get-MoePathKey $a).StartsWith((Get-MoePathKey ($t + '/')))) {
+        return (ConvertTo-MoeNormalPath $a.Substring($t.Length + 1))
+    }
+    return ''
+}
+
+function Test-MoeAbsolutePath([string]$P) {
+    return ($P -match '^[A-Za-z]:[\\/]' -or $P.StartsWith('/') -or $P.StartsWith('\\'))
+}
+
+# TOP-relative path -> ROOT-relative for the daemon ledger (REL stripped) —
+# the exact root_rel logic of the sh twin's record_commit_rpc. Declarations
+# round-trip through get_commit_scope as ROOT-relative, so every path list a
+# record_commit carries must be ROOT-relative too or a nested project
+# (ROOT != TOP) re-prefixes REL onto an already-REL-prefixed path.
+function ConvertTo-MoeRootRelative([string]$TopPath, [string]$Rel) {
+    if (-not $Rel) { return $TopPath }
+    if ((Get-MoePathKey $TopPath).StartsWith((Get-MoePathKey $Rel))) { return $TopPath.Substring($Rel.Length) }
+    return $TopPath
+}
+
+# One project.json read. Explicit-false semantics for the booleans that
+# default on (as autoCommit always had); commitHooks defaults OFF and needs an
+# explicit true. Env overrides last.
+function Read-MoeCommitSettings {
+    $s = @{
+        autoCommit = $true; checkpointCommits = $true; checkpointPush = $true
+        commitBoardState = $true; commitHooks = $false
+        undeclared = 'solo'; contested = 'commit'; exclude = @()
+        qualityGate = ''; qualityGateScope = 'epicFinal'; consolidationBranch = ''
+    }
+    $projJsonPath = Join-Path $moeDir "project.json"
+    if (Test-Path -LiteralPath $projJsonPath) {
+        try {
+            $cfg = Get-Content -Raw -LiteralPath $projJsonPath | ConvertFrom-Json
+            $st = Get-MoeProp $cfg 'settings'
+            if ($st) {
+                foreach ($k in @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState')) {
+                    $v = Get-MoeProp $st $k
+                    if ($null -ne $v -and $v -eq $false) { $s[$k] = $false }
+                }
+                $ch = Get-MoeProp $st 'commitHooks'
+                if ($null -ne $ch -and $ch -eq $true) { $s.commitHooks = $true }
+                $attr = Get-MoeProp $st 'attribution'
+                if ($attr) {
+                    $u = Get-MoeProp $attr 'undeclared'
+                    if ($u -is [string] -and (@('solo', 'never', 'always') -contains $u)) { $s.undeclared = $u }
+                    $c = Get-MoeProp $attr 'contested'
+                    if ($c -is [string] -and (@('commit', 'skip') -contains $c)) { $s.contested = $c }
+                    $s.exclude = @(Get-MoeStringList (Get-MoeProp $attr 'exclude'))
+                }
+                $qg = Get-MoeProp $st 'qualityGate'
+                if ($qg -is [string]) { $s.qualityGate = $qg.Trim() }
+                if ((Get-MoeProp $st 'qualityGateScope') -eq 'everyTask') { $s.qualityGateScope = 'everyTask' }
+                $cb = Get-MoeProp $st 'consolidationBranch'
+                # A literal branch name doubles as the peel target; a pattern
+                # (contains '*') is a policy glob, never a checkout target.
+                if ($cb -is [string] -and $cb.Trim() -and $cb.IndexOf('*') -lt 0) { $s.consolidationBranch = $cb.Trim() }
+            }
+        } catch {
+            # Malformed project.json — defaults stand.
+        }
+    }
+    if ($env:MOE_ATTRIBUTION -eq 'declared') { $s.undeclared = 'never' }
+    if ($env:MOE_DISABLE_QUALITY_GATE -eq '1') { $s.qualityGate = '' }
+    if ($env:MOE_DISABLE_CHECKPOINT -eq '1') { $s.checkpointCommits = $false }
+    return $s
+}
+
+# Probe the repo INSIDE an EAP='Continue' region (the old bare probe died on
+# PS 5.1 in a non-git tree). Returns @{Top; GitDir; Rel} or $null.
+function Get-MoeGitTop {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $top = & git -C $projectPath rev-parse --show-toplevel 2>$null
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0 -or -not $top) { return $null }
+        $top = "$top".Trim()
+        $gitDir = & git -C $projectPath rev-parse --absolute-git-dir 2>$null
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0 -or -not $gitDir) { return $null }
+        $rel = & git -C $projectPath rev-parse --show-prefix 2>$null
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0) { $rel = '' }
+        $rel = if ($rel) { "$rel".Trim() } else { '' }
+        return @{ Top = $top; GitDir = "$gitDir".Trim(); Rel = $rel }
+    } catch {
+        return $null
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Every git call in the landing path goes through here: -C TOP, optional
+# temp index (set for THIS call only), output + rc captured separately.
+function Invoke-MoeGit {
+    param(
+        [Parameter(Mandatory = $true)][string]$Top,
+        [Parameter(Mandatory = $true)][string[]]$GitArgs,
+        [string]$IndexFile = '',
+        [switch]$MergeStderr
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $prevIdx = $env:GIT_INDEX_FILE
+    if ($IndexFile) { $env:GIT_INDEX_FILE = $IndexFile }
+    $out = @()
+    $rc = 255
+    try {
+        if ($MergeStderr) {
+            $raw = & git -C $Top @GitArgs 2>&1
+        } else {
+            $raw = & git -C $Top @GitArgs 2>$null
+        }
+        $rc = $LASTEXITCODE
+        $out = @($raw | ForEach-Object { "$_" })
+    } catch {
+        $out = @("$_")
+        $rc = 255
+    } finally {
+        if ($IndexFile) {
+            if ($null -ne $prevIdx) { $env:GIT_INDEX_FILE = $prevIdx } else { Remove-Item Env:\GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+        }
+        $ErrorActionPreference = $prev
+    }
+    return @{ Out = $out; Rc = $rc }
+}
+
+# git status --porcelain=v1 -z (NUL-split, no quoting, no renames) + ONE
+# hash-object --stdin-paths. Returns hashtable pathKey -> @{Path; XY; Blob}
+# where Blob is 'D' for a path absent from disk. $null when git fails.
+function Get-MoeDirtySnapshot([string]$Top) {
+    $snap = @{}
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $prevConsole = $null
+    try { $prevConsole = [Console]::OutputEncoding } catch {}
+    $prevOutEnc = $OutputEncoding
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    try {
+        # Git emits paths as UTF-8; 5.1 decodes native stdout with the OEM
+        # code page and encodes native stdin as ASCII unless told otherwise.
+        try { [Console]::OutputEncoding = $utf8 } catch {}
+        $OutputEncoding = $utf8
+        $raw = & git -C $Top status --porcelain=v1 -z --untracked-files=all --no-renames 2>$null
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0) { return $null }
+        $joined = (@($raw | ForEach-Object { "$_" }) -join "`n")
+        $entries = $joined.Split([char]0)
+        $toHash = New-Object System.Collections.Generic.List[string]
+        $records = @()
+        foreach ($e in $entries) {
+            if ($e.Length -lt 4) { continue }
+            $xy = $e.Substring(0, 2)
+            $p = $e.Substring(3)
+            if (-not $p -or $p.EndsWith('/')) { continue }
+            if ($p.IndexOf("`t") -ge 0 -or $p.IndexOf("`n") -ge 0) {
+                Write-Host "[attribution] skipping a path with control characters: $p" -ForegroundColor Yellow
+                continue
+            }
+            $full = Join-Path $Top $p
+            $blob = 'D'
+            if (Test-Path -LiteralPath $full -PathType Leaf) {
+                $blob = ''
+                $toHash.Add($p)
+            } elseif (Test-Path -LiteralPath $full) {
+                # Directory / submodule entry: never attributable to a task.
+                continue
+            }
+            $records += @{ Path = $p; XY = $xy; Blob = $blob }
+        }
+        $hashMap = @{}
+        if ($toHash.Count -gt 0) {
+            $hashes = @($toHash.ToArray() | & git -C $Top hash-object --stdin-paths 2>$null | ForEach-Object { "$_".Trim() })
+            $hrc = $LASTEXITCODE
+            if ($hrc -eq 0 -and $hashes.Count -eq $toHash.Count) {
+                for ($i = 0; $i -lt $hashes.Count; $i++) { $hashMap[(Get-MoePathKey $toHash[$i])] = $hashes[$i] }
+            } else {
+                # Batch failed (one unreadable file poisons it): hash one by one.
+                foreach ($p in $toHash) {
+                    $h = & git -C $Top hash-object -- $p 2>$null
+                    if ($LASTEXITCODE -eq 0 -and $h) { $hashMap[(Get-MoePathKey $p)] = "$h".Trim() }
+                }
+            }
+        }
+        foreach ($r in $records) {
+            $k = Get-MoePathKey $r.Path
+            if ($r.Blob -ne 'D') {
+                if (-not $hashMap.ContainsKey($k)) { continue }   # unreadable: not attributable this exit
+                $r.Blob = $hashMap[$k]
+            }
+            $snap[$k] = $r
+        }
+        return $snap
+    } catch {
+        return $null
+    } finally {
+        try { if ($prevConsole) { [Console]::OutputEncoding = $prevConsole } } catch {}
+        $OutputEncoding = $prevOutEnc
+        $ErrorActionPreference = $prev
+    }
+}
+
+function Get-MoeBaselinePath([string]$GitDir, [string]$TaskId) {
+    # The id reaches a path join: whitelist, never sanitise.
+    if (-not $TaskId -or ($TaskId -notmatch '^[A-Za-z0-9_.-]+$')) { return '' }
+    return (Join-Path $GitDir "moe/baseline/$TaskId.tsv")
+}
+
+# TSV: header `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1>`,
+# then `B<TAB><blob|D><TAB><path>` rows (dirty-before-the-task) and
+# `U<TAB><blob><TAB><path>` rows (locally persisted unattributed set).
+# `landed=1` marks a session that completed a landing (committed/nothing/
+# refused), so the next pre-flight does not replay a "recovered" checkpoint;
+# an absent field (older twin) means recover.
+function Read-MoeBaseline([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
+    $b = @{}
+    $u = @{}
+    $head = ''
+    $at = ''
+    $landed = $false
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        foreach ($line in [System.IO.File]::ReadAllLines($Path, $utf8)) {
+            if (-not $line) { continue }
+            if ($line.StartsWith('#')) {
+                if ($line -match 'head=([0-9a-fA-F]+)') { $head = $matches[1] }
+                if ($line -match 'at=(\S+)') { $at = $matches[1] }
+                if ($line -match ' landed=1') { $landed = $true }
+                continue
+            }
+            $parts = $line.Split("`t")
+            if ($parts.Count -lt 3) { continue }
+            $kind = $parts[0]
+            $blob = $parts[1]
+            $p = ($parts[2..($parts.Count - 1)] -join "`t")
+            if (-not $p) { continue }
+            $k = Get-MoePathKey $p
+            if ($kind -eq 'B') { $b[$k] = @{ Path = $p; Blob = $blob } }
+            elseif ($kind -eq 'U') { $u[$k] = @{ Path = $p; Blob = $blob } }
+        }
+    } catch {
+        return $null
+    }
+    return @{ Head = $head; At = $at; B = $b; U = $u; Landed = $landed }
+}
+
+function Write-MoeBaseline([string]$Path, [string]$TaskId, [string]$Head, [hashtable]$B, [hashtable]$U, [int]$Landed = 0) {
+    if (-not $Path) { return $false }
+    try {
+        $dir = Split-Path -Parent $Path
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("#moe-baseline v1 task=$TaskId at=$at head=$Head landed=$Landed`n")
+        if ($B) { foreach ($k in ($B.Keys | Sort-Object)) { $r = $B[$k]; [void]$sb.Append("B`t$($r.Blob)`t$($r.Path)`n") } }
+        if ($U) { foreach ($k in ($U.Keys | Sort-Object)) { $r = $U[$k]; [void]$sb.Append("U`t$($r.Blob)`t$($r.Path)`n") } }
+        $tmp = "$Path.tmp"
+        [System.IO.File]::WriteAllText($tmp, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $Path -Force
+        return $true
+    } catch {
+        Write-Host "[WARN] could not write the baseline file ${Path}: $_" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function Remove-MoeBaseline([string]$Path) {
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        try { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}
+
+# Flip an existing baseline's header to landed=1 in place. Called on the
+# DELIBERATE mode='none' post-flight exit (checkpointCommits=false or a role
+# with no landing) so the next pre-flight does not replay this session's edits
+# as a "recovered" checkpoint the operator turned off. Twin: baseline_mark_landed.
+function Set-MoeBaselineLanded([string]$GitDir, [string]$TaskId) {
+    $p = Get-MoeBaselinePath $GitDir $TaskId
+    if (-not $p -or -not (Test-Path -LiteralPath $p)) { return }
+    $bl = Read-MoeBaseline $p
+    if ($null -eq $bl) { return }
+    Write-MoeBaseline $p $TaskId $bl.Head $bl.B $bl.U 1 | Out-Null
+}
+
+# ASSERTED / PLANNED tiers of ONE task record, exactly as the daemon's
+# get_commit_scope derives them (completeTask.ts semantics for asserted).
+function Get-MoeTaskDeclaredSets($Task) {
+    $asserted = @()
+    $planned = @()
+    $steps = @()
+    $plan = Get-MoeProp $Task 'implementationPlan'
+    if ($plan) { $steps = @($plan) }
+    foreach ($s in $steps) {
+        if ($null -eq $s) { continue }
+        $mod = Get-MoeProp $s 'modifiedFiles'
+        $aff = Get-MoeProp $s 'affectedFiles'
+        $new = Get-MoeProp $s 'newFiles'
+        if ((Get-MoeProp $s 'status') -eq 'COMPLETED') {
+            if ($null -ne $mod) { $asserted += @(Get-MoeStringList $mod) } else { $asserted += @(Get-MoeStringList $aff) }
+        }
+        $planned += @(Get-MoeStringList $aff)
+        $planned += @(Get-MoeStringList $new)
+        $planned += @(Get-MoeStringList $mod)
+    }
+    $asserted += @(Get-MoeStringList (Get-MoeProp $Task 'filesModified'))
+    $asserted += @(Get-MoeStringList (Get-MoeProp $Task 'declaredFiles'))
+    $asserted += @(Get-MoeStringList (Get-MoeProp $Task 'touchedFiles'))
+    $commits = Get-MoeProp $Task 'commits'
+    if ($commits) {
+        foreach ($c in @($commits)) {
+            if ($null -eq $c) { continue }
+            $inf = @(Get-MoeStringList (Get-MoeProp $c 'inferredPaths') | ForEach-Object { Get-MoePathKey (ConvertTo-MoeNormalPath $_) })
+            foreach ($p in @(Get-MoeStringList (Get-MoeProp $c 'paths'))) {
+                if ($inf -contains (Get-MoePathKey (ConvertTo-MoeNormalPath $p))) { continue }
+                $asserted += $p
+            }
+        }
+    }
+    $planned += @(Get-MoeStringList (Get-MoeProp $Task 'inferredPaths'))
+    return @{ Asserted = @($asserted); Planned = @($planned) }
+}
+
+# Disk fallback when moe.get_commit_scope is unavailable (old daemon, daemon
+# down): own record + every other .moe/tasks/*.json. Policy is forced to
+# undeclared=never and peersActive=true — without the daemon we cannot know
+# who else is live, so only declared paths may land.
+function Get-MoeDiskScope([string]$TaskId) {
+    $scope = @{
+        Source = 'disk'; Found = $false; TaskId = $TaskId; Title = ''; Status = ''; ReopenCount = 0
+        AssignedWorkerId = ''; Asserted = @(); Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
+        PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $false; PeersActive = $true; ForceNever = $true
+    }
+    $tasksDir = Join-Path $moeDir 'tasks'
+    $ownPath = Join-Path $tasksDir "$TaskId.json"
+    if (-not (Test-Path -LiteralPath $ownPath)) { $ownPath = Join-Path $tasksDir "task-$TaskId.json" }
+    $own = $null
+    if (Test-Path -LiteralPath $ownPath) {
+        try { $own = Get-Content -Raw -LiteralPath $ownPath | ConvertFrom-Json } catch { $own = $null }
+    }
+    if ($own) {
+        $scope.Found = $true
+        $t = Get-MoeProp $own 'title'; if ($t -is [string]) { $scope.Title = $t }
+        $st = Get-MoeProp $own 'status'; if ($st -is [string]) { $scope.Status = $st }
+        $rc = Get-MoeProp $own 'reopenCount'; if ($rc) { try { $scope.ReopenCount = [int]$rc } catch {} }
+        $aw = Get-MoeProp $own 'assignedWorkerId'; if ($aw -is [string]) { $scope.AssignedWorkerId = $aw }
+        $sets = Get-MoeTaskDeclaredSets $own
+        $scope.Asserted = @($sets.Asserted)
+        $scope.Planned = @($sets.Planned)
+        $scope.TouchedFiles = @(Get-MoeStringList (Get-MoeProp $own 'touchedFiles'))
+        $scope.InferredPaths = @(Get-MoeStringList (Get-MoeProp $own 'inferredPaths'))
+        $scope.UnattributedPaths = @(Get-MoeStringList (Get-MoeProp $own 'unattributedPaths'))
+    }
+    if (Test-Path -LiteralPath $tasksDir) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $tasksDir -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
+            if ($own -and $f.FullName -eq (Get-Item -LiteralPath $ownPath).FullName) { continue }
+            $peer = $null
+            try { $peer = Get-Content -Raw -LiteralPath $f.FullName | ConvertFrom-Json } catch { continue }
+            if (-not $peer) { continue }
+            $pid2 = Get-MoeProp $peer 'id'
+            if ($pid2 -isnot [string] -or -not $pid2 -or $pid2 -eq $TaskId) { continue }
+            $pst = Get-MoeProp $peer 'status'
+            if ($pst -eq 'DONE' -or $pst -eq 'ARCHIVED') { continue }
+            $psets = Get-MoeTaskDeclaredSets $peer
+            foreach ($p in @($psets.Asserted) + @($psets.Planned) + @(Get-MoeStringList (Get-MoeProp $peer 'touchedFiles'))) {
+                $n = ConvertTo-MoeNormalPath $p
+                if (-not $n) { continue }
+                $k = Get-MoePathKey $n
+                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = $pid2 } }
+            }
+        }
+    }
+    return $scope
+}
+
+# moe.get_commit_scope RPC, disk fallback on any failure. Paths in the
+# returned sets are ROOT-relative (as declared); callers convert with REL.
+function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
+    $resp = $null
+    try {
+        $scopeArgs = @{ taskId = $TaskId; workerId = $WorkerId; sessionId = $Sid; phase = $Phase }
+        # `since` widens the daemon's peer-liveness window to this session's
+        # pre-flight instant (SID = <workerId>@<preflight-iso>); only a
+        # parsable timestamp may travel or the daemon rejects the whole call.
+        if ($Sid -match '@(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)$') { $scopeArgs.since = $matches[1] }
+        $resp = Invoke-MoeRpc -Tool 'get_commit_scope' -Args $scopeArgs
+    } catch { $resp = $null }
+    if ($resp -and ($resp -isnot [string]) -and $resp.PSObject.Properties['taskId'] -and $resp.PSObject.Properties['asserted']) {
+        $scope = @{
+            Source = 'rpc'; Found = $true; TaskId = [string]$resp.taskId; Title = ''; Status = ''; ReopenCount = 0
+            AssignedWorkerId = ''; Asserted = @(); Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
+            PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $true; PeersActive = $false; ForceNever = $false
+        }
+        $t = Get-MoeProp $resp 'title'; if ($t -is [string]) { $scope.Title = $t }
+        $st = Get-MoeProp $resp 'status'; if ($st -is [string]) { $scope.Status = $st }
+        $rc = Get-MoeProp $resp 'reopenCount'; if ($rc) { try { $scope.ReopenCount = [int]$rc } catch {} }
+        $aw = Get-MoeProp $resp 'assignedWorkerId'; if ($aw -is [string]) { $scope.AssignedWorkerId = $aw }
+        $scope.Asserted = @(Get-MoeStringList (Get-MoeProp $resp 'asserted'))
+        $scope.Planned = @(Get-MoeStringList (Get-MoeProp $resp 'planned'))
+        $scope.TouchedFiles = @(Get-MoeStringList (Get-MoeProp $resp 'touchedFiles'))
+        $scope.InferredPaths = @(Get-MoeStringList (Get-MoeProp $resp 'inferredPaths'))
+        $scope.UnattributedPaths = @(Get-MoeStringList (Get-MoeProp $resp 'unattributedPaths'))
+        $scope.LivePeerIds = @(Get-MoeStringList (Get-MoeProp $resp 'livePeerIds'))
+        $pa = Get-MoeProp $resp 'peersActive'
+        $scope.PeersActive = [bool]($pa -eq $true)
+        $pd = Get-MoeProp $resp 'peerDeclared'
+        if ($pd) {
+            foreach ($e in @($pd)) {
+                if ($null -eq $e) { continue }
+                $pp = Get-MoeProp $e 'path'
+                $pt = Get-MoeProp $e 'taskId'
+                if ($pp -isnot [string] -or -not $pp) { continue }
+                $n = ConvertTo-MoeNormalPath $pp
+                if (-not $n) { continue }
+                $k = Get-MoePathKey $n
+                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = [string]$pt } }
+            }
+        }
+        return $scope
+    }
+    $disk = Get-MoeDiskScope $TaskId
+    Write-Host "[attribution] moe.get_commit_scope unavailable; using the on-disk task records (declared paths only, peers presumed active)." -ForegroundColor Yellow
+    return $disk
+}
+
+function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
+    $k = Get-MoePathKey $TopPath
+    $r = Get-MoePathKey $Rel
+    # When the Moe project is nested in a larger repo (ROOT != TOP) the OUTER
+    # repo's .moe/tool-config paths are denied too (bare-root prefix) — another
+    # fleet's board state must never be attributed to this task. Same roots
+    # list as the sh twin's denied().
+    $denyRoots = @($r)
+    if ($r) { $denyRoots += '' }
+    foreach ($dr in $denyRoots) {
+        if ($k.StartsWith("$dr.moe/")) { return $true }
+        if ($k -eq "$dr.mcp.json") { return $true }
+        foreach ($pre in @('.codex/', '.gemini/', '.claude/agents/', '.worktrees/', '.moe-worktree')) {
+            if ($k.StartsWith("$dr$pre")) { return $true }
+        }
+        if ($k -eq "$dr.claude/settings.local.json") { return $true }
+        if ($XY -eq '??' -and $k.StartsWith("$dr.serena/")) { return $true }
+    }
+    if ($Settings -and $Settings.exclude) {
+        foreach ($ex in @($Settings.exclude)) {
+            $n = ConvertTo-MoeNormalPath $ex
+            if (-not $n) { continue }
+            if ($k.StartsWith((Get-MoePathKey "$Rel$n"))) { return $true }
+        }
+    }
+    return $false
+}
+
+# Section 6 of the design, exactly. Inputs are TOP-relative snapshots; declared
+# sets arrive ROOT-relative and are converted with REL here.
+function Resolve-MoeAttribution {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Git,
+        [Parameter(Mandatory = $true)][hashtable]$S,
+        [hashtable]$B,
+        [hashtable]$U,
+        [hashtable]$Tool,
+        [Parameter(Mandatory = $true)][hashtable]$Scope,
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [Parameter(Mandatory = $true)][string]$TaskId,
+        [string]$Mode = 'checkpoint',
+        [string]$PolicyOverride = ''
+    )
+    $rel = $Git.Rel
+    if ($null -eq $B) { $B = @{} }
+    if ($null -eq $U) { $U = @{} }
+    if ($null -eq $Tool) { $Tool = @{} }
+    $undeclared = $Settings.undeclared
+    if ($Scope.ForceNever) { $undeclared = 'never' }
+    if ($PolicyOverride) { $undeclared = $PolicyOverride }
+    $contestedPolicy = $Settings.contested
+
+    $asserted = @{}
+    foreach ($p in @($Scope.Asserted)) { $tp = ConvertTo-MoeTopPath $p $rel; if ($tp) { $asserted[(Get-MoePathKey $tp)] = $tp } }
+    $planned = @{}
+    foreach ($p in @($Scope.Planned)) { $tp = ConvertTo-MoeTopPath $p $rel; if ($tp) { $k = Get-MoePathKey $tp; if (-not $asserted.ContainsKey($k)) { $planned[$k] = $tp } } }
+    $peer = @{}
+    foreach ($k in $Scope.PeerDeclared.Keys) {
+        $tp = "$rel$($Scope.PeerDeclared[$k].Path)"
+        $peer[(Get-MoePathKey $tp)] = $Scope.PeerDeclared[$k].TaskId
+    }
+    $mine = @{}
+    foreach ($k in $asserted.Keys) { $mine[$k] = $asserted[$k] }
+    foreach ($k in $Tool.Keys) { $mine[$k] = $Tool[$k] }
+
+    $ownRecordKey = Get-MoePathKey "$rel.moe/tasks/$TaskId.json"
+    $tasksPrefix = Get-MoePathKey "$rel.moe/tasks/"
+    $epicsPrefix = Get-MoePathKey "$rel.moe/epics/"
+    $projectKey = Get-MoePathKey "$rel.moe/project.json"
+    $memoryPrefix = Get-MoePathKey "$rel.serena/memories/"
+    $taskIdKey = Get-MoePathKey $TaskId
+
+    $candidates = @()
+    $skipped = @()
+    $unattributed = @()
+    $contested = @()
+    $foreign = 0
+    $excluded = 0
+
+    foreach ($k in ($S.Keys | Sort-Object)) {
+        $entry = $S[$k]
+        $p = $entry.Path
+        $blob = $entry.Blob
+        $changed = (-not $B.ContainsKey($k)) -or ($B[$k].Blob -ne $blob)
+
+        # BOARD: own record ALWAYS while dirty (sh board_always; spec section 6
+        # — the daemon rewrites it on every transition and it must land even
+        # when a previous session's baseline already carried it); epics,
+        # project.json and non-live-peer task records only when changed this
+        # session.
+        $isBoard = $false
+        if ($Settings.commitBoardState) {
+            if ($k -eq $ownRecordKey) {
+                $isBoard = $true
+            } elseif ($k -eq $projectKey -or ($k.StartsWith($epicsPrefix) -and $k.EndsWith('.json'))) {
+                $isBoard = $changed
+            } elseif ($k.StartsWith($tasksPrefix) -and $k.EndsWith('.json') -and $changed -and $Scope.LivePeerIdsKnown) {
+                # Another task's record: only when its assignee is not a live
+                # peer — and NEVER in disk-fallback mode (LivePeerIdsKnown is
+                # false: liveness is unknowable, so no other task's record is a
+                # board candidate; same rule as the sh twin's fallback scope).
+                $assignee = ''
+                try {
+                    $recObj = Get-Content -Raw -LiteralPath (Join-Path $Git.Top $p) | ConvertFrom-Json
+                    $a = Get-MoeProp $recObj 'assignedWorkerId'
+                    if ($a -is [string]) { $assignee = $a }
+                } catch { $assignee = '?' }
+                if ($assignee -eq '' -or $assignee -eq $WorkerId) { $isBoard = $true }
+                elseif ($assignee -ne '?' -and (@($Scope.LivePeerIds) -notcontains $assignee)) { $isBoard = $true }
+            }
+        }
+        if ($isBoard) {
+            $candidates += @{ Path = $p; Blob = $blob; XY = $entry.XY; Reason = 'BOARD'; Inferred = $false }
+            continue
+        }
+        if (Test-MoeDenyPath $p $entry.XY $rel $Settings) {
+            $skipped += @{ Path = $p; Code = 'MOE_ATTR_EXCLUDED' }
+            $excluded++
+            continue
+        }
+        $isOwnMemory = ($k.StartsWith($memoryPrefix) -and $entry.XY -ne '??' -and $k.IndexOf($taskIdKey) -ge 0)
+        if ($mine.ContainsKey($k) -or $isOwnMemory) {
+            if ($peer.ContainsKey($k)) {
+                $contested += @{ Path = $p; TaskId = $peer[$k] }
+                if ($contestedPolicy -eq 'skip') {
+                    $skipped += @{ Path = $p; Code = 'MOE_ATTR_CONTESTED' }
+                    continue
+                }
+            }
+            $candidates += @{ Path = $p; Blob = $blob; XY = $entry.XY; Reason = 'ASSERTED'; Inferred = $false }
+            continue
+        }
+        if ($peer.ContainsKey($k)) {
+            $skipped += @{ Path = $p; Code = "MOE_ATTR_PEER_DECLARED($($peer[$k]))" }
+            continue
+        }
+        if (-not $changed) {
+            $skipped += @{ Path = $p; Code = 'MOE_ATTR_PREEXISTING' }
+            $foreign++
+            continue
+        }
+        if ($planned.ContainsKey($k)) {
+            $candidates += @{ Path = $p; Blob = $blob; XY = $entry.XY; Reason = 'PLANNED'; Inferred = $false }
+            continue
+        }
+        if ($undeclared -eq 'always' -or ($undeclared -eq 'solo' -and -not $Scope.PeersActive)) {
+            $candidates += @{ Path = $p; Blob = $blob; XY = $entry.XY; Reason = 'MEASURED'; Inferred = $true }
+            continue
+        }
+        $unattributed += @{ Path = $p; Blob = $blob }
+    }
+
+    # Asserted paths that are neither dirty nor present nor in HEAD.
+    $missing = @()
+    foreach ($k in $asserted.Keys) {
+        if ($S.ContainsKey($k)) { continue }
+        $tp = $asserted[$k]
+        if (Test-Path -LiteralPath (Join-Path $Git.Top $tp)) { continue }
+        $r = Invoke-MoeGit -Top $Git.Top -GitArgs @('cat-file', '-e', "HEAD:$tp")
+        if ($r.Rc -eq 0) { continue }
+        $missing += $tp
+        $skipped += @{ Path = $tp; Code = 'MOE_ATTR_MISSING' }
+    }
+
+    return @{
+        Candidates = @($candidates); Skipped = @($skipped); Unattributed = @($unattributed)
+        Missing = @($missing); Contested = @($contested); ForeignCount = $foreign; ExcludedCount = $excluded
+        AssertedCount = $asserted.Count; PlannedCount = $planned.Count; ToolCount = $Tool.Count
+        Undeclared = $undeclared
+    }
+}
+
+# Today's branch-safety peel lifted into a helper. Returns the branch name the
+# commit may land on, or '' when the tree must not be committed (peel failed).
+function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
+    $currentBranch = ''
+    $r = Invoke-MoeGit -Top $Top -GitArgs @('symbolic-ref', '--short', '-q', 'HEAD')
+    if ($r.Rc -eq 0 -and $r.Out.Count -gt 0) { $currentBranch = ($r.Out -join '').Trim() }
+    if (-not $currentBranch) {
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--abbrev-ref', 'HEAD')
+        if ($r.Rc -eq 0 -and $r.Out.Count -gt 0) { $currentBranch = ($r.Out -join '').Trim() }
+    }
+    if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch) {
+        $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
+        if ($Settings -and $Settings.consolidationBranch) { $moeBranch = $Settings.consolidationBranch }
+        Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$moeBranch")
+        if ($r.Rc -eq 0) {
+            $co = Invoke-MoeGit -Top $Top -GitArgs @('checkout', $moeBranch) -MergeStderr
+        } else {
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/$moeBranch")
+            if ($r.Rc -eq 0) {
+                $co = Invoke-MoeGit -Top $Top -GitArgs @('checkout', '-b', $moeBranch, "origin/$moeBranch") -MergeStderr
+            } else {
+                $co = Invoke-MoeGit -Top $Top -GitArgs @('checkout', '-b', $moeBranch) -MergeStderr
+            }
+        }
+        $co.Out | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
+        if ($co.Rc -ne 0) {
+            Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
+            return ''
+        }
+        $currentBranch = $moeBranch
+    }
+    return $currentBranch
+}
+
+# Stage the candidates into a TEMP index seeded from $OldSha (or empty) and
+# verify each staged blob equals the snapshot blob (a path that changed under
+# us is dropped with MOE_ATTR_CONCURRENT and re-attempted at the next exit).
+function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSha, [array]$Candidates) {
+    $res = @{ Ok = $false; Changed = $false; Tree = ''; Landed = @(); Dropped = @() }
+    $idxDir = Split-Path -Parent $IndexFile
+    if (-not (Test-Path -LiteralPath $idxDir)) { New-Item -ItemType Directory -Force -Path $idxDir | Out-Null }
+    Remove-Item -LiteralPath $IndexFile -Force -ErrorAction SilentlyContinue
+    if ($OldSha) {
+        $r = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('read-tree', $OldSha)
+    } else {
+        $r = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('read-tree', '--empty')
+    }
+    if ($r.Rc -ne 0) { return $res }
+    $landed = @()
+    $dropped = @()
+    foreach ($c in @($Candidates)) {
+        $spec = ":(literal)$($c.Path)"
+        $a = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('add', '--', $spec)
+        if ($a.Rc -ne 0) {
+            $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_MISSING' }
+            continue
+        }
+        $ls = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('ls-files', '-s', '-z', '--', $spec)
+        $stagedBlob = ''
+        $lsLine = ($ls.Out -join '').Split([char]0)[0]
+        if ($lsLine) {
+            $fields = @($lsLine -split '\s+')
+            if ($fields.Count -ge 2) { $stagedBlob = $fields[1] }
+        }
+        $match = $false
+        if ($c.Blob -eq 'D') { $match = (-not $stagedBlob) } else { $match = ($stagedBlob -eq $c.Blob) }
+        if (-not $match) {
+            if ($OldSha) {
+                Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('reset', '-q', $OldSha, '--', $spec) | Out-Null
+            } else {
+                Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('rm', '--cached', '-q', '--force', '--', $spec) | Out-Null
+            }
+            $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_CONCURRENT' }
+            continue
+        }
+        $landed += $c
+    }
+    $res.Landed = @($landed)
+    $res.Dropped = @($dropped)
+    $res.Ok = $true
+    if ($landed.Count -eq 0) { return $res }
+    if ($OldSha) {
+        $d = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('diff-index', '--cached', '--quiet', $OldSha)
+        $res.Changed = ($d.Rc -ne 0)
+    } else {
+        $n = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('ls-files', '-z')
+        $res.Changed = ((($n.Out -join '').Split([char]0) | Where-Object { $_ }).Count -gt 0)
+    }
+    if (-not $res.Changed) { return $res }
+    $w = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('write-tree')
+    if ($w.Rc -ne 0 -or $w.Out.Count -eq 0) { $res.Ok = $false; return $res }
+    $res.Tree = ($w.Out -join '').Trim()
+    return $res
+}
+
+function Get-MoeCommitTitle([string]$Title, [string]$Fallback) {
+    $t = if ($Title) { ($Title -replace '[\r\n]+', ' ').Trim() } else { '' }
+    if (-not $t) { $t = $Fallback }
+    return $t
+}
+
+# Section 8 message formats (grep-stable; identical in moe-agent.sh).
+function New-MoeCommitMessage {
+    param(
+        [string]$Kind, [string]$TaskId, [string]$Title, [string]$Status, [int]$ReopenCount, [string]$Role,
+        [string]$Sid, [int]$CliExit, [bool]$Recovered, [int]$PathCount, [int]$InferredCount, [array]$Contested, [string]$Reason
+    )
+    $lines = @()
+    if ($Kind -eq 'completion') {
+        $type = if ($ReopenCount -gt 0) { 'fix' } else { 'feat' }
+        $suffix = if ($ReopenCount -gt 0) { " (retry after qa_reject #$ReopenCount)" } else { '' }
+        $lines += "$type($TaskId): $(Get-MoeCommitTitle $Title 'completed task')$suffix"
+        $lines += ''
+        $lines += 'Completed via Moe worker session.'
+    } elseif ($Kind -eq 'checkpoint') {
+        $statusText = if ($Status) { $Status } else { 'UNKNOWN' }
+        $rec = if ($Recovered) { ' recovered' } else { '' }
+        $lines += "wip($TaskId): $(Get-MoeCommitTitle $Title 'checkpoint') [status=$statusText role=$Role cli-exit=$CliExit]$rec"
+        $lines += ''
+        $lines += "Checkpoint via Moe $Role session; not a completion."
+    } else {
+        $lines += "rescue($TaskId): $(Get-MoeCommitTitle $Title 'rescue') [reason=$Reason]"
+        $lines += ''
+        $lines += "Rescue snapshot via Moe $Role session; recover with git checkout <ref> -- <path>."
+    }
+    $lines += ''
+    $lines += "Moe-Task: $TaskId"
+    $lines += "Moe-Kind: $Kind"
+    $lines += "Moe-Session: $Sid"
+    if ($Kind -eq 'rescue') {
+        $lines += "Moe-Reason: $Reason"
+    } else {
+        $statusText = if ($Status) { $Status } else { 'UNKNOWN' }
+        $lines += "Moe-Status: $statusText"
+        $lines += "Moe-Paths: $PathCount"
+        $lines += "Moe-Inferred: $InferredCount"
+        foreach ($c in @($Contested)) { if ($c) { $lines += "Moe-Contested: $($c.Path) ($($c.TaskId))" } }
+    }
+    return (($lines -join "`n") + "`n")
+}
+
+function Write-MoeMessageFile([string]$GitDir, [string]$TaskId, [string]$Message) {
+    $dir = Join-Path $GitDir 'moe'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $path = Join-Path $dir "msg-$TaskId-$myPid.txt"
+    [System.IO.File]::WriteAllText($path, $Message, (New-Object System.Text.UTF8Encoding($false)))
+    return $path
+}
+
+# Best-effort moe.record_commit; a $null result never breaks the loop.
+# NOTE: the parameter is deliberately NOT named $Args — a typed [hashtable]
+# parameter of that name collides with the automatic $args array on 5.1.
+function Send-MoeRecordCommit([hashtable]$Record) {
+    try {
+        $r = Invoke-MoeRpc -Tool 'record_commit' -Args $Record
+        if ($null -eq $r) { Write-Host "[WARN] moe.record_commit returned nothing (old daemon?) — the commit is on the branch; the ledger entry is missing." -ForegroundColor Yellow }
+        return $r
+    } catch {
+        return $null
+    }
+}
+
+function Send-MoeGeneralChat([string]$Content) {
+    if (-not $generalChannelId) { return }
+    try {
+        Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $Content } | Out-Null
+    } catch {}
+}
+
+function ConvertTo-MoeRecordPaths([array]$Items, [int]$Cap) {
+    $n = 0
+    foreach ($i in @($Items)) {
+        if ($null -eq $i) { continue }
+        if ($i -is [string]) { Write-Output $i } else { Write-Output ([string]$i.Path) }
+        $n++
+        if ($n -ge $Cap) { break }
+    }
+}
+
+# Section 7.4: rescue ref refs/moe/rescue/<taskId>/<utc-ts>. HEAD, branch and
+# shared index untouched; never pushed. Builds the tree from the candidates
+# (or a prebuilt tree) against HEAD's tree so `git show <ref> --stat` reads
+# as "what this session changed".
+function Invoke-MoeRescueRef {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Git,
+        [Parameter(Mandatory = $true)][string]$TaskId,
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [string]$Title = '', [string]$Status = '', [string]$Sid = '',
+        [hashtable]$Attr = $null,
+        [string]$Sha = ''
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $idx = Join-Path (Join-Path $Git.GitDir 'moe') "idx-$TaskId-$myPid-rescue"
+    $msgFile = ''
+    try {
+        $pathCount = 0
+        if (-not $Sha) {
+            if ($null -eq $Attr) {
+                $s = Get-MoeDirtySnapshot $Git.Top
+                if ($null -eq $s) { Write-Host "[rescue] git status failed; nothing rescued for task $TaskId (reason=$Reason)." -ForegroundColor Yellow; return $null }
+                $bl = Read-MoeBaseline (Get-MoeBaselinePath $Git.GitDir $TaskId)
+                $b = if ($bl) { $bl.B } else { @{} }
+                $u = if ($bl) { $bl.U } else { @{} }
+                $scope = Get-MoeCommitScope $TaskId 'postflight' $Sid
+                $settings = Read-MoeCommitSettings
+                $Attr = Resolve-MoeAttribution -Git $Git -S $s -B $b -U $u -Tool $script:MoeToolWritten -Scope $scope -Settings $settings -TaskId $TaskId -Mode 'checkpoint' -PolicyOverride 'never'
+            }
+            if ($Attr.Candidates.Count -eq 0) {
+                Write-Host "[rescue] nothing to rescue for task $TaskId (reason=$Reason)." -ForegroundColor Cyan
+                return $null
+            }
+            $head = ''
+            $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD')
+            if ($h.Rc -eq 0 -and $h.Out.Count -gt 0) { $head = ($h.Out -join '').Trim() }
+            $built = Build-MoeTempIndexTree -Top $Git.Top -IndexFile $idx -OldSha $head -Candidates $Attr.Candidates
+            if (-not $built.Ok -or -not $built.Changed) {
+                Write-Host "[rescue] nothing to rescue for task $TaskId (reason=$Reason)." -ForegroundColor Cyan
+                return $null
+            }
+            $pathCount = $built.Landed.Count
+            $msg = New-MoeCommitMessage -Kind 'rescue' -TaskId $TaskId -Title $Title -Status $Status -ReopenCount 0 -Role $Role -Sid $Sid -CliExit 0 -Recovered $false -PathCount $pathCount -InferredCount 0 -Contested @() -Reason $Reason
+            $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
+            $ctArgs = @('commit-tree', $built.Tree)
+            if ($head) { $ctArgs += @('-p', $head) }
+            $ctArgs += @('-F', $msgFile)
+            $ct = Invoke-MoeGit -Top $Git.Top -GitArgs $ctArgs -MergeStderr
+            if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
+                Write-Host "[WARN] rescue commit-tree failed for task ${TaskId}: $(($ct.Out | Select-Object -Last 2) -join ' ')" -ForegroundColor Yellow
+                return $null
+            }
+            $Sha = ($ct.Out -join '').Trim()
+        }
+        $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
+        $ref = "refs/moe/rescue/$TaskId/$ts"
+        for ($n = 2; $n -le 9; $n++) {
+            $ex = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', $ref)
+            if ($ex.Rc -ne 0) { break }
+            $ref = "refs/moe/rescue/$TaskId/$ts-$n"
+        }
+        $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', $ref, $Sha) -MergeStderr
+        if ($ur.Rc -ne 0) {
+            Write-Host "[WARN] rescue update-ref failed for task ${TaskId}: $(($ur.Out | Select-Object -Last 2) -join ' ')" -ForegroundColor Yellow
+            return $null
+        }
+        # Full sha (not abbreviated): identical to the sh twin and to the
+        # daemon's re-emission of this line from record_commit.
+        $line = "MOE_RESCUE_REF task=$TaskId ref=$ref sha=$Sha reason=$Reason"
+        Write-Host "[rescue] $line" -ForegroundColor Yellow
+        Write-Host "[rescue] recover with: git show $ref --stat ; git checkout $ref -- <path>" -ForegroundColor Yellow
+        Send-MoeGeneralChat $line
+        # ROOT-relative paths (REL stripped), and MEASURED candidates travel as
+        # inferredPaths so the daemon never promotes them into filesModified —
+        # same split as the sh twin's record_commit_rpc.
+        $recPaths = @()
+        $recInferred = @()
+        if ($Attr) {
+            $recPaths = @(ConvertTo-MoeRecordPaths $Attr.Candidates 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
+            $recInferred = @($Attr.Candidates | Where-Object { $_.Inferred } | ForEach-Object { ConvertTo-MoeRootRelative $_.Path $Git.Rel } | Select-Object -First 500)
+        }
+        Send-MoeRecordCommit @{
+            taskId = $TaskId; outcome = 'committed'; kind = 'rescue'; sha = $Sha; ref = $ref; status = $Status; role = $Role
+            workerId = $WorkerId; sessionId = $Sid; pushed = $false; paths = $recPaths; inferredPaths = $recInferred; code = $Reason
+            message = $line
+        } | Out-Null
+        return @{ Ref = $ref; Sha = $Sha; PathCount = $pathCount }
+    } catch {
+        Write-Host "[WARN] rescue ref failed for task ${TaskId}: $_" -ForegroundColor Yellow
+        return $null
+    } finally {
+        Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+        if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Today's push (+ one pull --rebase retry) with per-kind banners. Returns $true
+# when the branch is on the remote afterwards.
+function Push-MoeBranch([string]$Top, [string]$Branch, [string]$Kind, [string]$TaskId) {
+    $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}')
+    $hasUpstream = ($r.Rc -eq 0)
+    if ($hasUpstream) {
+        $p = Invoke-MoeGit -Top $Top -GitArgs @('push') -MergeStderr
+    } else {
+        $p = Invoke-MoeGit -Top $Top -GitArgs @('push', '-u', 'origin', $Branch) -MergeStderr
+    }
+    $p.Out | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+    if ($p.Rc -eq 0) {
+        Write-Host "[OK] Pushed task $TaskId to $Branch." -ForegroundColor Green
+        return $true
+    }
+    # The common cause is a non-fast-forward on the shared moe/work-* branch:
+    # pull --rebase then re-push once. NOTE: pull --rebase refuses in a tree
+    # with unstaged tracked changes, so in a busy fleet this retry usually
+    # fails — unpushed is a visibility problem, not a loss.
+    Write-Host "[WARN] git push failed; trying git pull --rebase then re-push..." -ForegroundColor Yellow
+    if ($hasUpstream) {
+        $pr = Invoke-MoeGit -Top $Top -GitArgs @('pull', '--rebase') -MergeStderr
+    } else {
+        # The failed `push -u` never configured an upstream, so a bare
+        # `pull --rebase` dies with "no tracking information" — name the
+        # remote branch instead, exactly as the sh twin does.
+        $pr = Invoke-MoeGit -Top $Top -GitArgs @('pull', '--rebase', 'origin', $Branch) -MergeStderr
+    }
+    $pr.Out | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+    $rebaseOk = ($pr.Rc -eq 0)
+    $pushOk = $false
+    if ($rebaseOk) {
+        if ($hasUpstream) {
+            $p2 = Invoke-MoeGit -Top $Top -GitArgs @('push') -MergeStderr
+        } else {
+            $p2 = Invoke-MoeGit -Top $Top -GitArgs @('push', '-u', 'origin', $Branch) -MergeStderr
+        }
+        $p2.Out | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
+        $pushOk = ($p2.Rc -eq 0)
+    } else {
+        # A rebase that stopped on a conflict must not leave the tree mid-rebase.
+        $st = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '-q', '--verify', 'REBASE_HEAD')
+        if ($st.Rc -eq 0) { Invoke-MoeGit -Top $Top -GitArgs @('rebase', '--abort') | Out-Null }
+    }
+    if ($pushOk) {
+        Write-Host "[OK] Pushed task $TaskId to $Branch (after rebase)." -ForegroundColor Green
+        return $true
+    }
+    Write-Host "[WARN] git push still failing (auth? network? conflict?) — resolve and push manually." -ForegroundColor Yellow
+    if ($Kind -eq 'completion') {
+        # Loud, daemon-visible warning: the task is reviewable on the board
+        # but its code never reached the remote.
+        Send-MoeGeneralChat "PUSH FAILED for task $TaskId — committed locally only; do not review until pushed"
+    } else {
+        Write-Host "[WARN] CHECKPOINT-UNPUSHED task=$TaskId — checkpoint committed locally only on $Branch; push when the remote is reachable" -ForegroundColor Yellow
+        Send-MoeGeneralChat "CHECKPOINT-UNPUSHED task=$TaskId — checkpoint committed locally only on $Branch; push when the remote is reachable"
+    }
+    return $false
+}
+
+# Refresh the SHARED index for exactly the landed paths after a plumbing
+# commit, so `git status` reads clean for them; peers' pre-staged entries
+# survive because only these pathspecs are touched. index.lock is retried.
+function Update-MoeSharedIndex([string]$Top, [array]$Paths) {
+    if (-not $Paths -or $Paths.Count -eq 0) { return $true }
+    $specs = @()
+    foreach ($p in $Paths) { $specs += ":(literal)$p" }
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $r = Invoke-MoeGit -Top $Top -GitArgs (@('reset', '-q', '--') + $specs) -MergeStderr
+        if ($r.Rc -eq 0) { return $true }
+        $text = ($r.Out -join ' ')
+        if ($text -notlike '*index.lock*') { break }
+        Start-Sleep -Seconds 2
+    }
+    Write-Host "[WARN] MOE_COMMIT_INDEX_REFRESH_FAILED: the commit exists but the shared index was not refreshed for $($Paths.Count) path(s); run git reset -q -- <path> by hand." -ForegroundColor Yellow
+    return $false
+}
+
+# Section 7: land a completion or checkpoint. Returns a result hashtable —
+# never break/continue. Outcome ∈ committed|nothing|refused|failed.
+function Invoke-MoeLanding {
+    param(
+        [Parameter(Mandatory = $true)][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$TaskId,
+        [Parameter(Mandatory = $true)][hashtable]$Git,
+        [Parameter(Mandatory = $true)][hashtable]$Settings,
+        [string]$Title = '',
+        [string]$Status = '',
+        [int]$ReopenCount = 0,
+        [int]$CliExit = 0,
+        [string]$Reason = '',
+        [string]$Sid = '',
+        [bool]$RunGate = $false,
+        [bool]$IsEpicFinal = $true
+    )
+    $res = @{
+        Outcome = 'nothing'; Kind = $Kind; Sha = ''; Ref = ''; Code = ''; Branch = ''
+        PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0
+        Pushed = $false; StopLoop = $false
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $idx = Join-Path (Join-Path $Git.GitDir 'moe') "idx-$TaskId-$myPid"
+    $msgFile = ''
+    $recovered = ($Reason -eq 'recovered')
+    $statusText = if ($Status) { $Status } else { 'UNKNOWN' }
+    try {
+        $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
+        $bl = Read-MoeBaseline $baselinePath
+        $B = if ($bl) { $bl.B } else { @{} }
+        $U = if ($bl) { $bl.U } else { @{} }
+        # Fail CLOSED on missing evidence: with no readable baseline every
+        # pre-session dirty path would read as "changed since baseline" and the
+        # MEASURED tier would sweep foreign debris into this task's commit. The
+        # policy is forced to 'never' for this landing (undeclared paths are
+        # reported, never committed); ASSERTED/TOOL/PLANNED/BOARD still land.
+        $policyOverride = ''
+        if ($null -eq $bl) {
+            $policyOverride = 'never'
+            Write-Host "[attribution] no readable baseline for task $TaskId — measured attribution disabled for this landing (undeclared paths are reported, never committed)." -ForegroundColor Yellow
+        }
+
+        # Quality gate (completion only): a failing gate can't un-transition
+        # the task, so it blocks the ship — the work goes to a RESCUE REF
+        # (never a branch commit, never pushed), chat + task comment carry the
+        # evidence, and the worker loop hard-stops. Opt out per-run via
+        # MOE_DISABLE_QUALITY_GATE=1. The gate RUNS here (before the snapshot:
+        # a gate that runs formatters rewrites files, and the snapshot must see
+        # the post-gate tree), but its failure is handled AFTER attribution so
+        # the rescue parks the normal-policy candidate set — same order as the
+        # sh twin.
+        $gateFailed = $false
+        $gateRc = 0
+        $gateOut = ''
+        if ($Kind -eq 'completion' -and $RunGate -and $Settings.qualityGate) {
+            $gate = $Settings.qualityGate
+            if ($Settings.qualityGateScope -ne 'everyTask' -and -not $IsEpicFinal) {
+                Write-Host "[info] qualityGate deferred: task $TaskId is mid-epic (scope=epicFinal; the epic-final task runs the full gate)." -ForegroundColor Cyan
+            } else {
+                Write-Host "Post-flight: quality gate: $gate" -ForegroundColor Cyan
+                Push-Location $projectPath
+                try {
+                    $gateOut = (& $env:ComSpec /d /s /c $gate 2>&1 | Out-String)
+                    $gateRc = $LASTEXITCODE
+                } finally {
+                    Pop-Location
+                }
+                if ($gateRc -ne 0) {
+                    ($gateOut -split "`n" | Select-Object -Last 15) | ForEach-Object { Write-Host "  $_" }
+                    Write-Host "[WARN] qualityGate failed (exit $gateRc); skipping commit+push for task $TaskId." -ForegroundColor Yellow
+                    Write-Host "[WARN] task $TaskId not landed on the branch — its edits are parked on a rescue ref and the worker loop stops here so nothing lands without the gate." -ForegroundColor Yellow
+                    $gateFailed = $true
+                } else {
+                    Write-Host "[OK] qualityGate passed." -ForegroundColor Green
+                }
+            }
+        }
+
+        # Snapshot + scope + attribution (section 6). The branch peel is
+        # deferred until we know something must land (sh order): a checkpoint
+        # with nothing to commit must not switch a human's checkout off main.
+        $S = Get-MoeDirtySnapshot $Git.Top
+        if ($null -eq $S) {
+            Write-Host "[WARN] git status failed; cannot attribute the working tree for task $TaskId — nothing committed, baseline kept." -ForegroundColor Yellow
+            $res.Outcome = 'failed'
+            $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
+            Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
+            return $res
+        }
+        $scope = Get-MoeCommitScope $TaskId 'postflight' $Sid
+        if (-not $Title -and $scope.Title) { $Title = $scope.Title }
+        $attr = Resolve-MoeAttribution -Git $Git -S $S -B $B -U $U -Tool $script:MoeToolWritten -Scope $scope -Settings $Settings -TaskId $TaskId -Mode $Kind -PolicyOverride $policyOverride
+        if ($attr.ForeignCount -gt 0) {
+            Write-Host "[attribution] $($attr.ForeignCount) pre-session dirty path(s) untouched" -ForegroundColor Cyan
+        }
+        if ($attr.ExcludedCount -gt 0) {
+            Write-Host "[attribution] $($attr.ExcludedCount) excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)" -ForegroundColor Cyan
+        }
+        # Per-path [skip] lines for everything but MOE_ATTR_EXCLUDED (.moe/**
+        # and tool config are static and numerous; they get the count above).
+        # MOE_ATTR_PREEXISTING is capped at 20 per session (a busy shared
+        # checkout carries hundreds) — same bound as the sh twin.
+        $nPre = 0
+        foreach ($sk in @($attr.Skipped)) {
+            if ($sk.Code -eq 'MOE_ATTR_EXCLUDED') { continue }
+            if ($sk.Code -eq 'MOE_ATTR_PREEXISTING') {
+                $nPre++
+                if ($nPre -gt 20) { continue }
+            }
+            Write-Host "[skip] $($sk.Path) $($sk.Code)" -ForegroundColor Yellow
+        }
+        if ($nPre -gt 20) { Write-Host "[skip] ... $($nPre - 20) more MOE_ATTR_PREEXISTING path(s)" -ForegroundColor Yellow }
+        $res.SkippedCount = $attr.Skipped.Count
+        $res.UnattributedCount = $attr.Unattributed.Count
+        $unattrPaths = @(ConvertTo-MoeRecordPaths $attr.Unattributed 500)
+        # Record path lists travel ROOT-relative (REL stripped) — the daemon
+        # stores declarations ROOT-relative and both wrappers re-prefix REL on
+        # the way back, so a TOP-relative record would double the prefix in a
+        # nested checkout. Console lines stay TOP-relative (as the sh twin's).
+        $unattrRecPaths = @($unattrPaths | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
+        if ($attr.Unattributed.Count -gt 0) {
+            Write-Host "[attribution] MOE_ATTRIBUTION_UNRESOLVED task=${TaskId}: $($unattrPaths -join ' ')" -ForegroundColor Yellow
+            Write-Host "[attribution] these changed paths were neither declared by the task nor written by its tools while other workers were active; report them via complete_step.modifiedFiles or moe.declare_files." -ForegroundColor Yellow
+        }
+        $newU = @{}
+        foreach ($ua in @($attr.Unattributed)) { $newU[(Get-MoePathKey $ua.Path)] = @{ Path = $ua.Path; Blob = $ua.Blob } }
+
+        # Gate failure (deferred from above so the rescue parks the FULL
+        # normal-policy candidate set, MEASURED included — sh parity): rescue
+        # ref, chat + task comment, unconditional failed record, hard stop.
+        if ($gateFailed) {
+            $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'gate-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
+            $gateMsg = "🚫 PUSH-BLOCKED: qualityGate failed for task ${TaskId}: $($Settings.qualityGate) (exit $gateRc)"
+            if ($rescue) { $gateMsg += " — edits parked on $($rescue.Ref)" }
+            Send-MoeGeneralChat $gateMsg
+            # Attach the output tail to the task so QA rejects with
+            # evidence (add_comment caps content at 10k chars).
+            try {
+                $tailLines = (($gateOut -split "`n" | Select-Object -Last 50) -join "`n")
+                if ($tailLines.Length -gt 8000) { $tailLines = $tailLines.Substring($tailLines.Length - 8000) }
+                Invoke-MoeRpc -Tool "add_comment" -Args @{ taskId = $TaskId; workerId = $WorkerId; content = "$gateMsg`n`n$tailLines" } | Out-Null
+            } catch {}
+            $res.Outcome = 'failed'
+            $res.Code = 'MOE_COMMIT_FAILED_GATE'
+            if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+            $res.StopLoop = $true
+            # The failed record is sent UNCONDITIONALLY (after the rescue's own
+            # committed/rescue record) so task.lastCommitOutcome reads failed —
+            # the sh twin records both, and triage keys on the failed one.
+            Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_GATE'; message = "qualityGate exit $gateRc" } | Out-Null
+            return $res
+        }
+
+        # Outcome when nothing at all is attributable (BOARD candidates count:
+        # a board-only session still lands, as the sh twin does).
+        if ($attr.Candidates.Count -eq 0) {
+            $code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
+            $outcome = 'nothing'
+            if ($Kind -eq 'completion' -and ($attr.AssertedCount + $attr.PlannedCount) -eq 0) {
+                $code = 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS'
+                $outcome = 'refused'
+            } elseif ($attr.AssertedCount -gt 0 -and $attr.Missing.Count -ge $attr.AssertedCount -and $attr.ToolCount -eq 0) {
+                $code = 'MOE_COMMIT_REFUSED_OWNED_PATH_MISSING'
+                $outcome = 'refused'
+            }
+            if ($outcome -eq 'refused') {
+                # Fail CLOSED. There is no whole-tree fallback: a fallback that
+                # fires silently is how a peer's in-flight files reached another
+                # task's commit.
+                Write-Host "[WARN] ${code}: task $TaskId — refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]" -ForegroundColor Yellow
+            } else {
+                Write-Host "[info] ${code}: task $TaskId — no attributable changes to commit (already landed, or nothing changed)." -ForegroundColor Cyan
+            }
+            if ($Kind -eq 'completion') {
+                # Peel even with nothing to stage so pre-existing local commits
+                # still get pushed (today's shape, same as the sh twin).
+                $branch = Ensure-MoeSafeBranch $Git.Top $Settings
+                if (-not $branch) {
+                    $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'peel-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
+                    $res.Outcome = 'failed'
+                    $res.Code = 'MOE_COMMIT_FAILED_PEEL'
+                    if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+                    $res.StopLoop = $true
+                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_PEEL'; message = 'branch peel failed' } | Out-Null
+                    return $res
+                }
+                $res.Branch = $branch
+            }
+            $res.Outcome = $outcome
+            $res.Code = $code
+            if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
+            # Any commits the worker made mid-session are already pathspec-scoped
+            # and must still reach the remote (today's behaviour for completions).
+            if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $res.Branch $Kind $TaskId }
+            Send-MoeRecordCommit @{
+                taskId = $TaskId; outcome = $outcome; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId
+                sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = $code
+                unattributedPaths = $unattrRecPaths; skipped = @(@($attr.Skipped | Where-Object { $_.Code -ne 'MOE_ATTR_EXCLUDED' } | Select-Object -First 100) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); code = $_.Code } })
+            } | Out-Null
+            return $res
+        }
+
+        # 7.1 Branch safety — candidates exist, so the peel is warranted now.
+        $branch = Ensure-MoeSafeBranch $Git.Top $Settings
+        if (-not $branch) {
+            $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'peel-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
+            $res.Outcome = 'failed'
+            $res.Code = 'MOE_COMMIT_FAILED_PEEL'
+            if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+            $res.StopLoop = $true
+            Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_PEEL'; message = 'branch peel failed' } | Out-Null
+            return $res
+        }
+        $res.Branch = $branch
+
+        $candidates = @($attr.Candidates)
+        $inferredCount = @($candidates | Where-Object { $_.Inferred }).Count
+        $inferredPaths = @($candidates | Where-Object { $_.Inferred } | ForEach-Object { $_.Path })
+        $landedPaths = @()
+        $sha = ''
+        $usePorcelain = ($Settings.commitHooks -and $Kind -eq 'completion')
+        $dropped = @()
+
+        if ($usePorcelain) {
+            # 7.3 Hooks requested: today's porcelain path against the shared
+            # index, with the same staged-blob check; rc != 0 -> rescue ref.
+            $specs = @()
+            $staged = @()
+            foreach ($c in $candidates) {
+                $spec = ":(literal)$($c.Path)"
+                $a = $null
+                for ($attempt = 1; $attempt -le 5; $attempt++) {
+                    $a = Invoke-MoeGit -Top $Git.Top -GitArgs @('add', '--', $spec) -MergeStderr
+                    if ($a.Rc -eq 0 -or (($a.Out -join ' ') -notlike '*index.lock*')) { break }
+                    Start-Sleep -Seconds 2
+                }
+                if ($a.Rc -ne 0) { $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_MISSING' }; continue }
+                $ls = Invoke-MoeGit -Top $Git.Top -GitArgs @('ls-files', '-s', '-z', '--', $spec)
+                $stagedBlob = ''
+                $lsLine = ($ls.Out -join '').Split([char]0)[0]
+                if ($lsLine) { $f = @($lsLine -split '\s+'); if ($f.Count -ge 2) { $stagedBlob = $f[1] } }
+                $ok = if ($c.Blob -eq 'D') { -not $stagedBlob } else { $stagedBlob -eq $c.Blob }
+                if (-not $ok) {
+                    Invoke-MoeGit -Top $Git.Top -GitArgs @('reset', '-q', '--', $spec) | Out-Null
+                    $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_CONCURRENT' }
+                    continue
+                }
+                $specs += $spec
+                $staged += $c
+            }
+            foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
+            # Every staged candidate matching HEAD is honest NOTHING, not a
+            # commit failure: `git commit -- <specs>` exits non-zero with
+            # "nothing to commit" there — check first, as the sh twin does.
+            $stagedMatchesHead = $false
+            if ($specs.Count -gt 0) {
+                $dc = Invoke-MoeGit -Top $Git.Top -GitArgs (@('diff', '--cached', '--quiet', '--') + $specs)
+                $stagedMatchesHead = ($dc.Rc -eq 0)
+            }
+            if ($specs.Count -eq 0 -or $stagedMatchesHead) {
+                Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — every candidate was dropped at staging time or already matches HEAD." -ForegroundColor Cyan
+                $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
+                if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
+                $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId
+                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
+                return $res
+            }
+            $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $staged.Count -InferredCount $inferredCount -Contested $attr.Contested -Reason ''
+            $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
+            $cm = $null
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+                # -- <specs> is load-bearing: a BARE commit commits the SHARED
+                # INDEX and sweeps a peer's pre-staged file into this task.
+                $cm = Invoke-MoeGit -Top $Git.Top -GitArgs (@('commit', '-F', $msgFile, '--') + $specs) -MergeStderr
+                if ($cm.Rc -eq 0 -or (($cm.Out -join ' ') -notlike '*index.lock*')) { break }
+                Start-Sleep -Seconds 2
+            }
+            $cm.Out | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+            if ($cm.Rc -ne 0) {
+                Write-Host "[WARN] git commit failed (pre-commit hook? identity?) — parking the edits on a rescue ref; baseline kept." -ForegroundColor Yellow
+                $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
+                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED'
+                if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($cm.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } | Out-Null
+                # Prior local commits still need the remote (today's behaviour).
+                $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId
+                return $res
+            }
+            $landedPaths = @($staged | ForEach-Object { $_.Path })
+            $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', 'HEAD')
+            if ($h.Rc -eq 0) { $sha = ($h.Out -join '').Trim() }
+        } else {
+            # 7.2 Plumbing: temp index + commit-tree + update-ref CAS, 3 attempts.
+            $new = ''
+            $landed = @()
+            $casOk = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                $old = ''
+                $o = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$branch")
+                if ($o.Rc -eq 0 -and $o.Out.Count -gt 0) { $old = ($o.Out -join '').Trim() }
+                $built = Build-MoeTempIndexTree -Top $Git.Top -IndexFile $idx -OldSha $old -Candidates $candidates
+                if (-not $built.Ok) {
+                    Write-Host "[WARN] temp-index build failed for task $TaskId; nothing committed, baseline kept." -ForegroundColor Yellow
+                    $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
+                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
+                    return $res
+                }
+                $dropped = @($built.Dropped)
+                $landed = @($built.Landed)
+                if (-not $built.Changed) {
+                    foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
+                    Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — the attributable paths already match $branch." -ForegroundColor Cyan
+                    $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
+                    if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
+                    if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
+                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
+                    return $res
+                }
+                $landedInferred = @($landed | Where-Object { $_.Inferred }).Count
+                $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $landed.Count -InferredCount $landedInferred -Contested $attr.Contested -Reason ''
+                if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+                $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
+                $ctArgs = @('commit-tree', $built.Tree)
+                if ($old) { $ctArgs += @('-p', $old) }
+                $ctArgs += @('-F', $msgFile)
+                $ct = Invoke-MoeGit -Top $Git.Top -GitArgs $ctArgs -MergeStderr
+                if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
+                    ($ct.Out | Select-Object -Last 3) | ForEach-Object { Write-Host "  $_" }
+                    Write-Host "[WARN] git commit-tree failed (identity? signing?) — parking the edits on a rescue ref; baseline kept." -ForegroundColor Yellow
+                    $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED'
+                    $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
+                    if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($ct.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } | Out-Null
+                    if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
+                    return $res
+                }
+                $new = ($ct.Out -join '').Trim()
+                if ($attempt -eq 1 -and $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
+                    # Test seam: lets the harness move the branch tip between
+                    # commit-tree and update-ref to prove the CAS retry.
+                    Push-Location $Git.Top
+                    try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
+                }
+                $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
+                $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', "refs/heads/$branch", $new, $oldArg) -MergeStderr
+                if ($ur.Rc -eq 0) { $casOk = $true; break }
+                Write-Host "[branch] $branch moved under us (attempt $attempt/3); rebuilding the commit on the new tip." -ForegroundColor Yellow
+            }
+            if (-not $casOk) {
+                Write-Host "[WARN] MOE_COMMIT_FAILED_REF_CONTENTION: $branch kept moving during 3 attempts; parking the built commit on a rescue ref, baseline kept." -ForegroundColor Yellow
+                $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'ref-contention' -Title $Title -Status $Status -Sid $Sid -Attr $attr -Sha $new
+                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
+                if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; ref = $res.Ref } | Out-Null
+                return $res
+            }
+            foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
+            $sha = $new
+            $landedPaths = @($landed | ForEach-Object { $_.Path })
+            $inferredCount = @($landed | Where-Object { $_.Inferred }).Count
+            $inferredPaths = @($landed | Where-Object { $_.Inferred } | ForEach-Object { $_.Path })
+            Update-MoeSharedIndex $Git.Top $landedPaths | Out-Null
+        }
+
+        # AFTER SUCCESS: prune landed paths from B, persist U, keep the baseline
+        # until the task is DONE/ARCHIVED.
+        foreach ($p in $landedPaths) { $B.Remove((Get-MoePathKey $p)) }
+        if ($Status -eq 'DONE' -or $Status -eq 'ARCHIVED') {
+            Remove-MoeBaseline $baselinePath
+        } else {
+            $head = if ($bl) { $bl.Head } else { $sha }
+            Write-MoeBaseline $baselinePath $TaskId $head $B $newU 1 | Out-Null
+        }
+        $res.Outcome = 'committed'
+        $res.Sha = $sha
+        $res.Ref = "refs/heads/$branch"
+        $res.PathCount = $landedPaths.Count
+        $res.InferredCount = $inferredCount
+        # Banner count = non-excluded attribution skips (incl. MISSING) plus
+        # staging-time drops — the same arithmetic as the sh twin's n_skipped.
+        $res.SkippedCount = ($attr.Skipped.Count - $attr.ExcludedCount) + $dropped.Count
+        $shortSha = if ($sha.Length -gt 12) { $sha.Substring(0, 12) } else { $sha }
+        Write-Host "[OK] Committed $Kind for task $TaskId on ${branch}: $shortSha ($($res.PathCount) paths, $($res.InferredCount) inferred, $($res.SkippedCount) skipped, $($res.UnattributedCount) unattributed)" -ForegroundColor Green
+
+        # 7.5 Push policy.
+        if ($Kind -eq 'completion' -or $Settings.checkpointPush) {
+            $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId
+        } else {
+            Write-Host "[info] checkpointPush=false — checkpoint kept local on $branch." -ForegroundColor Cyan
+        }
+
+        # 7.6 Record (rebase-safe sha via the session trailer).
+        $lg = Invoke-MoeGit -Top $Git.Top -GitArgs @('log', '-n1', '--format=%H', '--fixed-strings', "--grep=Moe-Session: $Sid", $branch)
+        if ($lg.Rc -eq 0 -and $lg.Out.Count -gt 0 -and ($lg.Out -join '').Trim()) { $sha = ($lg.Out -join '').Trim(); $res.Sha = $sha }
+        $treeId = ''
+        $tr = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', "$sha^{tree}")
+        if ($tr.Rc -eq 0 -and $tr.Out.Count -gt 0) { $treeId = ($tr.Out -join '').Trim() }
+        # MOE_ATTR_EXCLUDED skips (.moe/**, tool config) are static noise and
+        # would crowd the 100-entry cap out of meaningful skips — the sh twin
+        # filters them too. Truncation is computed daemon-side. Every path list
+        # goes back ROOT-relative (REL stripped), like record_commit_rpc.
+        $recArgs = @{
+            taskId = $TaskId; outcome = 'committed'; kind = $Kind; sha = $sha; treeId = $treeId; ref = "refs/heads/$branch"
+            status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed
+            paths = @($landedPaths | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
+            inferredPaths = @($inferredPaths | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
+            touchedPaths = @($script:MoeToolWritten.Values | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
+            unattributedPaths = $unattrRecPaths
+            skipped = @(@(@($attr.Skipped | Where-Object { $_.Code -ne 'MOE_ATTR_EXCLUDED' }) + @($dropped) | Select-Object -First 100) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); code = $_.Code } })
+            contested = @(@($attr.Contested) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); taskId = $_.TaskId } })
+        }
+        Send-MoeRecordCommit $recArgs | Out-Null
+        return $res
+    } catch {
+        Write-Host "[WARN] landing failed for task ${TaskId}: $_ (line $($_.InvocationInfo.ScriptLineNumber)) — nothing committed by this attempt; baseline kept." -ForegroundColor Yellow
+        $res.Outcome = 'failed'
+        $res.Code = 'MOE_COMMIT_FAILED'
+        return $res
+    } finally {
+        Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+        if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Section 4 steps 1-3 (shared by the pre-flight and the idle paths): scope,
+# DONE/ARCHIVED cleanup, recovery landing of a lingering baseline.
+function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
+    $out = @{ Scope = $null; Skip = $false; Recovered = $null }
+    $scope = Get-MoeCommitScope $TaskId 'preflight' $Sid
+    $out.Scope = $scope
+    $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
+    if (-not $scope.Found) {
+        Write-Host "[WARN] task $TaskId not found by moe.get_commit_scope or on disk — dropping its baseline." -ForegroundColor Yellow
+        Remove-MoeBaseline $baselinePath
+        $out.Skip = $true
+        return $out
+    }
+    if ($scope.Status -eq 'DONE' -or $scope.Status -eq 'ARCHIVED') {
+        Remove-MoeBaseline $baselinePath
+        $out.Skip = $true
+        return $out
+    }
+    if (-not $Status -and $scope.Status) { $Status = $scope.Status }
+    if (-not $Title -and $scope.Title) { $Title = $scope.Title }
+    # A baseline whose header says landed=1 belongs to a session that finished
+    # a landing (committed/nothing/refused); replaying a "recovered" checkpoint
+    # from it would only re-land board-state noise on every poll.
+    $blPrev = Read-MoeBaseline $baselinePath
+    if ($blPrev -and -not $blPrev.Landed) {
+        Write-Host "[attribution] a previous session of task $TaskId ended without landing (baseline present) — recovering its changes now." -ForegroundColor Yellow
+        $rec = Invoke-MoeLanding -Kind 'checkpoint' -TaskId $TaskId -Git $Git -Settings $Settings -Title $Title -Status $Status -ReopenCount $scope.ReopenCount -CliExit 0 -Reason 'recovered' -Sid $Sid
+        $out.Recovered = $rec
+        if ($rec.Outcome -eq 'committed') {
+            Write-Host "MOE_CHECKPOINT_RECOVERED task=$TaskId sha=$($rec.Sha)" -ForegroundColor Green
+        }
+    }
+    return $out
+}
+
+# Section 4 in full: recovery, baseline merge, rescue-ref discovery and the
+# shared-checkout notice. Returns the text to inject into the dynamic context.
+function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
+    $result = @{ ContextText = ''; ForeignCount = 0; RescueRefs = @() }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $chk = Invoke-MoeRecoveryCheck $Git $Settings $TaskId $Status $Title $Sid
+        if ($chk.Skip) { return $result }
+        $scope = $chk.Scope
+        $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
+        $bl = Read-MoeBaseline $baselinePath
+        $sPre = Get-MoeDirtySnapshot $Git.Top
+        if ($null -eq $sPre) {
+            Write-Host "[WARN] git status failed at pre-flight; no baseline written for task $TaskId (measured attribution disabled for this session)." -ForegroundColor Yellow
+            return $result
+        }
+        $rel = $Git.Rel
+        $known = @{}
+        foreach ($p in @($scope.Asserted) + @($scope.TouchedFiles) + @($scope.UnattributedPaths) + @($scope.InferredPaths)) {
+            $tp = ConvertTo-MoeTopPath $p $rel
+            if ($tp) { $known[(Get-MoePathKey $tp)] = $true }
+        }
+        $uLocal = @{}
+        if ($bl) { $uLocal = $bl.U; foreach ($k in $bl.U.Keys) { $known[$k] = $true } }
+        $B = @{}
+        if ($null -eq $bl) {
+            foreach ($k in $sPre.Keys) { $B[$k] = @{ Path = $sPre[$k].Path; Blob = $sPre[$k].Blob } }
+        } else {
+            foreach ($k in $bl.B.Keys) { if ($sPre.ContainsKey($k)) { $B[$k] = $bl.B[$k] } }
+            foreach ($k in $sPre.Keys) {
+                if (-not $B.ContainsKey($k) -and -not $known.ContainsKey($k)) {
+                    # Inter-session dirt is presumed foreign.
+                    $B[$k] = @{ Path = $sPre[$k].Path; Blob = $sPre[$k].Blob }
+                }
+            }
+        }
+        $head = ''
+        $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD')
+        if ($h.Rc -eq 0 -and $h.Out.Count -gt 0) { $head = ($h.Out -join '').Trim() }
+        Write-MoeBaseline $baselinePath $TaskId $head $B $uLocal | Out-Null
+
+        # K = dirty paths that are neither known-mine nor tool config / .moe.
+        $foreign = 0
+        foreach ($k in $sPre.Keys) {
+            if ($known.ContainsKey($k)) { continue }
+            if (Test-MoeDenyPath $sPre[$k].Path $sPre[$k].XY $rel $Settings) { continue }
+            $foreign++
+        }
+        $result.ForeignCount = $foreign
+        Write-Host "[attribution] baseline written for task ${TaskId}: $($B.Count) dirty path(s) recorded, $foreign foreign/pre-existing." -ForegroundColor Cyan
+
+        # Rescue-ref discovery.
+        $refs = @()
+        $fe = Invoke-MoeGit -Top $Git.Top -GitArgs @('for-each-ref', '--format=%(refname:short) %(objectname:short) %(subject)', "refs/moe/rescue/$TaskId/")
+        if ($fe.Rc -eq 0) { $refs = @($fe.Out | Where-Object { $_ -and $_.Trim() }) }
+        $result.RescueRefs = $refs
+        $text = ''
+        if ($refs.Count -gt 0) {
+            Write-Host "[rescue] $($refs.Count) rescue ref(s) for task ${TaskId}:" -ForegroundColor Yellow
+            foreach ($r in $refs) { Write-Host "  $r" -ForegroundColor Yellow }
+            $refNames = @($refs | ForEach-Object { ($_ -split ' ')[0] })
+            $text += "`n`nEarlier sessions of this task left rescue checkpoints: $($refNames -join ', '). Recover with `git show <ref> --stat` / `git checkout <ref> -- <path>` before redoing work."
+        }
+        $text += "`n`nThis checkout is shared. $foreign dirty path(s) belong to other sessions or are pre-existing debris. Never revert, stash, `git add -A`, or commit them, and never treat them as a stop condition — note them in your step note and continue. Report every path you create or modify in `complete_step.modifiedFiles`. A prerequisite task has landed iff `get_context.epicSiblings[*].landing.merged` is true or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it. BLOCKED is a wait state, never a terminal — delivered work goes through `complete_task`."
+        $result.ContextText = $text
+        return $result
+    } catch {
+        Write-Host "[WARN] pre-flight baseline failed for task ${TaskId}: $_" -ForegroundColor Yellow
+        return $result
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Idle paths (BLOCKED hold, resume cap): land a lingering baseline for the held
+# task without launching a CLI.
+function Invoke-MoeIdleRecovery([string]$TaskId, [string]$Status) {
+    if (-not $TaskId) { return }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $settings = Read-MoeCommitSettings
+        if (-not $settings.autoCommit) { return }
+        $git = Get-MoeGitTop
+        if ($null -eq $git) { return }
+        $baselinePath = Get-MoeBaselinePath $git.GitDir $TaskId
+        if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
+        $sid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        Invoke-MoeRecoveryCheck $git $settings $TaskId $Status '' $sid | Out-Null
+    } catch {
+        Write-Host "[WARN] idle-path recovery failed for task ${TaskId}: $_" -ForegroundColor Yellow
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Section 5 row C1: best-effort rescue ref from the outer finally when a
+# session tears down (Ctrl+C, terminating error, exit 1) before its
+# post-flight landed. Idempotent; the baseline stays so the next session's
+# pre-flight lands the work on the branch.
+function Invoke-MoeTeardownRescue {
+    if ($script:MoeTeardownDone) { return }
+    $script:MoeTeardownDone = $true
+    try {
+        if (-not $preflightTaskId -or $moeLandingDone) { return }
+        if ($null -eq $moeGit -or $null -eq $moeSettings) { return }
+        if (-not $moeSettings.autoCommit) { return }
+        $baselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
+        if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
+        Write-Host "[rescue] session ended before landing task $preflightTaskId — parking its changes on a rescue ref." -ForegroundColor Yellow
+        Invoke-MoeRescueRef -Git $moeGit -TaskId $preflightTaskId -Reason 'teardown' -Title $preflightTaskTitle -Status '' -Sid $moeSid | Out-Null
+    } catch {}
+}
+
+# Stream-json harvest (claude only): record the paths the CLI's tools wrote.
+function Add-MoeToolWrittenPath([string]$ToolName, $ToolInput) {
+    if (-not $ToolName -or $null -eq $ToolInput) { return }
+    if ($null -eq $moeGit) { return }
+    $paths = @()
+    $kind = ''
+    if ($ToolName -match '^(Edit|Write|MultiEdit|NotebookEdit)$') {
+        $kind = 'abs'
+        foreach ($k in @('file_path', 'notebook_path')) { $v = Get-MoeProp $ToolInput $k; if ($v -is [string] -and $v) { $paths += $v } }
+    } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex)$') {
+        $kind = 'serena'
+        $v = Get-MoeProp $ToolInput 'relative_path'; if ($v -is [string] -and $v) { $paths += $v }
+    } elseif ($ToolName -match '(^|__)(moe_)?complete_step$') {
+        $kind = 'root'
+        $paths = @(Get-MoeStringList (Get-MoeProp $ToolInput 'modifiedFiles'))
+    } else {
+        return
+    }
+    foreach ($p in $paths) {
+        $tp = ''
+        if (Test-MoeAbsolutePath $p) {
+            $tp = ConvertTo-MoeTopPathFromAbsolute $p $moeGit.Top
+        } elseif ($kind -eq 'root') {
+            $tp = ConvertTo-MoeTopPath $p $moeGit.Rel
+        } elseif ($kind -eq 'serena') {
+            $tp = ConvertTo-MoeTopPathFromAbsolute (Join-Path $serenaProject $p) $moeGit.Top
+        }
+        if (-not $tp) {
+            Write-Host "  [attribution] tool path outside the repo dropped: $p" -ForegroundColor DarkYellow
+            continue
+        }
+        $script:MoeToolWritten[(Get-MoePathKey $tp)] = $tp
     }
 }
 
@@ -1372,6 +3032,18 @@ do {
     $preflightNoTask = $false
     $preflightIsResume = $false
     $preflightRoutedMentions = @()
+    # Land-on-every-exit state. Reset per iteration so nothing leaks across
+    # tasks: the session id, the repo probe, the baseline path, the
+    # "bytes handled" flag the teardown rescue keys on, and the stream-json
+    # tool-write harvest.
+    $moeSid = ""
+    $moeGit = $null
+    $moeSettings = $null
+    $moeBaselinePath = ""
+    $moeLandingDone = $false
+    $moeStopLoop = $false
+    $script:MoeToolWritten = @{}
+    $script:MoeLastLanding = $null
 
     if ($AutoClaim) {
         Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan
@@ -1448,6 +3120,10 @@ do {
                     $blockedDetail = [string]$resumeInfo.blockedReason
                 }
                 Write-Host "[blocked] $($resumeInfo.taskId) is BLOCKED ($blockedDetail) — suppressing auto-resume; will idle until the daemon un-blocks it." -ForegroundColor DarkYellow
+                # The session that called report_blocked may have left its
+                # edits uncommitted (a lingering baseline says so): land them
+                # now so a BLOCKED task's files reach the branch with no CLI.
+                Invoke-MoeIdleRecovery ([string]$resumeInfo.taskId) 'BLOCKED'
                 $script:ResumeTrackTaskId = ""
                 $script:ResumeAttempts = 0
                 $script:ResumeEscalated = $false
@@ -1463,7 +3139,11 @@ do {
                 if ($script:ResumeAttempts -gt $resumeMaxAttempts) {
                     # The CLI keeps dying on this task without finishing it.
                     # Stop burning sessions: escalate once to #general (governor
-                    # or human can release_task / investigate) and idle.
+                    # or human can release_task / investigate) and idle. First
+                    # land whatever the dying sessions left behind (lingering
+                    # baseline) so the escalation points at committed work.
+                    $resumeStatusForRecovery = if ($resumeInfo.PSObject.Properties['status']) { [string]$resumeInfo.status } else { "" }
+                    Invoke-MoeIdleRecovery ([string]$resumeInfo.taskId) $resumeStatusForRecovery
                     if (-not $script:ResumeEscalated -and $generalChannelId) {
                         $resumeStatusForMsg = if ($resumeInfo.PSObject.Properties['status']) { [string]$resumeInfo.status } else { "?" }
                         $escalation = "@governors ${WorkerId}: CLI session ended $($script:ResumeAttempts - 1) times in a row while still holding $($resumeInfo.taskId) ($resumeStatusForMsg); wrapper is pausing auto-resume. release_task to reassign, or investigate why sessions keep dying mid-task."
@@ -1760,6 +3440,42 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
 If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. Do not claim a new task while a routed mention is unanswered.
 "@
     }
+
+    # -------- Pre-flight baseline (land-on-every-exit) --------
+    # The task is known and nothing has run yet: this is the single point
+    # (ahead of all three CLI launch sites) where the working tree can be
+    # snapshotted as "dirty BEFORE this session". It sits here rather than
+    # right before the launch because the rescue-ref and shared-checkout
+    # notices must reach $dynamicContext before the instruction files and
+    # $claimPrompt are assembled below. Recovery of a lingering baseline
+    # (a previous session that never landed) happens here too.
+    if ($AutoClaim -and $preflightOk -and $preflightTaskId) {
+        $moeSettings = Read-MoeCommitSettings
+        if ($moeSettings.autoCommit) {
+            $moeGit = Get-MoeGitTop
+            if ($null -eq $moeGit) {
+                Write-Host "[info] $projectPath is not a git repo — no baseline, no auto-commit." -ForegroundColor Cyan
+            } else {
+                $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+                $moeBaselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
+                $moeClaimStatus = ""
+                if ($preflightContext -and $preflightContext.task -and $preflightContext.task.PSObject.Properties['status']) {
+                    $moeClaimStatus = [string]$preflightContext.task.status
+                } elseif ($preflightIsResume -and $resumeInfo -and $resumeInfo.PSObject.Properties['status']) {
+                    $moeClaimStatus = [string]$resumeInfo.status
+                } elseif ($claim -and $claim.hasNext -and $claim.task.PSObject.Properties['status']) {
+                    $moeClaimStatus = [string]$claim.task.status
+                }
+                $moePre = Invoke-MoePreflightBaseline $moeGit $moeSettings $preflightTaskId $moeClaimStatus $preflightTaskTitle $moeSid
+                if ($moePre.ContextText -and $dynamicContext) {
+                    $dynamicContext += $moePre.ContextText
+                }
+            }
+        } else {
+            Write-Host "[info] settings.autoCommit=false — no baseline, no git activity this session." -ForegroundColor Cyan
+        }
+    }
+    # -------- End pre-flight baseline --------
 
     # Priority banner for unread messages routed at THIS worker. Goes LAST in
     # the dynamic context so it's the most recent text before the role-specific
@@ -2093,14 +3809,26 @@ $mentionsJson
             # whose tasks carry a fat implementationPlan. When it would, embed the
             # whole user-prompt body into the system-prompt file (Claude has no
             # --user-message-file flag) and hand the CLI a tiny sentinel.
+            #
+            # The same file route also covers prompts with embedded double quotes,
+            # regardless of length. Windows PowerShell 5.1 forwards native-command
+            # args WITHOUT escaping internal quotes, so a quote-bearing prompt
+            # (routed_mentions JSON, claimed_task_context JSON under the 6000-char
+            # threshold) word-splits into hundreds of argv tokens; the first
+            # '-'-leading fragment then kills the CLI as an unknown option
+            # (observed: `claude.exe : error: unknown option '-1'` on the
+            # no-task + routed-mentions launch). codex/gemini already dodge this
+            # via their instruction files — claude's user prompt was the gap.
             $userPromptForCli = $claimPrompt
             $WIN_CMD_SAFE_THRESHOLD = 6000
             $isWin = ($env:OS -eq "Windows_NT")
-            if ($isWin -and $claimPrompt -and $claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD) {
-                $overflow = "`n`n# === Per-iteration runtime context (delivered as system prompt because Windows command line cannot fit it as a user message) ===`n" + $claimPrompt
+            $promptHasQuote = $claimPrompt -and $claimPrompt.IndexOf('"') -ge 0
+            if ($isWin -and $claimPrompt -and ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD -or $promptHasQuote)) {
+                $overflow = "`n`n# === Per-iteration runtime context (delivered as system prompt because the Windows command line cannot carry it as a user message) ===`n" + $claimPrompt
                 [System.IO.File]::AppendAllText($systemPromptFile, $overflow, [System.Text.UTF8Encoding]::new($false))
                 $userPromptForCli = "Begin. Your full task context, claimed_task_context, routed mentions, and role directive are at the END of the appended system prompt. Treat the role directive there as your active user request."
-                Write-Host "[prompt-overflow] claimPrompt=$($claimPrompt.Length) chars > $WIN_CMD_SAFE_THRESHOLD; embedded in system prompt file to bypass Windows command-line limit." -ForegroundColor Yellow
+                $overflowReason = if ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD) { "length $($claimPrompt.Length) > $WIN_CMD_SAFE_THRESHOLD chars" } else { "embedded double quotes (PS 5.1 argv word-split)" }
+                Write-Host "[prompt-overflow] claimPrompt routed via system prompt file: $overflowReason." -ForegroundColor Yellow
             }
 
             # Per-task one-shot mode. --print runs claude non-interactively: the
@@ -2198,13 +3926,34 @@ $mentionsJson
                                     $j = $script:moeToolJson
                                     if ($j.Length -gt 140) { $j = $j.Substring(0, 140) + "..." }
                                     Write-Host " $j" -ForegroundColor DarkGray
+                                    # Tool-write harvest: the paths Edit/Write/
+                                    # MultiEdit/NotebookEdit, Serena's edit tools
+                                    # and complete_step.modifiedFiles named are
+                                    # positive evidence this session touched them
+                                    # (the TOOL tier of the attribution).
+                                    try {
+                                        $harvestInput = $script:moeToolJson | ConvertFrom-Json -ErrorAction Stop
+                                        Add-MoeToolWrittenPath $script:moeToolName $harvestInput
+                                    } catch {}
                                     $script:moeToolJson = ""
+                                    $script:moeToolName = $null
                                 } elseif ($script:moeInText) {
                                     Write-Host ""
                                     $script:moeInText = $false
                                 }
                             }
                         }
+                    }
+                    "assistant" {
+                        # Non-streamed assistant messages carry the full
+                        # tool_use.input — harvest those too (same tier).
+                        try {
+                            if ($evt.message -and $evt.message.content) {
+                                foreach ($blk in @($evt.message.content)) {
+                                    if ($blk -and $blk.type -eq "tool_use") { Add-MoeToolWrittenPath $blk.name $blk.input }
+                                }
+                            }
+                        } catch {}
                     }
                     "rate_limit_event" {
                         $rl = $evt.rate_limit_info
@@ -2257,8 +4006,9 @@ $mentionsJson
     }
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
-    # Save session summary + announce session end in #general. Best-effort.
-    Invoke-PostFlight
+    # Status resolution first; the landing + session-ended chat line follow.
+    $script:MoeLastLanding = $null
+    $moeStopLoop = $false
 
     if ($AutoClaim -and $preflightTaskId) {
         # Look up final task status AND reopenCount (the latter drives
@@ -2343,335 +4093,77 @@ $mentionsJson
             }
         }
 
-        # Auto-commit + push on worker completion. Runs when:
-        #   - role is worker
-        #   - task is now REVIEW (worker just called moe.complete_task — first
-        #     pass OR retry after qa_reject)
-        #   - project.json settings.autoCommit is not explicitly false
-        #   - $projectPath is a git repo
-        # Best-effort: failures log a warning but never abort the wrapper loop.
+        # Land on EVERY exit. Mode selection (identical in moe-agent.sh):
+        #   statusLookupError            -> checkpoint with status=UNKNOWN (the id is
+        #                                   certain; only the status is unknown)
+        #   autoCommit == false          -> none (logged; baseline dropped)
+        #   worker && REVIEW|DONE        -> completion (DONE = QA raced ahead)
+        #   worker|architect|qa && checkpointCommits && MOE_DISABLE_CHECKPOINT != 1
+        #                                -> checkpoint (wip(...) on the shared branch)
+        #   else                         -> none
+        # Best-effort: failures log a warning but never abort the wrapper loop;
+        # helpers return values and the `break` decision is taken HERE.
         # Commits use the user's configured git identity (no Claude attribution).
-        if ($Role -eq "worker" -and $finalStatus -eq "REVIEW") {
-            $autoCommit = $true
-            $qualityGate = ""
-            $qualityGateScope = "epicFinal"
-            $projJsonPath = Join-Path $moeDir "project.json"
-            if (Test-Path $projJsonPath) {
-                try {
-                    $cfg = Get-Content -Raw -Path $projJsonPath | ConvertFrom-Json
-                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['autoCommit']) {
-                        # Explicit `false` disables; any other value keeps default (true).
-                        if ($cfg.settings.autoCommit -eq $false) { $autoCommit = $false }
-                    }
-                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['qualityGate']) {
-                        # Optional pre-commit gate command; empty/non-string disables.
-                        $qg = $cfg.settings.qualityGate
-                        if ($qg -is [string]) { $qualityGate = $qg.Trim() }
-                    }
-                    if ($cfg.settings -and $cfg.settings.PSObject.Properties['qualityGateScope']) {
-                        if ($cfg.settings.qualityGateScope -eq 'everyTask') { $qualityGateScope = 'everyTask' }
-                    }
-                } catch {
-                    # Malformed project.json — fall through with default true.
-                }
-            }
-            if ($env:MOE_DISABLE_QUALITY_GATE -eq '1') { $qualityGate = "" }
-            # The full gate is deliberately NOT per-task: verification is
-            # concentrated on the epic's final integration-and-hardening task
-            # (same doctrine as the skills). Mid-epic tasks already carry their
-            # narrow plan-named verification via complete_task.
-            if ($qualityGate -and $qualityGateScope -ne 'everyTask' -and -not $isEpicFinal) {
-                Write-Host "[info] qualityGate deferred: task $preflightTaskId is mid-epic (scope=epicFinal; the epic-final task runs the full gate)." -ForegroundColor Cyan
-                $qualityGate = ""
-            }
-            if ($autoCommit) {
-                & git -C $projectPath rev-parse --git-dir 2>$null | Out-Null
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "Post-flight: auto-commit+push (settings.autoCommit=true)..." -ForegroundColor Cyan
-
-                    # H5: native git writes progress/info to stderr even on SUCCESS
-                    # (e.g. push progress, checkout summaries). Under the script-wide
-                    # $ErrorActionPreference='Stop' the `2>&1 | ...` merges below turn
-                    # that benign stderr into a terminating NativeCommandError with no
-                    # local catch — it unwinds straight to the outer finally and kills
-                    # the polling loop after the very first task. Drop EAP to 'Continue'
-                    # for the whole git block (mirrors the Invoke-MoeRpc proxy shim);
-                    # real failures are still detected via $LASTEXITCODE. The finally
-                    # restores EAP on EVERY exit path, including the `continue` in the
-                    # branch-safety guard below.
-                    $prevGitEAP = $ErrorActionPreference
-                    $ErrorActionPreference = 'Continue'
-                    try {
-
-                    # Quality gate: settings.qualityGate is an optional shell
-                    # command (lint/typecheck/tests) that must pass before the
-                    # post-flight may commit+push. The task already flipped to
-                    # REVIEW, so a failing gate can't un-transition it — it
-                    # blocks the ship instead: no commit, no push, loud announce
-                    # (chat + task comment with the output tail so QA rejects
-                    # with evidence), and the worker loop hard-stops so the
-                    # uncommitted edits can't be absorbed by the next task's
-                    # `git add -A` (same rationale as the bash wrapper). Opt out
-                    # per-run via MOE_DISABLE_QUALITY_GATE=1.
-                    if ($qualityGate) {
-                        Write-Host "Post-flight: quality gate: $qualityGate" -ForegroundColor Cyan
-                        Push-Location $projectPath
-                        try {
-                            $gateOut = (& $env:ComSpec /d /s /c $qualityGate 2>&1 | Out-String)
-                            $gateRc = $LASTEXITCODE
-                        } finally {
-                            Pop-Location
-                        }
-                        if ($gateRc -ne 0) {
-                            ($gateOut -split "`n" | Select-Object -Last 15) | ForEach-Object { Write-Host "  $_" }
-                            Write-Host "[WARN] qualityGate failed (exit $gateRc); skipping commit+push for task $preflightTaskId." -ForegroundColor Yellow
-                            Write-Host "[WARN] task $preflightTaskId left uncommitted — stopping the worker loop so its edits aren't absorbed by the next task's git add -A." -ForegroundColor Yellow
-                            $gateMsg = "🚫 PUSH-BLOCKED: qualityGate failed for task ${preflightTaskId}: $qualityGate (exit $gateRc)"
-                            if ($generalChannelId) {
-                                try {
-                                    Invoke-MoeRpc -Tool "chat_send" -Args @{
-                                        channel  = $generalChannelId
-                                        workerId = $WorkerId
-                                        content  = $gateMsg
-                                    } | Out-Null
-                                } catch {}
-                            }
-                            # Attach the output tail to the task so QA rejects with
-                            # evidence (add_comment caps content at 10k chars).
-                            try {
-                                $tailLines = (($gateOut -split "`n" | Select-Object -Last 50) -join "`n")
-                                if ($tailLines.Length -gt 8000) { $tailLines = $tailLines.Substring($tailLines.Length - 8000) }
-                                Invoke-MoeRpc -Tool "add_comment" -Args @{
-                                    taskId   = $preflightTaskId
-                                    workerId = $WorkerId
-                                    content  = "$gateMsg`n`n$tailLines"
-                                } | Out-Null
-                            } catch {}
-                            break
-                        }
-                        Write-Host "[OK] qualityGate passed." -ForegroundColor Green
-                    }
-
-                    # Never commit/push directly to main or master. If the worker
-                    # finished on the default branch, peel off onto a shared Moe
-                    # working branch (moe/work-<YYYY-MM-DD>) before committing.
-                    # Uncommitted/staged changes follow the checkout. Existing
-                    # non-default branches are reused as-is — this is not
-                    # branch-per-task.
-                    # Resolve the branch via symbolic-ref first: it returns the
-                    # branch name even on an unborn branch (fresh init, zero
-                    # commits) and FAILS on a detached HEAD. rev-parse is the
-                    # fallback but returns the literal "HEAD" for both detached
-                    # and unborn -- which silently bypassed this guard and let
-                    # auto-commit land on a dangling commit (detached) or the
-                    # default branch's first commit (unborn). Treat detached
-                    # (symbolic-ref failure / literal "HEAD") AND main/master as
-                    # unsafe -> peel onto moe/work-<date> (checkout -b works from
-                    # a detached HEAD and renames an unborn ref correctly).
-                    $currentBranch = (& git -C $projectPath symbolic-ref --short -q HEAD 2>$null)
-                    if ($currentBranch) { $currentBranch = "$currentBranch".Trim() } else { $currentBranch = "" }
-                    if (-not $currentBranch) {
-                        $currentBranch = (& git -C $projectPath rev-parse --abbrev-ref HEAD 2>$null)
-                        if ($currentBranch) { $currentBranch = "$currentBranch".Trim() } else { $currentBranch = "" }
-                    }
-                    if ($currentBranch -eq "main" -or $currentBranch -eq "master" -or $currentBranch -eq "HEAD" -or -not $currentBranch) {
-                        $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
-                        Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
-                        # Local exists?
-                        & git -C $projectPath rev-parse --verify --quiet "refs/heads/$moeBranch" 2>$null | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            & git -C $projectPath checkout $moeBranch 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
-                        } else {
-                            # Try tracking a remote branch of the same name; else create fresh.
-                            & git -C $projectPath rev-parse --verify --quiet "refs/remotes/origin/$moeBranch" 2>$null | Out-Null
-                            if ($LASTEXITCODE -eq 0) {
-                                & git -C $projectPath checkout -b $moeBranch "origin/$moeBranch" 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
-                            } else {
-                                & git -C $projectPath checkout -b $moeBranch 2>&1 | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
-                            }
-                        }
-                        if ($LASTEXITCODE -ne 0) {
-                            Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
-                            # Skip THIS task's commit and keep polling — `return`
-                            # here would exit the whole script and silently kill
-                            # the worker's polling loop (bash uses `continue`).
-                            continue
-                        }
-                        $currentBranch = $moeBranch
-                    }
-
-                    $commitType = if ($finalReopenCount -gt 0) { "fix" } else { "feat" }
-                    $commitSuffix = if ($finalReopenCount -gt 0) { " (retry after qa_reject #$finalReopenCount)" } else { "" }
-                    $titleText = if ($preflightTaskTitle) { $preflightTaskTitle } else { "completed task" }
-                    $commitMsg = "$commitType($preflightTaskId): $titleText$commitSuffix`n`nCompleted via Moe worker session."
-                    # Stage AND commit by the task's OWN pathspec (epic rail: a
-                    # whole-tree commit at completion is forbidden — it absorbs
-                    # other live agents' in-flight files and mis-attributes
-                    # their work). `filesModified` is the task's durable file
-                    # report. When it cannot be derived we now REFUSE with a
-                    # stable reason code; there is no whole-tree fallback,
-                    # because a fallback that fires silently is how a peer's
-                    # in-flight files reached another task's commit.
-                    #
-                    # Path resolution: the daemon stores a task at
-                    # `.moe/tasks/<taskId>.json` and the id ALREADY carries the
-                    # `task-` prefix, so the old `task-$id.json` resolved to
-                    # `task-task-<uuid>.json` and never existed (measured: 309
-                    # live task files, zero named `task-task-*`). That miss was
-                    # silent — the record simply didn't load — so EVERY
-                    # completion degraded to `git add -A`. Canonical name first;
-                    # the prefixed form stays as tolerance for a bare id.
-                    $taskFilePaths = @()
-                    try {
-                        $taskJsonPath = Join-Path $projectPath ".moe/tasks/$preflightTaskId.json"
-                        if (-not (Test-Path $taskJsonPath)) {
-                            $taskJsonPath = Join-Path $projectPath ".moe/tasks/task-$preflightTaskId.json"
-                        }
-                        if (Test-Path $taskJsonPath) {
-                            $taskJson = Get-Content $taskJsonPath -Raw | ConvertFrom-Json
-                            if ($taskJson.PSObject.Properties['filesModified'] -and $taskJson.filesModified) {
-                                $taskFilePaths = @($taskJson.filesModified | Where-Object { $_ -is [string] -and $_ })
-                            }
-                        }
-                    } catch { $taskFilePaths = @() }
-                    # Stable reason codes, spelled IDENTICALLY in moe-agent.sh so
-                    # an operator grepping either transcript finds the same
-                    # string. The two causes are deliberately DISTINCT: "the task
-                    # declared no paths" and "every declared path is absent" are
-                    # different failures, and collapsing them would make a later
-                    # guard change invisible.
-                    #
-                    # Every path is passed as a `:(literal)` pathspec. A git
-                    # pathspec is a GLOB by default, so a `filesModified` entry
-                    # of `*` — or any name containing `*`, `?` or `[` — would
-                    # walk straight back out to a whole-tree stage through the
-                    # "explicit pathspec" route this fix installs. Measured:
-                    # `git add -- '*'` staged every file in a throwaway repo;
-                    # `git add -- ':(literal)*'` matched nothing. The magic
-                    # prefix also makes a leading `-` or a leading `:` inert.
-                    $commitRefusal = ""
-                    $ownedSpecs = @()
-                    if ($taskFilePaths.Count -eq 0) {
-                        $commitRefusal = "MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
-                    } else {
-                        foreach ($taskPath in $taskFilePaths) {
-                            # Per-path add tolerating misses: a reported path that
-                            # never existed (or is outside the tree) must not
-                            # abort staging of the real ones. COUNT the survivors —
-                            # a pathspec naming an UNTRACKED file matches nothing at
-                            # commit time, so `git commit` exiting 0 is NOT proof a
-                            # deliverable landed. `add` is what makes the path known
-                            # to the index and therefore matchable. Read the add's
-                            # own exit code immediately so no earlier `git` call's
-                            # $LASTEXITCODE can be mistaken for this one's.
-                            & git -C $projectPath add -- ":(literal)$taskPath" 2>$null | Out-Null
-                            if ($LASTEXITCODE -eq 0) { $ownedSpecs += ":(literal)$taskPath" }
-                        }
-                        if ($ownedSpecs.Count -eq 0) {
-                            $commitRefusal = "MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
-                        } else {
-                            $leftover = (& git -C $projectPath status --porcelain 2>$null |
-                                Where-Object { $_ -and ($_[0] -eq ' ' -or $_[0] -eq '?') }).Count
-                            if ($leftover -gt 0) {
-                                Write-Host "[info] Pathspec staging left $leftover dirty path(s) untouched (other agents' in-flight work)." -ForegroundColor Cyan
-                            }
-                        }
-                    }
-                    $nothingStaged = $true
-                    if (-not $commitRefusal) {
-                        & git -C $projectPath diff --cached --quiet -- $ownedSpecs 2>$null
-                        $nothingStaged = ($LASTEXITCODE -eq 0)
-                    }
-                    if ($commitRefusal) {
-                        # Fail CLOSED. The push below still runs: any commits the
-                        # worker made mid-session are already pathspec-scoped by
-                        # epic rail 3 and must still reach the remote, so refusing
-                        # to COMMIT never strands work the worker already committed.
-                        Write-Host "[WARN] ${commitRefusal}: task $preflightTaskId — refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]" -ForegroundColor Yellow
-                    } elseif (-not $nothingStaged) {
-                        # Capture output AND exit code separately (same deliberate
-                        # split as moe-agent.sh): reading $LASTEXITCODE after the
-                        # printing pipeline risks reporting a downstream cmdlet's
-                        # state, turning a failed commit into a reported success.
-                        #
-                        # `-- $ownedSpecs` is the load-bearing part: a BARE
-                        # `git commit` commits the SHARED INDEX, so a peer that
-                        # staged a file before this hook ran had it swept into this
-                        # task's commit regardless of what this hook staged. The
-                        # pathspec form commits only these paths and leaves the
-                        # peer's index entry staged and uncommitted.
-                        $commitOut = & git -C $projectPath commit -m $commitMsg -- $ownedSpecs 2>&1
-                        $commitRc = $LASTEXITCODE
-                        $commitOut | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
-                        if ($commitRc -eq 0) {
-                            Write-Host "[OK] Committed task $preflightTaskId on $currentBranch." -ForegroundColor Green
-                        } else {
-                            # NOTE: we deliberately fall through to the push below —
-                            # the worker may already have committed mid-session, so
-                            # any prior local commits ahead of upstream still need to
-                            # reach the remote. Only this commit attempt was a no-op.
-                            Write-Host "[WARN] git commit failed (pre-commit hook? detached HEAD?); will still push any commits already made." -ForegroundColor Yellow
-                        }
-                    } else {
-                        Write-Host "[info] No staged changes to commit (worker may have already committed mid-session)." -ForegroundColor Cyan
-                    }
-                    # Check whether the current branch already has an upstream; if not,
-                    # push with -u so subsequent `git push` calls succeed without args.
-                    & git -C $projectPath rev-parse --abbrev-ref --symbolic-full-name "@{upstream}" 2>$null | Out-Null
-                    $hasUpstream = ($LASTEXITCODE -eq 0)
-                    if ($hasUpstream) {
-                        & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
-                    } else {
-                        & git -C $projectPath push -u origin $currentBranch 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
-                    }
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host "[OK] Pushed task $preflightTaskId to $currentBranch." -ForegroundColor Green
-                    } else {
-                        # The task already flipped to REVIEW, so a failed push leaves
-                        # QA reviewing work that never reached the remote. The common
-                        # cause is a non-fast-forward on the shared moe/work-* branch:
-                        # pull --rebase then re-push once.
-                        Write-Host "[WARN] git push failed; trying git pull --rebase then re-push..." -ForegroundColor Yellow
-                        & git -C $projectPath pull --rebase 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
-                        $rebaseOk = ($LASTEXITCODE -eq 0)
-                        if ($rebaseOk) {
-                            if ($hasUpstream) {
-                                & git -C $projectPath push 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
-                            } else {
-                                & git -C $projectPath push -u origin $currentBranch 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host "  $_" }
-                            }
-                        }
-                        if ($rebaseOk -and $LASTEXITCODE -eq 0) {
-                            Write-Host "[OK] Pushed task $preflightTaskId to $currentBranch (after rebase)." -ForegroundColor Green
-                        } else {
-                            Write-Host "[WARN] git push still failing (auth? network? conflict?) — resolve and push manually." -ForegroundColor Yellow
-                            # Loud, daemon-visible warning: the task is reviewable on
-                            # the board but its code never reached the remote. chat
-                            # tools take the channel id (resolved in pre-flight), not
-                            # the literal name.
-                            if ($generalChannelId) {
-                                try {
-                                    Invoke-MoeRpc -Tool "chat_send" -Args @{
-                                        channel  = $generalChannelId
-                                        workerId = $WorkerId
-                                        content  = "PUSH FAILED for task $preflightTaskId — committed locally only; do not review until pushed"
-                                    } | Out-Null
-                                } catch {}
-                            }
-                        }
-                    }
-                    } finally {
-                        $ErrorActionPreference = $prevGitEAP
-                    }
-                } else {
-                    Write-Host "[info] $projectPath is not a git repo — skipping auto-commit+push." -ForegroundColor Cyan
-                }
+        $moeSettings = Read-MoeCommitSettings
+        $moeMode = 'none'
+        $moeStatusForCommit = if ($finalStatus) { [string]$finalStatus } else { '' }
+        if (-not $moeSettings.autoCommit) {
+            Write-Host "[info] settings.autoCommit=false — no git activity for task $preflightTaskId (no completion, checkpoint or rescue); baseline deleted." -ForegroundColor Cyan
+            if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
+            if ($moeGit) { Remove-MoeBaseline (Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId) }
+        } elseif ($statusLookupError) {
+            $moeMode = 'checkpoint'
+            $moeStatusForCommit = 'UNKNOWN'
+        } elseif ($Role -eq 'worker' -and ($finalStatus -eq 'REVIEW' -or $finalStatus -eq 'DONE')) {
+            $moeMode = 'completion'
+        } elseif ((@('worker', 'architect', 'qa') -contains $Role) -and $moeSettings.checkpointCommits) {
+            $moeMode = 'checkpoint'
+        } else {
+            Write-Host "[info] no landing for task $preflightTaskId (role=$Role status=$moeStatusForCommit checkpointCommits=$($moeSettings.checkpointCommits))." -ForegroundColor Cyan
+            # A DELIBERATE no-landing exit (checkpointCommits=false / a role
+            # with no landing) must not arm the recovery checkpoint: mark the
+            # baseline landed so the next pre-flight does not land this
+            # session's edits as a wip(...) recovered commit the operator
+            # turned off.
+            if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
+            if ($moeGit) { Set-MoeBaselineLanded $moeGit.GitDir $preflightTaskId }
+        }
+        if ($moeMode -ne 'none') {
+            if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
+            if ($null -eq $moeGit) {
+                Write-Host "[info] $projectPath is not a git repo — skipping auto-commit+push." -ForegroundColor Cyan
+            } else {
+                Write-Host "Post-flight: landing $moeMode for task $preflightTaskId (settings.autoCommit=true, status=$moeStatusForCommit)..." -ForegroundColor Cyan
+                if (-not $moeSid) { $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'") }
+                $moeExitForCommit = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
+                $moeLanding = Invoke-MoeLanding -Kind $moeMode -TaskId $preflightTaskId -Git $moeGit -Settings $moeSettings `
+                    -Title $preflightTaskTitle -Status $moeStatusForCommit -ReopenCount $finalReopenCount -CliExit $moeExitForCommit `
+                    -Sid $moeSid -RunGate $true -IsEpicFinal $isEpicFinal
+                $script:MoeLastLanding = $moeLanding
+                if ($moeLanding.StopLoop) { $moeStopLoop = $true }
             }
         }
+        # Whatever happened above, this session's bytes have been handled
+        # (committed, parked on a rescue ref, refused, or nothing to land): the
+        # teardown rescue in the outer finally must not run a second pass.
+        $moeLandingDone = $true
     }
+    # Session-ended chat line carries the landing summary, so it runs AFTER
+    # the landing; the loop `break` for gate/peel failures happens after it.
+    Invoke-PostFlight
+    if ($moeStopLoop) { break }
     # -------- End post-flight --------
 } while ($loopEnabled)
 } finally {
+    # Teardown rescue FIRST (before the deregister releases the task): when
+    # this session ends without its post-flight having landed (Ctrl+C during
+    # the CLI, a terminating error, exit 1 after the claim), park the task's
+    # attributable edits on refs/moe/rescue/<taskId>/<ts>. Best-effort,
+    # idempotent, single snapshot, no CAS loop, no push. The baseline stays so
+    # the next session's pre-flight lands the work on the branch. This finally
+    # is SKIPPED on console-window close / SIGKILL (nothing runs; the
+    # persisted baseline is the recovery there).
+    try { Invoke-MoeTeardownRescue } catch {}
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. Best-effort and idempotent (Invoke-MoeDeregister
     # no-ops if a Ctrl+C / window-close handler already fired). There is NO

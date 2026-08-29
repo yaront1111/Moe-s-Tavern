@@ -36,6 +36,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 - **Skills System** - Vendored 8-phase discipline (TDD, debugging, adversarial review, regression checks) injected into every agent session
 - **Governance Mode** - Architects can pause a running task to revise rails, then hand it back
 - **Branch Safety** - Agents are blocked from auto-committing to `main` and peel onto a dated worker branch
+- **Land on Every Exit** - Every agent session exit commits its task's own files: a completion commit on REVIEW, a `wip(task-<id>)` checkpoint otherwise, a rescue ref when a gate or commit fails — attributed per task so one agent never sweeps another's edits
 - **Flexibility** - Works with Claude, Codex, Gemini, and any MCP-compatible agent
 
 > *"Let AI do the coding, but keep humans in the loop."*
@@ -52,6 +53,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Skills System** | 11 vendored skills (planning, TDD, systematic-debugging, adversarial-self-review, regression-check, receiving-code-review, …) auto-loaded per role ([manifest](docs/skills/manifest.json)) |
 | **Dedicated Governor** | A fourth, always-on agent role that watches for stale workers, drift, QA rejection loops, and human escalations — separate from planning, so the architect stays focused |
 | **Branch Safety** | Wrapper post-flight refuses to commit on `main`/`master` and peels onto `moe/work-<date>` automatically |
+| **Land on Every Exit** | The wrapper commits a task's own files on every session exit (completion on REVIEW, `wip` checkpoint otherwise, `refs/moe/rescue/` on failure) with tiered per-task attribution; every landing is recorded on the task and `qa_approve` audits it |
 | **Self-Healing Daemon** | Supervisor auto-restarts on crash with exponential backoff |
 | **Runtime-Driven Workflow** | Per-task agent respawn, streaming output, trimmed prompts — long sessions stay responsive |
 | **Agent Chat** | Real-time messaging with @mentions, channels, and a Mention Response Protocol that forces tagged agents to reply |
@@ -316,7 +318,7 @@ flowchart LR
 
 - Claims `WORKING` tasks (only after human/auto plan approval).
 - Walks the plan with `moe.start_step` → edits/tests → `moe.complete_step` per step.
-- Pre-flight syncs the worktree and mirrors skills into the agent's tool path; post-flight enforces **branch safety** (never auto-commit to `main`/`master`, peel onto `moe/work-<YYYY-MM-DD>` instead).
+- Pre-flight preloads the task (`claim_next_task` + `get_context`) and snapshots a per-task baseline of the shared checkout; post-flight enforces **branch safety** (never auto-commit to `main`/`master`, peel onto `moe/work-<YYYY-MM-DD>` instead) and **lands on every exit** — a completion commit when the task reached REVIEW, a `wip(task-<id>)` checkpoint on any other exit, a rescue ref under `refs/moe/rescue/` when a gate or commit fails — staging only the paths attributed to the task, never `git add -A`.
 - Finishes with `moe.complete_task` only after running `regression-check` and `adversarial-self-review`.
 - Skills auto-loaded: `test-driven-development`, `systematic-debugging`, `adversarial-self-review`, `regression-check`, `verification-before-completion`, `receiving-code-review`.
 - Role guide: [`docs/roles/worker.md`](docs/roles/worker.md).

@@ -24,6 +24,16 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 - **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, description } }` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
 - **Leave resource-blocked tasks alone**: a task BLOCKED with `blockedResourceId` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
 
+## Unblocking: seat vs task
+
+`moe.unblock_worker` is **seat-only by default**: the worker goes IDLE (and, without `retryTask`, drops the assignment) but its BLOCKED task stays BLOCKED with `blockedReason` intact — the response lists it in `stillBlockedTaskIds`. Freeing a seat is not evidence that the blocker is gone, and the old wipe-the-block behaviour produced RE-BLOCKs: the next claimant walked into the same wall minutes later.
+
+- **Blocker actually resolved** → `moe.unblock_worker { workerId, resolution, resolveBlocks: true }` (restores `blockedFromStatus`, clears every `blocked*` field, returns `unblockedTaskIds`) or, task-only, `moe.set_task_status { taskId, status: <blockedFromStatus> }`.
+- **Seat stuck, blocker still real** → bare `unblock_worker`. The task stays BLOCKED-unassigned and is not auto-parked — sweep `moe.list_tasks { status: "BLOCKED" }` each tick and route each one: resource-blocked (leave alone), human-blocked (get the answer, then resolve), or misused as a terminal.
+- **BLOCKED misused as a terminal** ("done, blocked by design", every step COMPLETED): the daemon already warned the worker (`ALL_STEPS_COMPLETE`). Ask the worker to `complete_task` with verification, or `set_task_status` → REVIEW yourself when the evidence is already on the task.
+- `retryTask: true` without `resolveBlocks` leaves a BLOCKED task untouched (still assigned, still BLOCKED) — for when the same worker should resume once the block clears.
+- Git is never a reason to hurry an unblock: the wrapper checkpointed the task's files on the BLOCKED exit and lands any lingering baseline at the next pre-flight, so nothing is stranded while a task waits.
+
 ## Rail proposal patterns
 
 When a rail blocks a task you're trying to unblock, file a proposal. Common patterns:
@@ -56,6 +66,21 @@ Do NOT loop between `propose_rail` and other actions on the same task — propos
 | Flip to PLANNING on every QA rejection | First rejection is usually a worker-side fix. Re-plan is for systemic issues. | Re-plan only after the same DoD item gets rejected twice. |
 | Reply to every drift signal with a tool call | The chat log is a tool too. Sometimes the right action is "watch and wait." | Post an acknowledgement; let the worker self-correct first. |
 | Use `moe.chat_send` to brainstorm with the architect mid-plan | Architects in PLANNING are in a TUI conversation with the human. Cross-talk derails them. | Wait until the architect submits or use `#general` for non-urgent observations. |
+| Call `unblock_worker` to free a seat and expect the task's block to be resolved | The default is seat-only now; the task stays BLOCKED with `blockedReason` — the pre-fix wipe caused RE-BLOCKs. | Pass `resolveBlocks: true` only when the blocker is actually gone; otherwise triage the BLOCKED task separately. |
+| Hand-commit a task's stranded sources under your own identity (a `chore(...)` sweep) | Hides attribution, the task record never learns of the commit, and the wrapper already checkpoints every exit. | Read `task.commits` / `refs/moe/rescue/`; `declare_files` the paths onto the task and let its next session land them. |
+| Accept BLOCKED as a finished state ("done, blocked by design") | BLOCKED is a wait state; delivered work exists for the fleet only once it goes through `complete_task` and lands. | Ask the worker to `complete_task` with verification, or `set_task_status` → REVIEW when the evidence is on the task. |
+
+## Commit evidence
+
+The wrapper — never the daemon — lands every session's files (completion commit on REVIEW, `wip(task-<id>)` checkpoint otherwise, `refs/moe/rescue/<task>/<ts>` on failure) and reports each attempt via `moe.record_commit`. Read the ledger before touching git:
+
+- `moe.get_context { taskId }` → `commits` (sha, ref, kind, pushed), `landing.lastCompletion`, `lastCommitOutcome` (`committed` / `nothing` / `refused` / `failed` + `MOE_COMMIT_*` code), `unattributedPaths`, `epicSiblings[*].landed`.
+- `git log --grep 'Moe-Task: task-<id>' --format='%h %s'` — every wrapper commit carries `Moe-Task` / `Moe-Kind` / `Moe-Session` / `Moe-Status` trailers; `git for-each-ref refs/moe/rescue/task-<id>/` for rescues.
+- **`MOE_COMMIT_REFUSED_NO_OWNED_PATHS`**: nothing was attributable — no step reported `modifiedFiles`, no plan paths, no declaration. `moe.declare_files { taskId, paths }` and let the next session land them. **`MOE_COMMIT_REFUSED_OWNED_PATH_MISSING`**: the asserted paths are gone from disk and HEAD (renamed, or edited in a `.worktrees/` checkout the post-flight never sees).
+- **`MOE_ATTRIBUTION_UNRESOLVED`** (task channel + rate-limited `#governors`): changed paths nobody declared were left unstaged because another worker was live. Find the owner (`grep -l '<path>' .moe/tasks/*.json`, chat, the session's step notes) and `declare_files` onto that task.
+- **Foreign-WIP debris** — dirty paths whose only owner is a DONE task — is `MOE_ATTR_PREEXISTING` for every later task and never swept. Runbook in `docs/TROUBLESHOOTING.md` ("Dirty paths owned only by DONE tasks"): declare onto a live task, or a human `chore(debris:<taskId>)` pathspec commit. Never land it under your own identity as a fleet-wide `chore` commit.
+- **`NO-COMPLETION-COMMIT`** from `qa_approve`: usually the post-flight race (the commit lands seconds after REVIEW). Re-check `task.commits` a minute later; if still empty, `lastCommitOutcome` says why. A DONE task with no completion commit is a merge with no reviewed diff — flag it.
+- `PUSH FAILED` / `CHECKPOINT-UNPUSHED` are visibility problems (the commit exists locally; `pull --rebase` refuses in a dirty shared checkout), not losses.
 
 ## Mention reply examples
 

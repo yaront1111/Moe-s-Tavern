@@ -7,7 +7,7 @@ import { nextStatusForRelease } from '../state/workerLifecycle.js';
 export function unblockWorkerTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.unblock_worker',
-    description: 'Clear BLOCKED status on a worker, setting it back to IDLE',
+    description: 'Free a BLOCKED worker\'s SEAT: the worker goes back to IDLE and (unless retryTask) its tasks are released/unassigned — a BLOCKED task STAYS BLOCKED with blockedReason intact, exactly like every other release path. Pass resolveBlocks:true to ALSO assert the blocker is gone and restore the worker\'s BLOCKED tasks to blockedFromStatus (clearing blockedReason/blockedAt); moe.set_task_status is the other way to clear a block. With retryTask:true and no resolveBlocks a BLOCKED task is left untouched (still assigned, still BLOCKED).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -15,7 +15,11 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         resolution: { type: 'string', description: 'What was done to resolve the block' },
         retryTask: {
           type: 'boolean',
-          description: 'If true, worker keeps currentTaskId to retry. Default false.'
+          description: 'If true, worker keeps currentTaskId (and its task assignment) to retry. Default false.'
+        },
+        resolveBlocks: {
+          type: 'boolean',
+          description: 'If true, BLOCKED tasks this worker holds are restored to blockedFromStatus and their blocked* fields cleared — the human asserts the blocker is gone. Default false: the task stays BLOCKED (blockedReason kept), only the seat is freed.'
         }
       },
       required: ['workerId', 'resolution'],
@@ -26,6 +30,7 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         workerId?: string;
         resolution?: string;
         retryTask?: boolean;
+        resolveBlocks?: boolean;
       };
 
       if (!params.workerId) {
@@ -57,17 +62,20 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
       // active task it still holds BEFORE nulling its pointer. Otherwise the task
       // is stranded WORKING/assigned to a now-IDLE worker that nothing can free —
       // a permanent orphan. Deliberately 'requeue' (the default), NOT the
-      // blocked-timeout sweep's 'park': unblock_worker means someone explicitly
-      // resolved the blocker, so the task goes straight back into its role's
-      // claim pool. The sweep parks precisely because nobody resolved it. MCP
+      // blocked-timeout sweep's 'park': freeing a seat is not a park. MCP
       // handlers run under the state mutex, so the worker + task writes stay
       // atomic.
-      // A BLOCKED task is un-blocked here regardless of retryTask — this tool
-      // IS the human "blocker resolved" lever. Restore blockedFromStatus and
-      // clear the block bookkeeping so the sweep/grant paths can't act on
-      // stale block state. nextStatusForRelease deliberately keeps BLOCKED
-      // tasks BLOCKED on ordinary releases (restart/deregister); this path is
-      // the exception because a human asserted the blocker is gone.
+      //
+      // SEAT-ONLY DEFAULT: a BLOCKED task is routed through nextStatusForRelease
+      // exactly like every other release path (restart purge, deregister,
+      // release_task), which keeps BLOCKED tasks BLOCKED — the blocker is still
+      // there, and governors measurably call this tool to free a wedged SEAT
+      // without meaning to declare the blocker gone (the moe-next RE-BLOCK
+      // pattern: un-blocked task → next claimer hits the same wall → re-block).
+      // `resolveBlocks: true` is the explicit "the human asserts the blocker is
+      // gone" lever: restore blockedFromStatus and clear the block bookkeeping
+      // so the sweep/grant paths can't act on stale block state.
+      const resolveBlocks = params.resolveBlocks === true;
       const unblockUpdates = (owned: { blockedFromStatus?: TaskStatus | null }) => ({
         status: (owned.blockedFromStatus ?? 'WORKING') as TaskStatus,
         blockedReason: null,
@@ -78,8 +86,9 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
 
       const releasedTaskIds: string[] = [];
       const unblockedTaskIds: string[] = [];
+      const stillBlockedTaskIds: string[] = [];
       for (const owned of state.getActiveTasksAssignedToWorker(params.workerId)) {
-        if (owned.status === 'BLOCKED') {
+        if (owned.status === 'BLOCKED' && resolveBlocks) {
           // assignedWorkerId is explicit on BOTH arms: updateTask clears the
           // assignment on any status change when the caller omits it, which
           // would strip the retrying worker of the very task it is resuming.
@@ -90,15 +99,29 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
           unblockedTaskIds.push(owned.id);
           if (!params.retryTask) releasedTaskIds.push(owned.id);
         } else if (!params.retryTask) {
+          // nextStatusForRelease keeps a BLOCKED task BLOCKED (blockedReason,
+          // blockedFromStatus and blockedAt untouched); assignedWorkerId must be
+          // explicit because the status does not change, so updateTask would
+          // not clear it on its own.
+          const nextStatus = nextStatusForRelease(owned);
           await state.updateTask(owned.id, {
             assignedWorkerId: null,
-            status: nextStatusForRelease(owned),
-          }, 'WORKER_UNBLOCKED');
+            status: nextStatus,
+          }, 'WORKER_RELEASED');
           releasedTaskIds.push(owned.id);
+          if (nextStatus === 'BLOCKED') stillBlockedTaskIds.push(owned.id);
+        } else if (owned.status === 'BLOCKED') {
+          // retryTask without resolveBlocks: the task is the wrapper's
+          // suppressed hold state (BLOCKED + assigned) and is left exactly as is.
+          stillBlockedTaskIds.push(owned.id);
         }
       }
 
       const updated = await state.updateWorker(params.workerId, updates, 'WORKER_UNBLOCKED');
+
+      const stillBlockedNote = stillBlockedTaskIds.length
+        ? ` ${stillBlockedTaskIds.join(', ')} remain${stillBlockedTaskIds.length === 1 ? 's' : ''} BLOCKED (blockedReason kept) — pass resolveBlocks:true or use moe.set_task_status to clear the block.`
+        : '';
 
       return {
         success: true,
@@ -107,9 +130,11 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         currentTaskId: updated.currentTaskId,
         resolution: params.resolution,
         retryTask: params.retryTask || false,
+        resolveBlocks,
         ...(releasedTaskIds.length ? { releasedTaskIds } : {}),
-        ...(unblockedTaskIds.length ? { unblockedTaskIds } : {}),
-        message: `Worker ${updated.id} unblocked. Resolution: ${params.resolution}`
+        ...(resolveBlocks ? { unblockedTaskIds } : {}),
+        stillBlockedTaskIds,
+        message: `Worker ${updated.id} seat freed (IDLE).${resolveBlocks ? ` Un-blocked ${unblockedTaskIds.length} task(s).` : ''}${stillBlockedNote} Resolution: ${params.resolution}`
       };
     }
   };

@@ -191,12 +191,11 @@ Ready to implement <feature-name>
 
 ---
 
-## Moe integration
+## Moe integration — read before using this skill on a Moe task
 
-Recommended whenever multiple workers are claiming Moe tasks against the same repository, or when one worker's task touches files another worker is editing.
+**Do not use this skill on your own initiative inside a Moe fleet.** It is human-directed only (the skill manifest scopes it to architects for that reason).
 
-In Moe specifically:
-
-- **Branch naming:** Use the project's `branchPattern` from `project.settings` (default `moe/{epicId}/{taskId}`). The wrapper pre-flight already creates a branch by this convention; if you're entering a worktree, use the same name so QA can find your work.
-- **Don't worktree the `.moe/` folder.** The daemon owns `.moe/` for the project root — workers in worktrees still talk to the same daemon over the same `daemon.json`. Operate on the worktree's source tree, not on a duplicate `.moe/`.
-- **After completion:** the wrapper post-flight handles commits + branch cleanup. If you created an extra worktree manually, clean it up with `git worktree remove <path>`.
+- The agent wrapper's post-flight — the only thing that commits your work — runs **only against the project root**. Edits made inside a `.worktrees/` (or any other) checkout are invisible to it: they never land as a completion or checkpoint commit, surface as `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING`, and have stranded whole review branches before (two `codex/direct-review-fixes*` worktrees, 11–12 commits ahead, never merged).
+- The wrapper's pre-flight creates **no** branch per task; the post-flight peels onto the shared `moe/work-<date>` (or the literal `consolidationBranch`) and stages only paths attributed to the task. There is no branch-cleanup step.
+- `.worktrees/**` and `.moe-worktree*` are on the wrapper's DENY list — nothing under them is ever staged.
+- If a human explicitly asks for a worktree: do the work there, then **you** merge or cherry-pick it back into the project root before the session ends, `git worktree remove <path>`, and report the paths in `complete_step.modifiedFiles` so the post-flight lands them. Never worktree `.moe/` — the daemon owns it at the project root.

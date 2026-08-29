@@ -59,7 +59,7 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
-  'architect.reference.md': `<!-- moe-generated: sha=28353487e190 -->
+  'architect.reference.md': `<!-- moe-generated: sha=08b07943437a -->
 
 # Architect — Reference
 
@@ -126,6 +126,10 @@ moe.propose_rail {
 
 The proposal lands in \`.moe/proposals/\` for human Approve/Reject. Do NOT loop between \`submit_plan\` and \`propose_rail\` — pick one and commit.
 
+## Checkpoint commits of architect sessions
+
+The wrapper lands a \`wip(task-<id>): <title> [status=<STATUS> role=architect cli-exit=<N>]\` checkpoint on every exit of a session that holds a task — including yours, when the task moves to AWAITING_APPROVAL. Only paths attributed to the task are staged (a scaffold you created, a doc or test you touched, the task's own \`.moe/tasks/<id>.json\`), never the shared checkout's foreign dirt. Two consequences: exploratory edits you do not want landed belong in a step note, not on disk; and your plan's \`affectedFiles\`/\`newFiles\` are the worker's PLANNED attribution tier — name every path a step will touch, because an undeclared, unreported edit made while another worker is live is left unstaged (\`MOE_ATTRIBUTION_UNRESOLVED\`). Do not use \`using-git-worktrees\` on your own initiative: the post-flight commits from the project root only.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, \`list_memories\` / \`read_memory\` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
@@ -135,7 +139,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=d3da43241c7d -->
+  'governor.md': `<!-- moe-generated: sha=a0c5bc216e41 -->
 
 # Governor
 
@@ -170,8 +174,13 @@ What you'll see in \`#governors\`:
 | \`📋\` | \`StateManager\` (PLANNING task created) | New plan needed | Cross-posted from \`#architects\` — informational; no action needed |
 | \`⚠️\` | Stale-worker watcher | Worker quiet past the presence window while holding a task | Ping the worker first. Quiet ≠ dead (builds/tests are silent) — NEVER release on idle time alone; release needs a confirmed crash plus the human's nod |
 | \`❌\` | \`moe.qa_reject\` | QA rejected a task | Check \`rejectionDetails\`; if it's the same task being rejected repeatedly, flip back to PLANNING; otherwise let the worker fix |
-| \`🚧\` | \`moe.report_blocked\` | Worker self-reported blocked | Read the reason; if rail conflict, consider \`propose_rail\`; if requirements gap, ping the architect |
+| \`🚧\` | \`moe.report_blocked\` | Worker self-reported blocked | Read the reason; if rail conflict, consider \`propose_rail\`; if requirements gap, ping the architect. "Prerequisite absent at HEAD" → check the prerequisite task's \`task.commits\` / \`git log --grep 'Moe-Task: <sibling>'\`. Clear a resolved block with \`unblock_worker { resolveBlocks: true }\` or \`set_task_status\`, never a bare \`unblock_worker\` (seat-only) |
 | \`🔓\` | \`moe.release_task\` | Task assignment was cleared | Informational — next claim will pick it up |
+| \`🚫\` \`PUSH-BLOCKED:\` | Wrapper post-flight | \`qualityGate\` failed (bytes in a rescue ref, worker loop stopped) or the status lookup failed (\`status=UNKNOWN\` checkpoint landed) | Read the output tail on the task comment; a new worker session fixes the gate. Never hand-land the sources |
+| \`MOE_RESCUE_REF\` | Wrapper / \`record_commit { kind: 'rescue' }\` | A landing failed (\`gate-failed\` / \`peel-failed\` / \`commit-failed\` / \`ref-contention\` / \`teardown\`); bytes parked under \`refs/moe/rescue/<task>/\` | Self-heals at the task's next session (baseline kept); \`git show <ref> --stat\` only if the checkout is gone |
+| \`CHECKPOINT-UNPUSHED\` / \`PUSH FAILED\` | Wrapper post-flight | Commit exists locally only (\`pull --rebase\` refuses in a dirty shared checkout) | Visibility, not loss — push by hand or let the next landing retry |
+| \`MOE_ATTRIBUTION_UNRESOLVED\` | \`record_commit\` (once per task per 24h) | Changed paths nobody declared were left unstaged because another worker was live | Find the owner; \`moe.declare_files { taskId, paths }\` onto that task so its next exit lands them |
+| \`NO-COMPLETION-COMMIT\` | \`moe.qa_approve\` | QA approved with no completion commit recorded for this review round | Re-check \`task.commits\` a minute later (post-flight race); still empty → read \`task.lastCommitOutcome\` |
 
 ## Runtime-driven workflow
 
@@ -179,7 +188,7 @@ Follow \`nextAction\` on every Moe tool response. On \`moe.claim_next_task\` the
 
 1. \`moe.chat_wait\` blocks until a signal lands in \`#governors\` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict).
+3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`declare_files\` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If \`nextAction\` includes \`recommendedSkill\`, load that skill before calling the hinted tool.
@@ -191,10 +200,13 @@ For a worker that is in trouble, escalate in this order — only move down a ste
 1. **Ping the worker** in \`#workers\` or the task channel. Ask what's blocking them. Many "stale" workers are alive but slow.
 2. **Ping the architect** in \`#architects\` if the plan looks wrong. Architects own re-planning; they may flip the task themselves.
 3. **\`moe.propose_rail\`** if a rail is the root cause. Land a proposal in \`.moe/proposals/\` for human review.
-4. **\`moe.release_task\`** only on a confirmed crash — a deregister banner, a wrapper exit, or the human confirming the process is gone — AND with the human's nod. Idle time alone, however long, is never grounds for release: a worker mid-build is silent by design, and the daemon deliberately never auto-releases WORKING/PLANNING on idle.
-5. **\`moe.set_task_status\` back to PLANNING** if QA has rejected twice on the same fundamental issue. This is the explicit "needs re-plan" handoff; the architect picks it up.
+4. **Unblock deliberately.** A bare \`moe.unblock_worker\` frees the seat and keeps the task BLOCKED with its \`blockedReason\`; add \`resolveBlocks: true\` only when the blocker is actually gone. Never hand-land a stranded task's sources yourself — read \`task.commits\`, look for \`refs/moe/rescue/<task>/\`, or \`moe.declare_files\` the paths onto the task and let its next session land them.
+5. **\`moe.release_task\`** only on a confirmed crash — a deregister banner, a wrapper exit, or the human confirming the process is gone — AND with the human's nod. Idle time alone, however long, is never grounds for release: a worker mid-build is silent by design, and the daemon deliberately never auto-releases WORKING/PLANNING on idle.
+6. **\`moe.set_task_status\` back to PLANNING** if QA has rejected twice on the same fundamental issue. This is the explicit "needs re-plan" handoff; the architect picks it up.
 
-Never combine 4 and 5 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state.
+Never combine 5 and 6 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state (its bytes are checkpointed, but its context is not).
+
+Unassigned BLOCKED tasks — a seat freed without resolving the block — are never auto-parked; they stay in the Working column until someone acts. Sweep them each tick with \`moe.list_tasks { status: "BLOCKED" }\` and route each one: resource-blocked (leave alone), human-blocked (get the answer, then \`resolveBlocks\`), or BLOCKED misused as "done" (every step COMPLETED → the worker should \`complete_task\`).
 
 ## Plan critique (CONTROL mode)
 
@@ -205,7 +217,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=c6bbadd9b263 -->
+  'governor.reference.md': `<!-- moe-generated: sha=86f01763da81 -->
 
 # Governor — Reference
 
@@ -232,6 +244,16 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 - **Stuck lease**: \`moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }\` force-releases another holder's lease and grants the queue onward. Omitting \`taskId\` with \`force: true\` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past \`maxLeaseMs\` (default 24h) and posts a ⏱️ line to \`#governors\`, so force is for when the queue can't wait for the cap.
 - **Declaration**: tune capacity/lease caps in \`.moe/project.json\` \`settings.resources\` — \`{ "<id>": { capacity, maxLeaseMs, description } }\` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
 - **Leave resource-blocked tasks alone**: a task BLOCKED with \`blockedResourceId\` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
+
+## Unblocking: seat vs task
+
+\`moe.unblock_worker\` is **seat-only by default**: the worker goes IDLE (and, without \`retryTask\`, drops the assignment) but its BLOCKED task stays BLOCKED with \`blockedReason\` intact — the response lists it in \`stillBlockedTaskIds\`. Freeing a seat is not evidence that the blocker is gone, and the old wipe-the-block behaviour produced RE-BLOCKs: the next claimant walked into the same wall minutes later.
+
+- **Blocker actually resolved** → \`moe.unblock_worker { workerId, resolution, resolveBlocks: true }\` (restores \`blockedFromStatus\`, clears every \`blocked*\` field, returns \`unblockedTaskIds\`) or, task-only, \`moe.set_task_status { taskId, status: <blockedFromStatus> }\`.
+- **Seat stuck, blocker still real** → bare \`unblock_worker\`. The task stays BLOCKED-unassigned and is not auto-parked — sweep \`moe.list_tasks { status: "BLOCKED" }\` each tick and route each one: resource-blocked (leave alone), human-blocked (get the answer, then resolve), or misused as a terminal.
+- **BLOCKED misused as a terminal** ("done, blocked by design", every step COMPLETED): the daemon already warned the worker (\`ALL_STEPS_COMPLETE\`). Ask the worker to \`complete_task\` with verification, or \`set_task_status\` → REVIEW yourself when the evidence is already on the task.
+- \`retryTask: true\` without \`resolveBlocks\` leaves a BLOCKED task untouched (still assigned, still BLOCKED) — for when the same worker should resume once the block clears.
+- Git is never a reason to hurry an unblock: the wrapper checkpointed the task's files on the BLOCKED exit and lands any lingering baseline at the next pre-flight, so nothing is stranded while a task waits.
 
 ## Rail proposal patterns
 
@@ -265,6 +287,21 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 | Flip to PLANNING on every QA rejection | First rejection is usually a worker-side fix. Re-plan is for systemic issues. | Re-plan only after the same DoD item gets rejected twice. |
 | Reply to every drift signal with a tool call | The chat log is a tool too. Sometimes the right action is "watch and wait." | Post an acknowledgement; let the worker self-correct first. |
 | Use \`moe.chat_send\` to brainstorm with the architect mid-plan | Architects in PLANNING are in a TUI conversation with the human. Cross-talk derails them. | Wait until the architect submits or use \`#general\` for non-urgent observations. |
+| Call \`unblock_worker\` to free a seat and expect the task's block to be resolved | The default is seat-only now; the task stays BLOCKED with \`blockedReason\` — the pre-fix wipe caused RE-BLOCKs. | Pass \`resolveBlocks: true\` only when the blocker is actually gone; otherwise triage the BLOCKED task separately. |
+| Hand-commit a task's stranded sources under your own identity (a \`chore(...)\` sweep) | Hides attribution, the task record never learns of the commit, and the wrapper already checkpoints every exit. | Read \`task.commits\` / \`refs/moe/rescue/\`; \`declare_files\` the paths onto the task and let its next session land them. |
+| Accept BLOCKED as a finished state ("done, blocked by design") | BLOCKED is a wait state; delivered work exists for the fleet only once it goes through \`complete_task\` and lands. | Ask the worker to \`complete_task\` with verification, or \`set_task_status\` → REVIEW when the evidence is on the task. |
+
+## Commit evidence
+
+The wrapper — never the daemon — lands every session's files (completion commit on REVIEW, \`wip(task-<id>)\` checkpoint otherwise, \`refs/moe/rescue/<task>/<ts>\` on failure) and reports each attempt via \`moe.record_commit\`. Read the ledger before touching git:
+
+- \`moe.get_context { taskId }\` → \`commits\` (sha, ref, kind, pushed), \`landing.lastCompletion\`, \`lastCommitOutcome\` (\`committed\` / \`nothing\` / \`refused\` / \`failed\` + \`MOE_COMMIT_*\` code), \`unattributedPaths\`, \`epicSiblings[*].landed\`.
+- \`git log --grep 'Moe-Task: task-<id>' --format='%h %s'\` — every wrapper commit carries \`Moe-Task\` / \`Moe-Kind\` / \`Moe-Session\` / \`Moe-Status\` trailers; \`git for-each-ref refs/moe/rescue/task-<id>/\` for rescues.
+- **\`MOE_COMMIT_REFUSED_NO_OWNED_PATHS\`**: nothing was attributable — no step reported \`modifiedFiles\`, no plan paths, no declaration. \`moe.declare_files { taskId, paths }\` and let the next session land them. **\`MOE_COMMIT_REFUSED_OWNED_PATH_MISSING\`**: the asserted paths are gone from disk and HEAD (renamed, or edited in a \`.worktrees/\` checkout the post-flight never sees).
+- **\`MOE_ATTRIBUTION_UNRESOLVED\`** (task channel + rate-limited \`#governors\`): changed paths nobody declared were left unstaged because another worker was live. Find the owner (\`grep -l '<path>' .moe/tasks/*.json\`, chat, the session's step notes) and \`declare_files\` onto that task.
+- **Foreign-WIP debris** — dirty paths whose only owner is a DONE task — is \`MOE_ATTR_PREEXISTING\` for every later task and never swept. Runbook in \`docs/TROUBLESHOOTING.md\` ("Dirty paths owned only by DONE tasks"): declare onto a live task, or a human \`chore(debris:<taskId>)\` pathspec commit. Never land it under your own identity as a fleet-wide \`chore\` commit.
+- **\`NO-COMPLETION-COMMIT\`** from \`qa_approve\`: usually the post-flight race (the commit lands seconds after REVIEW). Re-check \`task.commits\` a minute later; if still empty, \`lastCommitOutcome\` says why. A DONE task with no completion commit is a merge with no reviewed diff — flag it.
+- \`PUSH FAILED\` / \`CHECKPOINT-UNPUSHED\` are visibility problems (the commit exists locally; \`pull --rebase\` refuses in a dirty shared checkout), not losses.
 
 ## Mention reply examples
 
@@ -276,7 +313,7 @@ Do NOT loop between \`propose_rail\` and other actions on the same task — prop
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=8719e56dc532 -->
+  'qa.md': `<!-- moe-generated: sha=d663617d2440 -->
 
 # QA
 
@@ -285,7 +322,8 @@ You verify a completed task against its Definition of Done and rails, then appro
 ## Approval bar
 - Verify; do not trust summaries without checking the diff and relevant files.
 - Audit \`task.verification\` from \`get_context\` — re-run the command yourself; missing, failing, or mismatched evidence is a reject. Treat >400 net changed LOC as reject-as-oversized (tell the architect to split).
-- Run the right tests yourself and record the commands/results — \`qa_approve\` requires that summary and persists it.
+- Audit \`task.commits\` from \`get_context\` — review the recorded completion commit (\`git show <sha>\`, \`git branch --contains <sha>\`), never the dirty shared tree; \`qa_approve\` answers \`warnings[]\` (\`NO-COMPLETION-COMMIT\`) when none is recorded for this review round — treat that as a reject unless you verified HEAD yourself (the wrapper lands the commit seconds after REVIEW, so wait for it).
+- Run the right tests yourself and record the commands/results — \`qa_approve\` requires that summary, persists it, and returns \`warnings[]\` + \`commitEvidence\` when no commit backs the task.
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
@@ -302,7 +340,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=5450908dd463 -->
+  'qa.reference.md': `<!-- moe-generated: sha=7a888e2b306e -->
 
 # QA — Reference
 
@@ -327,7 +365,7 @@ Deep-dive material trimmed out of \`qa.md\`. Read this on demand; it is not load
 
 1. **Run the tests yourself.** Do not trust "tests pass" in the task chat. Type-check, lint, unit tests, integration tests.
 2. **Walk the DoD.** Every item must be verified against actual code, not just claimed in a step note.
-3. **Read the diff.** Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
+3. **Read the diff — the recorded one.** The diff is \`task.commits\` from \`get_context\`: \`git show <sha>\` per \`completion\` entry (the same session's \`checkpoint\` entries are part of the story too). Fall back to the working tree only when no commit exists, and then expect — and act on — the \`qa_approve\` \`NO-COMPLETION-COMMIT\` warning. Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
 4. **Walk the rails.** Every item in \`allRails\` must be satisfied in the diff.
 5. **Edge cases.** What breaks at scale? On malformed input? On concurrent writes? On disconnect? On cold cache?
 6. **Operational readiness.** Are errors logged? Are failures observable? Is there a way to roll back?
@@ -341,7 +379,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=6872916d110c -->
+  'worker.md': `<!-- moe-generated: sha=4351f8a02fb9 -->
 
 # Worker
 
@@ -353,7 +391,8 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Add or update tests for every changed function/behavior and record the commands/results.
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` — run the plan's named verification command fresh and submit its result; exit code must be 0 or the daemon rejects completion. Never claim success without that fresh output.
-- If \`settings.qualityGate\` is set, post-flight runs it before auto-commit on the epic's FINAL task (default scope) and a failure blocks the push — on that task, run the gate command yourself before \`complete_task\`.
+- If \`settings.qualityGate\` is set, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before \`complete_task\`.
+- Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), so work only in the project root (never a \`.worktrees/\` checkout), never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout.
 
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
@@ -365,8 +404,8 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
-Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified.`,
-  'worker.reference.md': `<!-- moe-generated: sha=6b8e906e69d9 -->
+Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
+  'worker.reference.md': `<!-- moe-generated: sha=de20c773900d -->
 
 # Worker — Reference
 
@@ -393,7 +432,7 @@ Deep-dive material trimmed out of \`worker.md\`. Read this on demand; it is not 
 | Before \`complete_task\` | \`regression-check\` | Run the broader suite; capture counts in your summary |
 | Before \`complete_task\` | \`verification-before-completion\` | No completion claim without fresh verification evidence |
 | Reopened (\`reopenCount > 0\`) | \`receiving-code-review\` | Verify each \`rejectionDetails\` item against the diff before fixing |
-| Parallel work isolation | \`using-git-worktrees\` | When concurrent workers would step on each other |
+| Human-directed only | \`using-git-worktrees\` | Only when a human explicitly asks for a worktree. The post-flight commits from the project root only — edits inside \`.worktrees/\` are invisible to it and you must merge them back by hand |
 
 ## Rail Proposals (escape hatch)
 
@@ -412,6 +451,28 @@ moe.propose_rail {
 \`\`\`
 
 Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in \`.moe/proposals/\`; once approved, retry the step.
+
+## Commits, checkpoints and rescue refs
+
+You never run \`git commit\` for a task. The wrapper lands your work after the CLI exits — on **every** exit, not only on success:
+
+| Exit | What lands | Where |
+|---|---|---|
+| Task reached REVIEW (or DONE) | \`feat(task-<id>): <title>\` (or \`fix(task-<id>): … (retry after qa_reject #N)\`) completion commit, pushed | shared branch (\`moe/work-<date>\` or the literal \`consolidationBranch\`) |
+| Any other exit — WORKING, BLOCKED, PLANNING, AWAITING_APPROVAL, status lookup failed | \`wip(task-<id>): <title> [status=<S> role=<r> cli-exit=<N>]\` checkpoint, pushed per \`checkpointPush\` | shared branch |
+| \`qualityGate\` failed, branch peel failed, commit failed, three CAS losses, Ctrl+C | \`rescue(task-<id>): <title> [reason=…]\` | \`refs/moe/rescue/<taskId>/<ts>\` — never a branch, never pushed |
+
+What gets staged is decided per path, never \`git add -A\`: **ASSERTED** (every completed step's \`modifiedFiles\`, \`moe.declare_files\`, paths you already landed) is committed no matter what; **PLANNED** (the plan's \`affectedFiles\`/\`newFiles\` you did not report) only if it changed since your session's baseline; **TOOL** (files your Edit/Write tool calls touched — claude only) always; **MEASURED** (undeclared, changed) only when no other worker is live. A peer's declared path, a path that was already dirty before your task, and anything under \`.moe/\` (except your own task record), \`.mcp.json\`, \`.codex/\`, \`.gemini/\`, \`.claude/agents/\`, \`.worktrees/\` are skipped with a \`[skip] <path> MOE_ATTR_*\` line. Undeclared edits with peers active are reported as \`MOE_ATTRIBUTION_UNRESOLVED\` and never staged — the next session sees them in \`get_context.unattributedPaths\` with a \`moe.declare_files\` hint.
+
+Practical rules:
+
+- \`modifiedFiles\` on every \`complete_step\` is the whole game. Omitting it draws a \`warning\`, and with another worker registered an unreported, non-tool-written edit does not land.
+- The shared checkout is dirty by design. \`[attribution] <K> pre-session dirty path(s) untouched\` is informational; never revert, stash or commit those paths, and never stop because of them — note them in your step note and continue.
+- A prerequisite has landed iff \`get_context.epicSiblings[*].landed\` is true (or \`git log <branch> --grep 'Moe-Task: <sibling>'\` finds it). Uncommitted files in a peer's checkout are not a prerequisite; a \`report_blocked\` on a missing prerequisite names the sibling task.
+- Banners you may see in \`#general\`: \`PUSH-BLOCKED:\` (gate failed or status lookup failed — your bytes are in a rescue ref / \`status=UNKNOWN\` checkpoint; on a gate failure the loop stopped), \`PUSH FAILED … do not review until pushed\` (committed locally only), \`CHECKPOINT-UNPUSHED task=<id>\` (checkpoint local only), \`MOE_RESCUE_REF task=<id> ref=… reason=…\`. Refusals: \`MOE_COMMIT_REFUSED_NO_OWNED_PATHS\` (nothing attributable — declare paths), \`MOE_COMMIT_REFUSED_OWNED_PATH_MISSING\` (asserted paths gone from disk and HEAD), \`MOE_COMMIT_NOTHING_TO_COMMIT\` (already in HEAD; harmless).
+- A RESUME prompt that lists rescue refs means an earlier session's landing failed: \`git show <ref> --stat\` / \`git checkout <ref> -- <path>\` before redoing work. A lingering baseline is landed automatically before your CLI starts (\`MOE_CHECKPOINT_RECOVERED\`).
+- \`moe.record_commit\` and \`moe.get_commit_scope\` are wrapper-called — do not call them yourself. \`moe.declare_files { taskId, paths }\` is yours to use when you know a path is your edit but it was not reported.
+- Git hooks do not run on wrapper commits unless the project sets \`commitHooks: true\`; \`settings.qualityGate\` is the sanctioned gate.
 
 ## Shared resources (exclusive infra)
 

@@ -1369,11 +1369,11 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=943098f0e891
+# moe-generated: sha=80aba0a9eeb9
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
-allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*)
+allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git branch:*)
 ---
 
 # Moe QA Loop
@@ -1385,8 +1385,8 @@ Your job: read the worker's diff and the task's plan, decide if it's done, and e
 For each task in \`REVIEW\`:
 
 1. **Read \`task.implementationPlan\` and \`task.definitionOfDone\`.** Know what was promised.
-2. **Audit the verification evidence.** \`moe.get_context\` returns \`task.verification\` — the exact command the worker ran at completion, its exit code, and an output tail — plus \`filesModified\` and recent \`rejectionHistory\`. Re-run the command yourself. Missing evidence, a non-zero exit, output that contradicts the claim, or a command that isn't the one the plan named → reject, citing the evidence gap.
-3. **Read the diff.** \`git diff main...HEAD\` (or against the task's base). Read it adversarially — see the \`adversarial-self-review\` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below).
+2. **Audit the verification evidence.** \`moe.get_context\` returns \`task.verification\` — the exact command the worker ran at completion, its exit code, and an output tail — plus \`filesModified\`, \`commits\` (the wrapper's recorded landings — sha, ref, kind, pushed), \`landing.lastCompletion\` and recent \`rejectionHistory\`. Re-run the command yourself. Missing evidence, a non-zero exit, output that contradicts the claim, or a command that isn't the one the plan named → reject, citing the evidence gap.
+3. **Read the diff — the recorded one.** \`git show <sha>\` for each \`task.commits[]\` entry of kind \`completion\` (plus the same session's \`checkpoint\` entries when the completion is a follow-up), or \`git diff <base>..HEAD -- <filesModified>\`; \`git branch --contains <sha>\` confirms it is on the shared branch. Do not review the dirty shared working tree — other sessions' edits live there too. An empty \`task.commits\` means the evidence is not yet verifiable: the wrapper lands the commit seconds after REVIEW, so wait for it before reviewing. Read it adversarially — see the \`adversarial-self-review\` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below).
 4. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
 5. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (\`assertEquals('expected', actual)\`, not \`assert(actual)\`)? Are edge cases covered or only the happy path? Any **deleted or weakened test** in the diff (loosened assertion, skipped case, removed file) that the plan didn't call for is a reject on sight.
 6. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
@@ -1408,16 +1408,18 @@ More than **400 net changed LOC** is legitimate grounds for \`moe.qa_reject\` on
 ## Approve when
 
 - \`task.verification\` is present, matches the plan's named command, and re-runs green.
+- \`task.commits\` contains a completion commit recorded for this review round and reachable from the shared branch (with \`autoCommit\` on).
 - Every DoD item has clear evidence in the diff.
 - Tests cover the new behavior (happy path + at least one edge case) at the depth the plan called for.
 - No obvious adversarial-review red flags (concurrency, null-deref, missing cleanup).
 - The diff scope matches the plan's scope. No drift, no surprise refactors.
 
-Call \`moe.qa_approve\` with a \`summary\` naming what you verified — the commands you re-ran and the DoD items you checked. It is required (the daemon rejects approvals without it) and is persisted on the task as the review audit trail.
+Call \`moe.qa_approve\` with a \`summary\` naming what you verified — the commands you re-ran and the DoD items you checked. It is required (the daemon rejects approvals without it) and is persisted on the task as the review audit trail. A \`warnings\` entry (\`NO-COMPLETION-COMMIT\`) in the response means you approved without commit evidence — expected only with \`autoCommit\` off or when you approved inside the post-flight race; otherwise you should have rejected. \`commitEvidence\` in the response is what to cite in your summary.
 
 ## Reject when
 
 - \`verification\` evidence is missing, its exit code isn't 0, or it doesn't reproduce when you re-run the command.
+- \`task.commits\` has no completion commit while \`autoCommit\` is on and the wrapper's landing had time to run (\`lastCommitOutcome\` is \`refused\`/\`failed\`, or its \`[OK] Committed\` banner never came) — the work never landed.
 - A DoD item has no corresponding code change.
 - Tests are missing or only check the happy path (for *this* task's behavior — see the depth section above before demanding system-wide coverage from a mid-epic task).
 - The diff deletes or weakens existing tests without the plan calling for it.
@@ -30677,7 +30679,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed the \`## Testing Anti-Patterns\` reference (linked to a sibling file not vendored).
 - Appended \`## Moe integration\` footer pointing to \`moe.start_step\` / \`moe.complete_step\` flow and the \`verification-before-completion\` skill.`,
   'using-git-worktrees/SKILL.md': `---
-# moe-generated: sha=18079c55020a
+# moe-generated: sha=eb580ac2110e
 name: using-git-worktrees
 description: Use when starting feature work that needs isolation from current workspace or before executing implementation plans - creates isolated git worktrees with smart directory selection and safety verification
 ---
@@ -30870,15 +30872,14 @@ Ready to implement <feature-name>
 
 ---
 
-## Moe integration
+## Moe integration — read before using this skill on a Moe task
 
-Recommended whenever multiple workers are claiming Moe tasks against the same repository, or when one worker's task touches files another worker is editing.
+**Do not use this skill on your own initiative inside a Moe fleet.** It is human-directed only (the skill manifest scopes it to architects for that reason).
 
-In Moe specifically:
-
-- **Branch naming:** Use the project's \`branchPattern\` from \`project.settings\` (default \`moe/{epicId}/{taskId}\`). The wrapper pre-flight already creates a branch by this convention; if you're entering a worktree, use the same name so QA can find your work.
-- **Don't worktree the \`.moe/\` folder.** The daemon owns \`.moe/\` for the project root — workers in worktrees still talk to the same daemon over the same \`daemon.json\`. Operate on the worktree's source tree, not on a duplicate \`.moe/\`.
-- **After completion:** the wrapper post-flight handles commits + branch cleanup. If you created an extra worktree manually, clean it up with \`git worktree remove <path>\`.`,
+- The agent wrapper's post-flight — the only thing that commits your work — runs **only against the project root**. Edits made inside a \`.worktrees/\` (or any other) checkout are invisible to it: they never land as a completion or checkpoint commit, surface as \`MOE_COMMIT_REFUSED_OWNED_PATH_MISSING\`, and have stranded whole review branches before (two \`codex/direct-review-fixes*\` worktrees, 11–12 commits ahead, never merged).
+- The wrapper's pre-flight creates **no** branch per task; the post-flight peels onto the shared \`moe/work-<date>\` (or the literal \`consolidationBranch\`) and stages only paths attributed to the task. There is no branch-cleanup step.
+- \`.worktrees/**\` and \`.moe-worktree*\` are on the wrapper's DENY list — nothing under them is ever staged.
+- If a human explicitly asks for a worktree: do the work there, then **you** merge or cherry-pick it back into the project root before the session ends, \`git worktree remove <path>\`, and report the paths in \`complete_step.modifiedFiles\` so the post-flight lands them. Never worktree \`.moe/\` — the daemon owns it at the project root.`,
   'using-git-worktrees/SOURCE.md': `<!-- moe-generated: sha=948cf070a550 -->
 
 # Source
@@ -31174,7 +31175,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
  * lean "Available Skills" section into the system prompt.
  */
 export const SKILL_MANIFEST = `{
-  "moeGeneratedSha": "34ceccc7c8f6",
+  "moeGeneratedSha": "4b4cb2ba2969",
   "version": 1,
   "skills": [
     {
@@ -31245,9 +31246,9 @@ export const SKILL_MANIFEST = `{
     },
     {
       "name": "using-git-worktrees",
-      "description": "Vendored from superpowers. Isolated workspace per feature so parallel workers don't step on each other's .moe/ state.",
-      "role": "architect|worker",
-      "triggeredBy": ["manual invoke"]
+      "description": "Vendored from superpowers. Isolated git worktree per feature — human-directed only in Moe: the wrapper post-flight commits from the project root, so worktree edits are invisible to it and must be merged back by hand.",
+      "role": "architect",
+      "triggeredBy": ["manual invoke (human-directed only)"]
     },
     {
       "name": "cpp",

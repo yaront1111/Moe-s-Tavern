@@ -218,7 +218,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // which sent the worker into a wait -> claim -> refuse spin (task-9d5dfec6).
       // Name the same alternative exit the other two tools name.
       const waitHintTail =
-        'wait for the unblock of THIS task (resource grant, chat, or moe.unblock_worker) -- ' +
+        'wait for the unblock of THIS task (resource grant, chat, moe.unblock_worker { resolveBlocks: true } ' +
+        'or moe.set_task_status -- a plain unblock_worker only frees the seat and leaves the task BLOCKED) -- ' +
         'wait_for_task will not hand you other work while you hold it. To work something ' +
         'else instead, release this one first with moe.release_task; its blockedReason is preserved.';
       const nextActionReason = identicalRepeat
@@ -226,19 +227,40 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         : alreadyBlocked
           ? `Block reason UPDATED on the already-BLOCKED task; ${waitHintTail}`
           : `Block reported; ${waitHintTail}`;
-      const nextAction = task.assignedWorkerId && !params.resourceId
-        ? {
-            tool: 'moe.wait_for_task',
-            args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
-            reason: nextActionReason,
-            recommendedSkill: recommendSkillFor('worker', 'task_blocked')
-          }
+
+      // BLOCKED is a wait state, never a terminal. A worker whose plan is fully
+      // COMPLETED and who blocks instead of calling complete_task (the measured
+      // "done but BLOCKED" stranding) still gets its block recorded — this is
+      // warn-only — but is pointed straight at complete_task. Only for a task
+      // blocked out of WORKING: complete_task rejects every other status.
+      const plan = Array.isArray(task.implementationPlan) ? task.implementationPlan : [];
+      const allStepsComplete = plan.length > 0 && plan.every((s) => s.status === 'COMPLETED');
+      const deliveredButBlocked = !params.resourceId && allStepsComplete && statusForWait === 'WORKING';
+      const warning = deliveredButBlocked
+        ? 'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'
         : undefined;
+
+      const nextAction = deliveredButBlocked
+        ? {
+            tool: 'moe.complete_task',
+            args: { taskId: task.id, workerId: task.assignedWorkerId ?? params.workerId },
+            reason: `${warning} (the task is BLOCKED; complete_task needs it back in WORKING first — moe.set_task_status or unblock_worker { resolveBlocks: true } if you cannot clear the block yourself). Otherwise ${waitHintTail}`,
+            recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
+          }
+        : task.assignedWorkerId && !params.resourceId
+          ? {
+              tool: 'moe.wait_for_task',
+              args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
+              reason: nextActionReason,
+              recommendedSkill: recommendSkillFor('worker', 'task_blocked')
+            }
+          : undefined;
 
       return {
         success: true,
         taskId: task.id,
         taskStatus: flipped ? 'BLOCKED' : task.status,
+        ...(warning ? { warning } : {}),
         // Both flags report what was WRITTEN, never what the status happens to
         // read: taskStatus already printed 'BLOCKED' on the broken no-op path,
         // which is exactly why the silent failure was invisible.

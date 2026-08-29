@@ -4,6 +4,10 @@
 
 set -e
 
+# Never let a git call (push/pull/fetch over https) block the wrapper on a
+# credential prompt: there is no human on the other end of a fleet terminal.
+export GIT_TERMINAL_PROMPT=0
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -83,12 +87,24 @@ create_secure_temp() {
 }
 
 cleanup_temp() {
+    # This is the EXIT trap: it inherits `set -e`, and a failing command here
+    # would abort the trap half-way (no rescue, no deregister). Everything
+    # below is best-effort.
+    set +e
     # Kill the heartbeat sidecar first — it's just a background subshell, not
     # tracked by anything else, so a hard exit (Ctrl+C, error) would otherwise
     # leak it past this process's own lifetime. HEARTBEAT_PID/stop_heartbeat_sidecar
     # are defined later in the script but read/called here at exit time.
     if [ "$(type -t stop_heartbeat_sidecar)" = "function" ]; then
         stop_heartbeat_sidecar
+    fi
+    # Teardown rescue BEFORE deregister: if this session holds a task with a
+    # baseline and never completed a landing (Ctrl+C mid-CLI, set -e abort),
+    # park its edits on refs/moe/rescue/<taskId>/<ts> so a peer re-claiming
+    # the released task cannot absorb them. Idempotent; the persisted baseline
+    # still makes the next pre-flight land them on the branch.
+    if [ "$(type -t teardown_rescue)" = "function" ]; then
+        teardown_rescue || true
     fi
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. This is best-effort and never blocks exit. There is
@@ -1575,7 +1591,12 @@ post_flight() {
     # stops). The post-flight chat message below remains the session-ended signal.
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
         local content
-        content="$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$exit_code)"
+        content="$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$exit_code) commit=${LAND_SUMMARY_SHA:-none} kind=${LAND_SUMMARY_KIND:-none} paths=${LAND_SUMMARY_PATHS:-0} inferred=${LAND_SUMMARY_INFERRED:-0} unattributed=${LAND_SUMMARY_UNATTR:-0}"
+        # Same suffix as the ps1 twin: a landing that did not commit carries
+        # its outcome + code so governors can triage from the chat line alone.
+        if [ -n "${LAND_SUMMARY_OUTCOME:-}" ] && [ "${LAND_SUMMARY_OUTCOME:-}" != "committed" ] && [ -n "${LAND_SUMMARY_CODE:-}" ]; then
+            content="$content outcome=$LAND_SUMMARY_OUTCOME code=$LAND_SUMMARY_CODE"
+        fi
         if ! moe_rpc chat_send \
             "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
                 "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$content" 2>/dev/null)" \
@@ -1637,6 +1658,1807 @@ $out_tail"
     return 0
 }
 
+# =============================================================================
+# Land-on-every-exit machinery (twin: moe-agent.ps1 -- same reason codes,
+# banners, chat prefixes and settings keys; scripts/tests/parity-check.sh greps
+# both wrappers for the shared vocabulary and fails on asymmetry).
+#
+# Vocabulary: ROOT = $PROJECT; TOP = repo toplevel; REL = `rev-parse
+# --show-prefix` ('' when ROOT == TOP); GITDIR = --absolute-git-dir. EVERY git
+# call runs `-C $MOE_TOP` and every path is handled TOP-relative: `status
+# --porcelain` paths are always TOP-relative while add/ls-files/hash-object are
+# cwd-relative, so mixing the two silently mis-stages under a sub-directory
+# ROOT. Declared (ROOT-relative) paths are converted with REL + path. The
+# per-task baseline lives at GITDIR/moe/baseline/<taskId>.tsv, the landing temp
+# index at GITDIR/moe/idx-<taskId>-<pid>.
+#
+# Every `VAR=$(git ...)` below carries `|| VAR=""`: under `set -e` a failing
+# substitution in an assignment aborts the whole wrapper (measured on the old
+# detached-HEAD `symbolic-ref` probe), and a wrapper that dies inside its
+# post-flight strands the session's edits -- the very defect this fixes.
+# GIT_INDEX_FILE is set per plumbing call only (a leaked export would make every
+# later git call, including the CLI's, use the temp index).
+# =============================================================================
+MOE_TAB=$'\t'
+MOE_ZERO_OID="0000000000000000000000000000000000000000"
+
+# read_commit_settings -- one project.json read per iteration. Explicit-false
+# semantics as today for autoCommit (opt-out); commitHooks is opt-in.
+read_commit_settings() {
+    CS_AUTO_COMMIT="true"
+    CS_CHECKPOINT_COMMITS="true"
+    CS_CHECKPOINT_PUSH="true"
+    CS_COMMIT_BOARD_STATE="true"
+    CS_COMMIT_HOOKS="false"
+    CS_ATTR_UNDECLARED="solo"
+    CS_ATTR_CONTESTED="commit"
+    CS_ATTR_EXCLUDE=""
+    CS_CONSOLIDATION_BRANCH=""
+    local parsed
+    parsed=$($PYTHON_CMD -c "
+import json, os, sys
+p = os.path.join(sys.argv[1], 'project.json')
+def clean(s):
+    return str(s).replace('\r', ' ').replace('\n', ' ').replace('\x1f', ' ').replace('\x1e', ' ')
+try:
+    d = json.load(open(p, encoding='utf-8'))
+    s = d.get('settings') or {}
+    if not isinstance(s, dict):
+        s = {}
+except Exception:
+    s = {}
+attr = s.get('attribution') if isinstance(s.get('attribution'), dict) else {}
+def flag(key, default):
+    v = s.get(key)
+    if v is True:
+        return 'true'
+    if v is False:
+        return 'false'
+    return default
+und = attr.get('undeclared')
+und = und if und in ('solo', 'never', 'always') else 'solo'
+con = attr.get('contested')
+con = con if con in ('commit', 'skip') else 'commit'
+exc = attr.get('exclude')
+exc = [clean(e.strip()) for e in exc if isinstance(e, str) and e.strip()] if isinstance(exc, list) else []
+cb = s.get('consolidationBranch')
+cb = cb.strip() if isinstance(cb, str) and cb.strip() and '*' not in cb else ''
+fields = [flag('autoCommit', 'true'), flag('checkpointCommits', 'true'), flag('checkpointPush', 'true'),
+          flag('commitBoardState', 'true'), flag('commitHooks', 'false'), und, con, '\x1e'.join(exc), clean(cb)]
+sys.stdout.write('\x1f'.join(fields) + '\x1f')
+" "$MOE_DIR" 2>/dev/null) || parsed=""
+    if [ -n "$parsed" ]; then
+        { IFS= read -r -d $'\x1f' CS_AUTO_COMMIT
+          IFS= read -r -d $'\x1f' CS_CHECKPOINT_COMMITS
+          IFS= read -r -d $'\x1f' CS_CHECKPOINT_PUSH
+          IFS= read -r -d $'\x1f' CS_COMMIT_BOARD_STATE
+          IFS= read -r -d $'\x1f' CS_COMMIT_HOOKS
+          IFS= read -r -d $'\x1f' CS_ATTR_UNDECLARED
+          IFS= read -r -d $'\x1f' CS_ATTR_CONTESTED
+          IFS= read -r -d $'\x1f' CS_ATTR_EXCLUDE
+          IFS= read -r -d $'\x1f' CS_CONSOLIDATION_BRANCH
+        } <<< "$parsed" 2>/dev/null || true
+    fi
+    CS_AUTO_COMMIT="${CS_AUTO_COMMIT:-true}"
+    CS_CHECKPOINT_COMMITS="${CS_CHECKPOINT_COMMITS:-true}"
+    CS_CHECKPOINT_PUSH="${CS_CHECKPOINT_PUSH:-true}"
+    CS_COMMIT_BOARD_STATE="${CS_COMMIT_BOARD_STATE:-true}"
+    CS_COMMIT_HOOKS="${CS_COMMIT_HOOKS:-false}"
+    CS_ATTR_UNDECLARED="${CS_ATTR_UNDECLARED:-solo}"
+    CS_ATTR_CONTESTED="${CS_ATTR_CONTESTED:-commit}"
+    # MOE_ATTRIBUTION=declared: declared-only attribution for this run.
+    if [ "${MOE_ATTRIBUTION:-}" = "declared" ]; then
+        CS_ATTR_UNDECLARED="never"
+    fi
+    return 0
+}
+
+# git_top -- resolve TOP / REL / GITDIR for $PROJECT. Returns 1 when not a repo.
+git_top() {
+    MOE_TOP=""
+    MOE_REL=""
+    MOE_GITDIR=""
+    local top rel gitdir
+    top=$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null) || top=""
+    [ -n "$top" ] || return 1
+    rel=$(git -C "$PROJECT" rev-parse --show-prefix 2>/dev/null) || rel=""
+    gitdir=$(git -C "$PROJECT" rev-parse --absolute-git-dir 2>/dev/null) || gitdir=""
+    [ -n "$gitdir" ] || return 1
+    MOE_TOP="$top"
+    MOE_REL="$rel"
+    MOE_GITDIR="$gitdir"
+    return 0
+}
+
+# git_dirty_snapshot OUT -- `status --porcelain=v1 -z --untracked-files=all
+# --no-renames` mapped to `<blob|D>\t<XY>\t<path>` lines (TOP-relative). Blobs
+# come from ONE `hash-object --stdin-paths` (newline-separated: git has no -z
+# for it), so a path carrying a newline/tab/CR is dropped with a WARN -- it
+# can never be committed by this machinery, which is the safe direction.
+# Returns 1 when `git status` itself fails: a failed status is NOT a clean
+# tree, and masking it as an empty snapshot would mark the landing "nothing"
+# (landed=1) and silently strand the session's real edits as inter-session
+# foreign dirt at the next baseline merge -- callers must fail closed instead
+# (MOE_COMMIT_FAILED_ATTRIBUTION, baseline kept), like the ps1 twin.
+git_dirty_snapshot() {
+    local out="$1"
+    local work status_z paths_txt
+    work="$(create_secure_temp)"
+    status_z="$work/snapshot-status-$$.z"
+    paths_txt="$work/snapshot-paths-$$.txt"
+    : > "$out"
+    if ! git -C "$MOE_TOP" status --porcelain=v1 -z --untracked-files=all --no-renames > "$status_z" 2>/dev/null; then
+        rm -f "$status_z" "$paths_txt" 2>/dev/null || true
+        return 1
+    fi
+    : > "$paths_txt"
+    local -a present_paths=() present_xy=()
+    local entry xy p n_present=0
+    while IFS= read -r -d '' entry; do
+        [ "${#entry}" -ge 4 ] || continue
+        xy="${entry:0:2}"
+        p="${entry:3}"
+        case "$p" in
+            *$'\n'*|*"$MOE_TAB"*|*$'\r'*)
+                echo -e "${YELLOW}[WARN]${NC} [attribution] a dirty path contains a control character and cannot be represented -- it is never committed by the wrapper." >&2
+                continue ;;
+        esac
+        # A nested repository / submodule shows as a directory: skip it.
+        if [ -d "$MOE_TOP/$p" ] && [ ! -L "$MOE_TOP/$p" ]; then continue; fi
+        if [ -e "$MOE_TOP/$p" ] || [ -L "$MOE_TOP/$p" ]; then
+            present_paths+=("$p")
+            present_xy+=("$xy")
+            printf '%s\n' "$p" >> "$paths_txt"
+            n_present=$((n_present + 1))
+        else
+            printf 'D\t%s\t%s\n' "$xy" "$p" >> "$out"
+        fi
+    done < "$status_z"
+    if [ "$n_present" -gt 0 ]; then
+        local hashes="" n_hashes=0 i=0 h
+        hashes=$(git -C "$MOE_TOP" hash-object --stdin-paths < "$paths_txt" 2>/dev/null) || hashes=""
+        if [ -n "$hashes" ]; then
+            n_hashes=$(printf '%s\n' "$hashes" | wc -l | tr -d '[:space:]')
+        fi
+        if [ "${n_hashes:-0}" -eq "$n_present" ]; then
+            while IFS= read -r h; do
+                printf '%s\t%s\t%s\n' "$h" "${present_xy[$i]}" "${present_paths[$i]}" >> "$out"
+                i=$((i + 1))
+            done <<< "$hashes"
+        else
+            # Batch failed (an unreadable file?) -- hash one at a time; an
+            # unhashable path gets '?' which always counts as changed.
+            for ((i = 0; i < n_present; i++)); do
+                h=$(git -C "$MOE_TOP" hash-object -- "${present_paths[$i]}" 2>/dev/null) || h=""
+                [ -n "$h" ] || h="?"
+                printf '%s\t%s\t%s\n' "$h" "${present_xy[$i]}" "${present_paths[$i]}" >> "$out"
+            done
+        fi
+    fi
+    rm -f "$status_z" "$paths_txt" 2>/dev/null || true
+    return 0
+}
+
+# ---- baseline TSV: header + B/U rows ----------------------------------------
+# `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1>` then
+# `B\t<blob|D>\t<path>` rows (dirty state presumed foreign) and `U\t<blob>\t<path>`
+# rows (the locally persisted unattributed set). `landed=1` marks a session that
+# ended with a completed landing so the next pre-flight does not replay a
+# recovery checkpoint for nothing; absent (a twin that does not write it) means
+# "recover". Written .tmp + rename.
+baseline_path() {
+    printf '%s/moe/baseline/%s.tsv' "$MOE_GITDIR" "$1"
+}
+
+baseline_read() { # $1 taskId, $2 out B rows (blob\tpath), $3 out U rows; 1 = none
+    local f line
+    f="$(baseline_path "$1")"
+    : > "$2"
+    : > "$3"
+    [ -f "$f" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            B"$MOE_TAB"*) printf '%s\n' "${line#B$MOE_TAB}" >> "$2" ;;
+            U"$MOE_TAB"*) printf '%s\n' "${line#U$MOE_TAB}" >> "$3" ;;
+        esac
+    done < "$f"
+    return 0
+}
+
+baseline_landed() { # $1 taskId -- 0 when the header says landed=1
+    local f
+    f="$(baseline_path "$1")"
+    [ -f "$f" ] || return 1
+    head -n1 "$f" 2>/dev/null | grep -q ' landed=1' 2>/dev/null
+}
+
+baseline_write() { # $1 taskId, $2 head, $3 B rows file, $4 U rows file, $5 landed(0|1)
+    local dir="$MOE_GITDIR/moe/baseline" line
+    mkdir -p "$dir" 2>/dev/null || return 1
+    local f="$dir/$1.tsv" tmp="$dir/$1.tsv.tmp.$$"
+    {
+        printf '#moe-baseline v1 task=%s at=%s head=%s landed=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${5:-0}"
+        if [ -f "$3" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] && printf 'B\t%s\n' "$line"
+            done < "$3"
+        fi
+        if [ -f "$4" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] && printf 'U\t%s\n' "$line"
+            done < "$4"
+        fi
+        :
+    } > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+    return 0
+}
+
+baseline_delete() {
+    [ -n "${MOE_GITDIR:-}" ] || return 0
+    rm -f "$(baseline_path "$1")" 2>/dev/null || true
+    return 0
+}
+
+# baseline_mark_landed TASKID -- flip the header's landed flag in place.
+# Caller: the post-flight's deliberate LANDING_MODE=none exit (checkpoint
+# commits off / a role with no landing), so the next pre-flight does not
+# replay a "recovered" checkpoint the operator turned off.
+baseline_mark_landed() {
+    local f work b u head
+    f="$(baseline_path "$1")"
+    [ -f "$f" ] || return 0
+    work="$(create_secure_temp)"
+    baseline_read "$1" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" || true
+    head=$(head -n1 "$f" 2>/dev/null | sed -n 's/.* head=\([^ ]*\).*/\1/p') || head=""
+    baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 1 || true
+    rm -f "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 2>/dev/null || true
+    return 0
+}
+
+# commit_scope PHASE TASKID OUT -- moe.get_commit_scope, with the disk fallback
+# (own record + every other .moe/tasks/*.json; policy forced undeclared=never,
+# peersActive=true) when the daemon cannot answer. Sets MOE_SCOPE_FALLBACK.
+commit_scope() {
+    local phase="$1" task_id="$2" out="$3" args="" resp=""
+    MOE_SCOPE_FALLBACK=0
+    args=$($PYTHON_CMD -c "
+import json, sys
+d = {'taskId': sys.argv[1], 'workerId': sys.argv[2], 'phase': sys.argv[3]}
+if sys.argv[4]:
+    d['sessionId'] = sys.argv[4]
+if sys.argv[5]:
+    d['since'] = sys.argv[5]
+print(json.dumps(d))
+" "$task_id" "$WORKER_ID" "$phase" "${MOE_SID:-}" "${MOE_PREFLIGHT_ISO:-}" 2>/dev/null) || args=""
+    if [ -n "$args" ]; then
+        resp=$(moe_rpc get_commit_scope "$args" 2>/dev/null) || resp=""
+    fi
+    if [ -n "$resp" ] && $PYTHON_CMD -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if isinstance(d, dict) and d.get('taskId') else 1)
+" <<< "$resp" 2>/dev/null; then
+        printf '%s' "$resp" > "$out"
+        return 0
+    fi
+    MOE_SCOPE_FALLBACK=1
+    if ! $PYTHON_CMD - "$PROJECT" "$task_id" > "$out" 2>/dev/null <<'PYEOF'
+import glob, json, os, re, sys
+project, task_id = sys.argv[1], sys.argv[2]
+tasks_dir = os.path.join(project, '.moe', 'tasks')
+CI = sys.platform in ('win32', 'darwin')
+def norm(raw):
+    if not isinstance(raw, str):
+        return None
+    p = raw.strip()
+    if not p or len(p) > 500:
+        return None
+    p = p.replace('\\', '/')
+    if p.startswith('./'):
+        p = p[2:]
+    if p.startswith('/') or re.match(r'^[A-Za-z]:/', p):
+        return None
+    if any(seg == '..' for seg in p.split('/')):
+        return None
+    return p
+def key(p):
+    return p.lower() if CI else p
+class PS:
+    def __init__(self):
+        self.m = {}
+    def add(self, raw):
+        n = norm(raw)
+        if n is None:
+            return None
+        k = key(n)
+        if k in self.m:
+            return self.m[k]
+        self.m[k] = n
+        return n
+    def addall(self, xs):
+        if isinstance(xs, list):
+            for x in xs:
+                self.add(x)
+        return self
+    def has(self, p):
+        n = norm(p)
+        return n is not None and key(n) in self.m
+    def values(self):
+        return list(self.m.values())
+def steps(t):
+    s = t.get('implementationPlan')
+    return s if isinstance(s, list) else []
+def tiers(t):
+    a = PS()
+    for s in steps(t):
+        if isinstance(s, dict) and s.get('status') == 'COMPLETED':
+            a.addall(s.get('modifiedFiles') or s.get('affectedFiles') or [])
+    a.addall(t.get('filesModified')).addall(t.get('declaredFiles')).addall(t.get('touchedFiles'))
+    for c in (t.get('commits') or []):
+        if not isinstance(c, dict):
+            continue
+        inf = PS().addall(c.get('inferredPaths'))
+        for p in (c.get('paths') or []):
+            n = norm(p)
+            if n is None or inf.has(n):
+                continue
+            a.add(n)
+    pl = PS()
+    for s in steps(t):
+        if not isinstance(s, dict):
+            continue
+        for raw in list(s.get('affectedFiles') or []) + list(s.get('newFiles') or []) + list(s.get('modifiedFiles') or []):
+            n = norm(raw)
+            if n is None or a.has(n):
+                continue
+            pl.add(n)
+    for raw in (t.get('inferredPaths') or []):
+        n = norm(raw)
+        if n is None or a.has(n):
+            continue
+        pl.add(n)
+    return a.values(), pl.values()
+def load(path):
+    try:
+        with open(path, encoding='utf-8') as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+own = None
+for cand in (os.path.join(tasks_dir, task_id + '.json'), os.path.join(tasks_dir, 'task-' + task_id + '.json')):
+    own = load(cand)
+    if own is not None:
+        break
+out = {'taskId': task_id, 'fallback': True}
+always = []
+if own is None:
+    out['notFound'] = True
+    out.update(title='', status='', asserted=[], planned=[], touchedFiles=[], inferredPaths=[], unattributedPaths=[])
+else:
+    a, pl = tiers(own)
+    out.update(title=own.get('title') or '', status=own.get('status') or '', epicId=own.get('epicId'),
+               reopenCount=own.get('reopenCount') or 0, assignedWorkerId=own.get('assignedWorkerId'),
+               asserted=a, planned=pl,
+               touchedFiles=PS().addall(own.get('touchedFiles')).values(),
+               inferredPaths=PS().addall(own.get('inferredPaths')).values(),
+               unattributedPaths=PS().addall(own.get('unattributedPaths')).values())
+    always.append('.moe/tasks/' + task_id + '.json')
+always.append('.moe/project.json')
+for f in sorted(glob.glob(os.path.join(project, '.moe', 'epics', '*.json'))):
+    always.append('.moe/epics/' + os.path.basename(f))
+peer = []
+seen = PS()
+live = []
+for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
+    t = load(f)
+    if t is None or not t.get('id') or t.get('id') == task_id:
+        continue
+    if t.get('status') in ('DONE', 'ARCHIVED'):
+        continue
+    # Liveness is unknown without the daemon: every open task counts as a live
+    # peer, so no other task record is ever a board candidate in fallback mode.
+    live.append(t.get('id'))
+    a2, p2 = tiers(t)
+    for p in a2 + p2:
+        if seen.has(p):
+            continue
+        seen.add(p)
+        peer.append({'path': p, 'taskId': t.get('id')})
+out.update(peerDeclared=peer, livePeerIds=live, activePeerIds=live, peersActive=True,
+           alwaysInclude=always, excludePrefixes=[],
+           policy={'undeclared': 'never', 'contested': 'commit'})
+print(json.dumps(out))
+PYEOF
+    then
+        printf '{"taskId":"%s","notFound":true,"fallback":true,"asserted":[],"planned":[],"peerDeclared":[],"livePeerIds":[],"peersActive":true,"alwaysInclude":[],"excludePrefixes":[],"policy":{"undeclared":"never","contested":"commit"}}' "$task_id" > "$out"
+    fi
+    return 0
+}
+
+# resolve_attribution MODE TASKID SNAPSHOT B_FILE U_FILE TOOL_FILE SCOPE_JSON OUT_DIR POLICY_OVERRIDE
+# The exact tiered algorithm (see docs/CONFIGURATION.md "attribution"), in ONE
+# python pass -- bash 3.2 has no associative arrays. Writes NUL-terminated
+# records into OUT_DIR: candidates (reason\tblob\tpath), skipped (code\tpath),
+# unattributed (blob\tpath), contested (peer\tpath), missing (path), plus a
+# KEY=VALUE summary. Tiers: BOARD (own task record always; project.json /
+# epics / non-live-peer records when changed) > DENY (.moe/**, .mcp.json,
+# .codex/**, .gemini/**, .claude/agents/**, .claude/settings.local.json,
+# untracked .serena/**, .worktrees/**, .moe-worktree*, attribution.exclude) >
+# ASSERTED ∪ TOOL ∪ own Serena memories (committed regardless of the baseline;
+# CONTESTED when a peer declared them too) > PEER-declared (skipped) >
+# PREEXISTING (dirty before the task and untouched: NEVER committed, the hard
+# constraint) > PLANNED (plan-declared, changed since baseline) > MEASURED
+# (undeclared, changed; policy 'always', or 'solo' with no active peer;
+# inferred=true, never promoted) > UNATTRIBUTED (reported, never staged).
+resolve_attribution() {
+    local mode="$1" tid="$2" snap="$3" bfile="$4" ufile="$5" toolfile="$6" scopefile="$7" outdir="$8" override="${9:-}"
+    mkdir -p "$outdir" 2>/dev/null || return 1
+    MOE_LAND_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_LAND_CONTESTED="$CS_ATTR_CONTESTED" MOE_LAND_EXCLUDE="$CS_ATTR_EXCLUDE" \
+    MOE_LAND_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_LAND_POLICY_OVERRIDE="$override" \
+    MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" \
+    $PYTHON_CMD - "$mode" "$tid" "$snap" "$bfile" "$ufile" "$toolfile" "$scopefile" "$outdir" 2>"$outdir/attr.err" <<'PYEOF'
+import json, os, re, subprocess, sys
+mode, task_id, snap_f, b_f, u_f, tool_f, scope_f, out_dir = sys.argv[1:9]
+env = os.environ
+top = (env.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
+rel = env.get('MOE_GIT_REL') or ''
+undeclared = env.get('MOE_LAND_UNDECLARED') or 'solo'
+contested_policy = env.get('MOE_LAND_CONTESTED') or 'commit'
+board_state = (env.get('MOE_LAND_BOARD_STATE') or 'true') == 'true'
+override = env.get('MOE_LAND_POLICY_OVERRIDE') or ''
+if override == 'never':
+    undeclared = 'never'
+exclude_extra = [e for e in (env.get('MOE_LAND_EXCLUDE') or '').split('\x1e') if e]
+CI = sys.platform in ('win32', 'darwin')
+def key(p):
+    return p.lower() if CI else p
+def norm_decl(raw):
+    # ROOT-relative declared path -> TOP-relative; None when unusable.
+    if not isinstance(raw, str):
+        return None
+    p = raw.strip().replace('\\', '/')
+    if not p:
+        return None
+    while p.startswith('./'):
+        p = p[2:]
+    if p.startswith('/') or re.match(r'^[A-Za-z]:/', p):
+        return None
+    if any(seg == '..' for seg in p.split('/')):
+        return None
+    p = p.rstrip('/')
+    return (rel + p) if p else None
+def norm_top(raw):
+    if not isinstance(raw, str):
+        return None
+    p = raw.replace('\\', '/')
+    while p.startswith('./'):
+        p = p[2:]
+    return p or None
+def read_rows(path):
+    rows = []
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+            for line in fh:
+                line = line.rstrip('\n').rstrip('\r')
+                if line:
+                    rows.append(line.split('\t'))
+    except Exception:
+        pass
+    return rows
+S = {}
+for parts in read_rows(snap_f):
+    if len(parts) < 3:
+        continue
+    p = norm_top('\t'.join(parts[2:]))
+    if p:
+        S[key(p)] = (p, parts[0], parts[1])
+B = {}
+for parts in read_rows(b_f):
+    if len(parts) < 2:
+        continue
+    p = norm_top('\t'.join(parts[1:]))
+    if p:
+        B[key(p)] = parts[0]
+TOOL = set()
+try:
+    with open(tool_f, encoding='utf-8', errors='surrogateescape') as fh:
+        for line in fh:
+            p = norm_top(line.rstrip('\n').rstrip('\r'))
+            if p:
+                TOOL.add(key(p))
+except Exception:
+    pass
+try:
+    with open(scope_f, encoding='utf-8') as fh:
+        scope = json.load(fh)
+    if not isinstance(scope, dict):
+        scope = {}
+except Exception:
+    scope = {}
+def decl_set(lst):
+    out = {}
+    if isinstance(lst, list):
+        for raw in lst:
+            n = norm_decl(raw)
+            if n:
+                out.setdefault(key(n), n)
+    return out
+ASSERTED = decl_set(scope.get('asserted'))
+PLANNED = dict((k, v) for k, v in decl_set(scope.get('planned')).items() if k not in ASSERTED)
+PEER = {}
+for ent in (scope.get('peerDeclared') or []):
+    if isinstance(ent, dict):
+        n = norm_decl(ent.get('path'))
+        if n:
+            PEER.setdefault(key(n), str(ent.get('taskId') or ''))
+peers_active = bool(scope.get('peersActive'))
+if override == 'never' or scope.get('fallback'):
+    peers_active = True
+always_include = decl_set(scope.get('alwaysInclude'))
+exclude_prefixes = [n for n in (norm_decl(e) for e in (scope.get('excludePrefixes') or []) if isinstance(e, str)) if n]
+exclude_prefixes += [n for n in (norm_decl(e) for e in exclude_extra) if n]
+MINE = set(ASSERTED) | TOOL
+own_records = set()
+for name in (task_id + '.json', 'task-' + task_id + '.json'):
+    n = norm_decl('.moe/tasks/' + name)
+    if n:
+        own_records.add(key(n))
+board_always = set(own_records) if board_state else set()
+board_changed = set(k for k in always_include if k not in own_records) if board_state else set()
+if board_state and not always_include:
+    n = norm_decl('.moe/project.json')
+    if n:
+        board_changed.add(key(n))
+roots = [key(rel)] + ([''] if rel else [])
+def is_epic_record(pk):
+    # THIS project's epics only (REL-prefixed): when the Moe project is nested
+    # in a larger repo, an OUTER `.moe/epics/*.json` belongs to another fleet
+    # and must fall through to denied() (bare root stays in `roots`), never
+    # become this task's BOARD candidate.
+    head = key(rel) + '.moe/epics/'
+    return pk.startswith(head) and pk.endswith('.json') and '/' not in pk[len(head):]
+def denied(p, xy):
+    pk = key(p)
+    for pre in roots:
+        if pk.startswith(pre + '.moe/'):
+            return True
+        if pk == pre + '.mcp.json' or pk == pre + '.claude/settings.local.json':
+            return True
+        if pk.startswith(pre + '.codex/') or pk.startswith(pre + '.gemini/') or pk.startswith(pre + '.claude/agents/'):
+            return True
+        if pk.startswith(pre + '.serena/') and xy == '??':
+            return True
+        if pk.startswith(pre + '.worktrees/') or pk.startswith(pre + '.moe-worktree'):
+            return True
+    for ex in exclude_prefixes:
+        ek = key(ex)
+        if pk == ek or pk.startswith(ek.rstrip('/') + '/'):
+            return True
+    return False
+def own_memory(p, xy):
+    if xy == '??':
+        return False
+    pk = key(p)
+    if '.serena/memories/' not in pk:
+        return False
+    return key(task_id) in pk.rsplit('/', 1)[-1]
+def changed(pk, blob):
+    if pk not in B:
+        return True
+    return blob == '?' or B[pk] != blob
+cands, skipped, unattributed, contested, missing = [], [], [], [], []
+n_pre = n_exc = n_inf = 0
+for pk in sorted(S):
+    p, blob, xy = S[pk]
+    if pk in board_always:
+        cands.append(('BOARD', blob, p))
+        continue
+    if pk in board_changed or (board_state and is_epic_record(pk)):
+        if changed(pk, blob):
+            cands.append(('BOARD', blob, p))
+        else:
+            skipped.append(('MOE_ATTR_EXCLUDED', p))
+            n_exc += 1
+        continue
+    if denied(p, xy):
+        skipped.append(('MOE_ATTR_EXCLUDED', p))
+        n_exc += 1
+        continue
+    if pk in MINE or own_memory(p, xy):
+        if pk in PEER:
+            contested.append((PEER[pk], p))
+            if contested_policy == 'skip':
+                skipped.append(('MOE_ATTR_CONTESTED', p))
+                continue
+        cands.append(('ASSERTED', blob, p))
+        continue
+    if pk in PEER:
+        skipped.append(('MOE_ATTR_PEER_DECLARED(%s)' % PEER[pk], p))
+        continue
+    if not changed(pk, blob):
+        skipped.append(('MOE_ATTR_PREEXISTING', p))
+        n_pre += 1
+        continue
+    if pk in PLANNED:
+        cands.append(('PLANNED', blob, p))
+        continue
+    if undeclared == 'always' or (undeclared == 'solo' and not peers_active):
+        cands.append(('MEASURED', blob, p))
+        n_inf += 1
+        continue
+    unattributed.append((blob, p))
+all_missing = 1 if ASSERTED else 0
+for ak, ap in ASSERTED.items():
+    if ak in S:
+        all_missing = 0
+        continue
+    full = (top + '/' + ap) if top else ap
+    if os.path.lexists(full):
+        all_missing = 0
+        continue
+    in_head = False
+    try:
+        r = subprocess.run(['git', '-C', top, 'cat-file', '-e', 'HEAD:' + ap], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        in_head = (r.returncode == 0)
+    except Exception:
+        in_head = False
+    if in_head:
+        all_missing = 0
+        continue
+    missing.append(ap)
+def write_recs(name, recs):
+    with open(os.path.join(out_dir, name), 'w', encoding='utf-8', errors='surrogateescape', newline='') as fh:
+        for rec in recs:
+            fh.write('\t'.join(rec) + '\0')
+write_recs('candidates', cands)
+write_recs('skipped', skipped)
+write_recs('unattributed', unattributed)
+write_recs('contested', contested)
+write_recs('missing', [(m,) for m in missing])
+declared = set(ASSERTED) | set(PLANNED)
+with open(os.path.join(out_dir, 'summary'), 'w', newline='') as fh:
+    fh.write('N_CANDIDATES=%d\nN_INFERRED=%d\nN_SKIPPED=%d\nN_UNATTRIBUTED=%d\nN_MISSING=%d\nN_PREEXISTING=%d\nN_EXCLUDED=%d\nN_DECLARED=%d\nN_ASSERTED=%d\nALL_ASSERTED_MISSING=%d\nN_TOOL=%d\nN_CONTESTED=%d\nPEERS_ACTIVE=%d\n' % (
+        len(cands), n_inf, len(skipped), len(unattributed), len(missing), n_pre, n_exc, len(declared), len(ASSERTED), all_missing, len(TOOL), len(contested), 1 if peers_active else 0))
+PYEOF
+}
+
+# attr_summary_load DIR -- read the summary into ATTR_* globals.
+attr_summary_load() {
+    ATTR_N_CANDIDATES=0; ATTR_N_INFERRED=0; ATTR_N_SKIPPED=0; ATTR_N_UNATTRIBUTED=0; ATTR_N_MISSING=0
+    ATTR_N_PREEXISTING=0; ATTR_N_EXCLUDED=0; ATTR_N_DECLARED=0; ATTR_N_ASSERTED=0; ATTR_ALL_ASSERTED_MISSING=0
+    ATTR_N_TOOL=0; ATTR_N_CONTESTED=0; ATTR_PEERS_ACTIVE=0
+    [ -f "$1/summary" ] || return 1
+    local k v
+    while IFS='=' read -r k v; do
+        v="${v%$''}"
+        case "$k" in
+            N_CANDIDATES) ATTR_N_CANDIDATES="$v" ;;
+            N_INFERRED) ATTR_N_INFERRED="$v" ;;
+            N_SKIPPED) ATTR_N_SKIPPED="$v" ;;
+            N_UNATTRIBUTED) ATTR_N_UNATTRIBUTED="$v" ;;
+            N_MISSING) ATTR_N_MISSING="$v" ;;
+            N_PREEXISTING) ATTR_N_PREEXISTING="$v" ;;
+            N_EXCLUDED) ATTR_N_EXCLUDED="$v" ;;
+            N_DECLARED) ATTR_N_DECLARED="$v" ;;
+            N_ASSERTED) ATTR_N_ASSERTED="$v" ;;
+            ALL_ASSERTED_MISSING) ATTR_ALL_ASSERTED_MISSING="$v" ;;
+            N_TOOL) ATTR_N_TOOL="$v" ;;
+            N_CONTESTED) ATTR_N_CONTESTED="$v" ;;
+            PEERS_ACTIVE) ATTR_PEERS_ACTIVE="$v" ;;
+        esac
+    done < "$1/summary"
+    return 0
+}
+
+# attr_print_skips DIR -- `[skip] <path> <code>` per dropped path (EXCLUDED
+# runtime paths are summarised, PREEXISTING capped at 20 -- a busy shared
+# checkout carries hundreds).
+attr_print_skips() {
+    local rec code p n_pre=0
+    while IFS= read -r -d '' rec; do
+        code="${rec%%"$MOE_TAB"*}"
+        p="${rec#*"$MOE_TAB"}"
+        [ "$code" = "MOE_ATTR_EXCLUDED" ] && continue
+        if [ "$code" = "MOE_ATTR_PREEXISTING" ]; then
+            n_pre=$((n_pre + 1))
+            [ "$n_pre" -le 20 ] || continue
+        fi
+        echo "[skip] $p $code"
+    done < "$1/skipped"
+    if [ "$n_pre" -gt 20 ]; then
+        echo "[skip] ... $((n_pre - 20)) more MOE_ATTR_PREEXISTING path(s)"
+    fi
+    while IFS= read -r -d '' rec; do
+        echo "[skip] $rec MOE_ATTR_MISSING"
+    done < "$1/missing"
+    return 0
+}
+
+# ---- temp index --------------------------------------------------------------
+# moe_temp_index_build BASE CAND_FILE STAGED_OUT DROPPED_OUT
+# BASE = commit/tree to start from ('' = unborn -> empty index). Stages every
+# candidate with `:(literal)` into GITDIR/moe/idx-<task>-<pid> (never the
+# shared index), then verifies the staged blob equals the snapshot blob (or no
+# entry for a deletion); a mismatch means the path moved under us and is
+# dropped with MOE_ATTR_CONCURRENT (re-attempted next exit). Sets TI_INDEX,
+# TI_N_STAGED, TI_N_INFERRED.
+moe_temp_index_build() {
+    local base="$1" cand="$2" staged_out="$3" dropped_out="$4"
+    TI_INDEX="$MOE_GITDIR/moe/idx-${LAND_TASK_ID}-$$"
+    TI_N_STAGED=0
+    TI_N_INFERRED=0
+    mkdir -p "$MOE_GITDIR/moe" 2>/dev/null || return 1
+    rm -f "$TI_INDEX" 2>/dev/null || true
+    : > "$staged_out"
+    : > "$dropped_out"
+    if [ -n "$base" ]; then
+        GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" read-tree "$base" >/dev/null 2>&1 || return 1
+    else
+        GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" read-tree --empty >/dev/null 2>&1 || return 1
+    fi
+    local rec reason rest blob p actual
+    while IFS= read -r -d '' rec; do
+        reason="${rec%%"$MOE_TAB"*}"
+        rest="${rec#*"$MOE_TAB"}"
+        blob="${rest%%"$MOE_TAB"*}"
+        p="${rest#*"$MOE_TAB"}"
+        [ -n "$p" ] || continue
+        if ! GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" add -- ":(literal)$p" >/dev/null 2>&1; then
+            printf 'MOE_ATTR_MISSING\t%s\0' "$p" >> "$dropped_out"
+            continue
+        fi
+        actual=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" ls-files -s -- ":(literal)$p" 2>/dev/null | head -n1 | awk '{print $2}') || actual=""
+        if { [ "$blob" = "D" ] && [ -n "$actual" ]; } || { [ "$blob" != "D" ] && [ "$actual" != "$blob" ]; }; then
+            if [ -n "$base" ]; then
+                GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" reset -q "$base" -- ":(literal)$p" >/dev/null 2>&1 || true
+            else
+                GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" rm -q --cached -- ":(literal)$p" >/dev/null 2>&1 || true
+            fi
+            printf 'MOE_ATTR_CONCURRENT\t%s\0' "$p" >> "$dropped_out"
+            continue
+        fi
+        printf '%s\t%s\t%s\0' "$reason" "$blob" "$p" >> "$staged_out"
+        TI_N_STAGED=$((TI_N_STAGED + 1))
+        [ "$reason" = "MEASURED" ] && TI_N_INFERRED=$((TI_N_INFERRED + 1))
+    done < "$cand"
+    return 0
+}
+
+# moe_temp_index_has_changes BASE -- 0 when the temp index differs from BASE
+# (unborn: any entry counts).
+moe_temp_index_has_changes() {
+    local base="$1"
+    if [ -n "$base" ]; then
+        if GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" diff-index --cached --quiet "$base" >/dev/null 2>&1; then
+            return 1
+        fi
+        return 0
+    fi
+    local first
+    first=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" ls-files -z 2>/dev/null | head -c 1) || first=""
+    [ -n "$first" ]
+}
+
+moe_temp_index_drop() {
+    [ -n "${TI_INDEX:-}" ] && rm -f "$TI_INDEX" 2>/dev/null
+    TI_INDEX=""
+    return 0
+}
+
+# index_refresh STAGED_FILE -- after a plumbing landing, make the SHARED index
+# agree with HEAD for exactly the landed paths (`git reset -q -- <specs>`) so
+# `git status` is clean for them while peers' pre-staged entries survive.
+# 5 x 2 s retry on index.lock; the commit already exists either way.
+index_refresh() {
+    local -a specs=()
+    local rec p i out=""
+    while IFS= read -r -d '' rec; do
+        p="${rec##*"$MOE_TAB"}"
+        [ -n "$p" ] && specs+=(":(literal)$p")
+    done < "$1"
+    [ "${#specs[@]}" -gt 0 ] || return 0
+    for i in 1 2 3 4 5; do
+        if out=$(git -C "$MOE_TOP" reset -q -- "${specs[@]}" 2>&1); then
+            return 0
+        fi
+        case "$out" in
+            *index.lock*) sleep 2 ;;
+            *) break ;;
+        esac
+    done
+    echo -e "${YELLOW}[WARN]${NC} MOE_COMMIT_INDEX_REFRESH_FAILED: the commit exists but the shared index could not be refreshed for the landed paths ($(printf '%s' "$out" | tail -n1))."
+    return 1
+}
+
+# ---- branch safety -----------------------------------------------------------
+peel_target_branch() {
+    if [ -n "${CS_CONSOLIDATION_BRANCH:-}" ]; then
+        printf '%s' "$CS_CONSOLIDATION_BRANCH"
+    else
+        printf 'moe/work-%s' "$(date +%Y-%m-%d)"
+    fi
+}
+
+current_branch_name() {
+    local b
+    b=$(git -C "$MOE_TOP" symbolic-ref --short -q HEAD 2>/dev/null) || b=""
+    if [ -z "$b" ]; then
+        b=$(git -C "$MOE_TOP" rev-parse --abbrev-ref HEAD 2>/dev/null) || b=""
+    fi
+    printf '%s' "$b"
+}
+
+# ensure_safe_branch -- never commit on main/master/detached/unborn: peel onto
+# the literal settings.consolidationBranch (no `*`) else moe/work-<date>
+# (local, then origin/, then create). Existing non-default branches are reused
+# as-is (not branch-per-task). Sets MOE_SHARED_BRANCH; returns 1 on failure.
+# symbolic-ref returns the name on an unborn branch and FAILS on a detached
+# HEAD; rev-parse is the fallback but returns the literal "HEAD" for both, so
+# detached ("HEAD" / '') and main/master are all unsafe.
+ensure_safe_branch() {
+    MOE_SHARED_BRANCH=""
+    local current target
+    current="$(current_branch_name)"
+    if [ "$current" = "main" ] || [ "$current" = "master" ] || [ "$current" = "HEAD" ] || [ -z "$current" ]; then
+        target="$(peel_target_branch)"
+        echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target so we don't commit to the default branch."
+        if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target" > /dev/null 2>&1; then
+            git -C "$MOE_TOP" checkout "$target" 2>&1 | tail -2
+        elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/remotes/origin/$target" > /dev/null 2>&1; then
+            git -C "$MOE_TOP" checkout -b "$target" "origin/$target" 2>&1 | tail -2
+        else
+            git -C "$MOE_TOP" checkout -b "$target" 2>&1 | tail -2
+        fi
+        current="$(current_branch_name)"
+        if [ "$current" != "$target" ]; then
+            echo -e "${YELLOW}[WARN]${NC} [branch] failed to switch off ${current:-detached/unborn} onto $target; refusing to commit to the default branch."
+            return 1
+        fi
+    fi
+    MOE_SHARED_BRANCH="$current"
+    return 0
+}
+
+# ---- commit messages (grep-stable; identical in moe-agent.ps1) -----------------
+# write_commit_message KIND OUT N_PATHS N_INFERRED
+write_commit_message() {
+    local kind="$1" out="$2" n_paths="${3:-0}" n_inferred="${4:-0}"
+    local subject body contested_lines="" rec peer p
+    while IFS= read -r -d '' rec; do
+        peer="${rec%%"$MOE_TAB"*}"
+        p="${rec#*"$MOE_TAB"}"
+        contested_lines="$contested_lines
+Moe-Contested: $p ($peer)"
+    done < "$ATTR_DIR/contested"
+    if [ "$kind" = "completion" ]; then
+        local ctype="feat" suffix=""
+        if [ "${LAND_REOPEN:-0}" -gt 0 ] 2>/dev/null; then
+            ctype="fix"
+            suffix=" (retry after qa_reject #$LAND_REOPEN)"
+        fi
+        subject="$ctype($LAND_TASK_ID): ${LAND_TITLE:-completed task}$suffix"
+        body="Completed via Moe worker session."
+    else
+        local rec_suffix=""
+        [ "${LAND_RECOVERED:-false}" = "true" ] && rec_suffix=" recovered"
+        subject="wip($LAND_TASK_ID): ${LAND_TITLE:-checkpoint} [status=${LAND_STATUS:-UNKNOWN} role=$ROLE cli-exit=${LAND_CLI_EXIT:-0}]$rec_suffix"
+        body="Checkpoint via Moe $ROLE session; not a completion."
+    fi
+    printf '%s\n\n%s\n\nMoe-Task: %s\nMoe-Kind: %s\nMoe-Session: %s\nMoe-Status: %s\nMoe-Paths: %s\nMoe-Inferred: %s%s\n' \
+        "$subject" "$body" "$LAND_TASK_ID" "$kind" "$MOE_SID" "${LAND_STATUS:-UNKNOWN}" "$n_paths" "$n_inferred" "$contested_lines" > "$out"
+}
+
+write_rescue_message() { # $1 reason, $2 out
+    printf 'rescue(%s): %s [reason=%s]\n\nRescue snapshot via Moe %s session; recover with git checkout <ref> -- <path>.\n\nMoe-Task: %s\nMoe-Kind: rescue\nMoe-Session: %s\nMoe-Reason: %s\n' \
+        "$LAND_TASK_ID" "${LAND_TITLE:-rescue snapshot}" "$1" "$ROLE" "$LAND_TASK_ID" "$MOE_SID" "$1" > "$2"
+}
+
+# ---- landing -----------------------------------------------------------------
+# land_commit KIND -- §7: branch (peel), then plumbing (temp index +
+# commit-tree + update-ref CAS, 3 attempts) or, for a completion with
+# settings.commitHooks=true, the porcelain `git commit -- <specs>` so hooks
+# run. Returns 0 committed, 2 nothing, 1 failed (rescue attempted),
+# 3 peel-failed (rescue attempted; caller must stop the loop).
+land_commit() {
+    local kind="$1" work
+    work="$(create_secure_temp)"
+    LAND_STAGED_FILE="$work/land-staged-$$.z"
+    LAND_DROPPED_FILE="$work/land-dropped-$$.z"
+    : > "$LAND_STAGED_FILE"
+    : > "$LAND_DROPPED_FILE"
+    LAND_SHA=""
+    LAND_TREE=""
+    LAND_BRANCH=""
+    LAND_N_PATHS=0
+    LAND_N_INFERRED=0
+    if ! ensure_safe_branch; then
+        LAND_OUTCOME="failed"
+        LAND_CODE="MOE_COMMIT_FAILED_PEEL"
+        rescue_ref "peel-failed" "$ATTR_DIR/candidates" || true
+        return 3
+    fi
+    LAND_BRANCH="$MOE_SHARED_BRANCH"
+    if [ "$kind" = "completion" ] && [ "$CS_COMMIT_HOOKS" = "true" ]; then
+        land_porcelain "$work/land-msg-$$.txt"
+        return $?
+    fi
+    land_plumbing "$work/land-msg-$$.txt"
+    return $?
+}
+
+land_plumbing() {
+    local msgfile="$1" ref="refs/heads/$LAND_BRANCH" attempt old="" tree="" new="" rc err
+    err="$(create_secure_temp)/land-err-$$.txt"
+    for attempt in 1 2 3; do
+        old=$(git -C "$MOE_TOP" rev-parse -q --verify "$ref" 2>/dev/null) || old=""
+        if ! moe_temp_index_build "$old" "$ATTR_DIR/candidates" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then
+            moe_temp_index_drop
+            LAND_OUTCOME="failed"
+            LAND_CODE="MOE_COMMIT_FAILED"
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: could not build the landing index for task $LAND_TASK_ID."
+            return 1
+        fi
+        if ! moe_temp_index_has_changes "$old"; then
+            moe_temp_index_drop
+            LAND_OUTCOME="nothing"
+            return 2
+        fi
+        write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
+        tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
+        if [ -n "$tree" ]; then
+            if [ -n "$old" ]; then
+                new=$(git -C "$MOE_TOP" commit-tree "$tree" -p "$old" -F "$msgfile" 2>"$err") || new=""
+            else
+                new=$(git -C "$MOE_TOP" commit-tree "$tree" -F "$msgfile" 2>"$err") || new=""
+            fi
+        fi
+        if [ -z "$new" ]; then
+            moe_temp_index_drop
+            LAND_OUTCOME="failed"
+            LAND_CODE="MOE_COMMIT_FAILED"
+            LAND_MESSAGE="$(tail -n3 "$err" 2>/dev/null | tr '\n' ' ')"
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git commit-tree failed for task $LAND_TASK_ID (identity? gpg?): $LAND_MESSAGE"
+            rescue_ref "commit-failed" "$ATTR_DIR/candidates" || true
+            return 1
+        fi
+        # Test seam: runs once, between commit-tree and update-ref, so a
+        # harness can move the branch and prove the CAS retry rebuilds.
+        if [ -n "${MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF:-}" ]; then
+            local hook="$MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF"
+            unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
+            (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
+        fi
+        if [ -n "$old" ]; then
+            if git -C "$MOE_TOP" update-ref "$ref" "$new" "$old" >/dev/null 2>&1; then rc=0; else rc=1; fi
+        else
+            if git -C "$MOE_TOP" update-ref "$ref" "$new" "$MOE_ZERO_OID" >/dev/null 2>&1; then rc=0; else rc=1; fi
+        fi
+        moe_temp_index_drop
+        if [ "$rc" -eq 0 ]; then
+            LAND_SHA="$new"
+            LAND_TREE="$tree"
+            LAND_OUTCOME="committed"
+            LAND_N_PATHS="$TI_N_STAGED"
+            LAND_N_INFERRED="$TI_N_INFERRED"
+            index_refresh "$LAND_STAGED_FILE" || true
+            return 0
+        fi
+        echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
+    done
+    LAND_OUTCOME="failed"
+    LAND_CODE="MOE_COMMIT_FAILED_REF_CONTENTION"
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: $ref kept moving; keeping the snapshot on a rescue ref."
+    RESCUE_STAGED_FILE="${LAND_STAGED_FILE:-}"
+    rescue_ref_from_commit "$new" "ref-contention" || true
+    return 1
+}
+
+# land_porcelain MSGFILE -- settings.commitHooks=true completion path: today's
+# `git add -- :(literal)p` into the shared index + `git commit -- <specs>`
+# (hooks run). rc != 0 -> rescue [commit-failed].
+land_porcelain() {
+    local msgfile="$1" rec reason rest blob p actual out="" rc=1 i
+    local -a specs=()
+    while IFS= read -r -d '' rec; do
+        reason="${rec%%"$MOE_TAB"*}"
+        rest="${rec#*"$MOE_TAB"}"
+        blob="${rest%%"$MOE_TAB"*}"
+        p="${rest#*"$MOE_TAB"}"
+        [ -n "$p" ] || continue
+        if ! git -C "$MOE_TOP" add -- ":(literal)$p" >/dev/null 2>&1; then
+            printf 'MOE_ATTR_MISSING\t%s\0' "$p" >> "$LAND_DROPPED_FILE"
+            continue
+        fi
+        actual=$(git -C "$MOE_TOP" ls-files -s -- ":(literal)$p" 2>/dev/null | head -n1 | awk '{print $2}') || actual=""
+        if { [ "$blob" = "D" ] && [ -n "$actual" ]; } || { [ "$blob" != "D" ] && [ "$actual" != "$blob" ]; }; then
+            git -C "$MOE_TOP" reset -q -- ":(literal)$p" >/dev/null 2>&1 || true
+            printf 'MOE_ATTR_CONCURRENT\t%s\0' "$p" >> "$LAND_DROPPED_FILE"
+            continue
+        fi
+        printf '%s\t%s\t%s\0' "$reason" "$blob" "$p" >> "$LAND_STAGED_FILE"
+        specs+=(":(literal)$p")
+        TI_N_STAGED=$((${TI_N_STAGED:-0} + 1))
+        [ "$reason" = "MEASURED" ] && TI_N_INFERRED=$((${TI_N_INFERRED:-0} + 1))
+    done < "$ATTR_DIR/candidates"
+    if [ "${#specs[@]}" -eq 0 ] || git -C "$MOE_TOP" diff --cached --quiet -- "${specs[@]}" >/dev/null 2>&1; then
+        LAND_OUTCOME="nothing"
+        return 2
+    fi
+    write_commit_message "$LAND_KIND" "$msgfile" "${#specs[@]}" "${TI_N_INFERRED:-0}"
+    for i in 1 2 3 4 5; do
+        if out=$(git -C "$MOE_TOP" commit -F "$msgfile" -- "${specs[@]}" 2>&1); then rc=0; else rc=$?; fi
+        [ "$rc" -ne 0 ] || break
+        case "$out" in
+            *index.lock*) sleep 2 ;;
+            *) break ;;
+        esac
+    done
+    printf '%s\n' "$out" | tail -3
+    if [ "$rc" -ne 0 ]; then
+        LAND_OUTCOME="failed"
+        LAND_CODE="MOE_COMMIT_FAILED"
+        LAND_MESSAGE="$(printf '%s' "$out" | tail -n3 | tr '\n' ' ')"
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git commit failed (pre-commit hook? identity?) for task $LAND_TASK_ID; keeping the snapshot on a rescue ref."
+        rescue_ref "commit-failed" "$ATTR_DIR/candidates" || true
+        return 1
+    fi
+    LAND_SHA=$(git -C "$MOE_TOP" rev-parse HEAD 2>/dev/null) || LAND_SHA=""
+    LAND_TREE=$(git -C "$MOE_TOP" rev-parse 'HEAD^{tree}' 2>/dev/null) || LAND_TREE=""
+    LAND_OUTCOME="committed"
+    LAND_N_PATHS="${#specs[@]}"
+    LAND_N_INFERRED="${TI_N_INFERRED:-0}"
+    return 0
+}
+
+# ---- rescue refs -------------------------------------------------------------
+# rescue_ref REASON CAND_FILE -- park the candidate snapshot on
+# refs/moe/rescue/<taskId>/<utc-ts> (tree built exactly like §7.2 against
+# HEAD; commit-tree -p HEAD, no parent when unborn). HEAD, the branch and the
+# shared index are untouched; never pushed. Announced via MOE_RESCUE_REF in
+# #general and recorded daemon-side (kind rescue). Returns 1 when there was
+# nothing to rescue or the ref could not be written.
+rescue_ref() {
+    local reason="$1" cand="$2" work head="" tree="" sha="" ts ref msgfile
+    LAND_RESCUE_REF=""
+    LAND_RESCUE_SHA=""
+    RESCUE_STAGED_FILE=""
+    if [ ! -s "$cand" ]; then
+        echo -e "${BLUE}[rescue]${NC} nothing to rescue for task $LAND_TASK_ID (no candidate paths) [reason=$reason]"
+        return 1
+    fi
+    work="$(create_secure_temp)"
+    head=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head=""
+    if ! moe_temp_index_build "$head" "$cand" "$work/rescue-staged-$$.z" "$work/rescue-dropped-$$.z"; then
+        moe_temp_index_drop
+        echo -e "${YELLOW}[WARN]${NC} [rescue] could not build the rescue index for task $LAND_TASK_ID [reason=$reason]"
+        return 1
+    fi
+    if ! moe_temp_index_has_changes "$head"; then
+        moe_temp_index_drop
+        echo -e "${BLUE}[rescue]${NC} nothing to rescue for task $LAND_TASK_ID (candidates match HEAD) [reason=$reason]"
+        return 1
+    fi
+    tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>/dev/null) || tree=""
+    moe_temp_index_drop
+    [ -n "$tree" ] || return 1
+    msgfile="$work/rescue-msg-$$.txt"
+    write_rescue_message "$reason" "$msgfile"
+    if [ -n "$head" ]; then
+        sha=$(git -C "$MOE_TOP" commit-tree "$tree" -p "$head" -F "$msgfile" 2>/dev/null) || sha=""
+    else
+        sha=$(git -C "$MOE_TOP" commit-tree "$tree" -F "$msgfile" 2>/dev/null) || sha=""
+    fi
+    if [ -z "$sha" ]; then
+        echo -e "${YELLOW}[WARN]${NC} [rescue] commit-tree failed; the snapshot could not be parked [reason=$reason]"
+        return 1
+    fi
+    RESCUE_STAGED_FILE="$work/rescue-staged-$$.z"
+    rescue_ref_from_commit "$sha" "$reason"
+}
+
+# rescue_ref_from_commit SHA REASON -- point a fresh rescue ref at an existing
+# commit (the CAS-exhausted `new` on ref-contention, or the tree just built).
+rescue_ref_from_commit() {
+    local sha="$1" reason="$2" ts ref
+    [ -n "$sha" ] || return 1
+    ts=$(date -u +%Y%m%dT%H%M%SZ)
+    ref="refs/moe/rescue/$LAND_TASK_ID/$ts"
+    if git -C "$MOE_TOP" rev-parse -q --verify "$ref" >/dev/null 2>&1; then
+        ref="$ref-$$"
+    fi
+    if ! git -C "$MOE_TOP" update-ref "$ref" "$sha" >/dev/null 2>&1; then
+        echo -e "${YELLOW}[WARN]${NC} [rescue] update-ref $ref failed [reason=$reason]"
+        return 1
+    fi
+    LAND_RESCUE_REF="$ref"
+    LAND_RESCUE_SHA="$sha"
+    echo -e "${YELLOW}[rescue]${NC} MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason"
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+    fi
+    # The rescued paths travel in the ledger entry (same as the ps1 twin), and
+    # the MOE_RESCUE_REF line rides in `message` for the daemon's re-emission.
+    record_commit_rpc "committed" "rescue" "$sha" "$ref" "$reason" \
+        "MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason" "false" "${RESCUE_STAGED_FILE:-}" "" || true
+    return 0
+}
+
+# ---- push --------------------------------------------------------------------
+announce_checkpoint_unpushed() { # $1 taskId, $2 branch
+    local msg="CHECKPOINT-UNPUSHED task=$1 -- checkpoint committed locally only on $2; push when the remote is reachable"
+    echo -e "${YELLOW}[WARN]${NC} $msg"
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# push_branch KIND -- today's push (`-u` on first push, one `pull --rebase`
+# retry, `rebase --abort` on conflict). Banners per kind: completion ->
+# `PUSH FAILED ... do not review until pushed`; checkpoint ->
+# `CHECKPOINT-UNPUSHED task=<id>`. Note `pull --rebase` refuses in a tree with
+# unstaged tracked changes, so the retry usually fails in a busy fleet --
+# unpushed is a visibility problem, not a loss. Returns 0 when pushed.
+push_branch() {
+    local kind="$1" branch="$LAND_BRANCH" tid="$LAND_TASK_ID" PUSH_OUT="" REBASE_OUT="" ok=false
+    [ -n "$branch" ] || return 1
+    if git -C "$MOE_TOP" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
+        if PUSH_OUT=$(git -C "$MOE_TOP" push 2>&1); then
+            ok=true
+        else
+            printf '%s\n' "$PUSH_OUT" | tail -5
+            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
+            if REBASE_OUT=$(git -C "$MOE_TOP" pull --rebase 2>&1); then
+                printf '%s\n' "$REBASE_OUT" | tail -5
+                if PUSH_OUT=$(git -C "$MOE_TOP" push 2>&1); then
+                    ok=true
+                else
+                    printf '%s\n' "$PUSH_OUT" | tail -5
+                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                fi
+            else
+                printf '%s\n' "$REBASE_OUT" | tail -5
+                git -C "$MOE_TOP" rebase --abort 2>/dev/null || true
+                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict? unstaged changes?); aborted rebase to restore a clean tree -- resolve and push manually."
+            fi
+        fi
+    else
+        if PUSH_OUT=$(git -C "$MOE_TOP" push -u origin "$branch" 2>&1); then
+            ok=true
+        else
+            printf '%s\n' "$PUSH_OUT" | tail -5
+            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
+            if REBASE_OUT=$(git -C "$MOE_TOP" pull --rebase origin "$branch" 2>&1); then
+                printf '%s\n' "$REBASE_OUT" | tail -5
+                if PUSH_OUT=$(git -C "$MOE_TOP" push -u origin "$branch" 2>&1); then
+                    ok=true
+                else
+                    printf '%s\n' "$PUSH_OUT" | tail -5
+                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
+                fi
+            else
+                printf '%s\n' "$REBASE_OUT" | tail -5
+                git -C "$MOE_TOP" rebase --abort 2>/dev/null || true
+                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict? unstaged changes?); aborted rebase to restore a clean tree -- resolve and push manually."
+            fi
+        fi
+    fi
+    if [ "$ok" = true ]; then
+        printf '%s\n' "$PUSH_OUT" | tail -5
+        echo -e "${GREEN}[OK]${NC} Pushed task $tid to $branch."
+        return 0
+    fi
+    if [ "$kind" = "completion" ]; then
+        announce_push_failure "$tid"
+    else
+        announce_checkpoint_unpushed "$tid" "$branch"
+    fi
+    return 1
+}
+
+# ---- daemon ledger -----------------------------------------------------------
+# record_commit_rpc OUTCOME KIND SHA REF CODE MESSAGE PUSHED STAGED_FILE DROPPED_FILE
+# Best-effort moe.record_commit with every outcome; never breaks the loop.
+# Paths go back ROOT-relative (REL stripped); lists are capped daemon-side too.
+record_commit_rpc() {
+    local args=""
+    args=$(MOE_RC_TASK="$LAND_TASK_ID" MOE_RC_OUTCOME="$1" MOE_RC_KIND="$2" MOE_RC_SHA="${3:-}" MOE_RC_REF="${4:-}" \
+           MOE_RC_CODE="${5:-}" MOE_RC_MSG="${6:-}" MOE_RC_PUSHED="${7:-}" MOE_RC_STAGED="${8:-}" MOE_RC_DROPPED="${9:-}" \
+           MOE_RC_SKIPPED="${ATTR_DIR:-}/skipped" MOE_RC_UNATTR="${ATTR_DIR:-}/unattributed" MOE_RC_CONTESTED="${ATTR_DIR:-}/contested" \
+           MOE_RC_TOOL="${LAND_TOOL_FILE_EFFECTIVE:-}" MOE_RC_STATUS="${LAND_STATUS:-}" MOE_RC_ROLE="$ROLE" MOE_RC_WORKER="$WORKER_ID" \
+           MOE_RC_SID="${MOE_SID:-}" MOE_RC_CLI_EXIT="${LAND_CLI_EXIT:-}" MOE_RC_TREE="${LAND_TREE:-}" MOE_GIT_REL="${MOE_REL:-}" \
+           $PYTHON_CMD - <<'PYEOF' 2>/dev/null
+import json, os, sys
+e = os.environ
+rel = e.get('MOE_GIT_REL') or ''
+CI = sys.platform in ('win32', 'darwin')
+def root_rel(p):
+    if rel and (p.lower() if CI else p).startswith(rel.lower() if CI else rel):
+        return p[len(rel):]
+    return p
+def recs(path):
+    out = []
+    if not path:
+        return out
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+            data = fh.read()
+    except Exception:
+        return out
+    for rec in data.split('\0'):
+        if rec:
+            out.append(rec.split('\t'))
+    return out
+def lines(path):
+    out = []
+    if not path:
+        return out
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+            for line in fh:
+                line = line.rstrip('\n').rstrip('\r')
+                if line:
+                    out.append(line)
+    except Exception:
+        pass
+    return out
+def dedupe(items):
+    seen, out = set(), []
+    for p in items:
+        k = p.lower() if CI else p
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(p)
+    return out
+d = {'taskId': e['MOE_RC_TASK'], 'outcome': e['MOE_RC_OUTCOME'], 'kind': e['MOE_RC_KIND'], 'role': e['MOE_RC_ROLE'] or 'worker',
+     'sessionId': e.get('MOE_RC_SID') or (e['MOE_RC_WORKER'] + '@unknown')}
+if e.get('MOE_RC_WORKER'):
+    d['workerId'] = e['MOE_RC_WORKER']
+for k, name in (('sha', 'MOE_RC_SHA'), ('ref', 'MOE_RC_REF'), ('code', 'MOE_RC_CODE'), ('status', 'MOE_RC_STATUS'), ('treeId', 'MOE_RC_TREE')):
+    v = e.get(name)
+    if v:
+        d[k] = v
+msg = e.get('MOE_RC_MSG')
+if msg:
+    d['message'] = msg[:2000]
+if e.get('MOE_RC_PUSHED') in ('true', 'false'):
+    d['pushed'] = (e['MOE_RC_PUSHED'] == 'true')
+try:
+    d['cliExitCode'] = int(e.get('MOE_RC_CLI_EXIT') or '')
+except Exception:
+    pass
+staged = recs(e.get('MOE_RC_STAGED'))
+paths = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3])
+inferred = dedupe([root_rel('\t'.join(r[2:])) for r in staged if len(r) >= 3 and r[0] == 'MEASURED'])
+if paths:
+    d['paths'] = paths[:500]
+if inferred:
+    d['inferredPaths'] = inferred[:500]
+touched = dedupe([root_rel(p) for p in lines(e.get('MOE_RC_TOOL'))])
+if touched:
+    d['touchedPaths'] = touched[:500]
+# unattributedPaths REPLACES the stored set daemon-side and an explicit []
+# clears it -- send it only when attribution actually RAN this pass (the file
+# exists; resolve_attribution always writes it, even empty, on success). A
+# record from a path where attribution never ran must OMIT the field so the
+# daemon keeps the stored evidence -- same as the ps1 twin's failure records.
+unattr_f = e.get('MOE_RC_UNATTR')
+if unattr_f and os.path.exists(unattr_f):
+    unattr = dedupe([root_rel('\t'.join(r[1:])) for r in recs(unattr_f) if len(r) >= 2])
+    d['unattributedPaths'] = unattr[:500]
+skipped = []
+for r in recs(e.get('MOE_RC_SKIPPED')) + recs(e.get('MOE_RC_DROPPED')):
+    if len(r) >= 2 and r[0] != 'MOE_ATTR_EXCLUDED':
+        skipped.append({'path': root_rel('\t'.join(r[1:])), 'code': r[0]})
+if skipped:
+    d['skipped'] = skipped[:100]
+contested = [{'path': root_rel('\t'.join(r[1:])), 'taskId': r[0]} for r in recs(e.get('MOE_RC_CONTESTED')) if len(r) >= 2]
+if contested:
+    d['contested'] = contested[:100]
+print(json.dumps(d))
+PYEOF
+    ) || args=""
+    [ -n "$args" ] || return 0
+    moe_rpc record_commit "$args" >/dev/null 2>&1 || true
+    return 0
+}
+
+# baseline_after_landing TASKID B_FILE U_SRC STAGED_FILE LANDED -- remove the
+# landed paths from B, replace U with this pass's unattributed set, keep the
+# file (it lives until the task is DONE/ARCHIVED), refresh head.
+baseline_after_landing() {
+    local tid="$1" bfile="$2" unattr="$3" staged="$4" landed="$5" work head
+    work="$(create_secure_temp)"
+    $PYTHON_CMD - "$bfile" "$staged" "$unattr" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" <<'PYEOF' 2>/dev/null || return 0
+import sys
+b_f, staged_f, unattr_f, out_b, out_u = sys.argv[1:6]
+CI = sys.platform in ('win32', 'darwin')
+def key(p):
+    return p.lower() if CI else p
+landed = set()
+try:
+    with open(staged_f, encoding='utf-8', errors='surrogateescape') as fh:
+        for rec in fh.read().split('\0'):
+            parts = rec.split('\t')
+            if len(parts) >= 3:
+                landed.add(key('\t'.join(parts[2:])))
+except Exception:
+    pass
+with open(out_b, 'w', encoding='utf-8', errors='surrogateescape', newline='') as out:
+    try:
+        with open(b_f, encoding='utf-8', errors='surrogateescape') as fh:
+            for line in fh:
+                line = line.rstrip('\n').rstrip('\r')
+                parts = line.split('\t')
+                if len(parts) < 2:
+                    continue
+                if key('\t'.join(parts[1:])) in landed:
+                    continue
+                out.write(line + '\n')
+    except Exception:
+        pass
+with open(out_u, 'w', encoding='utf-8', errors='surrogateescape', newline='') as out:
+    try:
+        with open(unattr_f, encoding='utf-8', errors='surrogateescape') as fh:
+            for rec in fh.read().split('\0'):
+                parts = rec.split('\t')
+                if len(parts) >= 2:
+                    out.write(parts[0] + '\t' + '\t'.join(parts[1:]) + '\n')
+    except Exception:
+        pass
+PYEOF
+    head=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head=""
+    baseline_write "$tid" "$head" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" "$landed" || true
+    rm -f "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" 2>/dev/null || true
+    return 0
+}
+
+# ---- the landing driver ------------------------------------------------------
+# run_landing -- inputs via LAND_* globals:
+#   LAND_KIND completion|checkpoint, LAND_TASK_ID, LAND_TITLE, LAND_STATUS,
+#   LAND_REOPEN, LAND_CLI_EXIT, LAND_RECOVERED, LAND_GATE_FAILED,
+#   LAND_POLICY_OVERRIDE ('' | never), LAND_SNAPSHOT_FILE ('' = take one now),
+#   LAND_TOOL_FILE ('' = none), LAND_SCOPE_FILE ('' = fetch postflight scope).
+# Outputs: LAND_OUTCOME committed|nothing|refused|failed, LAND_SHA, LAND_CODE,
+#   LAND_BRANCH, LAND_PUSHED, LAND_N_PATHS, LAND_N_INFERRED, LAND_RESCUE_REF,
+#   LAND_SUMMARY_* for the session-ended chat line.
+# Returns 0 (committed/nothing/refused), 1 failed, 3 peel-failed (stop the
+# loop), 4 gate-failed (stop the loop). Sets MOE_LANDING_DONE on every path so
+# the teardown rescue never double-parks a session that already landed.
+run_landing() {
+    local work rc=0 snap tool head_before head_after n_skipped
+    work="$(create_secure_temp)/landing-$$"
+    rm -rf "$work" 2>/dev/null || true
+    mkdir -p "$work"
+    ATTR_DIR="$work/attr"
+    mkdir -p "$ATTR_DIR"
+    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""
+    LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
+    TI_N_STAGED=0; TI_N_INFERRED=0
+    local policy_override="${LAND_POLICY_OVERRIDE:-}"
+    if [ -z "${LAND_SCOPE_FILE:-}" ] || [ ! -f "$LAND_SCOPE_FILE" ]; then
+        commit_scope postflight "$LAND_TASK_ID" "$work/scope.json"
+        LAND_SCOPE_FILE="$work/scope.json"
+    fi
+    if [ "${MOE_SCOPE_FALLBACK:-0}" = "1" ]; then
+        policy_override="never"
+        echo -e "${YELLOW}[attribution]${NC} moe.get_commit_scope unavailable -- disk fallback (declared-only, peers assumed active)."
+    fi
+    if ! baseline_read "$LAND_TASK_ID" "$work/B.tsv" "$work/U.tsv"; then
+        # Fail CLOSED on missing evidence: with no readable baseline every
+        # pre-session dirty path would read as "changed since baseline" and the
+        # MEASURED tier would sweep foreign debris into this task's commit. The
+        # policy is forced to 'never' for this landing (undeclared paths are
+        # reported, never committed); ASSERTED/TOOL/PLANNED/BOARD still land.
+        policy_override="never"
+        echo -e "${YELLOW}[attribution]${NC} no readable baseline for task $LAND_TASK_ID -- measured attribution disabled for this landing (undeclared paths are reported, never committed)."
+    fi
+    snap="${LAND_SNAPSHOT_FILE:-}"
+    if [ -z "$snap" ] || [ ! -f "$snap" ]; then
+        snap="$work/S.tsv"
+        if ! git_dirty_snapshot "$snap"; then
+            LAND_CODE="MOE_COMMIT_FAILED_ATTRIBUTION"
+            echo -e "${YELLOW}[WARN]${NC} git status failed; cannot attribute the working tree for task $LAND_TASK_ID -- nothing committed, baseline kept."
+            record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
+            MOE_LANDING_DONE=true
+            LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+            LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
+            return 1
+        fi
+    fi
+    tool="${LAND_TOOL_FILE:-}"
+    if [ -z "$tool" ] || [ ! -f "$tool" ]; then
+        tool="$work/tool.txt"
+        : > "$tool"
+    fi
+    LAND_TOOL_FILE_EFFECTIVE="$tool"
+    if ! resolve_attribution "$LAND_KIND" "$LAND_TASK_ID" "$snap" "$work/B.tsv" "$work/U.tsv" "$tool" "$LAND_SCOPE_FILE" "$ATTR_DIR" "$policy_override" \
+        || ! attr_summary_load "$ATTR_DIR"; then
+        LAND_CODE="MOE_COMMIT_FAILED_ATTRIBUTION"
+        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: attribution failed for task $LAND_TASK_ID ($(tail -n1 "$ATTR_DIR/attr.err" 2>/dev/null)); nothing committed, baseline kept."
+        record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
+        MOE_LANDING_DONE=true
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+        LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
+        return 1
+    fi
+    attr_print_skips "$ATTR_DIR"
+    if [ "${ATTR_N_PREEXISTING:-0}" -gt 0 ]; then
+        echo -e "${BLUE}[attribution]${NC} $ATTR_N_PREEXISTING pre-session dirty path(s) untouched"
+    fi
+    if [ "${ATTR_N_EXCLUDED:-0}" -gt 0 ]; then
+        echo -e "${BLUE}[attribution]${NC} $ATTR_N_EXCLUDED excluded path(s) untouched (MOE_ATTR_EXCLUDED: .moe/, tool config, worktrees)"
+    fi
+
+    if [ "${LAND_GATE_FAILED:-false}" = "true" ]; then
+        LAND_OUTCOME="failed"
+        LAND_CODE="MOE_COMMIT_FAILED_GATE"
+        rescue_ref "gate-failed" "$ATTR_DIR/candidates" || true
+        record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "qualityGate failed" "" "" "" || true
+        MOE_LANDING_DONE=true
+        # Summary convention (same as the ps1 twin): kind = the ATTEMPTED
+        # landing kind, sha = the rescue sha when one was parked.
+        LAND_SUMMARY_SHA="${LAND_RESCUE_SHA:-none}"
+        [ -n "$LAND_SUMMARY_SHA" ] || LAND_SUMMARY_SHA="none"
+        LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+        LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
+        return 4
+    fi
+
+    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
+        head_before=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head_before=""
+        if land_commit "$LAND_KIND"; then rc=0; else rc=$?; fi
+        if [ "$rc" -eq 0 ]; then
+            head_after="$LAND_SHA"
+        fi
+    else
+        rc=0
+        if [ "$LAND_KIND" = "completion" ] && [ "${ATTR_N_DECLARED:-0}" -eq 0 ]; then
+            LAND_OUTCOME="refused"
+            LAND_CODE="MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
+        elif [ "${ATTR_ALL_ASSERTED_MISSING:-0}" = "1" ] && [ "${ATTR_N_TOOL:-0}" -eq 0 ]; then
+            LAND_OUTCOME="refused"
+            LAND_CODE="MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
+        else
+            LAND_OUTCOME="nothing"
+        fi
+        if [ "$LAND_KIND" = "completion" ]; then
+            # Today's shape: peel happens before staging even when nothing is
+            # staged, so pre-existing local commits still get pushed.
+            if ! ensure_safe_branch; then
+                LAND_OUTCOME="failed"
+                LAND_CODE="MOE_COMMIT_FAILED_PEEL"
+                rescue_ref "peel-failed" "$ATTR_DIR/candidates" || true
+                rc=3
+            else
+                LAND_BRANCH="$MOE_SHARED_BRANCH"
+            fi
+        fi
+    fi
+
+    # A "nothing" outcome carries its code (the ps1 twin sets $res.Code on
+    # every nothing branch): the session-ended chat line's outcome=/code=
+    # suffix must read the same on both wrappers.
+    if [ "$LAND_OUTCOME" = "nothing" ] && [ -z "${LAND_CODE:-}" ]; then
+        LAND_CODE="MOE_COMMIT_NOTHING_TO_COMMIT"
+    fi
+
+    case "$LAND_OUTCOME" in
+        committed)
+            # Non-excluded attribution skips (incl. MISSING) plus staging-time
+            # drops — same arithmetic as the ps1 twin's SkippedCount.
+            local n_dropped=0
+            if [ -n "${LAND_DROPPED_FILE:-}" ] && [ -f "$LAND_DROPPED_FILE" ]; then
+                n_dropped=$(tr -cd '\0' < "$LAND_DROPPED_FILE" 2>/dev/null | wc -c | tr -d '[:space:]') || n_dropped=0
+            fi
+            n_skipped=$(( ${ATTR_N_SKIPPED:-0} - ${ATTR_N_EXCLUDED:-0} + ${ATTR_N_MISSING:-0} + ${n_dropped:-0} ))
+            echo -e "${GREEN}[OK]${NC} Committed $LAND_KIND for task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths, $LAND_N_INFERRED inferred, $n_skipped skipped, ${ATTR_N_UNATTRIBUTED:-0} unattributed)"
+            ;;
+        refused)
+            echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
+            ;;
+        nothing)
+            echo -e "${BLUE}[info]${NC} MOE_COMMIT_NOTHING_TO_COMMIT: task $LAND_TASK_ID -- no changed candidate paths (already landed, or the session changed nothing it may commit)."
+            ;;
+    esac
+    if [ "${ATTR_N_UNATTRIBUTED:-0}" -gt 0 ]; then
+        local unattr_list="" rec
+        while IFS= read -r -d '' rec; do
+            unattr_list="$unattr_list ${rec#*"$MOE_TAB"}"
+        done < "$ATTR_DIR/unattributed"
+        echo -e "${YELLOW}[attribution]${NC} MOE_ATTRIBUTION_UNRESOLVED task=$LAND_TASK_ID:$unattr_list"
+        echo -e "${YELLOW}[attribution]${NC} these changed paths were neither declared by the task nor written by its tools while other workers were active; report them via complete_step.modifiedFiles or moe.declare_files."
+    fi
+
+    # Push policy: completion pushes as today (also after refusals/nothing AND
+    # after a failed commit, so pre-existing local commits reach origin -- same
+    # as the ps1 twin; push_branch itself announces PUSH FAILED when the push
+    # cannot reach the remote). Checkpoints only when settings.checkpointPush.
+    # Ref-contention skips the push: the branch is moving under a peer.
+    LAND_PUSHED=""
+    if [ "$rc" -ne 3 ]; then
+        if [ "$LAND_KIND" = "completion" ]; then
+            if [ "$LAND_OUTCOME" = "failed" ] && [ "${LAND_CODE:-}" = "MOE_COMMIT_FAILED_REF_CONTENTION" ]; then
+                LAND_PUSHED=""
+            elif push_branch "completion"; then
+                LAND_PUSHED="true"
+            else
+                LAND_PUSHED="false"
+            fi
+        elif [ "$LAND_OUTCOME" = "committed" ]; then
+            if [ "$CS_CHECKPOINT_PUSH" = "true" ]; then
+                if push_branch "checkpoint"; then LAND_PUSHED="true"; else LAND_PUSHED="false"; fi
+            else
+                LAND_PUSHED="false"
+                echo -e "${BLUE}[info]${NC} settings.checkpointPush=false -- checkpoint kept local on $LAND_BRANCH."
+            fi
+        fi
+    fi
+
+    # Record (rebase-safe sha lookup by the Moe-Session trailer).
+    if [ "$LAND_OUTCOME" = "committed" ]; then
+        local found
+        found=$(git -C "$MOE_TOP" log -n1 --format=%H --fixed-strings --grep="Moe-Session: $MOE_SID" "$LAND_BRANCH" 2>/dev/null) || found=""
+        if [ -n "$found" ]; then
+            LAND_SHA="$found"
+            LAND_TREE=$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null) || LAND_TREE=""
+        fi
+        record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" 1
+    elif [ "$LAND_OUTCOME" = "nothing" ]; then
+        record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+    elif [ "$LAND_OUTCOME" = "refused" ]; then
+        record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+    else
+        record_commit_rpc "failed" "$LAND_KIND" "" "$LAND_BRANCH" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
+    fi
+    MOE_LANDING_DONE=true
+    # Summary convention (same as the ps1 twin): sha falls back to the rescue
+    # sha on a failed landing that parked its bytes on a rescue ref.
+    LAND_SUMMARY_SHA="${LAND_SHA:-}"
+    [ -n "$LAND_SUMMARY_SHA" ] || LAND_SUMMARY_SHA="${LAND_RESCUE_SHA:-}"
+    [ -n "$LAND_SUMMARY_SHA" ] || LAND_SUMMARY_SHA="none"
+    LAND_SUMMARY_KIND="$LAND_KIND"
+    LAND_SUMMARY_PATHS="$LAND_N_PATHS"
+    LAND_SUMMARY_INFERRED="$LAND_N_INFERRED"
+    LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+    LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"
+    LAND_SUMMARY_CODE="${LAND_CODE:-}"
+    if [ "$rc" -eq 3 ]; then return 3; fi
+    if [ "$LAND_OUTCOME" = "failed" ]; then return 1; fi
+    return 0
+}
+
+# ---- pre-flight --------------------------------------------------------------
+# preflight_landing TASKID TITLE STATUS_HINT launch|idle
+#   1. scope (preflight)  2. DONE/ARCHIVED/notFound -> drop baseline  3. lingering
+#   baseline -> recovery checkpoint NOW (MOE_CHECKPOINT_RECOVERED)  [idle stops
+#   here]  4. baseline merge  5. rescue-ref discovery  6. shared-checkout notice
+#   (both go into MOE_PREFLIGHT_NOTICE for the dynamic context).
+preflight_landing() {
+    local tid="$1" title="$2" status_hint="$3" phase="$4"
+    MOE_PREFLIGHT_NOTICE=""
+    MOE_BASELINE_PATH=""
+    [ "$CS_AUTO_COMMIT" = "true" ] || return 0
+    git_top || return 0
+    local work parsed scope_status="" scope_title="" scope_notfound="0" rc=0 known_mine bp
+    work="$(create_secure_temp)/preflight-$$"
+    rm -rf "$work" 2>/dev/null || true
+    mkdir -p "$work"
+    known_mine="$work/known-mine.txt"
+    commit_scope preflight "$tid" "$work/scope.json"
+    parsed=$($PYTHON_CMD - "$work/scope.json" "$known_mine" "$MOE_REL" <<'PYEOF' 2>/dev/null || echo ""
+import json, re, sys
+scope_f, out_f, rel = sys.argv[1:4]
+def clean(s):
+    return str(s or '').replace('\r', ' ').replace('\n', ' ').replace('\x1f', ' ')
+try:
+    with open(scope_f, encoding='utf-8') as fh:
+        d = json.load(fh)
+    if not isinstance(d, dict):
+        d = {}
+except Exception:
+    d = {}
+def norm(raw):
+    if not isinstance(raw, str):
+        return None
+    p = raw.strip().replace('\\', '/')
+    while p.startswith('./'):
+        p = p[2:]
+    if not p or p.startswith('/') or re.match(r'^[A-Za-z]:/', p) or any(s == '..' for s in p.split('/')):
+        return None
+    return rel + p.rstrip('/')
+with open(out_f, 'w', encoding='utf-8', errors='surrogateescape', newline='') as out:
+    for k in ('asserted', 'touchedFiles', 'unattributedPaths', 'inferredPaths'):
+        for raw in (d.get(k) or []):
+            n = norm(raw)
+            if n:
+                out.write(n + '\n')
+sys.stdout.write(clean(d.get('status')) + '\x1f' + clean(d.get('title')) + '\x1f' + ('1' if d.get('notFound') else '0') + '\x1f')
+PYEOF
+    )
+    if [ -n "$parsed" ]; then
+        { IFS= read -r -d $'\x1f' scope_status
+          IFS= read -r -d $'\x1f' scope_title
+          IFS= read -r -d $'\x1f' scope_notfound
+        } <<< "$parsed" 2>/dev/null || true
+    fi
+    bp="$(baseline_path "$tid")"
+    if [ "${scope_notfound:-0}" = "1" ]; then
+        echo -e "${YELLOW}[WARN]${NC} [attribution] task $tid not found in the daemon or on disk -- dropping its baseline."
+        baseline_delete "$tid"
+        return 0
+    fi
+    if [ "$scope_status" = "DONE" ] || [ "$scope_status" = "ARCHIVED" ]; then
+        baseline_delete "$tid"
+        return 0
+    fi
+    local status="${scope_status:-$status_hint}"
+    [ -n "$status" ] || status="UNKNOWN"
+    [ -n "$title" ] || title="$scope_title"
+
+    # 3. Recovery: a baseline that never reached a completed landing means the
+    # previous session ended without one (Ctrl+C, window close, crash, lookup
+    # failure, CAS exhaustion). Land it as a checkpoint now.
+    if [ -f "$bp" ] && ! baseline_landed "$tid"; then
+        echo -e "${BLUE}[info]${NC} lingering baseline for $tid -- landing the previous session's work before this one starts."
+        LAND_KIND="checkpoint"; LAND_TASK_ID="$tid"; LAND_TITLE="$title"; LAND_STATUS="$status"; LAND_REOPEN=0
+        LAND_CLI_EXIT=0; LAND_RECOVERED=true; LAND_GATE_FAILED=false; LAND_POLICY_OVERRIDE=""
+        LAND_SNAPSHOT_FILE=""; LAND_TOOL_FILE=""; LAND_SCOPE_FILE="$work/scope.json"
+        if run_landing; then rc=0; else rc=$?; fi
+        if [ "$LAND_OUTCOME" = "committed" ]; then
+            echo -e "${GREEN}[OK]${NC} MOE_CHECKPOINT_RECOVERED task=$tid sha=$LAND_SHA"
+        elif [ "$rc" -ne 0 ]; then
+            echo -e "${YELLOW}[WARN]${NC} recovery landing for $tid did not complete (${LAND_CODE:-?}); baseline kept for the next attempt."
+        fi
+        MOE_SCOPE_FALLBACK=0
+    fi
+    [ "$phase" = "idle" ] && return 0
+
+    # 4. Baseline merge: inter-session dirt is presumed foreign unless the task
+    # is already known to own it (asserted/touched/unattributed/inferred/U).
+    local spre="$work/S-pre.tsv" k_foreign="0" head=""
+    if ! git_dirty_snapshot "$spre"; then
+        echo -e "${YELLOW}[WARN]${NC} git status failed at pre-flight; no baseline written for $tid -- measured attribution is off for this session."
+        return 0
+    fi
+    baseline_read "$tid" "$work/B-old.tsv" "$work/U.tsv" || true
+    k_foreign=$($PYTHON_CMD - "$spre" "$work/B-old.tsv" "$known_mine" "$work/U.tsv" "$work/B-new.tsv" <<'PYEOF' 2>/dev/null || echo 0
+import sys
+spre_f, bold_f, mine_f, u_f, out_f = sys.argv[1:6]
+CI = sys.platform in ('win32', 'darwin')
+def key(p):
+    return p.lower() if CI else p
+def rows(path, min_parts):
+    out = []
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as fh:
+            for line in fh:
+                line = line.rstrip('\n').rstrip('\r')
+                parts = line.split('\t')
+                if line and len(parts) >= min_parts:
+                    out.append(parts)
+    except Exception:
+        pass
+    return out
+S = {}
+for parts in rows(spre_f, 3):
+    p = '\t'.join(parts[2:])
+    S[key(p)] = (p, parts[0])
+B = {}
+for parts in rows(bold_f, 2):
+    p = '\t'.join(parts[1:])
+    B[key(p)] = (p, parts[0])
+mine = set()
+try:
+    with open(mine_f, encoding='utf-8', errors='surrogateescape') as fh:
+        for line in fh:
+            line = line.rstrip('\n').rstrip('\r')
+            if line:
+                mine.add(key(line))
+except Exception:
+    pass
+for parts in rows(u_f, 2):
+    mine.add(key('\t'.join(parts[1:])))
+had_baseline = bool(B)
+new = {}
+if not had_baseline:
+    new = dict(S)
+else:
+    for k, (p, blob) in S.items():
+        if k in B:
+            new[k] = B[k]
+        elif k not in mine:
+            new[k] = (p, blob)
+foreign = sum(1 for k in S if k not in mine)
+with open(out_f, 'w', encoding='utf-8', errors='surrogateescape', newline='') as out:
+    for k in sorted(new):
+        p, blob = new[k]
+        out.write(blob + '\t' + p + '\n')
+sys.stdout.write(str(foreign))
+PYEOF
+    )
+    head=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head=""
+    # A dead merge (B-new.tsv absent) must NOT write a header-only baseline:
+    # an empty B reads as "everything changed since baseline" and re-arms the
+    # MEASURED sweep the landing's fail-closed guard exists to prevent.
+    if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0; then
+        MOE_BASELINE_PATH="$bp"
+        echo -e "${BLUE}[attribution]${NC} baseline written for $tid (${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing)"
+    else
+        echo -e "${YELLOW}[WARN]${NC} [attribution] could not write the baseline for $tid under $MOE_GITDIR/moe/baseline -- measured attribution is off for this session."
+    fi
+
+    # 5. Rescue-ref discovery.
+    local rescue_list="" rescue_n=0 rescue_refs=""
+    rescue_list=$(git -C "$MOE_TOP" for-each-ref --format='%(refname:short) %(objectname:short) %(subject)' "refs/moe/rescue/$tid/" 2>/dev/null) || rescue_list=""
+    if [ -n "$rescue_list" ]; then
+        rescue_n=$(printf '%s\n' "$rescue_list" | wc -l | tr -d '[:space:]')
+        rescue_refs=$(printf '%s\n' "$rescue_list" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
+        echo -e "${YELLOW}[rescue]${NC} $rescue_n rescue ref(s) for $tid: $rescue_refs"
+        MOE_PREFLIGHT_NOTICE="Earlier sessions of this task left rescue checkpoints: $rescue_refs. Recover with \`git show <ref> --stat\` / \`git checkout <ref> -- <path>\` before redoing work."
+    fi
+
+    # 6. Shared-checkout notice.
+    local shared_branch
+    shared_branch="$(current_branch_name)"
+    case "$shared_branch" in main|master|HEAD|"") shared_branch="$(peel_target_branch)" ;; esac
+    MOE_PREFLIGHT_NOTICE="${MOE_PREFLIGHT_NOTICE:+$MOE_PREFLIGHT_NOTICE
+}This checkout is shared. ${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing debris. Never revert, stash, \`git add -A\`, or commit them, and never treat them as a stop condition -- note them in your step note and continue. Report every path you create or modify in \`complete_step.modifiedFiles\`. A prerequisite task has landed iff \`get_context.epicSiblings[*].landing.merged\` is true or \`git log $shared_branch --grep 'Moe-Task: <sibling>'\` finds it. BLOCKED is a wait state, never a terminal -- delivered work goes through \`complete_task\`."
+    return 0
+}
+
+# ---- teardown ----------------------------------------------------------------
+# teardown_rescue -- from the EXIT trap (Ctrl+C / SIGTERM / set -e abort),
+# before deregister. If a task id + baseline exist and this session never
+# completed a landing, park a single-snapshot rescue ref (policy never, no CAS
+# loop, no push). Best-effort, idempotent; the persisted baseline stays the
+# primary recovery (the next pre-flight lands it on the branch).
+MOE_TEARDOWN_DONE=false
+teardown_rescue() {
+    [ "$MOE_TEARDOWN_DONE" = true ] && return 0
+    MOE_TEARDOWN_DONE=true
+    set +e
+    local tid="${PREFLIGHT_TASK_ID:-}"
+    [ -n "$tid" ] || return 0
+    [ "${MOE_LANDING_DONE:-}" = "true" ] && return 0
+    [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    [ -f "$(baseline_path "$tid")" ] || return 0
+    [ "$(type -t run_landing)" = "function" ] || return 0
+    echo ""
+    echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
+    local work
+    work="$(create_secure_temp)/teardown-$$"
+    rm -rf "$work" 2>/dev/null
+    mkdir -p "$work" 2>/dev/null || return 0
+    ATTR_DIR="$work/attr"
+    mkdir -p "$ATTR_DIR" 2>/dev/null || return 0
+    LAND_KIND="rescue"; LAND_TASK_ID="$tid"; LAND_TITLE="${PREFLIGHT_TASK_TITLE:-}"; LAND_STATUS="${LAND_STATUS:-UNKNOWN}"
+    LAND_CLI_EXIT="${CLI_EXIT_CODE:-}"; LAND_TREE=""; TI_N_STAGED=0; TI_N_INFERRED=0
+    commit_scope postflight "$tid" "$work/scope.json"
+    baseline_read "$tid" "$work/B.tsv" "$work/U.tsv" || true
+    git_dirty_snapshot "$work/S.tsv" || return 0
+    local tool="${MOE_TOOL_WRITES_FILE:-}"
+    if [ -z "$tool" ] || [ ! -f "$tool" ]; then tool="$work/tool.txt"; : > "$tool"; fi
+    LAND_TOOL_FILE_EFFECTIVE="$tool"
+    resolve_attribution "rescue" "$tid" "$work/S.tsv" "$work/B.tsv" "$work/U.tsv" "$tool" "$work/scope.json" "$ATTR_DIR" "never" || return 0
+    rescue_ref "teardown" "$ATTR_DIR/candidates" || true
+    MOE_LANDING_DONE=true
+    return 0
+}
+
 FIRST_RUN=true
 
 # Consecutive-resume tracking for the alreadyAssigned resume path (pre-flight
@@ -1689,6 +3511,20 @@ while [ "$LOOP_RUNNING" = true ]; do
         MOE_WRAPPER_CURRENT_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
         if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ]; then
             echo "wrapper source changed on disk; restarting to load it"
+            # `exec` replaces this process WITHOUT running the EXIT trap, so
+            # do its two must-haves by hand (ps1 parity): stop the sidecar and
+            # deregister -- the re-exec'd wrapper registers afresh and any
+            # held task is released for it (or a peer) to re-claim. The
+            # previous post-flight already ran, so nothing is left to land.
+            stop_heartbeat_sidecar
+            if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+                bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
+                    "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
+                    --project "$PROJECT" >/dev/null 2>&1 || true
+            fi
+            if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
+                rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
+            fi
             exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
             echo "wrapper relaunch failed; continuing on current bytes"
         fi
@@ -1718,6 +3554,22 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_IS_RESUME=false
     PREFLIGHT_ROUTED_MENTIONS_JSON=""
     PREFLIGHT_ROUTED_MENTIONS_COUNT=0
+    # Landing state is per-iteration: a previous task's baseline, snapshot or
+    # tool-write harvest must never leak into this task's attribution.
+    MOE_PREFLIGHT_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    MOE_SID="$WORKER_ID@$MOE_PREFLIGHT_ISO"
+    MOE_TOP=""
+    MOE_REL=""
+    MOE_GITDIR=""
+    MOE_BASELINE_PATH=""
+    MOE_LANDING_DONE=""
+    MOE_PREFLIGHT_NOTICE=""
+    MOE_TOOL_WRITES_FILE="$(create_secure_temp)/tool-writes-$$.txt"
+    : > "$MOE_TOOL_WRITES_FILE"
+    LAND_STATUS=""
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+    POSTFLIGHT_SNAPSHOT=""
+    read_commit_settings
 
     if [ "$AUTO_CLAIM" = true ]; then
         echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"
@@ -1843,6 +3695,11 @@ except Exception:
                     BLOCKED_DETAIL="$RESUME_TASK_BLOCKED_REASON"
                 fi
                 echo -e "${YELLOW}[blocked]${NC} $RESUME_TASK_ID is BLOCKED ($BLOCKED_DETAIL) -- suppressing auto-resume; will idle until the daemon un-blocks it."
+                # Land-on-every-exit (A5): the held BLOCKED task may carry a
+                # lingering baseline from the session that blocked it. Recover
+                # it onto the branch NOW so a blocked task's files reach git
+                # with no CLI launched (steps 1-3 of the pre-flight landing).
+                preflight_landing "$RESUME_TASK_ID" "$RESUME_TASK_TITLE" "$RESUME_TASK_STATUS" idle || true
                 RESUME_TRACK_TASK_ID=""
                 RESUME_ATTEMPTS=0
                 RESUME_ESCALATED=false
@@ -1867,6 +3724,10 @@ except Exception:
                         RESUME_ESCALATED=true
                     fi
                     echo -e "${RED}[resume]${NC} Auto-resume cap reached ($RESUME_MAX_ATTEMPTS) for $RESUME_TASK_ID -- escalated to #general; idling until released."
+                    # Land-on-every-exit (A6): same recovery landing as the
+                    # BLOCKED hold -- the dying sessions' edits reach the
+                    # branch before this wrapper idles on the held task.
+                    preflight_landing "$RESUME_TASK_ID" "$RESUME_TASK_TITLE" "$RESUME_TASK_STATUS" idle || true
                     RESUME_TASK_ID=""
                 fi
             else
@@ -2489,6 +4350,26 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         PROMPT_BODY="$PROMPT_BODY CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Run verification in the foreground or poll it to completion. Do NOT call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
     fi
 
+    # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
+    # Runs once the task id is known and before the CLI starts (fresh claim
+    # and resume alike). Gated on settings.autoCommit and on $PROJECT being a
+    # git repo (both inside preflight_landing). The notice it produces goes
+    # into the dynamic context so the model knows which dirt is not its own.
+    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
+        preflight_landing "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}" launch || true
+        # A recovery landing in there belongs to the PREVIOUS session; this
+        # session's own landing is still ahead of us.
+        MOE_LANDING_DONE=""
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+        if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
+            DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
+
+<system-reminder>
+$MOE_PREFLIGHT_NOTICE
+</system-reminder>"
+        fi
+    fi
+
     # Compose final PROMPT = DYNAMIC_CONTEXT (per-iteration) + PROMPT_BODY (role).
     # Order: dynamic context first (sets the per-task scene), role body last (latest user instruction).
     if [ -n "$PROMPT_BODY" ]; then
@@ -2696,12 +4577,89 @@ $PROMPT_BODY"
         # Inline stream-json pretty-printer for --print mode (mirrors the
         # PowerShell launcher's parser): terse per-event lines for init /
         # tool_use / text / rate-limit / result; non-JSON lines pass through.
+        # It ALSO harvests the paths the model's editing tools wrote (Edit /
+        # Write / MultiEdit / NotebookEdit file_path|notebook_path, the Serena
+        # edit tools' relative_path, complete_step.modifiedFiles) into
+        # $MOE_TOOL_WRITES_FILE, TOP-relative -- the TOOL tier of the
+        # post-flight attribution: a path this session's tools wrote is the
+        # session's own even when a peer's plan also names it and even with
+        # other workers active. Absolute paths outside the repo are dropped
+        # with a WARN. Codex/gemini have no such stream: their TOOL set is
+        # empty (documented).
         STREAM_JSON_PARSER=$(cat <<'PYEOF'
-import json, sys
+import json, os, re, sys
 tool_json = ''
+tool_name = ''
 in_text = False
+harvest_path = os.environ.get('MOE_TOOL_WRITES_FILE') or ''
+top = (os.environ.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
+rel = os.environ.get('MOE_GIT_REL') or ''
+serena_root = (os.environ.get('MOE_SERENA_PROJECT_ROOT') or '').replace('\\', '/').rstrip('/')
+CI = sys.platform in ('win32', 'darwin')
+WRITE_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
+SERENA_TOOLS = ('replace_symbol_body', 'insert_after_symbol', 'insert_before_symbol', 'create_text_file', 'replace_regex')
 def w(s):
     sys.stdout.write(s); sys.stdout.flush()
+def base_name(n):
+    n = n or ''
+    return n.split('__')[-1] if n.startswith('mcp__') else n
+def to_top_rel(raw):
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    p = raw.strip().replace('\\', '/')
+    if sys.platform == 'win32':
+        m = re.match(r'^/([A-Za-z])/(.*)$', p)
+        if m:
+            p = m.group(1).upper() + ':/' + m.group(2)
+    if p.startswith('/') or re.match(r'^[A-Za-z]:/', p):
+        if not top:
+            return None
+        a = p.lower() if CI else p
+        t = top.lower() if CI else top
+        if not a.startswith(t + '/'):
+            return None
+        return p[len(top) + 1:]
+    while p.startswith('./'):
+        p = p[2:]
+    if not p or any(seg == '..' for seg in p.split('/')):
+        return None
+    return rel + p
+def harvest(name, inp):
+    if not harvest_path or not isinstance(inp, dict):
+        return
+    n = base_name(name)
+    if n in WRITE_TOOLS:
+        raws = [inp.get('file_path'), inp.get('notebook_path')]
+    elif n in SERENA_TOOLS:
+        # Serena resolves relative_path against ITS project root (the
+        # serenaProject override can point outside this Moe project): join it
+        # there first so the harvest maps the REAL file -- exactly what the
+        # ps1 twin's Add-MoeToolWrittenPath does. Absolute results outside the
+        # repo are then dropped by to_top_rel with the usual WARN.
+        raws = []
+        for raw0 in [inp.get('relative_path')]:
+            if isinstance(raw0, str) and raw0.strip() and serena_root:
+                p0 = raw0.strip().replace('\\', '/')
+                if not (p0.startswith('/') or re.match(r'^[A-Za-z]:/', p0)):
+                    raw0 = serena_root + '/' + p0
+            raws.append(raw0)
+    elif n in ('moe_complete_step', 'complete_step'):
+        mf = inp.get('modifiedFiles')
+        raws = mf if isinstance(mf, list) else []
+    else:
+        return
+    for raw in raws:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        r = to_top_rel(raw)
+        if r is None:
+            w('  [WARN] tool write outside the repo not harvested: %s\n' % raw)
+            continue
+        try:
+            with open(harvest_path, 'a', encoding='utf-8') as fh:
+                fh.write(r + '\n')
+        except Exception:
+            pass
 for line in sys.stdin:
     line = line.rstrip('\n')
     if not line.strip():
@@ -2720,6 +4678,7 @@ for line in sys.stdin:
             cb = e.get('content_block') or {}
             if cb.get('type') == 'tool_use':
                 tool_json = ''
+                tool_name = cb.get('name') or ''
                 in_text = False
                 w('  -> %s' % cb.get('name'))
             elif cb.get('type') == 'text':
@@ -2737,10 +4696,23 @@ for line in sys.stdin:
             if tool_json:
                 j = tool_json if len(tool_json) <= 140 else tool_json[:140] + '...'
                 w(' %s\n' % j)
+                try:
+                    harvest(tool_name, json.loads(tool_json))
+                except Exception:
+                    pass
                 tool_json = ''
             elif in_text:
                 w('\n')
                 in_text = False
+    elif t == 'assistant':
+        # Non-streamed assistant turns carry the full tool_use.input.
+        msg = evt.get('message') or {}
+        for blk in (msg.get('content') or []):
+            if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                try:
+                    harvest(blk.get('name'), blk.get('input'))
+                except Exception:
+                    pass
     elif t == 'rate_limit_event':
         rl = evt.get('rate_limit_info') or {}
         tag = 'OVERAGE' if rl.get('isUsingOverage') else rl.get('status')
@@ -2796,7 +4768,7 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$PYTHON_CMD" -u -c "$STREAM_JSON_PARSER"
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "$PROMPT")
@@ -2808,7 +4780,7 @@ PYEOF
             set +e
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | "$PYTHON_CMD" -u -c "$STREAM_JSON_PARSER"
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)
@@ -2822,9 +4794,16 @@ PYEOF
     stop_heartbeat_sidecar
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
-    # Save session summary and announce session end in #general. Best-effort -- any
-    # RPC failure does not block loop continuation.
-    post_flight || true
+    # Dirty snapshot FIRST: after the CLI exits and before any daemon RPC, so
+    # the blobs the attribution compares are exactly what the session left.
+    POSTFLIGHT_SNAPSHOT=""
+    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$CS_AUTO_COMMIT" = "true" ] && [ -n "$MOE_TOP" ]; then
+        POSTFLIGHT_SNAPSHOT="$(create_secure_temp)/S-post-$$.tsv"
+        git_dirty_snapshot "$POSTFLIGHT_SNAPSHOT" || POSTFLIGHT_SNAPSHOT=""
+    fi
+    # The session-ended chat line (post_flight) runs AFTER the landing now so
+    # it can carry commit=<sha> kind=<k> paths=<n> -- see the end of the block.
+    POSTFLIGHT_BREAK=false
 
     if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         # Check task's final status and reopenCount (agent may have completed,
@@ -2952,43 +4931,69 @@ except Exception:
             fi
         fi
 
-        # Auto-commit + push on worker completion. Runs when:
-        #   - role is worker
-        #   - task is now in REVIEW (worker just called moe.complete_task, either
-        #     first time or retry after qa_reject)
-        #   - project.json `settings.autoCommit` is not explicitly false
-        #   - $PROJECT is a git repo with a remote
-        # All operations are best-effort: failures log a warning but never abort
-        # the wrapper loop. Commits use whatever git identity the user has
-        # configured -- no Claude/Codex attribution.
-        if [ "$ROLE" = "worker" ] && [ "$FINAL_STATUS" = "REVIEW" ]; then
-            AUTO_COMMIT=$($PYTHON_CMD -c "
-import json, os, sys
-p = os.path.join(sys.argv[1], 'project.json')
-try:
-    d = json.load(open(p))
-    v = (d.get('settings') or {}).get('autoCommit')
-    # Default true: autoCommit is opt-out, not opt-in.
-    print('false' if v is False else 'true')
-except Exception:
-    print('true')
-" "$MOE_DIR" 2>/dev/null || echo "true")
-            if [ "$AUTO_COMMIT" = "true" ]; then
-                if git -C "$PROJECT" rev-parse --git-dir > /dev/null 2>&1; then
-                    echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true)...${NC}"
-
+        # -------- Landing: every exit path lands (land-on-every-exit) --------
+        # Mode selection replaces the old `worker && REVIEW` guard. That guard
+        # let every non-REVIEW exit (BLOCKED, WORKING after a CLI death, a
+        # PLANNING flip, the DONE race with QA), every architect/qa session and
+        # every Ctrl+C leave the session's edits dirty in the shared tree, where
+        # the next session found them as foreign debris (measured: the moe-next
+        # stranded sources). Now:
+        #   autoCommit=false    -> none (logged, no longer silent; the master
+        #                          switch also disables the UNKNOWN checkpoint)
+        #   statusLookupError   -> checkpoint status=UNKNOWN (the task id is
+        #                          certain; only its status is not)
+        #   worker + REVIEW|DONE -> completion (DONE = QA raced ahead)
+        #   worker|architect|qa + checkpointCommits -> checkpoint
+        # Commits use whatever git identity the user has configured -- no
+        # Claude/Codex attribution. Everything is best-effort: a failure logs
+        # and parks the bytes on a rescue ref, it never aborts the loop.
+        LANDING_MODE="none"
+        LANDING_STATUS=""
+        if [ "$CS_AUTO_COMMIT" != "true" ]; then
+            echo -e "${BLUE}[info]${NC} settings.autoCommit=false -- no git activity for task $PREFLIGHT_TASK_ID (no completion, checkpoint or rescue); baseline deleted."
+            baseline_delete "$PREFLIGHT_TASK_ID"
+        elif [ -n "$STATUS_LOOKUP_ERROR" ]; then
+            LANDING_MODE="checkpoint"
+            LANDING_STATUS="UNKNOWN"
+        elif [ "$ROLE" = "worker" ] && { [ "$FINAL_STATUS" = "REVIEW" ] || [ "$FINAL_STATUS" = "DONE" ]; }; then
+            LANDING_MODE="completion"
+            LANDING_STATUS="$FINAL_STATUS"
+        elif { [ "$ROLE" = "worker" ] || [ "$ROLE" = "architect" ] || [ "$ROLE" = "qa" ]; } \
+            && [ "$CS_CHECKPOINT_COMMITS" = "true" ] && [ "${MOE_DISABLE_CHECKPOINT:-0}" != "1" ]; then
+            LANDING_MODE="checkpoint"
+            LANDING_STATUS="${FINAL_STATUS:-UNKNOWN}"
+        else
+            echo -e "${BLUE}[info]${NC} no landing for task $PREFLIGHT_TASK_ID (role=$ROLE status=${FINAL_STATUS:-?} checkpointCommits=$CS_CHECKPOINT_COMMITS MOE_DISABLE_CHECKPOINT=${MOE_DISABLE_CHECKPOINT:-0})."
+            # A DELIBERATE no-landing exit (checkpointCommits=false / a role
+            # with no landing) must not arm the recovery checkpoint: mark the
+            # baseline landed so the next pre-flight does not land this
+            # session's edits as a wip(...) recovered commit the operator
+            # turned off. Same as the ps1 twin's Set-MoeBaselineLanded.
+            if [ -n "$MOE_TOP" ] || git_top; then
+                baseline_mark_landed "$PREFLIGHT_TASK_ID"
+            fi
+        fi
+        if [ "$LANDING_MODE" != "none" ]; then
+            if [ -z "$MOE_TOP" ] && ! git_top; then
+                echo -e "${YELLOW}[info]${NC} $PROJECT is not a git repo -- skipping auto-commit+push."
+            else
+                echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true, mode=$LANDING_MODE, status=$LANDING_STATUS)...${NC}"
+                GATE_FAILED=false
+                GATE_RC=0
+                GATE_OUT=""
+                QUALITY_GATE=""
+                QUALITY_GATE_SCOPE="epicFinal"
+                if [ "$LANDING_MODE" = "completion" ]; then
                     # Quality gate: settings.qualityGate is an optional shell
                     # command (lint/typecheck/tests) that must pass before the
-                    # post-flight may commit+push. The task already flipped to
-                    # REVIEW, so a failing gate can't un-transition it -- it
-                    # blocks the ship instead: no commit, no push, loud announce
-                    # (chat + task comment with the output tail so QA rejects
-                    # with evidence), and the worker loop hard-stops -- same
-                    # rationale as the branch-safety stop below: looping on with
-                    # uncommitted edits would let the next task's `git add -A`
-                    # absorb them. Opt out per-run via MOE_DISABLE_QUALITY_GATE=1.
-                    QUALITY_GATE=""
-                    QUALITY_GATE_SCOPE="epicFinal"
+                    # post-flight may commit+push a completion. The task already
+                    # flipped to REVIEW, so a failing gate can't un-transition
+                    # it -- it blocks the ship instead: the session's edits go
+                    # to a rescue ref (never a branch commit, never pushed), a
+                    # loud announce (chat + task comment with the output tail so
+                    # QA rejects with evidence), and the worker loop hard-stops
+                    # so the failed tree is handled by a human, not absorbed by
+                    # the next task. Opt out per-run via MOE_DISABLE_QUALITY_GATE=1.
                     if [ "${MOE_DISABLE_QUALITY_GATE:-0}" != "1" ]; then
                         QUALITY_GATE=$($PYTHON_CMD -c "
 import json, os, sys
@@ -3021,8 +5026,8 @@ except Exception:
                     fi
                     if [ -n "$QUALITY_GATE" ]; then
                         echo -e "${BLUE}Post-flight: quality gate: $QUALITY_GATE${NC}"
-                        # Capture output AND exit code separately (same pattern as
-                        # the commit below) so `set -e` can't abort on a failing gate.
+                        # Capture output AND exit code separately so `set -e`
+                        # can't abort on a failing gate.
                         if GATE_OUT=$(cd "$PROJECT" && bash -c "$QUALITY_GATE" 2>&1); then
                             GATE_RC=0
                         else
@@ -3031,255 +5036,61 @@ except Exception:
                         if [ "$GATE_RC" -ne 0 ]; then
                             echo "$GATE_OUT" | tail -15
                             echo -e "${YELLOW}[WARN]${NC} qualityGate failed (exit $GATE_RC); skipping commit+push for task $PREFLIGHT_TASK_ID."
-                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID left uncommitted -- stopping the worker loop so its edits aren't absorbed by the next task's git add -A."
-                            announce_gate_failure "$PREFLIGHT_TASK_ID" "$QUALITY_GATE" "$GATE_RC" "$GATE_OUT"
-                            break
-                        fi
-                        echo -e "${GREEN}[OK]${NC} qualityGate passed."
-                    fi
-
-                    # Never commit/push directly to main or master. If the worker
-                    # finished on the default branch, peel off onto a shared Moe
-                    # working branch (moe/work-<YYYY-MM-DD>) before committing.
-                    # Uncommitted/staged changes follow the checkout. Existing
-                    # non-default branches are reused as-is -- this is not
-                    # branch-per-task.
-                    # Resolve the branch via symbolic-ref first: it returns the
-                    # branch name even on an unborn branch (fresh init, zero
-                    # commits) and FAILS on a detached HEAD. rev-parse is the
-                    # fallback but returns the literal "HEAD" for both detached
-                    # and unborn -- which silently bypassed this guard and let
-                    # auto-commit land on a dangling commit (detached) or the
-                    # default branch's first commit (unborn). Treat detached
-                    # (symbolic-ref failure / literal "HEAD") AND main/master as
-                    # unsafe -> peel onto moe/work-<date> (checkout -b works from
-                    # a detached HEAD and renames an unborn ref correctly).
-                    CURRENT_BRANCH=$(git -C "$PROJECT" symbolic-ref --short -q HEAD 2>/dev/null)
-                    if [ -z "$CURRENT_BRANCH" ]; then
-                        CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
-                    fi
-                    if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ] || [ "$CURRENT_BRANCH" = "HEAD" ] || [ -z "$CURRENT_BRANCH" ]; then
-                        MOE_BRANCH="moe/work-$(date +%Y-%m-%d)"
-                        echo -e "${YELLOW}[branch]${NC} on $CURRENT_BRANCH; switching to $MOE_BRANCH so we don't commit to the default branch."
-                        if git -C "$PROJECT" rev-parse --verify --quiet "refs/heads/$MOE_BRANCH" > /dev/null 2>&1; then
-                            git -C "$PROJECT" checkout "$MOE_BRANCH" 2>&1 | tail -2
-                        elif git -C "$PROJECT" rev-parse --verify --quiet "refs/remotes/origin/$MOE_BRANCH" > /dev/null 2>&1; then
-                            git -C "$PROJECT" checkout -b "$MOE_BRANCH" "origin/$MOE_BRANCH" 2>&1 | tail -2
+                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID will be parked on a rescue ref (never a branch commit) -- stopping the worker loop after the rescue so the failed tree can't be absorbed by a later task."
+                            GATE_FAILED=true
                         else
-                            git -C "$PROJECT" checkout -b "$MOE_BRANCH" 2>&1 | tail -2
-                        fi
-                        CURRENT_BRANCH=$(git -C "$PROJECT" symbolic-ref --short -q HEAD 2>/dev/null)
-                        if [ -z "$CURRENT_BRANCH" ]; then
-                            CURRENT_BRANCH=$(git -C "$PROJECT" rev-parse --abbrev-ref HEAD 2>/dev/null)
-                        fi
-                        if [ "$CURRENT_BRANCH" != "$MOE_BRANCH" ]; then
-                            echo -e "${YELLOW}[WARN]${NC} failed to switch off default branch; aborting auto-commit to avoid writing to it."
-                            # The finished task's edits are still uncommitted in the
-                            # worktree. A bare `continue` would loop to the next task
-                            # whose `git add -A` would absorb this task's work into
-                            # the wrong commit; a single-shot `continue` would also
-                            # spin the loop forever. Hard-stop the loop in BOTH modes
-                            # so the uncommitted edits stay isolated for manual
-                            # handling and can't be swept into a later task's commit.
-                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID left uncommitted on $CURRENT_BRANCH -- stopping the worker loop so its edits aren't absorbed by the next task's git add -A."
-                            announce_push_failure "$PREFLIGHT_TASK_ID"
-                            break
+                            echo -e "${GREEN}[OK]${NC} qualityGate passed."
                         fi
                     fi
-
-                    COMMIT_TYPE="feat"
-                    COMMIT_SUFFIX=""
-                    if [ "$FINAL_REOPEN_COUNT" -gt 0 ] 2>/dev/null; then
-                        COMMIT_TYPE="fix"
-                        COMMIT_SUFFIX=" (retry after qa_reject #$FINAL_REOPEN_COUNT)"
-                    fi
-                    COMMIT_MSG="$COMMIT_TYPE($PREFLIGHT_TASK_ID): ${PREFLIGHT_TASK_TITLE:-completed task}$COMMIT_SUFFIX
-
-Completed via Moe worker session."
-                    # Stage AND commit by the task's OWN pathspec (epic rail: a
-                    # whole-tree commit at completion is forbidden -- it absorbs
-                    # other live agents' in-flight files and mis-attributes
-                    # their work). `filesModified` is the task's durable file
-                    # report. When it cannot be derived we now REFUSE with a
-                    # stable reason code; there is no whole-tree fallback,
-                    # because a fallback that fires silently is how a peer's
-                    # in-flight files reached another task's commit.
-                    #
-                    # Path resolution: the daemon stores a task at
-                    # `.moe/tasks/<taskId>.json` and the id ALREADY carries the
-                    # `task-` prefix, so the old `task-$ID.json` resolved to
-                    # `task-task-<uuid>.json` and never existed (measured: 309
-                    # live task files, zero named `task-task-*`). That miss was
-                    # silent -- the record simply didn't load -- so EVERY
-                    # completion degraded to `git add -A`. Canonical name first;
-                    # the prefixed form stays as tolerance for a bare id.
-                    TASK_JSON="$PROJECT/.moe/tasks/$PREFLIGHT_TASK_ID.json"
-                    if [ ! -f "$TASK_JSON" ]; then
-                        TASK_JSON="$PROJECT/.moe/tasks/task-$PREFLIGHT_TASK_ID.json"
-                    fi
-                    TASK_FILES=""
-                    if [ -f "$TASK_JSON" ] && command -v node >/dev/null 2>&1; then
-                        TASK_FILES=$(node -e "
-                          try {
-                            const t = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-                            const files = Array.isArray(t.filesModified) ? t.filesModified : [];
-                            console.log(files.filter((f) => typeof f === 'string' && f).join('\n'));
-                          } catch {}
-                        " "$TASK_JSON" 2>/dev/null)
-                    fi
-                    # Stable reason codes, spelled IDENTICALLY in moe-agent.ps1 so
-                    # an operator grepping either transcript finds the same string.
-                    # The two causes are deliberately DISTINCT: "the task declared
-                    # no paths" and "every declared path is absent" are different
-                    # failures, and collapsing them would make a later guard change
-                    # invisible.
-                    #
-                    # Every path is passed as a `:(literal)` pathspec. A git
-                    # pathspec is a GLOB by default, so a `filesModified` entry
-                    # of `*` -- or any name containing `*`, `?` or `[` -- would
-                    # walk straight back out to a whole-tree stage through the
-                    # "explicit pathspec" route this fix installs. Measured:
-                    # `git add -- '*'` staged every file in a throwaway repo;
-                    # `git add -- ':(literal)*'` matched nothing. The magic
-                    # prefix also makes a leading `-` or a leading `:` inert.
-                    COMMIT_REFUSAL=""
-                    OWNED_SPECS=()
-                    if [ -z "$TASK_FILES" ]; then
-                        COMMIT_REFUSAL="MOE_COMMIT_REFUSED_NO_OWNED_PATHS"
-                    else
-                        # Per-path add tolerating misses: a reported path that never
-                        # existed must not abort staging of the real ones. COUNT the
-                        # survivors -- a pathspec naming an UNTRACKED file matches
-                        # nothing at commit time, so `git commit` exiting 0 is NOT
-                        # proof a deliverable landed. `add` is what makes the path
-                        # known to the index and therefore matchable.
-                        while IFS= read -r TASK_PATH; do
-                            [ -n "$TASK_PATH" ] || continue
-                            if git -C "$PROJECT" add -- ":(literal)$TASK_PATH" 2>/dev/null; then
-                                OWNED_SPECS+=(":(literal)$TASK_PATH")
-                            fi
-                        done <<< "$TASK_FILES"
-                        if [ "${#OWNED_SPECS[@]}" -eq 0 ]; then
-                            COMMIT_REFUSAL="MOE_COMMIT_REFUSED_OWNED_PATH_MISSING"
-                        else
-                            LEFTOVER=$(git -C "$PROJECT" status --porcelain 2>/dev/null | grep -c '^[ ?]' || true)
-                            if [ "${LEFTOVER:-0}" -gt 0 ]; then
-                                echo -e "${BLUE}[info]${NC} Pathspec staging left $LEFTOVER dirty path(s) untouched (other agents' in-flight work)."
-                            fi
-                        fi
-                    fi
-                    # COMMIT_SKIP_PUSH stays true only when a commit was attempted
-                    # and actually failed -- in that case we must NOT push (there is
-                    # nothing new to ship and the tree is in an unknown state).
-                    COMMIT_SKIP_PUSH=false
-                    if [ -n "$COMMIT_REFUSAL" ]; then
-                        # Fail CLOSED. Push still runs: any commits the worker made
-                        # mid-session are already pathspec-scoped by epic rail 3 and
-                        # must still reach the remote, so refusing to COMMIT never
-                        # strands work the worker already committed.
-                        echo -e "${YELLOW}[WARN]${NC} $COMMIT_REFUSAL: task $PREFLIGHT_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
-                    elif ! git -C "$PROJECT" diff --cached --quiet -- "${OWNED_SPECS[@]}" 2>/dev/null; then
-                        # Capture output AND exit code separately: piping commit into
-                        # `tail` would make the `if` test tail's status (always 0) and
-                        # report success even on a failed commit. The substitution
-                        # lives in the `if` condition so `set -e` won't abort on a
-                        # non-zero commit.
-                        #
-                        # `-- "${OWNED_SPECS[@]}"` is the load-bearing part: a BARE
-                        # `git commit` commits the SHARED INDEX, so a peer that
-                        # staged a file before this hook ran had it swept into this
-                        # task's commit regardless of what this hook staged. The
-                        # pathspec form commits only these paths and leaves the
-                        # peer's index entry staged and uncommitted.
-                        if COMMIT_OUT=$(git -C "$PROJECT" commit -m "$COMMIT_MSG" -- "${OWNED_SPECS[@]}" 2>&1); then
-                            COMMIT_RC=0
-                        else
-                            COMMIT_RC=$?
-                        fi
-                        echo "$COMMIT_OUT" | tail -3
-                        if [ "$COMMIT_RC" -eq 0 ]; then
-                            echo -e "${GREEN}[OK]${NC} Committed task $PREFLIGHT_TASK_ID on $CURRENT_BRANCH."
-                        else
-                            echo -e "${YELLOW}[WARN]${NC} git commit failed (pre-commit hook? detached HEAD?); skipping push."
-                            COMMIT_SKIP_PUSH=true
-                        fi
-                    else
-                        echo -e "${BLUE}[info]${NC} No staged changes to commit (worker may have already committed mid-session)."
-                    fi
-                    # Push whatever commits are ahead of the upstream. If the
-                    # current branch has no upstream yet (fresh moe/work-* branch),
-                    # set it on first push so subsequent `git push` succeeds.
-                    if [ "$COMMIT_SKIP_PUSH" = true ]; then
-                        announce_push_failure "$PREFLIGHT_TASK_ID"
-                    elif git -C "$PROJECT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
-                        if PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
-                            echo "$PUSH_OUT" | tail -5
-                            echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
-                        else
-                            echo "$PUSH_OUT" | tail -5
-                            # The task already flipped to REVIEW, so a failed push
-                            # leaves QA reviewing work that never reached the
-                            # remote. The common cause is a non-fast-forward on the
-                            # shared moe/work-* branch: pull --rebase then re-push.
-                            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
-                            # Test the rebase's OWN exit code (capture into a var)
-                            # rather than piping it into `tail` -- otherwise the `if`
-                            # tests tail's status and we'd push on a conflicted,
-                            # mid-rebase tree. Only push when the rebase succeeded; on
-                            # failure abort to restore a clean checkout.
-                            if REBASE_OUT=$(git -C "$PROJECT" pull --rebase 2>&1); then
-                                echo "$REBASE_OUT" | tail -5
-                                if PUSH_OUT=$(git -C "$PROJECT" push 2>&1); then
-                                    echo "$PUSH_OUT" | tail -5
-                                    echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
-                                else
-                                    echo "$PUSH_OUT" | tail -5
-                                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
-                                    announce_push_failure "$PREFLIGHT_TASK_ID"
-                                fi
-                            else
-                                echo "$REBASE_OUT" | tail -5
-                                git -C "$PROJECT" rebase --abort 2>/dev/null || true
-                                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict?); aborted rebase to restore a clean tree -- resolve and push manually."
-                                announce_push_failure "$PREFLIGHT_TASK_ID"
-                            fi
-                        fi
-                    else
-                        if PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
-                            echo "$PUSH_OUT" | tail -5
-                            echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH."
-                        else
-                            echo "$PUSH_OUT" | tail -5
-                            # No upstream yet -- a non-fast-forward is unlikely, but
-                            # the remote branch may already exist (another worker
-                            # pushed it). Pull --rebase from it, then re-push -u.
-                            echo -e "${YELLOW}[WARN]${NC} git push failed; trying git pull --rebase then re-push..."
-                            # As above: capture the rebase's exit code instead of
-                            # piping into `tail`, so a conflicted mid-rebase tree
-                            # doesn't get pushed. Abort the rebase on failure.
-                            if REBASE_OUT=$(git -C "$PROJECT" pull --rebase origin "$CURRENT_BRANCH" 2>&1); then
-                                echo "$REBASE_OUT" | tail -5
-                                if PUSH_OUT=$(git -C "$PROJECT" push -u origin "$CURRENT_BRANCH" 2>&1); then
-                                    echo "$PUSH_OUT" | tail -5
-                                    echo -e "${GREEN}[OK]${NC} Pushed task $PREFLIGHT_TASK_ID to $CURRENT_BRANCH (after rebase)."
-                                else
-                                    echo "$PUSH_OUT" | tail -5
-                                    echo -e "${YELLOW}[WARN]${NC} git push still failing (auth? network? conflict?) -- resolve and push manually."
-                                    announce_push_failure "$PREFLIGHT_TASK_ID"
-                                fi
-                            else
-                                echo "$REBASE_OUT" | tail -5
-                                git -C "$PROJECT" rebase --abort 2>/dev/null || true
-                                echo -e "${YELLOW}[WARN]${NC} git pull --rebase failed (conflict?); aborted rebase to restore a clean tree -- resolve and push manually."
-                                announce_push_failure "$PREFLIGHT_TASK_ID"
-                            fi
-                        fi
-                    fi
-                else
-                    echo -e "${YELLOW}[info]${NC} $PROJECT is not a git repo -- skipping auto-commit+push."
+                fi
+                LAND_KIND="$LANDING_MODE"
+                LAND_TASK_ID="$PREFLIGHT_TASK_ID"
+                LAND_TITLE="$PREFLIGHT_TASK_TITLE"
+                LAND_STATUS="$LANDING_STATUS"
+                LAND_REOPEN="${FINAL_REOPEN_COUNT:-0}"
+                LAND_CLI_EXIT="${CLI_EXIT_CODE:-0}"
+                LAND_RECOVERED=false
+                LAND_GATE_FAILED="$GATE_FAILED"
+                LAND_POLICY_OVERRIDE=""
+                LAND_SNAPSHOT_FILE="$POSTFLIGHT_SNAPSHOT"
+                LAND_TOOL_FILE="$MOE_TOOL_WRITES_FILE"
+                LAND_SCOPE_FILE=""
+                # A gate that ran may have rewritten files (formatters): the
+                # pre-gate snapshot would then drop every touched path as
+                # MOE_ATTR_CONCURRENT, so re-snapshot after it.
+                if [ -n "$QUALITY_GATE" ]; then
+                    LAND_SNAPSHOT_FILE=""
+                fi
+                if run_landing; then LAND_RC=0; else LAND_RC=$?; fi
+                if [ "$GATE_FAILED" = true ]; then
+                    announce_gate_failure "$PREFLIGHT_TASK_ID" "$QUALITY_GATE" "$GATE_RC" "$GATE_OUT"
+                    echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
+                    POSTFLIGHT_BREAK=true
+                elif [ "$LAND_RC" -eq 3 ]; then
+                    # Could not peel off main/master/detached: the bytes are on
+                    # the rescue ref; hard-stop in BOTH modes (and both
+                    # wrappers) so nothing later can sweep the tree.
+                    # No PUSH FAILED chat here (nothing was committed): the
+                    # MOE_RESCUE_REF chat line + the daemon's #governors alert
+                    # from record_commit{outcome:failed} carry the signal —
+                    # identical to the ps1 twin.
+                    echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID could not be landed on a safe branch; its edits are parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
+                    POSTFLIGHT_BREAK=true
                 fi
             fi
         fi
+        # Whatever happened above, this session's bytes have been handled
+        # (committed, parked on a rescue ref, refused, nothing to land, or a
+        # deliberate policy skip): the teardown rescue in the EXIT trap must
+        # not run a second pass. Same as the ps1 twin's unconditional
+        # $moeLandingDone after its landing selection.
+        MOE_LANDING_DONE=true
+    fi
+    # Session-ended chat line (carries commit=<sha|none> kind=<k> paths=<n>).
+    # Best-effort -- any RPC failure does not block loop continuation.
+    post_flight || true
+    if [ "$POSTFLIGHT_BREAK" = true ]; then
+        break
     fi
     # -------- End post-flight --------
 

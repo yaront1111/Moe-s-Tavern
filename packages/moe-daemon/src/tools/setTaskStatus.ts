@@ -33,7 +33,8 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // parked review must be able to send it straight back to the QA queue.
   // BLOCKED ↔ the agent-claimable columns: report_blocked (or a human) parks
   // an in-flight task on an external blocker; the resource grant path,
-  // unblock_worker, or a human flips it back. BLOCKED → BACKLOG is the manual
+  // unblock_worker { resolveBlocks: true }, or a human (this tool) flips it
+  // back — a plain unblock_worker frees only the seat. BLOCKED → BACKLOG is the manual
   // park; BLOCKED is deliberately NOT reachable from human-gated columns
   // (BACKLOG/AWAITING_APPROVAL) — nothing is running there to block.
   BACKLOG: ['PLANNING', 'WORKING', 'REVIEW', 'ARCHIVED'],

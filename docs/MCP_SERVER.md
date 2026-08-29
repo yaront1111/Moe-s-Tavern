@@ -110,6 +110,8 @@ Bookkeeping fields on `Task`:
 
 All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-auto-claim` interactive flows and the JetBrains plugin `/ws` path (which never carries a `workerId`).
 
+Three tools are deliberately **guard-exempt** even though the proxy injects `workerId` into them: `moe.get_commit_scope`, `moe.record_commit` and `moe.declare_files`. The wrapper calls the first two **after** the CLI exits — by then QA may already own the REVIEW task, a seat-only `unblock_worker` may have left it unassigned, or the task may be `BLOCKED`/`DONE` — and a governor uses `declare_files` on tasks it never owns. They are allowed in every task status.
+
 ---
 
 ## Tools (Implemented)
@@ -185,7 +187,15 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     id, title, description, definitionOfDone, taskRails, status, implementationPlan,
     planSizeWarnings?: string[],        // present when the latest submit_plan drew warn-zone size warnings
     verification: { command, exitCode, outputTail?, reportedAt } | null, // complete_task evidence — QA re-runs the command
-    filesModified: string[],            // union of per-step modifiedFiles/affectedFiles, captured at complete_task
+    filesModified: string[],            // ASSERTED paths: completed steps' modifiedFiles ?? affectedFiles (complete_task) ∪ non-inferred paths landed via record_commit
+    declaredPaths?: string[],           // the full ASSERTED tier (completed steps' modifiedFiles ?? affectedFiles ∪ filesModified ∪ declaredFiles ∪ touchedFiles ∪ non-inferred committed paths) — what the wrapper commits regardless of baseline; NOT just the moe.declare_files list
+    inferredPaths?: string[],           // MEASURED-tier paths the wrapper landed; never promoted to asserted
+    unattributedPaths?: string[],       // changed paths the last landing could not attribute (reported, never staged) — claim them with moe.declare_files
+    commits?: Array<{ sha, treeId?, ref, kind: "completion" | "checkpoint" | "rescue", status?, pushed?, recordedAt, recordedBy, pathCount, inferredCount }>, // bounded projection of task.commits (moe.record_commit)
+    lastCommitOutcome?: { outcome: "committed" | "nothing" | "refused" | "failed", kind, code?, sessionId, at },
+    landing?: { lastCompletion?: { sha, ref, pushed, recordedAt }, lastCheckpoint?: { sha, recordedAt } },
+    rescueRefsHint?: string,            // present when any commit is kind "rescue": how to recover from refs/moe/rescue/<taskId>/*
+    epicSiblings?: Array<{ id, title, order, status, landing?: { lastCompletion? }, landed: boolean }>, // same epic, lower order, ≤20; landed = a pushed completion commit or status REVIEW/DONE
     rejectionHistory?: RejectionHistoryEntry[], // present when non-empty; 5 most recent, newest first
     comments: Array<{
       id: string,
@@ -209,6 +219,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 ```
 
 By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
+
+**Commit evidence.** `commits`/`landing`/`lastCommitOutcome` come from the wrapper's `moe.record_commit` reports (the daemon never runs git). A prerequisite task has landed iff `epicSiblings[*].landed` is true — or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it; uncommitted work in a peer's checkout is not a prerequisite. For a `REVIEW` task the `nextAction` reason tells QA to confirm a completion commit is recorded in `task.commits` (`git show <sha>`) before approving. A RESUME context lists `unattributedPaths` with a `moe.declare_files` hint so the resuming session can claim what its predecessor forgot to report.
 
 ---
 
@@ -295,7 +307,13 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 
 **Parameters:**
 ```typescript
-{ taskId: string, stepId: string, modifiedFiles?: string[], note?: string, workerId?: string }
+{
+  taskId: string,
+  stepId: string,
+  modifiedFiles?: string[],   // EVERY project-relative path this step created or modified — omitting it draws a `warning`
+  note?: string,
+  workerId?: string
+}
 ```
 
 **Returns:**
@@ -304,6 +322,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   success: true,
   taskId,
   stepId,
+  warning?: string,                   // present when modifiedFiles was omitted: report every touched path
   progress: { completed, total, percentage },
   effectiveDescription: string,       // what the worker was actually told to do (amendment-resolved)
   amended?: {                         // ABSENT unless an amendment is active on the completed step
@@ -317,6 +336,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 - `effectiveDescription` is the amended text when the step has an active amendment (see `moe.amend_plan_step`), otherwise the step's planned `description`. The chat line posted for the completion uses the same text, so a worker following an amendment does not read as plan drift.
 - `amended` is omitted entirely (not `false`/`null`) on unamended steps, so existing consumers see an unchanged shape.
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
+- `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
 
 ---
 
@@ -380,9 +400,10 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 **Notes:**
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
-- The evidence is persisted as `task.verification` (with `reportedAt`) and the union of per-step `modifiedFiles`/`affectedFiles` as `task.filesModified`; both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself.
+- The evidence is persisted as `task.verification` (with `reportedAt`), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier the wrapper commits regardless of its baseline; `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself and never runs git.
+- **The commit happens after the CLI exits.** `complete_task` only flips the status; the wrapper's post-flight lands the completion commit (`feat|fix(task-<id>): <title>` with `Moe-Task`/`Moe-Kind: completion`/`Moe-Session`/`Moe-Status` trailers), pushes it and reports it via `moe.record_commit` seconds later. A QA that wakes on the REVIEW write can see an empty `task.commits` for that window — `qa_approve` warns (`NO-COMPLETION-COMMIT`) rather than rejecting. If QA raced ahead and the task is already `DONE` when the wrapper looks, the completion commit still lands (`Moe-Status: DONE`).
 - **Branch policy** (`settings.consolidationBranch`, a literal branch name or a `*` glob such as `moe/work-*`; case-sensitive, anchored at both ends). Unset or empty disables the check entirely and no `branchPolicy` key appears in the response. When it is set there are three outcomes: `currentBranch` matches → completion proceeds and the response carries `branchPolicy: { pattern, currentBranch, matched: true }`; `currentBranch` does not match → `CONSTRAINT_VIOLATION` whose message starts `BRANCH-POLICY-FAIL:` and names both branches, thrown **before** the task update so the task stays `WORKING` with no verification persisted; `currentBranch` missing or blank → **never blocked**, a one-line warning is posted to `#governors` and the response carries `branchPolicy: { pattern, matched: null, warning }`.
-- The agent wrappers are unchanged by this: they already peel onto `moe/work-<YYYY-MM-DD>` but do not report the branch yet, so `currentBranch` is opt-in until a later task teaches them to send it — which is exactly why an absent branch warns instead of failing.
+- `currentBranch` is reported by the agent (the CLI), not by the wrapper: the wrapper's landing happens *after* this call, on the branch its safe-branch step picks (a literal `consolidationBranch` doubles as that peel target; otherwise `moe/work-<YYYY-MM-DD>`), and the branch it actually landed on arrives afterwards as `record_commit.ref` / `task.commits[].ref`. That is why an absent `currentBranch` warns instead of failing.
 
 **Returns:**
 ```typescript
@@ -392,6 +413,137 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
   branchPolicy?: { pattern: string, currentBranch?: string, matched: boolean | null, warning?: string }
 }
 ```
+
+---
+
+### moe.get_commit_scope
+
+**Wrapper-called; not for agents.** Returns everything the agent wrapper's post-flight needs to attribute dirty paths to one task: the task's ASSERTED and PLANNED path tiers, every other live task's declared paths (PEER), which peers are active, the DENY/BOARD lists and the resolved commit policy. State-only — the daemon never runs git; the wrapper joins this with its own `git status` snapshot and the persisted per-task baseline (`<gitdir>/moe/baseline/<taskId>.tsv`). Attribution rules and codes: `docs/CONFIGURATION.md` → `autoCommit`, `docs/TROUBLESHOOTING.md` → `MOE_ATTR_*`.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,                          // Required
+  workerId?: string,                       // caller (auto-injected by proxy); counted in activePeerIds when it is not the assignee
+  sessionId?: string,                      // "<workerId>@<preflight-iso>" — the Moe-Session trailer of the landing commit
+  phase?: "preflight" | "postflight",
+  since?: string                           // ISO; peers active since this instant (default: the 120s presence window)
+}
+```
+
+**Returns:**
+```typescript
+{
+  taskId, title, status, epicId, reopenCount, assignedWorkerId,
+  assigneeAlive: boolean,
+  asserted: string[],         // ⋃ COMPLETED steps' (modifiedFiles ?? affectedFiles) ∪ task.filesModified ∪ task.declaredFiles ∪ task.touchedFiles ∪ non-inferred commits[].paths
+  planned: string[],          // ⋃ ALL steps' (affectedFiles ∪ newFiles ∪ modifiedFiles) ∪ task.inferredPaths, minus asserted
+  touchedFiles: string[],
+  inferredPaths: string[],
+  unattributedPaths: string[],
+  peerDeclared: { path: string, taskId: string }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED}
+  livePeerIds: string[],      // workers ≠ caller, not DEAD, lastActivityAt inside the window (or registered since `since`)
+  activePeerIds: string[],
+  peersActive: boolean,
+  alwaysInclude: string[],    // BOARD: .moe/tasks/<taskId>.json (always) + .moe/epics/*.json, .moe/project.json, non-live-peer task records (when commitBoardState)
+  excludePrefixes: string[],  // settings.attribution.exclude ONLY, normalized (project-relative, trailing slash stripped). The built-in DENY list (.moe/** except BOARD, .mcp.json, .codex/**, .gemini/**, .claude/agents/**, .claude/settings.local.json, untracked .serena/**, .worktrees/**, .moe-worktree*) is hard-coded wrapper-side and never travels here.
+  policy: {
+    autoCommit, checkpointCommits, checkpointPush, commitBoardState, commitHooks,
+    undeclared: "solo" | "never" | "always",
+    contested: "commit" | "skip"
+  }
+}
+```
+
+**Notes:**
+- No ownership guard and no status restriction — the wrapper calls it at pre-flight and post-flight, including for a task QA already owns, an unassigned `BLOCKED` task, or a `DONE`/`ARCHIVED` task (the wrapper then deletes that task's baseline instead of landing).
+- Paths are normalised like `affectedFiles` (`normalizeAffectedFiles`) and deduped by `pathKey` (case-folded on win32/darwin).
+- When the RPC fails (older daemon, daemon down) the wrapper falls back to disk — its own `.moe/tasks/<id>.json` plus every other task record — with the policy forced to `undeclared: "never"` and `peersActive: true`: declared-only landing, never a sweep.
+
+**Errors:**
+- `taskId is required`
+- `Task not found: <taskId>`
+
+---
+
+### moe.record_commit
+
+**Wrapper-called; not for agents.** The post-flight reports every landing attempt here — committed, nothing to commit, refused, or failed — for completion commits, checkpoints and rescue refs. This is the daemon's commit ledger: it is what `qa_approve` audits, what `get_context.commits`/`landing`/`epicSiblings` project, and what `scripts/analyze-task-metrics.mjs --commits` joins against `git log --grep 'Moe-Task:'`.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  outcome: "committed" | "nothing" | "refused" | "failed",
+  kind: "completion" | "checkpoint" | "rescue",
+  sha?: string,                 // /^[0-9a-f]{7,40}$/i — set for outcome "committed"
+  treeId?: string,
+  ref?: string,                 // branch name, or refs/moe/rescue/<taskId>/<ts> for kind "rescue"
+  status?: string,              // task status the wrapper resolved (REVIEW/DONE/WORKING/BLOCKED/…/UNKNOWN)
+  role: string,                 // worker | architect | qa
+  workerId?: string,
+  sessionId: string,            // "<workerId>@<preflight-iso>" — matches the commit's Moe-Session trailer
+  cliExitCode?: number,
+  pushed?: boolean,
+  recoveredBy?: string,         // set when a different worker landed a lingering baseline (recovery checkpoint)
+  paths?: string[],             // landed paths (≤500; `pathsTruncated` is recorded past that)
+  inferredPaths?: string[],     // MEASURED-tier paths inside `paths`
+  touchedPaths?: string[],      // tool-write harvest this session
+  unattributedPaths?: string[], // changed-but-unattributed paths (reported, never staged)
+  skipped?: { path: string, code: string }[],   // ≤100; code = MOE_ATTR_*
+  contested?: { path: string, taskId: string }[],
+  code?: string,                // MOE_COMMIT_* code for refused/failed
+  message?: string
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, sha?, kind, outcome, duplicate?: boolean, commitCount, filesModified, addedPaths, warning? }
+```
+
+**Notes:**
+- On `committed`: appends a `TaskCommit` to `task.commits` (idempotent by `sha` → `duplicate: true`; capped at `MAX_COMMITS_PER_TASK`, default 50, newest kept — same env pattern as `MAX_COMMENTS_PER_TASK`), unions `paths − inferredPaths` into `task.filesModified` (returned as `addedPaths`), `inferredPaths` into `task.inferredPaths` (never promoted to asserted), `touchedPaths` into `task.touchedFiles`, and **replaces** `task.unattributedPaths`.
+- Every outcome — including `nothing`, `refused` and `failed` — sets `task.lastCommitOutcome = { outcome, kind, code?, sessionId, at }`, so "the wrapper never got here" is distinguishable from "it refused".
+- Persisted with activity event `TASK_COMMIT_RECORDED`; refreshes the calling worker's `lastActivityAt`.
+- Chat: one line to the task channel for every call; a `#governors` line (rate-limited to once per task per 24h) when `unattributedPaths` is non-empty, `kind` is `rescue`, or `outcome` is not `committed`/`nothing`. Chat failures never fail the record.
+- `warning` when `kind === "completion"` and `paths` is empty.
+- **Guard-exempt and status-agnostic**: allowed in every task status (`DONE`, `BLOCKED`, unassigned). See **Ownership & Ordering**.
+
+**Errors:**
+- `taskId is required` / `Task not found: <taskId>`
+- `[INVALID_INPUT]` on a malformed `sha`, an unknown `outcome`/`kind`, or a missing `sessionId`/`role`
+
+---
+
+### moe.declare_files
+
+Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, which the wrapper treats as the **ASSERTED** attribution tier — the next post-flight of that task commits them regardless of the baseline. This is the governor/worker lever for "these edits are mine, land them" (a path listed in `get_context.unattributedPaths`, a helper file the plan never named, debris a DONE task left dirty) and replaces hand-landed `chore(...)` commits.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  paths: string[],      // project-relative, forward slashes; normalised + deduped like affectedFiles
+  workerId?: string,    // caller (auto-injected by proxy)
+  note?: string         // why — posted to the task channel
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, taskId, declaredFiles: string[], addedPaths: string[] }
+```
+
+**Notes:**
+- No ownership guard: a governor declares onto tasks it never owns. Activity event: `TASK_FILES_DECLARED`.
+- Declaring does not commit anything by itself — the assigned agent's next session exit (or the BLOCKED-hold idle path, which lands lingering baselines with no CLI launched) lands it. Declare onto a task that will still get a session; a `DONE` task never runs a post-flight again.
+- A declared path that no longer exists on disk and is not in HEAD is reported as `MOE_ATTR_MISSING` at landing, never committed as a deletion.
+
+**Errors:**
+- `taskId is required` / `paths is required` (non-empty array)
+- `[INVALID_INPUT]` for absolute paths or `..` traversal
+- `Task not found: <taskId>`
 
 ---
 
@@ -413,7 +565,8 @@ Report a task as blocked: flips the task to `BLOCKED` (the wrapper stops relaunc
 - With **no live architect**, the ping escalates to `@governors` instead.
 - Channels: the task/general system copy stays unmentioned (it lands in `#general`, which already receives the mentioned copy — prefixing both would page the same person twice); `#general` gets the mentioned copy; `#architects` additionally gets it when an architect was found; `#governors` always receives the message — unmentioned when an architect was paged (visibility without being paged), mentioned when it *is* the escalation. Every post is best-effort: a chat failure never fails `report_blocked` or skips the `BLOCKED` update.
 - `nextAction` is emitted only when the task has an assigned worker **and no `resourceId`**. A resource block deliberately gets **no `nextAction`**: the wrapper idles (`BLOCKED` suppresses relaunch) and the grant path auto-unblocks the task, so ending the session IS the correct next step — there is nothing to wait on in-session.
-- Un-block routes: the resource grant path (auto), `moe.unblock_worker`, or a human `set_task_status`. Ordinary releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there.
+- **Every plan step already `COMPLETED`, no `resourceId`, and the task blocked out of `WORKING`**: the block still happens, but the response carries `warning: 'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'` and `nextAction` pointing at `moe.complete_task`. REVIEW/PLANNING-origin blocks never warn — `complete_task` is only legal from `WORKING` (a REVIEW-origin block always has all steps completed). Delivered work goes through `complete_task`; `BLOCKED` is never a finish line.
+- Un-block routes: the resource grant path (auto), `moe.unblock_worker { resolveBlocks: true }`, or a human `set_task_status`. A bare `moe.unblock_worker` is **seat-only** — the worker goes `IDLE` but the task stays `BLOCKED` with its `blockedReason`. Ordinary releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there. The wrapper lands a checkpoint commit of the task's files on the BLOCKED exit, so a block never strands bytes.
 
 **Returns:**
 ```typescript
@@ -433,7 +586,8 @@ Report a task as blocked: flips the task to `BLOCKED` (the wrapper stops relaunc
     via: "freshest-live-architect" | "governors-fallback"
   },
   message: string,                    // names who was pinged
-  nextAction?: { tool: "moe.wait_for_task", ... }   // only when assigned AND not a resource block
+  warning?: string,                   // "ALL_STEPS_COMPLETE: …" when every step is COMPLETED, no resourceId, and the block originated from WORKING
+  nextAction?: { tool: "moe.wait_for_task" | "moe.complete_task", ... }   // wait_for_task only when assigned AND not a resource block; complete_task alongside the ALL_STEPS_COMPLETE warning
 }
 ```
 
@@ -587,7 +741,7 @@ When `taskId` is provided the priority/order ranking is bypassed — you get the
 
 **One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
 
-**BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason` and `blockedResourceId` (each present only when set on the task), and `nextAction` points at `moe.list_resources` instead of `get_context`. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); no `resourceId` means the block needs a human (`moe.unblock_worker` / `set_task_status`).
+**BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason` and `blockedResourceId` (each present only when set on the task), and `nextAction` points at `moe.list_resources` instead of `get_context`. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); no `resourceId` means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
 
 With `preferAdjacentInEpic` on (default), candidates in the caller's currently-recorded epic (or explicit `epicId`) are ranked ahead of other epics before priority/order — so a worker waking from `wait_for_task` picks up the next adjacent task instead of jumping to an unrelated epic.
 
@@ -935,14 +1089,15 @@ Delete an epic and optionally its tasks.
 
 ### moe.unblock_worker
 
-Clear BLOCKED status on a worker, setting it back to IDLE — and un-block/release the tasks it holds. This is the human "blocker resolved" lever.
+Clear `BLOCKED` status on a worker, setting it back to `IDLE`. **Seat-only by default**: the worker's seat is freed, but a `BLOCKED` task it holds stays `BLOCKED` with `blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt` intact — freeing a seat is not an assertion that the blocker is gone. Pass `resolveBlocks: true` to also restore the task; that is the human "blocker resolved" lever.
 
 **Parameters:**
 ```typescript
 {
-  workerId: string,       // Required: the worker ID to unblock
-  resolution: string,     // Required: what was done to resolve the block
-  retryTask?: boolean     // If true, worker keeps currentTaskId to retry (default false)
+  workerId: string,        // Required: the worker ID to unblock
+  resolution: string,      // Required: what was done (seat freed / blocker resolved)
+  retryTask?: boolean,     // If true, worker keeps currentTaskId to retry (default false)
+  resolveBlocks?: boolean  // default false: also restore BLOCKED tasks to blockedFromStatus and clear every blocked* field
 }
 ```
 
@@ -955,16 +1110,20 @@ Clear BLOCKED status on a worker, setting it back to IDLE — and un-block/relea
   currentTaskId: string | null,
   resolution: string,
   retryTask: boolean,
-  releasedTaskIds?: string[],   // tasks whose assignment was cleared (absent when retryTask kept them)
-  unblockedTaskIds?: string[],  // BLOCKED tasks restored to their blockedFromStatus
+  resolveBlocks: boolean,
+  releasedTaskIds?: string[],    // tasks whose assignment was cleared (absent when retryTask kept them)
+  stillBlockedTaskIds: string[], // BLOCKED tasks left BLOCKED (the seat-only default, or retryTask without resolveBlocks)
+  unblockedTaskIds?: string[],   // only with resolveBlocks: true — BLOCKED tasks restored to their blockedFromStatus
   message: string
 }
 ```
 
 **Notes:**
-- A `BLOCKED` task owned by the worker is un-blocked **regardless of `retryTask`** — someone explicitly asserted the blocker is gone. Its status is restored to `blockedFromStatus` (fallback `WORKING`) and every `blocked*` field (`blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt`) is cleared so the sweep/grant paths can't act on stale block state. With `retryTask: true` the worker keeps the assignment; without it, the assignment is also cleared (the task id then appears in both `unblockedTaskIds` and `releasedTaskIds`). Activity event: `TASK_UNBLOCKED`.
-- Non-`BLOCKED` active tasks are released via `nextStatusForRelease` (**requeue**, not park) when `retryTask` is false: the blocker was explicitly resolved, so the task goes straight back into its role's claim pool — the blocked-timeout sweep parks precisely because nobody resolved it.
-- Contrast with ordinary releases (daemon restart purge, `deregister_worker`, `release_task`): those deliberately keep a `BLOCKED` task `BLOCKED` — this tool is the exception.
+- **Default (`resolveBlocks` omitted/false)**: a `BLOCKED` task owned by the worker keeps its status and every `blocked*` field. Without `retryTask` its assignment is cleared via `nextStatusForRelease` (BLOCKED stays BLOCKED-unassigned; activity `WORKER_RELEASED`) and the id appears in both `stillBlockedTaskIds` and `releasedTaskIds`; with `retryTask: true` the task is left completely untouched (still assigned, still `BLOCKED`). Un-park it later with `resolveBlocks: true`, the resource grant path, or `set_task_status`.
+- **`resolveBlocks: true`**: the task's status is restored to `blockedFromStatus` (fallback `WORKING`) and every `blocked*` field is cleared so the sweep/grant paths can't act on stale block state; activity `TASK_UNBLOCKED`; the id lands in `unblockedTaskIds` (and in `releasedTaskIds` too when `retryTask` is false).
+- Non-`BLOCKED` active tasks are released via `nextStatusForRelease` (**requeue**, not park) when `retryTask` is false — the task goes straight back into its role's claim pool.
+- Why seat-only is the default: tasks were being **re-blocked** minutes after a governor freed a stuck seat, because the old behaviour wiped `blockedReason` and the next claimant walked into the same wall. Ordinary releases (daemon restart purge, `deregister_worker`, `release_task`) have always kept `BLOCKED` tasks `BLOCKED`; this tool is the exception only when `resolveBlocks: true` is passed.
+- Git: the wrapper checkpoints a `BLOCKED` task's files on the BLOCKED exit, and again at the next pre-flight if a baseline lingers, so unblocking never has to worry about stranded bytes.
 
 **Errors:**
 - `workerId is required`
@@ -976,7 +1135,7 @@ Clear BLOCKED status on a worker, setting it back to IDLE — and un-block/relea
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED — the blocker is still there, only `moe.unblock_worker`, the resource grant path, or `set_task_status` clears it). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
+Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED — the blocker is still there, only `moe.unblock_worker { resolveBlocks: true }`, the resource grant path, or `set_task_status` clears it). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
 
 **Parameters:**
 ```typescript
@@ -1142,7 +1301,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 
 ### moe.qa_approve
 
-QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of what was verified — symmetric with `qa_reject`'s required `reason`, so DONE tasks carry an audit trail instead of a rubber stamp.
+QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of what was verified — symmetric with `qa_reject`'s required `reason`, so DONE tasks carry an audit trail instead of a rubber stamp. It is also a **soft commit gate**: it warns (never rejects) when no completion commit has been recorded for this review round, and returns the task's commit evidence so QA can cite the sha it actually reviewed.
 
 **Parameters:**
 ```typescript
@@ -1157,8 +1316,23 @@ The summary is persisted on the task as `reviewSummary`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "DONE", summary, message }
+{
+  success: true, taskId, status: "DONE", summary, message,
+  warning?: string,      // the NO-COMPLETION-COMMIT line, when it fired
+  warnings: string[],    // ALWAYS present ([] when clean): "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging"
+  commitEvidence: {      // task.commits split by kind — a 4-FIELD PROJECTION per entry: { sha, ref, pushed: boolean|null, recordedAt }. Full TaskCommit entries (paths, recordedBy, status…) live in task.commits / get_context.
+    completion: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,   // only entries recorded at/after task.reviewStartedAt count against the warning
+    checkpoint: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,
+    rescue: Array<{ sha, ref, pushed: boolean | null, recordedAt }>
+  }
+}
 ```
+
+**Notes:**
+- **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
+- **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
+- **Approval always lands** — the gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
+- QA policy: treat the warning as a reject unless you verified HEAD yourself (`docs/roles/qa.md`).
 
 **Errors:**
 - `taskId is required`

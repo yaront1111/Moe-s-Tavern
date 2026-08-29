@@ -418,5 +418,30 @@ describe('moe.complete_step', () => {
     expect(worker.status).toBe('CODING');
     expect(worker.currentTaskId).toBe('task-1');
   });
+
+  it('warns MODIFIED-FILES-OMITTED when the step reports no modifiedFiles', async () => {
+    const tool = completeStepTool(h.state);
+    const omitted = await tool.handler({ taskId: 'task-1', stepId: 'step-1' }, h.state) as { success: boolean; warning?: string };
+    expect(omitted.success).toBe(true);
+    expect(omitted.warning).toContain('MODIFIED-FILES-OMITTED: step step-1');
+    expect(omitted.warning).toContain('moe.declare_files');
+    // Still completed — warn-only.
+    expect(h.state.getTask('task-1')!.implementationPlan.find((s) => s.stepId === 'step-1')?.status).toBe('COMPLETED');
+  });
+
+  it('treats an explicit empty modifiedFiles as omitted and reports nothing when paths are given', async () => {
+    const tool = completeStepTool(h.state);
+    const empty = await tool.handler({ taskId: 'task-1', stepId: 'step-1', modifiedFiles: [] }, h.state) as { warning?: string };
+    expect(empty.warning).toContain('MODIFIED-FILES-OMITTED');
+
+    await h.state.updateTask('task-1', {
+      implementationPlan: [
+        { stepId: 'step-1', description: 'first', status: 'COMPLETED', affectedFiles: [] },
+        { stepId: 'step-2', description: 'second', status: 'IN_PROGRESS', affectedFiles: [] },
+      ],
+    });
+    const reported = await tool.handler({ taskId: 'task-1', stepId: 'step-2', modifiedFiles: ['src/x.ts'] }, h.state) as { warning?: string };
+    expect(reported.warning).toBeUndefined();
+  });
 });
 

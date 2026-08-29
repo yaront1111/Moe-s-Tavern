@@ -383,15 +383,89 @@ describe('moe.report_blocked', () => {
     // WORKING -- a wait its own task can never satisfy.
     expect(correction.nextAction).toMatchObject({ args: { statuses: ['REVIEW'] } });
 
+    // resolveBlocks:true is the "blocker is gone" lever; a plain unblock_worker
+    // frees only the seat and would leave the task BLOCKED (asserted below).
     const unblock = unblockWorkerTool(state);
     await unblock.handler(
-      { workerId: 'worker-1', resolution: 'blocker resolved', retryTask: true }, state
+      { workerId: 'worker-1', resolution: 'blocker resolved', retryTask: true, resolveBlocks: true }, state
     );
 
     const restored = state.getTask('task-1')!;
     expect(restored.status).toBe('REVIEW');
     expect(restored.blockedReason).toBeNull();
     expect(restored.blockedFromStatus).toBeNull();
+  });
+
+  it('a plain unblock_worker frees the seat and leaves the task BLOCKED with its reason', async () => {
+    await report({ reason: 'waiting on the schema decision' });
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+
+    const result = await unblockWorkerTool(state).handler(
+      { workerId: 'worker-1', resolution: 'seat freed for other work' }, state
+    ) as { resolveBlocks: boolean; stillBlockedTaskIds: string[]; unblockedTaskIds?: string[] };
+
+    const still = state.getTask('task-1')!;
+    expect(still.status).toBe('BLOCKED');
+    expect(still.blockedReason).toBe('waiting on the schema decision');
+    expect(still.blockedFromStatus).toBe('WORKING');
+    expect(still.assignedWorkerId).toBeNull();
+    expect(state.getWorker('worker-1')!.status).toBe('IDLE');
+    expect(result.resolveBlocks).toBe(false);
+    expect(result.stillBlockedTaskIds).toEqual(['task-1']);
+    expect(result.unblockedTaskIds).toBeUndefined();
+  });
+
+  it('warns ALL_STEPS_COMPLETE and points at complete_task when every step is done', async () => {
+    await state.updateTask('task-1', {
+      implementationPlan: [
+        { stepId: 'step-1', description: 'a', status: 'COMPLETED', affectedFiles: [] },
+        { stepId: 'step-2', description: 'b', status: 'COMPLETED', affectedFiles: [] },
+      ],
+    });
+
+    const result = await report({ reason: 'not sure how to hand off' }) as {
+      success: boolean; taskStatus: string; warning?: string;
+      nextAction?: { tool: string; args: Record<string, unknown> };
+    };
+
+    // Still blocks — warn-only.
+    expect(result.success).toBe(true);
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+    expect(result.warning).toBe(
+      'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'
+    );
+    expect(result.nextAction?.tool).toBe('moe.complete_task');
+    expect(result.nextAction?.args).toMatchObject({ taskId: 'task-1', workerId: 'worker-1' });
+  });
+
+  it('does not warn ALL_STEPS_COMPLETE while steps remain or when waiting on a resource', async () => {
+    await state.updateTask('task-1', {
+      implementationPlan: [
+        { stepId: 'step-1', description: 'a', status: 'COMPLETED', affectedFiles: [] },
+        { stepId: 'step-2', description: 'b', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+    const partial = await report({ reason: 'stuck on step 2' }) as { warning?: string; nextAction?: { tool: string } };
+    expect(partial.warning).toBeUndefined();
+    expect(partial.nextAction?.tool).toBe('moe.wait_for_task');
+
+    // Resource waits are auto-unblocked on grant; no complete_task nudge.
+    await state.updateTask('task-1', {
+      status: 'WORKING',
+      assignedWorkerId: 'worker-1',
+      blockedReason: null,
+      blockedFromStatus: null,
+      blockedAt: null,
+      implementationPlan: [
+        { stepId: 'step-1', description: 'a', status: 'COMPLETED', affectedFiles: [] },
+      ],
+    });
+    // Occupy the resource so the report queues instead of being granted.
+    await state.acquireResource({ resourceId: 'bench', taskId: 'task-other', workerId: 'worker-9' });
+    const queued = await report({ reason: 'need the bench', resourceId: 'bench' }) as { warning?: string; nextAction?: unknown };
+    expect(queued.warning).toBeUndefined();
+    expect(queued.nextAction).toBeUndefined();
   });
 
   it('an identical-reason repeat reports reasonUpdated:false and writes nothing', async () => {

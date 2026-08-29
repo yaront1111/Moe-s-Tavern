@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { getContextTool } from './getContext.js';
+import type { TaskCommit } from '../types/schema.js';
 
 describe('moe.get_context', () => {
   const h = new ToolTestHarness();
@@ -213,6 +214,132 @@ describe('moe.get_context', () => {
     }, h.state) as { task: { comments: Array<{ content: string; contentTruncated?: boolean }> } };
     expect(fullComment.task.comments[0].content).toBe('latest comment');
     expect(fullComment.task.comments[0].contentTruncated).toBeUndefined();
+  });
+
+  describe('commit ledger + attribution surface', () => {
+    interface ContextTask {
+      commits: Array<{
+        sha: string; treeId: string | null; ref: string; kind: string; status: string | null; pushed: boolean | null;
+        recordedAt: string; recordedBy: string; pathCount: number; inferredCount: number;
+      }>;
+      commitCount: number;
+      lastCommitOutcome: unknown;
+      landing: { lastCompletion?: { sha: string; ref: string; pushed: boolean | null; recordedAt: string }; lastCheckpoint?: { sha: string; recordedAt: string } };
+      declaredPaths: string[];
+      inferredPaths: string[];
+      unattributedPaths: string[];
+      unattributedHint?: string;
+      rescueRefsHint?: string;
+      epicSiblings: Array<{ id: string; title: string; order: number; status: string; landed: boolean; landing: { merged: boolean; lastCompletion?: { sha: string } } }>;
+    }
+
+    function commit(overrides: Partial<TaskCommit>): TaskCommit {
+      return {
+        sha: 'abc1234abc1234', ref: 'moe/work-2026-08-28', kind: 'completion', role: 'worker',
+        sessionId: 'w@t', paths: ['src/a.ts', 'src/m.ts'], inferredPaths: ['src/m.ts'], pushed: true,
+        recordedBy: 'worker-1', recordedAt: '2026-08-28T10:05:00.000Z', ...overrides,
+      };
+    }
+
+    it('surfaces bounded commits, landing, tiers, hints and the REVIEW audit nudge', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({
+        id: 'task-1',
+        status: 'REVIEW',
+        order: 5,
+        implementationPlan: [
+          { stepId: 's1', description: 'a', status: 'COMPLETED', affectedFiles: ['src/plan.ts'], modifiedFiles: ['src/step.ts'] },
+          { stepId: 's2', description: 'b', status: 'PENDING', affectedFiles: ['src/pending.ts'] },
+        ],
+        filesModified: ['src/fm.ts'],
+        declaredFiles: ['src/decl.ts'],
+        touchedFiles: ['src/touched.ts'],
+        inferredPaths: ['src/m.ts'],
+        unattributedPaths: ['src/foreign.ts'],
+        lastCommitOutcome: { outcome: 'committed', kind: 'completion', sessionId: 'w@t', at: '2026-08-28T10:05:00.000Z' },
+        commits: [
+          commit({ kind: 'checkpoint', sha: 'c0ffee1c0ffee1', recordedAt: '2026-08-28T09:00:00.000Z', pushed: false, treeId: 'deadbeefdeadbeef' }),
+          commit({ kind: 'rescue', sha: 'e5c4e0e5c4e0e5', ref: 'refs/moe/rescue/task-1/20260828T093000Z', recordedAt: '2026-08-28T09:30:00.000Z', pushed: false }),
+          commit({}),
+        ],
+      });
+      await h.state.load();
+
+      const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+        task: ContextTask; nextAction: { tool: string; reason: string };
+      };
+      const t = result.task;
+      expect(t.commitCount).toBe(3);
+      expect(t.commits).toHaveLength(3);
+      expect(t.commits[0]).toEqual({
+        sha: 'c0ffee1c0ffee1', treeId: 'deadbeefdeadbeef', ref: 'moe/work-2026-08-28', kind: 'checkpoint', status: null,
+        pushed: false, recordedAt: '2026-08-28T09:00:00.000Z', recordedBy: 'worker-1', pathCount: 2, inferredCount: 1,
+      });
+      // Projection only — never the raw path arrays.
+      expect((t.commits[0] as unknown as { paths?: unknown }).paths).toBeUndefined();
+      expect(t.landing).toEqual({
+        lastCompletion: { sha: 'abc1234abc1234', ref: 'moe/work-2026-08-28', pushed: true, recordedAt: '2026-08-28T10:05:00.000Z' },
+        lastCheckpoint: { sha: 'c0ffee1c0ffee1', recordedAt: '2026-08-28T09:00:00.000Z' },
+      });
+      expect(t.lastCommitOutcome).toMatchObject({ outcome: 'committed', kind: 'completion' });
+      // ASSERTED tier: completed step's modifiedFiles, filesModified, declared, touched, committed non-inferred.
+      expect([...t.declaredPaths].sort()).toEqual(['src/a.ts', 'src/decl.ts', 'src/fm.ts', 'src/step.ts', 'src/touched.ts']);
+      expect(t.declaredPaths).not.toContain('src/m.ts');
+      expect(t.declaredPaths).not.toContain('src/pending.ts');
+      expect(t.inferredPaths).toEqual(['src/m.ts']);
+      expect(t.unattributedPaths).toEqual(['src/foreign.ts']);
+      expect(t.unattributedHint).toContain('moe.declare_files { taskId: "task-1"');
+      expect(t.unattributedHint).toContain('src/foreign.ts');
+      expect(t.rescueRefsHint).toContain('refs/moe/rescue/task-1/20260828T093000Z');
+      expect(t.rescueRefsHint).toContain('git checkout <ref> -- <path>');
+      expect(result.nextAction.tool).toBe('moe.qa_approve');
+      expect(result.nextAction.reason).toContain('confirm a completion commit is recorded in task.commits (`git show <sha>`) before approving');
+    });
+
+    it('returns empty evidence for a task without a ledger', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING' });
+      await h.state.load();
+
+      const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as { task: ContextTask };
+      expect(result.task.commits).toEqual([]);
+      expect(result.task.commitCount).toBe(0);
+      expect(result.task.landing).toEqual({});
+      expect(result.task.lastCommitOutcome).toBeNull();
+      expect(result.task.declaredPaths).toEqual([]);
+      expect(result.task.inferredPaths).toEqual([]);
+      expect(result.task.unattributedPaths).toEqual([]);
+      expect(result.task.unattributedHint).toBeUndefined();
+      expect(result.task.rescueRefsHint).toBeUndefined();
+      expect(result.task.epicSiblings).toEqual([]);
+    });
+
+    it('lists lower-order epic siblings with a landed flag (pushed completion or REVIEW/DONE)', async () => {
+      h.setupMoeFolder();
+      h.createEpic({ id: 'epic-1' });
+      h.createEpic({ id: 'epic-2' });
+      h.createTask({ id: 'task-1', status: 'WORKING', order: 4 });
+      // Landed via a pushed completion commit.
+      h.createTask({ id: 'task-a', title: 'A', status: 'WORKING', order: 1, commits: [commit({ sha: 'aaaaaaaaaaaaaa' })] });
+      // Landed by status alone.
+      h.createTask({ id: 'task-b', title: 'B', status: 'DONE', order: 2 });
+      // Unpushed completion + WORKING → not landed.
+      h.createTask({ id: 'task-c', title: 'C', status: 'WORKING', order: 3, commits: [commit({ sha: 'cccccccccccccc', pushed: false })] });
+      // Higher order, other epic: excluded.
+      h.createTask({ id: 'task-later', status: 'BACKLOG', order: 9 });
+      h.createTask({ id: 'task-other-epic', epicId: 'epic-2', status: 'DONE', order: 1 });
+      await h.state.load();
+
+      const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as { task: ContextTask };
+      expect(result.task.epicSiblings.map((s) => s.id)).toEqual(['task-a', 'task-b', 'task-c']);
+      const byId = new Map(result.task.epicSiblings.map((s) => [s.id, s]));
+      expect(byId.get('task-a')).toMatchObject({ order: 1, status: 'WORKING', landed: true, landing: { merged: true, lastCompletion: { sha: 'aaaaaaaaaaaaaa' } } });
+      expect(byId.get('task-b')).toMatchObject({ status: 'DONE', landed: true, landing: { merged: true } });
+      expect(byId.get('task-b')!.landing.lastCompletion).toBeUndefined();
+      expect(byId.get('task-c')).toMatchObject({ landed: false, landing: { merged: false, lastCompletion: { sha: 'cccccccccccccc' } } });
+    });
   });
 });
 

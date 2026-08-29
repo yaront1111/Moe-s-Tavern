@@ -19,7 +19,7 @@ This document covers all configuration options for Moe's Tavern.
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
 | `LOG_RETENTION_COUNT` | Number of rotated logs to keep | `5` | `3` |
 
-(Advanced tuning — see `packages/moe-daemon/src/index.ts` and the util that reads each: port/lock `MOE_SOCKET_TIMEOUT_MS`, `MOE_PORT_CHECK_INTERVAL_MS`, `MOE_PORT_READY_TIMEOUT_MS`, `MOE_LOCK_RETRY_DELAY_MS`, `MOE_LOCK_STALE_TIMEOUT_MS`, `MOE_HTTP_CLOSE_TIMEOUT_MS`; state/limits `MOE_STATE_LOAD_TIMEOUT_MS`, `MOE_MCP_MAX_BATCH_SIZE`, `MOE_MAX_COMMENTS_PER_TASK`; rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`; proposal cleanup `MOE_PROPOSAL_PURGE_INTERVAL_MS`, `MOE_PROPOSAL_PURGE_AGE_MS`, `MOE_PROPOSAL_SNAPSHOT_RETENTION_MS`; log compression `LOG_COMPRESSION_TIMEOUT_MS`.)
+(Advanced tuning — see `packages/moe-daemon/src/index.ts` and the util that reads each: port/lock `MOE_SOCKET_TIMEOUT_MS`, `MOE_PORT_CHECK_INTERVAL_MS`, `MOE_PORT_READY_TIMEOUT_MS`, `MOE_LOCK_RETRY_DELAY_MS`, `MOE_LOCK_STALE_TIMEOUT_MS`, `MOE_HTTP_CLOSE_TIMEOUT_MS`; state/limits `MOE_STATE_LOAD_TIMEOUT_MS`, `MOE_MCP_MAX_BATCH_SIZE`, `MOE_MAX_COMMENTS_PER_TASK`, `MOE_MAX_COMMITS_PER_TASK` (cap on `task.commits`, default 50, newest kept); rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`; proposal cleanup `MOE_PROPOSAL_PURGE_INTERVAL_MS`, `MOE_PROPOSAL_PURGE_AGE_MS`, `MOE_PROPOSAL_SNAPSHOT_RETENTION_MS`; log compression `LOG_COMPRESSION_TIMEOUT_MS`.)
 
 ### Proxy Configuration
 
@@ -44,6 +44,10 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_HEARTBEAT_INTERVAL_SEC` | Heartbeat sidecar ping interval | `60` | `30` |
 | `MOE_HEARTBEAT_MAX_DURATION_SEC` | Heartbeat sidecar hard stop (a truly-hung CLI still goes stale) | `7200` | `3600` |
 | `MOE_DISABLE_QUALITY_GATE` | Skip `settings.qualityGate` for this run | Unset | `1` |
+| `MOE_DISABLE_CHECKPOINT` | Skip `wip(task-<id>)` checkpoint commits for this run (completion commits and rescue refs still land) | Unset | `1` |
+| `MOE_ATTRIBUTION` | `declared` forces `settings.attribution.undeclared` to `never` for this run — declared-only landing, no MEASURED paths | Unset | `declared` |
+| `GIT_TERMINAL_PROMPT` | **Set by the wrapper** (not read) to `0` for its whole lifetime, so a credential or host-key prompt can never hang a push or a `pull --rebase` retry | `0` (wrapper-set) | — |
+| `MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF` | Test seam only: a command the landing runs between `commit-tree` and `update-ref` (the harness uses it to force CAS contention with a peer commit) | Unset | `bash peer-commit.sh` |
 | `MOE_RESUME_MAX_ATTEMPTS` | CLI relaunches onto an already-held task before escalating + idling | `5` | `3` |
 | `MOE_CODEX_REASONING_EFFORT` | `model_reasoning_effort` written to codex config.toml | `xhigh` | `high` |
 | `MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC` | `startup_timeout_sec` for the codex `moe` MCP entry (survives supervised daemon restarts) | `120` | `180` |
@@ -114,7 +118,13 @@ The `.moe/project.json` file contains project-specific settings.
     "branchPattern": "moe/{epicId}/{taskId}",
     "commitPattern": "feat({epicId}): {taskTitle}",
     "appendOnlyFiles": ["CHANGELOG.md", "docs/**/release-notes.md"],
-    "refusalCascadeAutoBacklog": true
+    "refusalCascadeAutoBacklog": true,
+    "autoCommit": true,
+    "checkpointCommits": true,
+    "checkpointPush": true,
+    "commitBoardState": true,
+    "commitHooks": false,
+    "attribution": { "undeclared": "solo", "contested": "commit", "exclude": [] }
   }
 }
 ```
@@ -129,10 +139,17 @@ The `.moe/project.json` file contains project-specific settings.
 | `branchPattern` | Pattern for branch names | Supports `{epicId}`, `{taskId}` |
 | `commitPattern` | Pattern for commit messages | Supports `{epicId}`, `{taskTitle}` |
 | `agentCommand` | CLI the agent launchers spawn | `claude` (default), `codex`, `gemini` |
-| `autoCommit` | Worker post-flight auto-commit + push on REVIEW | `true` (default) / `false` |
-| `qualityGate` | Shell command the worker wrapper runs before the post-flight auto-commit; non-zero exit blocks commit+push and posts the failure to the task | e.g. `"npm run lint && npx tsc --noEmit"`; unset/empty disables; `MOE_DISABLE_QUALITY_GATE=1` skips per-run |
+| `autoCommit` | Master switch for the wrapper's **land-on-every-exit** post-flight (the wrappers are the only git actors; the daemon never runs git). On: a worker exit at REVIEW/DONE makes a completion commit (`feat(task-<id>): <title>`, or `fix(task-<id>): … (retry after qa_reject #N)` after a reopen) and pushes; every other exit that holds a task (worker/architect/qa — WORKING, BLOCKED, PLANNING, AWAITING_APPROVAL, or a failed status lookup) makes a `wip(task-<id>)` checkpoint; gate/peel/commit failures, ref contention and Ctrl+C teardown go to a rescue ref `refs/moe/rescue/<taskId>/<utc-ts>` (never a branch commit, never pushed). Paths are attributed **per task** from a persisted baseline `<gitdir>/moe/baseline/<taskId>.tsv` (dirty snapshot at pre-flight, pruned after each landing, kept until DONE/ARCHIVED) joined with `moe.get_commit_scope`: ASSERTED (completed-step `modifiedFiles`, `declare_files`, prior commits — committed regardless of baseline), PLANNED (plan-declared, only if changed since baseline), TOOL (stream-json edit harvest), MEASURED (undeclared + changed, per `attribution.undeclared`), BOARD (own task record) are staged; PEER (`MOE_ATTR_PEER_DECLARED`), PREEXISTING (`MOE_ATTR_PREEXISTING` — dirty before the task and untouched, never committed), DENY (`MOE_ATTR_EXCLUDED`) are skipped per path. Staging is `:(literal)` pathspec into a **temp index**, landed with `commit-tree` + `update-ref` CAS (3 attempts) — never `git add -A`/`-u`, never a bare `git commit`, no whole-tree fallback, peers' staged entries survive. Every outcome is reported through `moe.record_commit` into `task.commits`. `false` disables completion, checkpoint and rescue commits alike (logged `[info] settings.autoCommit=false`) | `true` (default) / `false` |
+| `checkpointCommits` | `wip(task-<id>): <title> [status=<S> role=<r> cli-exit=<N>]` checkpoint on every non-REVIEW exit of a worker and on every exit of an architect/qa session holding a task; always plumbing (hooks never run). A lingering baseline is landed as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`) at the task's next pre-flight | `true` (default) / `false`; `MOE_DISABLE_CHECKPOINT=1` skips per-run |
+| `checkpointPush` | Push checkpoint commits to origin (`CHECKPOINT-UNPUSHED task=<id>` in `#general` on failure — a visibility problem, not a loss); `false` keeps them local | `true` (default) / `false` |
+| `commitBoardState` | Stage board records with the landing: the task's own `.moe/tasks/<id>.json` always; `.moe/epics/*.json`, `.moe/project.json` and non-live-peer task records when changed this session. Live peers' task records are never staged | `true` (default) / `false` |
+| `commitHooks` | `false`: every wrapper commit uses plumbing (temp index + `commit-tree` + `update-ref`) — pre-commit/commit-msg hooks do **not** run; `qualityGate` is the sanctioned gate. `true`: **completion** commits only switch to porcelain `git add -- :(literal)<p>` + `git commit -- <specs>` so hooks run, with a rescue ref (`[reason=commit-failed]`) when a hook rejects; checkpoints and rescues stay plumbing | `false` (default) / `true` |
+| `attribution.undeclared` | A changed path no task declared and no tool wrote: `solo` commits it as MEASURED (recorded in `task.inferredPaths`, never promoted to asserted) only when no other worker is live, otherwise reports it as `MOE_ATTRIBUTION_UNRESOLVED` (persisted in `task.unattributedPaths`, never staged); `never` = declared-only; `always` = commit regardless (single-seat projects) | `solo` (default) / `never` / `always`; `MOE_ATTRIBUTION=declared` forces `never` per-run |
+| `attribution.contested` | A path this task asserted that another live task also declares: `commit` lands it and records `Moe-Contested: <path> (task-<peer>)` in the commit body; `skip` drops it with `MOE_ATTR_CONTESTED` | `commit` (default) / `skip` |
+| `attribution.exclude` | Extra DENY prefixes (project-relative, forward slashes; no absolute paths or `..`) the wrapper never stages, on top of the built-ins: `.moe/**` except board records, `.mcp.json`, `.codex/**`, `.gemini/**`, `.claude/agents/**`, `.claude/settings.local.json`, untracked `.serena/**`, `.worktrees/**`, `.moe-worktree*`. In a multi-project repo (the Moe project nested below the git toplevel) the same built-ins are ALSO denied at the repo root — another fleet's `.moe/**` (board records included) is never staged or attributed by this project's tasks | `[]` (default), e.g. `["generated/", "tmp/"]` |
+| `qualityGate` | Shell command the worker wrapper runs before the **completion** commit; non-zero exit sends the work to a rescue ref (`rescue(task-<id>): … [reason=gate-failed]` — never the branch, never pushed), keeps the baseline, posts `PUSH-BLOCKED:` to `#general` + the output tail as a task comment, and stops the worker loop | e.g. `"npm run lint && npx tsc --noEmit"`; unset/empty disables; `MOE_DISABLE_QUALITY_GATE=1` skips per-run |
 | `qualityGateScope` | When the gate runs: only on the epic's final task (highest `order` among siblings) or on every task | `epicFinal` (default) / `everyTask` |
-| `consolidationBranch` | Branch workers must be on when calling `moe.complete_task`; mismatch rejects with `BRANCH-POLICY-FAIL`, a missing `currentBranch` only warns #governors | Literal name or `*` glob, e.g. `moe/work-*`; case-sensitive; unset/empty disables |
+| `consolidationBranch` | Branch workers must be on when calling `moe.complete_task`; mismatch rejects with `BRANCH-POLICY-FAIL`, a missing `currentBranch` only warns #governors. A **literal** value (no `*`) also doubles as the wrapper's peel target instead of `moe/work-<date>` when it must leave `main`/`master`/detached HEAD (existing non-default branches are still reused, never switched) | Literal name or `*` glob, e.g. `moe/work-*`; case-sensitive; unset/empty disables |
 | `taskSizing` | Plan-size thresholds enforced by `moe.submit_plan` (warn past warn values, reject past max values; distinct files = union of step `affectedFiles`). `autoCritique: true` additionally auto-blocks warn-zone plans back to PLANNING in CONTROL mode when no governor is online (capped like governor critique blocks) | `{"warnSteps": 8, "maxSteps": 12, "warnDistinctFiles": 5, "maxDistinctFiles": 10, "autoCritique": false}` (defaults) |
 | `pacePerStepMs` | Wall-clock ms budgeted per plan step; `moe.submit_plan` seeds an absent task budget as `stepCount * pacePerStepMs` (an explicit budget arg or an existing task budget wins) | Milliseconds (default: 900000 = 15 min; valid 1000-86400000) |
 | `appendOnlyFiles` | Project-relative globs for files every task appends to; claim-time `fileCollision` warnings skip them so real overlaps stay visible. Forward slashes only; supports literal paths, `*` (matches within one path segment) and `**` (crosses directories, and `**/x` also matches `x` at the root). A supplied array **replaces** the default — include `CHANGELOG.md` yourself if you still want it suppressed; `[]` disables suppression entirely | `["CHANGELOG.md"]` (default), e.g. `["CHANGELOG.md", "docs/**/release-notes.md", "docs/*.md"]` |
@@ -201,6 +218,8 @@ The `.moe/project.json` file contains project-specific settings.
 ├── agents/            # Claude Code subagent defs (mirrored to .claude/agents/)
 └── skills/            # Vendored skill pack (manifest.json + per-skill dirs)
 ```
+
+The agent wrapper's landing state lives **outside** `.moe/`, under the repository's git dir: `<gitdir>/moe/baseline/<taskId>.tsv` (per-task dirty-snapshot baseline; `#moe-baseline v1 task=<id> at=<iso> head=<sha>` header, `B`/`U` rows; written at pre-flight, pruned after each landing, deleted when the task is DONE/ARCHIVED) and transient `<gitdir>/moe/idx-<taskId>-<pid>` temp indexes. Rescue snapshots are refs under `refs/moe/rescue/<taskId>/<utc-ts>` (never pushed). `<gitdir>` is `git rev-parse --absolute-git-dir` from the project root.
 
 ---
 

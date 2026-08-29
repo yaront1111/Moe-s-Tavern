@@ -61,6 +61,9 @@ import { acquireResourceTool } from './acquireResource.js';
 import { releaseResourceTool } from './releaseResource.js';
 import { listResourcesTool } from './listResources.js';
 import { waitForResourceTool } from './waitForResource.js';
+import { getCommitScopeTool } from './getCommitScope.js';
+import { recordCommitTool } from './recordCommit.js';
+import { declareFilesTool } from './declareFiles.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -139,5 +142,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     releaseResourceTool(state),
     listResourcesTool(state),
     waitForResourceTool(state),
+    getCommitScopeTool(state),
+    recordCommitTool(state),
+    declareFilesTool(state),
   ];
 }

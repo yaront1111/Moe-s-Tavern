@@ -23,7 +23,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 | Before `complete_task` | `regression-check` | Run the broader suite; capture counts in your summary |
 | Before `complete_task` | `verification-before-completion` | No completion claim without fresh verification evidence |
 | Reopened (`reopenCount > 0`) | `receiving-code-review` | Verify each `rejectionDetails` item against the diff before fixing |
-| Parallel work isolation | `using-git-worktrees` | When concurrent workers would step on each other |
+| Human-directed only | `using-git-worktrees` | Only when a human explicitly asks for a worktree. The post-flight commits from the project root only — edits inside `.worktrees/` are invisible to it and you must merge them back by hand |
 
 ## Rail Proposals (escape hatch)
 
@@ -42,6 +42,28 @@ moe.propose_rail {
 ```
 
 Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in `.moe/proposals/`; once approved, retry the step.
+
+## Commits, checkpoints and rescue refs
+
+You never run `git commit` for a task. The wrapper lands your work after the CLI exits — on **every** exit, not only on success:
+
+| Exit | What lands | Where |
+|---|---|---|
+| Task reached REVIEW (or DONE) | `feat(task-<id>): <title>` (or `fix(task-<id>): … (retry after qa_reject #N)`) completion commit, pushed | shared branch (`moe/work-<date>` or the literal `consolidationBranch`) |
+| Any other exit — WORKING, BLOCKED, PLANNING, AWAITING_APPROVAL, status lookup failed | `wip(task-<id>): <title> [status=<S> role=<r> cli-exit=<N>]` checkpoint, pushed per `checkpointPush` | shared branch |
+| `qualityGate` failed, branch peel failed, commit failed, three CAS losses, Ctrl+C | `rescue(task-<id>): <title> [reason=…]` | `refs/moe/rescue/<taskId>/<ts>` — never a branch, never pushed |
+
+What gets staged is decided per path, never `git add -A`: **ASSERTED** (every completed step's `modifiedFiles`, `moe.declare_files`, paths you already landed) is committed no matter what; **PLANNED** (the plan's `affectedFiles`/`newFiles` you did not report) only if it changed since your session's baseline; **TOOL** (files your Edit/Write tool calls touched — claude only) always; **MEASURED** (undeclared, changed) only when no other worker is live. A peer's declared path, a path that was already dirty before your task, and anything under `.moe/` (except your own task record), `.mcp.json`, `.codex/`, `.gemini/`, `.claude/agents/`, `.worktrees/` are skipped with a `[skip] <path> MOE_ATTR_*` line. Undeclared edits with peers active are reported as `MOE_ATTRIBUTION_UNRESOLVED` and never staged — the next session sees them in `get_context.unattributedPaths` with a `moe.declare_files` hint.
+
+Practical rules:
+
+- `modifiedFiles` on every `complete_step` is the whole game. Omitting it draws a `warning`, and with another worker registered an unreported, non-tool-written edit does not land.
+- The shared checkout is dirty by design. `[attribution] <K> pre-session dirty path(s) untouched` is informational; never revert, stash or commit those paths, and never stop because of them — note them in your step note and continue.
+- A prerequisite has landed iff `get_context.epicSiblings[*].landed` is true (or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it). Uncommitted files in a peer's checkout are not a prerequisite; a `report_blocked` on a missing prerequisite names the sibling task.
+- Banners you may see in `#general`: `PUSH-BLOCKED:` (gate failed or status lookup failed — your bytes are in a rescue ref / `status=UNKNOWN` checkpoint; on a gate failure the loop stopped), `PUSH FAILED … do not review until pushed` (committed locally only), `CHECKPOINT-UNPUSHED task=<id>` (checkpoint local only), `MOE_RESCUE_REF task=<id> ref=… reason=…`. Refusals: `MOE_COMMIT_REFUSED_NO_OWNED_PATHS` (nothing attributable — declare paths), `MOE_COMMIT_REFUSED_OWNED_PATH_MISSING` (asserted paths gone from disk and HEAD), `MOE_COMMIT_NOTHING_TO_COMMIT` (already in HEAD; harmless).
+- A RESUME prompt that lists rescue refs means an earlier session's landing failed: `git show <ref> --stat` / `git checkout <ref> -- <path>` before redoing work. A lingering baseline is landed automatically before your CLI starts (`MOE_CHECKPOINT_RECOVERED`).
+- `moe.record_commit` and `moe.get_commit_scope` are wrapper-called — do not call them yourself. `moe.declare_files { taskId, paths }` is yours to use when you know a path is your edit but it was not reported.
+- Git hooks do not run on wrapper commits unless the project sets `commitHooks: true`; `settings.qualityGate` is the sanctioned gate.
 
 ## Shared resources (exclusive infra)
 

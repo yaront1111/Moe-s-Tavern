@@ -271,8 +271,10 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
             .catch((error) => logger.warn({ workerId, error }, 'Failed to refresh worker heartbeat on wait_for_task timeout'))
             .finally(() => {
               // An encumbered caller idled here on purpose: parking is how it
-              // catches its OWN unblock (a grant or moe.unblock_worker flips the
-              // task into a requested status and the own-task path fires). What
+              // catches its OWN unblock (a grant, set_task_status, or
+              // moe.unblock_worker { resolveBlocks: true } flips the task into a
+              // requested status and the own-task path fires; a plain
+              // unblock_worker only frees the seat and leaves the task BLOCKED). What
               // it must NOT be told is to re-enter the wait for other work —
               // none is claimable while the hold stands — so hand back the same
               // payload and exits claim_next_task gives.

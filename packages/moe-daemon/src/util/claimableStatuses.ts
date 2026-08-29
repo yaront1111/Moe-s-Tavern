@@ -24,7 +24,8 @@ export function assertAgentClaimableStatuses(statuses: string[]): void {
       `human-gated columns with no agent tool surface — claiming there wedges the worker ` +
       `(start_step/submit_plan/qa_* all reject with INVALID_STATE) — and BLOCKED tasks are ` +
       `waiting on a resource/human and un-block themselves (resource grant) or via ` +
-      `moe.unblock_worker. Ask a human or governor to route the task with ` +
-      `moe.set_task_status instead.`
+      `moe.unblock_worker { resolveBlocks: true } / moe.set_task_status (a plain ` +
+      `unblock_worker only frees the worker's seat). Ask a human or governor to route ` +
+      `the task with moe.set_task_status instead.`
   );
 }

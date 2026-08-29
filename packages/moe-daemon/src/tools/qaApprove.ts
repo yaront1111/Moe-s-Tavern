@@ -1,15 +1,21 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import type { TaskCommit } from '../types/schema.js';
 import { missingRequired, notFound, invalidState, invalidInput } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 
 /** Upper bound on the approval summary — mirrors qa_reject's reason cap. */
 const MAX_SUMMARY_CHARS = 2000;
 
+/** Compact commit projection returned as approval evidence. */
+function commitEvidenceEntry(c: TaskCommit) {
+  return { sha: c.sha, ref: c.ref, pushed: c.pushed ?? null, recordedAt: c.recordedAt };
+}
+
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits after reviewStartedAt, the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -54,6 +60,25 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const reviewSummary = params.summary.trim();
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
+      // Soft commit gate. A completion commit counts only when recorded at or
+      // after reviewStartedAt (stamped by complete_task, cleared by reopen), so
+      // a stale attempt-#1 commit can never satisfy attempt #2. Warn-only: the
+      // wrapper lands the commit seconds AFTER complete_task, so a fast QA in
+      // SPEED/TURBO can legitimately arrive first; blocking here would wedge
+      // every approval on a race. Both ISO strings come from toISOString(), so
+      // the lexicographic compare is exact.
+      const commits: TaskCommit[] = Array.isArray(task.commits) ? task.commits : [];
+      const reviewStartedAt = task.reviewStartedAt;
+      const completionCommits = commits.filter(
+        (c) => c.kind === 'completion' && (!reviewStartedAt || c.recordedAt >= reviewStartedAt)
+      );
+      const checkpointCommits = commits.filter((c) => c.kind === 'checkpoint');
+      const rescueCommits = commits.filter((c) => c.kind === 'rescue');
+      const autoCommitOn = state.project?.settings?.autoCommit !== false;
+      const warning = completionCommits.length === 0 && autoCommitOn
+        ? `NO-COMPLETION-COMMIT: task ${task.id} has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging`
+        : undefined;
+
       // Capture metrics: doneAt + wallClockMs (first claim → DONE). If no
       // firstClaimAt was recorded (legacy task), wallClockMs stays undefined.
       const nowIso = new Date().toISOString();
@@ -94,12 +119,27 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         await state.postSystemMessage(params.taskId, 'QA approved — task complete');
       } catch { /* never block tool */ }
 
+      // After the DONE write has landed: the approval is never held hostage to
+      // chat, and a governor sees the gap even if QA ignores the response.
+      if (warning) {
+        try {
+          await state.postToRoleChannel('governors', `⚠️ ${warning}`);
+        } catch { /* never block tool */ }
+      }
+
       return {
         success: true,
         taskId: updated.id,
         status: updated.status,
         summary: reviewSummary,
-        message: `Task ${updated.id} approved and moved to DONE`,
+        ...(warning ? { warning } : {}),
+        warnings: warning ? [warning] : [],
+        commitEvidence: {
+          completion: completionCommits.map(commitEvidenceEntry),
+          checkpoint: checkpointCommits.map(commitEvidenceEntry),
+          rescue: rescueCommits.map(commitEvidenceEntry),
+        },
+        message: `Task ${updated.id} approved and moved to DONE${warning ? ' (WARNING: no completion commit recorded — see warnings)' : ''}`,
         nextAction: {
           tool: 'moe.wait_for_task',
           args: {
