@@ -187,6 +187,10 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     id, title, description, definitionOfDone, taskRails, status, implementationPlan,
     planSizeWarnings?: string[],        // present when the latest submit_plan drew warn-zone size warnings
     verification: { command, exitCode, outputTail?, reportedAt } | null, // complete_task evidence — QA re-runs the command
+    completionSummary?: string,         // worker's complete_task summary (≤2000 chars) — persisted, no longer discarded
+    dependsOn?: string[],               // structural prerequisites (create_task / set_task_dependencies) — gate WORKING-status claims until all are DONE/ARCHIVED
+    dependsOnUnmet?: string[],          // the dependsOn subset not yet DONE/ARCHIVED (present alongside dependsOn)
+    blockedOnTaskIds?: string[],        // BLOCKED tasks only (with the other blocked* fields): what this row waits on (report_blocked param ∪ ids auto-parsed from the reason) — auto-unblocks when all are DONE/ARCHIVED
     filesModified: string[],            // ASSERTED paths: completed steps' modifiedFiles ?? affectedFiles (complete_task) ∪ non-inferred paths landed via record_commit
     declaredPaths?: string[],           // the full ASSERTED tier (completed steps' modifiedFiles ?? affectedFiles ∪ filesModified ∪ declaredFiles ∪ touchedFiles ∪ non-inferred committed paths) — what the wrapper commits regardless of baseline; NOT just the moe.declare_files list
     inferredPaths?: string[],           // MEASURED-tier paths the wrapper landed; never promoted to asserted
@@ -195,7 +199,12 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     lastCommitOutcome?: { outcome: "committed" | "nothing" | "refused" | "failed", kind, code?, sessionId, at },
     landing?: { lastCompletion?: { sha, ref, pushed, recordedAt }, lastCheckpoint?: { sha, recordedAt } },
     rescueRefsHint?: string,            // present when any commit is kind "rescue": how to recover from refs/moe/rescue/<taskId>/*
-    epicSiblings?: Array<{ id, title, order, status, landing?: { lastCompletion? }, landed: boolean }>, // same epic, lower order, ≤20; landed = a pushed completion commit or status REVIEW/DONE
+    epicSiblings?: Array<{ id, title, order, status, landing?: { lastCompletion? }, landed: boolean,
+                           verification?: { command, exitCode, reportedAt }, reviewSummary?: string, completionSummary?: string }>,
+                                        // same epic, lower order, ≤20 — PLUS every task named by this task's dependsOn/blockedOnTaskIds,
+                                        // regardless of the lower-order filter and the 20-cap; landed = a pushed completion commit or
+                                        // status REVIEW/DONE. Prerequisite evidence is READ HERE — never via HEAD greps
+    isEpicFinal?: boolean,              // highest order among the epic's siblings — the wrapper's qualityGateScope 'epicFinal' rule; wrappers prefer this over their RPC+python fallback
     rejectionHistory?: RejectionHistoryEntry[], // present when non-empty; 5 most recent, newest first
     comments: Array<{
       id: string,
@@ -392,7 +401,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
     outputTail?: string    // tail of its output (kept to the last 2000 chars)
   },
   prLink?: string,
-  summary?: string,
+  summary?: string,        // persisted as task.completionSummary (capped at 2000 chars, like qa_approve's summary)
   currentBranch?: string,  // branch the worker is on; enables the consolidationBranch check
   workerId?: string
 }
@@ -400,6 +409,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 **Notes:**
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
+- `summary` is persisted as `task.completionSummary` (it used to be accepted and silently discarded) and surfaced via `moe.get_context` — both on the task itself and on the `epicSiblings` entries of every dependent task, so a later task can read what its prerequisite actually delivered without grepping HEAD.
 - The evidence is persisted as `task.verification` (with `reportedAt`), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier the wrapper commits regardless of its baseline; `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself and never runs git.
 - **The commit happens after the CLI exits.** `complete_task` only flips the status; the wrapper's post-flight lands the completion commit (`feat|fix(task-<id>): <title>` with `Moe-Task`/`Moe-Kind: completion`/`Moe-Session`/`Moe-Status` trailers), pushes it and reports it via `moe.record_commit` seconds later. A QA that wakes on the REVIEW write can see an empty `task.commits` for that window — `qa_approve` warns (`NO-COMPLETION-COMMIT`) rather than rejecting. If QA raced ahead and the task is already `DONE` when the wrapper looks, the completion commit still lands (`Moe-Status: DONE`).
 - **Branch policy** (`settings.consolidationBranch`, a literal branch name or a `*` glob such as `moe/work-*`; case-sensitive, anchored at both ends). Unset or empty disables the check entirely and no `branchPolicy` key appears in the response. When it is set there are three outcomes: `currentBranch` matches → completion proceeds and the response carries `branchPolicy: { pattern, currentBranch, matched: true }`; `currentBranch` does not match → `CONSTRAINT_VIOLATION` whose message starts `BRANCH-POLICY-FAIL:` and names both branches, thrown **before** the task update so the task stays `WORKING` with no verification persisted; `currentBranch` missing or blank → **never blocked**, a one-line warning is posted to `#governors` and the response carries `branchPolicy: { pattern, matched: null, warning }`.
@@ -549,29 +559,54 @@ Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, wh
 
 ### moe.report_blocked
 
-Report a task as blocked: flips the task to `BLOCKED` (the wrapper stops relaunching sessions against the wall) and pages whoever can actually unblock it. With `resourceId`, first tries to acquire the shared resource — a free resource grants the lease and does **not** block.
+Report a task as blocked: flips the task to `BLOCKED` and pages whoever can actually unblock it. With `resourceId`, first tries to acquire the shared resource — a free resource grants the lease and does **not** block. With `blockedOnTaskIds` (or task ids in the `reason`), the daemon auto-unblocks the task when every named task lands — and if every named task has **already** landed, the task is not blocked at all (`dependenciesSatisfied: true`). A **non-resource** block reported by the assignee (or on an unassigned task) frees the seat: the worker goes `IDLE` and claims other work instead of idling on its own unblock; a third-party (workerId-less) block on an assigned task keeps the hold.
 
 **Parameters:**
 ```typescript
-{ taskId: string, reason: string, needsFrom?: string, currentStepId?: string, workerId?: string, resourceId?: string }
+{
+  taskId: string,
+  reason: string,                // required, ≤2000 chars; task-… ids inside it are auto-parsed into blockedOnTaskIds
+  needsFrom?: string,
+  currentStepId?: string,
+  workerId?: string,
+  resourceId?: string,           // shared-resource block: grant-or-enqueue; keeps the seat parked (hold+idle)
+  blockedOnTaskIds?: string[]    // task ids this row waits on — existing ids, deduped, capped at 20
+}
 ```
 
 **Notes:**
-- **Task flip:** a task in an agent-claimable column (`PLANNING`/`WORKING`/`REVIEW`) flips to `BLOCKED`, recording `blockedReason`, `blockedResourceId` (when given), `blockedFromStatus` (the pre-block status to restore) and `blockedAt`. This is what stops wrapper churn: `claim_next_task` keeps answering `alreadyAssigned { status: "BLOCKED" }`, which the wrapper reads as "do not relaunch a CLI onto this". Tasks in other statuses keep their status (the worker is still marked `BLOCKED`).
-- Updates the assigned worker status to `BLOCKED`.
+- **Task flip:** a task in an agent-claimable column (`PLANNING`/`WORKING`/`REVIEW`) flips to `BLOCKED`, recording `blockedReason`, `blockedResourceId` (when given), `blockedOnTaskIds` (when given or parsed), `blockedFromStatus` (the pre-block status to restore) and `blockedAt`. Tasks in other statuses keep their status.
+- **Task-dependency path** (`blockedOnTaskIds`): only ids that exist on the board are kept (a missing id counts as satisfied anyway, so storing it would be dead weight; supplied unknowns come back in `ignoredBlockedOnTaskIds`), the task's own id is never a dependency of itself, deduped, capped at 20 — and the daemon ALSO auto-parses `task-…` ids out of `reason` and unions them (stored ∪ supplied ∪ parsed; a correction never loses earlier ids), so a legacy free-text "BUILD-ORDER BLOCK on task-X" becomes structured with zero agent effort (on both the flip and the repeat/reason-update arms). The auto-parse is boundary-anchored (`subtask-abcdef` never records `task-abcdef`). The moment every listed task is `DONE`/`ARCHIVED` (a missing/deleted id counts as satisfied), the daemon auto-unblocks: status → `blockedFromStatus`, all `blocked*` fields cleared, `TASK_UNBLOCKED` + a chat notice; the task returns **unassigned** unless a still-assigned hold's worker still exists, is not `DEAD` and still points at the task (then it returns to that worker). The check is event-driven (every task transition to DONE/ARCHIVED — `qa_approve`, `set_task_status`, archive, board moves), with a sweep backstop that repairs rows blocked before the daemon upgrade.
+- **Already-landed prerequisites (fresh flip only):** on a fresh flip, ids that are already `DONE`/`ARCHIVED` are **not** recorded (they come back in `satisfiedBlockedOnTaskIds`), and when EVERY candidate id is already landed (and no `resourceId` is involved) the task is **not blocked at all** — the call answers `{ blocked: false, dependenciesSatisfied: true, satisfiedBlockedOnTaskIds }` with `nextAction` → `moe.get_context` (read the prerequisites' evidence from `epicSiblings` and continue), writes nothing and pages nobody. Recording an instantly-satisfied list would be a claim-thrash livelock: flip → the next dependency scan restores it → the next worker claims → same wall → flip. The repeat/reason-update arm on an already-BLOCKED task deliberately keeps the union, satisfied ids included — that is the backfill path (store the DONE ids; the next dependency scan repairs the row).
+- **Dependency cycles:** an id from which the reporting task is already reachable over `dependsOn ∪ blockedOnTaskIds` (A waits on B, B waits on A — directly or transitively; edges out of `DONE`/`ARCHIVED` rows are not followed) is **dropped**, reported in `droppedCycleBlockedOnTaskIds`, explained in `warnings[]` (`DEPENDENCY_CYCLE: … (task-A → task-B → task-A)`), and alerted to `#governors` — a cycle's members can never all reach DONE, so nothing could ever auto-unblock it.
+- **Stale-block visibility** (sweep, `#governors`, once per block instance — visibility, not auto-park): a resource-less BLOCKED task draws a `blockedAt`-age alert when it has no `blockedOnTaskIds` and is past `blockedTimeoutMs` (nothing will auto-unblock it), when it is past `blockedTimeoutMs` and an unmet prerequisite is itself `BLOCKED`/`BACKLOG` (a cycle or a parked prerequisite — the line names each unmet id with its status), or when it is dep-waiting past 2× `blockedTimeoutMs`.
+- **Seat-freeing (non-resource blocks reported by the assignee, or on an unassigned task):** the block releases the seat — `assignedWorkerId → null`, the reporting worker → `IDLE` (its `currentTaskId` is only cleared when it actually points at this task), and `nextAction` points at `moe.claim_next_task` so the seat takes other work. Safe because the wrapper checkpoints the task's files at block time (land-on-every-exit), so any worker can resume from the landed bytes; on unblock the task returns **unassigned** to its `blockedFromStatus`, claimable by anyone. A **resource** block keeps the old hold+idle semantics: the task stays assigned, the worker is marked `BLOCKED`, and the grant path returns the task to the same parked worker by design. A **third-party** block (no `workerId` — a `workerId` that is not the assignee is refused outright) on an **assigned** task keeps the hold too (`seatFreed: false`, worker → `BLOCKED`, `nextAction` → `wait_for_task`): freeing a live worker's seat from the outside would unassign the task under a running session, and the auto-unblock would then hand it to a second worker while the first is still editing the same files.
 - **Resource path** (`resourceId` set): the daemon runs the `moe.acquire_resource` grant-or-enqueue FIRST — even for an **unassigned** task (operator/plugin flow; the queue entry's `workerId` falls back to the caller, then the assignee, then `"human"`), because without a queue entry the grant path could never auto-unblock the task. Capacity free → the lease is granted, the task is **not** blocked, and the call returns `{ granted: true, lease }` — proceed, then `moe.release_resource`. Busy → the task blocks as above with `blockedResourceId` set, and the grant path auto-unblocks it (status → `blockedFromStatus`) the moment the lease is granted. `resourceId` must match the resource-id shape (see `## Shared Resources`).
 - Only the assigned worker may report a task blocked (`workerId` is auto-injected by the proxy); a `reason` is required and capped at 2000 chars.
 - **Ping routing:** the daemon direct-mentions the **architect with the freshest `lastActivityAt` inside the 120s liveness window** (`isWorkerAlive` — so a `DEAD`/deregistered architect is never picked), resolving the role through `worker.teamId`. The blocked worker itself is excluded, so an architect blocked on its own PLANNING task cannot page itself into a dead end. Ties on `lastActivityAt` break to the lowest worker id, so routing is deterministic.
 - With **no live architect**, the ping escalates to `@governors` instead.
 - Channels: the task/general system copy stays unmentioned (it lands in `#general`, which already receives the mentioned copy — prefixing both would page the same person twice); `#general` gets the mentioned copy; `#architects` additionally gets it when an architect was found; `#governors` always receives the message — unmentioned when an architect was paged (visibility without being paged), mentioned when it *is* the escalation. Every post is best-effort: a chat failure never fails `report_blocked` or skips the `BLOCKED` update.
-- `nextAction` is emitted only when the task has an assigned worker **and no `resourceId`**. A resource block deliberately gets **no `nextAction`**: the wrapper idles (`BLOCKED` suppresses relaunch) and the grant path auto-unblocks the task, so ending the session IS the correct next step — there is nothing to wait on in-session.
+- `nextAction`: a seat-freed block points at `moe.claim_next_task` — the seat was freed, go take other work (never `wait_for_task` on your own unblock); the seat-freed, dep-less reason names `moe.set_task_status` as the human escape (a `moe.unblock_worker` cannot reach an unassigned task). A `dependenciesSatisfied` answer points at `moe.get_context` (continue). A third-party hold on an assigned task points at `moe.wait_for_task` for the still-assigned worker. A resource block deliberately gets **no `nextAction`**: the wrapper idles (`BLOCKED` suppresses relaunch) and the grant path auto-unblocks the task, so ending the session IS the correct next step — there is nothing to wait on in-session.
 - **Every plan step already `COMPLETED`, no `resourceId`, and the task blocked out of `WORKING`**: the block still happens, but the response carries `warning: 'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'` and `nextAction` pointing at `moe.complete_task`. REVIEW/PLANNING-origin blocks never warn — `complete_task` is only legal from `WORKING` (a REVIEW-origin block always has all steps completed). Delivered work goes through `complete_task`; `BLOCKED` is never a finish line.
-- Un-block routes: the resource grant path (auto), `moe.unblock_worker { resolveBlocks: true }`, or a human `set_task_status`. A bare `moe.unblock_worker` is **seat-only** — the worker goes `IDLE` but the task stays `BLOCKED` with its `blockedReason`. Ordinary releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there. The wrapper lands a checkpoint commit of the task's files on the BLOCKED exit, so a block never strands bytes.
+- Un-block routes: the resource grant path (auto), the task-dependency path (auto, all `blockedOnTaskIds` DONE/ARCHIVED), `moe.unblock_worker { resolveBlocks: true }`, or a human `set_task_status`. A bare `moe.unblock_worker` is **seat-only** — the worker goes `IDLE` but the task stays `BLOCKED` with its `blockedReason`. Ordinary releases (daemon restart purge, deregister, `release_task`) keep a `BLOCKED` task `BLOCKED` — the blocker is still there. The wrapper lands a checkpoint commit of the task's files on the BLOCKED exit, so a block never strands bytes.
 
 **Returns:**
 ```typescript
 // Resource path, capacity was free — lease granted, task NOT blocked:
 { success: true, taskId, taskStatus: TaskStatus /* unchanged */, granted: true, lease: ResourceLease, message }
+
+// Every named prerequisite already DONE/ARCHIVED (fresh flip, no resourceId) — task NOT blocked, nothing written, nobody paged:
+{
+  success: true, taskId, taskStatus: TaskStatus /* unchanged */,
+  blocked: false, dependenciesSatisfied: true,
+  satisfiedBlockedOnTaskIds: string[],   // the landed ids that were named (param ∪ parsed)
+  alreadyBlocked: false, reasonUpdated: false,
+  ignoredBlockedOnTaskIds?: string[], droppedCycleBlockedOnTaskIds?: string[], warnings?: string[],
+  workerStatus: WorkerStatus,
+  notified: { target: null, via: "not-blocked-dependencies-satisfied" },
+  message: string,
+  nextAction: { tool: "moe.get_context", args: { taskId, workerId? }, reason, recommendedSkill? }  // read the prerequisites' evidence from epicSiblings and continue
+}
 
 // Blocked:
 {
@@ -580,14 +615,20 @@ Report a task as blocked: flips the task to `BLOCKED` (the wrapper stops relaunc
   taskStatus: "BLOCKED" | TaskStatus, // "BLOCKED" when flipped; unchanged for non-flippable statuses
   resourceId?: string,                // echoed when resourceId was passed …
   granted?: false,                    // … along with the failed-grant marker
-  workerStatus: "BLOCKED",
+  blockedOnTaskIds?: string[],        // recorded deps: on a fresh flip param ∪ parsed MINUS already-landed ids; on a repeat stored ∪ param ∪ parsed (a correction never loses earlier ids)
+  satisfiedBlockedOnTaskIds?: string[], // fresh flip only: named ids already DONE/ARCHIVED, NOT recorded (the block stands on the unmet ones)
+  ignoredBlockedOnTaskIds?: string[], // explicitly supplied ids that don't exist on the board — dropped, not an error (parsed strays are skipped silently)
+  droppedCycleBlockedOnTaskIds?: string[], // ids dropped because recording them would close a dependency cycle (also warned + alerted to #governors)
+  warnings?: string[],                // "DEPENDENCY_CYCLE: <id> was NOT recorded — … (task-A → task-B → task-A) …"
+  seatFreed?: boolean,                // present on a fresh flip: true = assignee/unassigned non-resource block released the seat; false = resource block or third-party block kept it
+  workerStatus: "IDLE" | "BLOCKED",   // IDLE when the seat was freed; BLOCKED for resource blocks and third-party holds (hold+idle)
   notified: {
     target: string,                   // architect worker id, or "@governors"
     via: "freshest-live-architect" | "governors-fallback"
   },
   message: string,                    // names who was pinged
   warning?: string,                   // "ALL_STEPS_COMPLETE: …" when every step is COMPLETED, no resourceId, and the block originated from WORKING
-  nextAction?: { tool: "moe.wait_for_task" | "moe.complete_task", ... }   // wait_for_task only when assigned AND not a resource block; complete_task alongside the ALL_STEPS_COMPLETE warning
+  nextAction?: { tool: "moe.claim_next_task" | "moe.wait_for_task" | "moe.complete_task", ... }  // claim_next_task when the seat was freed (take other work); wait_for_task on a third-party hold (the assignee waits on its own unblock); complete_task alongside the ALL_STEPS_COMPLETE warning; absent on resource blocks
 }
 ```
 
@@ -644,7 +685,9 @@ total regardless, so the existence of archived tickets is never hidden.
   tasks: Array<{
     id, epicId, title, status, priority, order,
     assignedWorkerId, hasWorker, reopenCount, hasPendingQuestion,
-    definitionOfDoneCount, planStepCount, completedStepCount
+    definitionOfDoneCount, planStepCount, completedStepCount,
+    blockedOnTaskIds?: string[],  // BLOCKED rows: the tasks this row waits on (auto-unblocks when all are DONE/ARCHIVED)
+    dependsOnUnmet?: number       // count of dependsOn targets not yet DONE/ARCHIVED — why a row isn't offered to WORKING claims
   }>,
   counts: { backlog, inProgress, review, done },
   pagination: { limit, offset, returned, total, hasMore }
@@ -739,9 +782,11 @@ Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`.
 
 When `taskId` is provided the priority/order ranking is bypassed — you get the named task or an error. The task must be in one of the requested `statuses`; if it's already assigned to someone else, pass `replaceExisting: true` to take over. Re-claiming a task already assigned to YOU is always allowed (resume path) and needs no `replaceExisting`.
 
+**Dependency gating (WORKING claims only):** a task whose `dependsOn` targets are not all `DONE`/`ARCHIVED` is excluded from `WORKING`-status claims — it is not offered for execution until its prerequisites land, and an explicit-`taskId` claim of such a task is refused too (re-claiming a task you already hold stays allowed — the resume path). `PLANNING` (and `REVIEW`) claims are unaffected: a task may be planned before its prerequisites finish. A missing/deleted id counts as satisfied, so a removed prerequisite can never wedge its dependents. `moe.list_tasks` rows carry `dependsOnUnmet` so a withheld row is explainable, and `moe.set_task_dependencies` (architect/governor) edits a mis-declared list. This gate *prevents* build-order blocks; a dependency discovered mid-flight goes through `moe.report_blocked { blockedOnTaskIds }` instead, which the same auto-unblock machinery clears.
+
 **One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
 
-**BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason` and `blockedResourceId` (each present only when set on the task), and `nextAction` points at `moe.list_resources` instead of `get_context`. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); no `resourceId` means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
+**BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason`, `blockedResourceId` and `blockedOnTaskIds` (each present only when set on the task), and `nextAction` points at `moe.release_task` instead of `get_context`, spelling out the two workable exits: end the session and let the wrapper idle (the resource grant / dependency auto-unblock / a human clears it), or `moe.release_task { taskId }` to hand the task back with its `blockedReason` intact and free the slot for other work — never re-enter `wait_for_task` hoping for different work (nothing else is claimable while the hold stands). Note that an assignee-reported **non-resource** `report_blocked` frees the seat at report time, so a BLOCKED hold is the resource-block (hold+idle) shape or a third-party (workerId-less) block on an assigned task — an assignee-reported non-resource BLOCKED task is unassigned and simply not offered. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); a set `blockedOnTaskIds` means it auto-unblocks when every listed task is DONE/ARCHIVED; neither set means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
 
 With `preferAdjacentInEpic` on (default), candidates in the caller's currently-recorded epic (or explicit `epicId`) are ranked ahead of other epics before priority/order — so a worker waking from `wait_for_task` picks up the next adjacent task instead of jumping to an unrelated epic.
 
@@ -773,10 +818,11 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
     title: string,
     status: TaskStatus,
     blockedReason?: string,         // BLOCKED holds only
-    blockedResourceId?: string      // BLOCKED holds only; set = auto-unblocks on lease grant
+    blockedResourceId?: string,     // BLOCKED holds only; set = auto-unblocks on lease grant
+    blockedOnTaskIds?: string[]     // BLOCKED holds only; set = auto-unblocks when all are DONE/ARCHIVED
   },
   nextAction: {
-    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance' | 'moe.list_resources',
+    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance' | 'moe.release_task',  // release_task = BLOCKED hold (see above)
     args: object,
     reason: string,
     recommendedSkill?: { name: string, reason: string }
@@ -852,6 +898,7 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 **Notes:**
 - Marked `blocking`: the MCP dispatch layer does **not** wrap it in the global state mutex (it can park for minutes; all other tools stay serialized). Same mechanism as `moe.chat_wait`.
 - Only **claimable** tasks match: `assignedWorkerId` is null, or the assigned worker is missing/`DEAD`. Candidates are ranked by priority (`CRITICAL` > `HIGH` > `MEDIUM` > `LOW`), then `order`; the top match is returned.
+- **Dependency gating matches `claim_next_task`:** a `WORKING` wait skips a task whose `dependsOn` targets are not all `DONE`/`ARCHIVED` (`PLANNING`/`REVIEW` waits are unaffected; missing/deleted ids count as satisfied). No extra plumbing was needed: the `TASK_UPDATED` fired by a prerequisite's DONE transition re-runs the waiter predicate, so a parked dependent wakes the moment its last prerequisite lands.
 - Wake triggers while parked: `TASK_CREATED`/`TASK_UPDATED` producing a claimable match; `TASK_UPDATED` setting `hasPendingQuestion`; `MESSAGE_CREATED` where the message routes to/mentions this worker **or** the sender is `"human"`.
 - Refreshes the worker heartbeat on entry and again on timeout, so a parked worker is not treated as idle.
 - Calling `wait_for_task` again with the same `workerId` cancels the previous wait (the earlier call resolves `{ hasNext: false, cancelled: true }`). The same cancellation fires on MCP client disconnect and when the stale-waiter sweep finds the worker no longer tracked.
@@ -894,9 +941,10 @@ there to block. Block bookkeeping is handled by this tool: entering `BLOCKED`
 here (the human/board path — agents use `moe.report_blocked`) records
 `blockedFromStatus` and `blockedAt` (plus `blockedReason` from `reason` when
 given); leaving `BLOCKED` by any route clears every `blocked*` field
-(`blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt`) so a
-later resource grant or sweep cannot act on stale block state. Activity
-events: `TASK_BLOCKED` on entry, `TASK_UNBLOCKED` on exit.
+(`blockedReason`/`blockedResourceId`/`blockedOnTaskIds`/`blockedFromStatus`/`blockedAt`)
+so a later resource grant, dependency auto-unblock, or sweep cannot act on
+stale block state. Activity events: `TASK_BLOCKED` on entry, `TASK_UNBLOCKED`
+on exit.
 
 Exits are additionally judged against **`blockedFromStatus`**: leaving
 `BLOCKED` to any status other than the one the task was blocked from requires
@@ -909,6 +957,40 @@ returning to `blockedFromStatus` both **preserve** `assignedWorkerId` (the
 parked worker keeps its hold); any other exit keeps the normal
 clear-on-move semantics. The plugin `/ws` board-move handler enforces the
 same rules.
+
+---
+
+### moe.set_task_dependencies
+
+Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-declared dependency can never permanently withhold a row from WORKING claims. `dependsOn` is normally declared at `moe.create_task`; this tool edits it after the fact.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  dependsOn: string[],   // full replacement, not a union; [] clears. Existing task ids, deduped, capped at 20, no cycles
+  workerId?: string      // caller (auto-injected by proxy); role must resolve to architect or governor
+}
+```
+
+**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[NOT_ALLOWED]` when the caller is not on an architect/governor team; `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+
+**Returns:**
+```typescript
+{
+  success: true, taskId,
+  dependsOn: string[],           // the list now in force
+  previousDependsOn: string[],   // what it replaced
+  dependsOnUnmet: number,        // how many of the new targets are not yet DONE/ARCHIVED (0 = claimable now)
+  message: string
+}
+```
+
+**Notes:**
+- `dependsOn` gates **WORKING-status claims only** (`claim_next_task`/`wait_for_task`): the task is not offered for execution until every target is `DONE`/`ARCHIVED`. Planning proceeds regardless, and a missing/deleted id counts as satisfied — a deleted prerequisite can never wedge its dependents.
+- Withheld rows are explainable: `moe.list_tasks` rows carry `dependsOnUnmet`.
+- **Cycles are rejected**, not stored: a `dependsOn` cycle (A→B then B→A, directly or through a longer chain) would leave every member claim-gated forever with nothing — no sweep, no alert, no wrapper path — ever looking at it. This tool is the hard-validation escape hatch, so it throws and names the path; `create_task` and `report_blocked` apply the same check advisorily (drop + warning).
+- Distinct from `blockedOnTaskIds` (a `report_blocked` field for dependencies discovered mid-flight): `dependsOn` prevents a bad claim up front; `blockedOnTaskIds` parks an already-claimed task. Both are cleared by the same all-deps-done machinery, and both count as edges for the cycle check.
 
 ---
 
@@ -952,7 +1034,7 @@ Refuses (atomically — nothing changes) if any task is in-flight
 
 ### moe.create_task
 
-Create a new task in an epic.
+Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never hard-fails.** Agents keep creating tasks (a full column must not wedge a rail-mandated spinoff); the board's anti-stuck duty is carried by dependency gating + auto-unblock, not by creation brakes.
 
 **Parameters:**
 ```typescript
@@ -963,9 +1045,12 @@ Create a new task in an epic.
   definitionOfDone?: string[],
   taskRails?: string[],
   status?: string,
+  priority?: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
   parentTaskId?: string,
   order?: number,
-  createdBy?: "HUMAN" | "WORKER"
+  dependsOn?: string[],          // structural prerequisites (unknown ids, ids past the 20 cap, and cycle-closing ids are dropped — each with a warning naming them); gates WORKING-status claims only — see moe.set_task_dependencies
+  workerId?: string,             // caller (auto-injected by proxy); resolves the creator's role for createdBy attribution
+  createdBy?: "HUMAN" | "WORKER" | "ARCHITECT" | "QA" | "GOVERNOR"
 }
 ```
 
@@ -974,7 +1059,14 @@ Create a new task in an epic.
 { success: true, task, warnings?: string[] }
 ```
 
-`warnings` carries advisory task-shape feedback: empty `definitionOfDone` (a placeholder was substituted — give every task 3-7 mechanically checkable items), more than 7 DoD items (usually several tasks — split before planning), or a title containing "and" (often two tasks). Advisory only; the hard size gate lives in `moe.submit_plan`.
+`warnings` carries advisory task-shape feedback — **advisory only, the creation always succeeds**; the hard size gate lives in `moe.submit_plan`:
+- empty `definitionOfDone` (a placeholder was substituted — give every task 3-7 mechanically checkable items), more than 7 DoD items (usually several tasks — split before planning), or a title containing "and" (often two tasks);
+- **column limit at creation**: creating straight into a column past its `settings.columnLimits` cap warns (the transition path still throws — only creation is softened);
+- **meta-row consolidation**: a meta-titled row (`/security|evidence|verif|harden|audit|acceptance|quality|proof|gate/i`) filed into an epic that already has another active (non-DONE) meta-titled row — the warning names the highest-order one as the consolidation target: fold the checks into it instead (the "by evidence type" anti-seam in `moe-epic-breakdown`);
+- **epic size ceiling**: the epic now exceeds `settings.taskSizing.maxTasksPerEpic` (default 40) — re-slice into sub-epics;
+- **dependsOn hygiene**: ids not on the board are dropped (named), ids past the 20-id cap are dropped (named — `dependsOn capped at 20; dropped: …`, split the task or edit via `moe.set_task_dependencies`), and an id that would close a dependency cycle over `dependsOn ∪ blockedOnTaskIds` is dropped (named, with the path). A fresh id is referenced by nothing yet, so the cycle warning cannot fire today — it exists so all three dependency writers share one rule.
+
+`workerId` (auto-injected by the proxy) resolves the caller's role so agent-created tasks are attributed — `createdBy` records who actually filed the row, not just a `HUMAN`/`WORKER` binary.
 
 ---
 
@@ -1089,7 +1181,7 @@ Delete an epic and optionally its tasks.
 
 ### moe.unblock_worker
 
-Clear `BLOCKED` status on a worker, setting it back to `IDLE`. **Seat-only by default**: the worker's seat is freed, but a `BLOCKED` task it holds stays `BLOCKED` with `blockedReason`/`blockedResourceId`/`blockedFromStatus`/`blockedAt` intact — freeing a seat is not an assertion that the blocker is gone. Pass `resolveBlocks: true` to also restore the task; that is the human "blocker resolved" lever.
+Clear `BLOCKED` status on a worker, setting it back to `IDLE`. **Seat-only by default**: the worker's seat is freed, but a `BLOCKED` task it holds stays `BLOCKED` with `blockedReason`/`blockedResourceId`/`blockedOnTaskIds`/`blockedFromStatus`/`blockedAt` intact — freeing a seat is not an assertion that the blocker is gone. Pass `resolveBlocks: true` to also restore the task; that is the human "blocker resolved" lever.
 
 **Parameters:**
 ```typescript
@@ -1135,7 +1227,7 @@ Clear `BLOCKED` status on a worker, setting it back to `IDLE`. **Seat-only by de
 
 ### moe.release_task
 
-Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED — the blocker is still there, only `moe.unblock_worker { resolveBlocks: true }`, the resource grant path, or `set_task_status` clears it). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
+Release a task from its assigned worker (clears `assignedWorkerId` and keeps the task claimable in place via `nextStatusForRelease`: WORKING stays WORKING-unassigned so the next worker resumes it via `priorHandoffs`, or →REVIEW if every step is already done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED — the blocker is still there, only `moe.unblock_worker { resolveBlocks: true }`, the resource grant path, the dependency auto-unblock (all `blockedOnTaskIds` DONE/ARCHIVED), or `set_task_status` clears it). Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**: a quiet worker may be mid-build with its CLI blocked on a long local step. Never release a WORKING/PLANNING task on idle time alone; release only on a confirmed crash (deregister banner, wrapper exit, human confirmation) or an explicit handoff. To pull a task OUT of the agent pool for human triage instead, use `set_task_status` → BACKLOG (the blocked-timeout sweep does this automatically — it *parks* in-flight tasks, PLANNING/WORKING/REVIEW → BACKLOG, so the next agent doesn't claim straight into the same blocker). `release_task` itself parks in exactly one case: the third empty-progress release inside 24h — see **Refusal cascade** below.
 
 **Parameters:**
 ```typescript
@@ -1938,6 +2030,7 @@ Governor-only. Record a structured critique of a submitted plan. `verdict='block
   taskId: string,
   verdict: 'pass' | 'block',
   concerns?: string[],   // max 20 entries, ≤1000 chars each; required when verdict='block'
+  category?: 'size' | 'correctness' | 'rails' | 'dependency',  // what kind of block this is — expected on block verdicts
   workerId?: string
 }
 ```
@@ -1947,13 +2040,16 @@ Governor-only. Record a structured critique of a submitted plan. `verdict='block
 {
   success: true, taskId, status,
   verdict: 'pass' | 'block',
+  category?: string,     // echoed when supplied
+  warning?: string,      // a block verdict without a category draws this (recorded as 'uncategorized')
   concerns: string[],
-  planCritiqueResult: { verdict, concerns?, reviewedBy, reviewedAt }
+  planCritiqueResult: { verdict, concerns?, category?, reviewedBy, reviewedAt }
 }
 ```
 
 **Notes:**
 - `block` only flips the task back to `PLANNING` when its current status is `AWAITING_APPROVAL` or `WORKING`. If a human has already advanced the task past those, the critique becomes purely advisory.
+- `category` makes block verdicts countable (open-ended "add more evidence rows" critiques were unmeasurable). A `block` without a `category` is accepted but draws a warning and is counted as `uncategorized` — WARN-when-missing rather than hard-required, for rollout compatibility with older governors. `pass` verdicts don't need one.
 - On `block`, posts `🚫 plan blocked on <id>` to `#architects` (with bulleted concerns) and a one-line summary to `#governors`. On `pass`, posts `✅ critique passed: <id>` to `#governors`.
 - Clears `task.pendingPlanCritique` once a critique lands (idempotent).
 

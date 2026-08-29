@@ -3103,15 +3103,21 @@ do {
                 $resumeInfo = $claim.alreadyAssigned
             }
             # BLOCKED hold: the daemon parked this worker's task via
-            # moe.report_blocked (usually waiting on a shared-resource lease)
-            # and will auto-flip it back to its pre-block status when the
-            # blocker clears. Relaunching a CLI onto it is pure waste — nothing
-            # can be done until the daemon unblocks it — and every relaunch
-            # would burn one of the MOE_RESUME_MAX_ATTEMPTS budget. Suppress
-            # the resume entirely (no chat escalation: a BLOCKED hold is
-            # expected daemon state, not a dying CLI) and clear the tracker so
-            # the eventual unblock starts the resume path fresh with its full
-            # attempt budget.
+            # moe.report_blocked while it waits on a shared-resource lease,
+            # and the grant path will auto-flip it back to its pre-block
+            # status (returning it to THIS parked worker by design). With
+            # daemon seat-freeing, an assignee-reported non-resource
+            # report_blocked releases the seat instead (task
+            # BLOCKED-unassigned, worker IDLE claims other work), so
+            # alreadyAssigned{status:BLOCKED} now happens only for resource
+            # blocks and third-party (workerId-less) blocks on an assigned
+            # task. Relaunching a CLI onto it is pure waste — nothing can be
+            # done until the lease is granted / a human clears it — and every
+            # relaunch would burn one of the MOE_RESUME_MAX_ATTEMPTS budget.
+            # Suppress the resume entirely (no chat escalation: a BLOCKED
+            # hold is expected daemon state, not a dying CLI) and clear the
+            # tracker so the eventual unblock starts the resume path fresh
+            # with its full attempt budget.
             if ($resumeInfo -and $resumeInfo.PSObject.Properties['status'] -and [string]$resumeInfo.status -eq 'BLOCKED') {
                 $blockedDetail = "no reason given"
                 if ($resumeInfo.PSObject.Properties['blockedResourceId'] -and $resumeInfo.blockedResourceId) {
@@ -3119,7 +3125,7 @@ do {
                 } elseif ($resumeInfo.PSObject.Properties['blockedReason'] -and $resumeInfo.blockedReason) {
                     $blockedDetail = [string]$resumeInfo.blockedReason
                 }
-                Write-Host "[blocked] $($resumeInfo.taskId) is BLOCKED ($blockedDetail) — suppressing auto-resume; will idle until the daemon un-blocks it." -ForegroundColor DarkYellow
+                Write-Host "[blocked] $($resumeInfo.taskId) is BLOCKED ($blockedDetail) — suppressing auto-resume; only resource-lease waits and third-party blocks hold a seat now (an assignee-reported non-resource block frees it), so idling until the daemon un-blocks it." -ForegroundColor DarkYellow
                 # The session that called report_blocked may have left its
                 # edits uncommitted (a lingering baseline says so): land them
                 # now so a BLOCKED task's files reach the branch with no CLI.
@@ -4017,8 +4023,12 @@ $mentionsJson
         $finalReopenCount = 0
         # Epic-final = highest 'order' among this epic's tasks (ties count).
         # Drives the qualityGate scope: the epic's integration-and-hardening
-        # task owns the full gate; mid-epic tasks stay lean. Missing epicId
-        # or unparsable orders default to final (gate on the safe side).
+        # task owns the full gate; mid-epic tasks stay lean. Newer daemons
+        # compute the same rule board-side and serve it as get_context
+        # isEpicFinal — prefer that value (and skip the sibling RPC); the
+        # list_tasks fallback below stays for old daemons that don't serve
+        # the field. Missing epicId or unparsable orders default to final
+        # (gate on the safe side).
         $isEpicFinal = $true
         # Resolve the status by EXACT task id. This used to be an unscoped
         # `list_tasks @{}` filtered client-side, which the daemon caps at
@@ -4047,28 +4057,42 @@ $mentionsJson
                 if ($matched.PSObject.Properties['reopenCount'] -and $matched.reopenCount) {
                     $finalReopenCount = [int]$matched.reopenCount
                 }
-                # get_context's task projection carries no epicId/order, but it
-                # returns the resolved epic alongside it. Epic-final needs the
-                # siblings' orders anyway, so ask for ONE epic's tasks and read
-                # this task's own order out of that same page: that collection is
-                # legitimately bounded, unlike the whole project, so a limit here
-                # is not the same mistake — and the page is guaranteed to contain
-                # this task, because it is scoped to this task's epic.
-                $taskEpicId = if ($ctxResp.epic -and $ctxResp.epic.id) { [string]$ctxResp.epic.id } else { "" }
-                if ($taskEpicId) {
-                    try {
-                        $sibResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{ epicId = $taskEpicId; limit = 500 }
-                        if ($sibResp -and $sibResp.tasks) {
-                            $myOrder = 0.0
-                            $mine = $sibResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
-                            if ($mine -and $null -ne $mine.order) { $myOrder = [double]$mine.order }
-                            $siblingMax = ($sibResp.tasks |
-                                ForEach-Object { if ($null -ne $_.order) { [double]$_.order } else { 0.0 } } |
-                                Measure-Object -Maximum).Maximum
-                            if ($null -ne $siblingMax -and $myOrder -lt $siblingMax) { $isEpicFinal = $false }
+                # Daemon-provided epic-final (get_context isEpicFinal, on the
+                # task projection or top-level beside the epic): only an exact
+                # JSON boolean counts — anything else means an old daemon and
+                # routes to the fallback below.
+                $daemonIsEpicFinal = $null
+                if ($matched.PSObject.Properties['isEpicFinal'] -and $matched.isEpicFinal -is [bool]) {
+                    $daemonIsEpicFinal = [bool]$matched.isEpicFinal
+                } elseif ($ctxResp.PSObject.Properties['isEpicFinal'] -and $ctxResp.isEpicFinal -is [bool]) {
+                    $daemonIsEpicFinal = [bool]$ctxResp.isEpicFinal
+                }
+                if ($null -ne $daemonIsEpicFinal) {
+                    $isEpicFinal = $daemonIsEpicFinal
+                } else {
+                    # get_context's task projection carries no epicId/order, but it
+                    # returns the resolved epic alongside it. Epic-final needs the
+                    # siblings' orders anyway, so ask for ONE epic's tasks and read
+                    # this task's own order out of that same page: that collection is
+                    # legitimately bounded, unlike the whole project, so a limit here
+                    # is not the same mistake — and the page is guaranteed to contain
+                    # this task, because it is scoped to this task's epic.
+                    $taskEpicId = if ($ctxResp.epic -and $ctxResp.epic.id) { [string]$ctxResp.epic.id } else { "" }
+                    if ($taskEpicId) {
+                        try {
+                            $sibResp = Invoke-MoeRpc -Tool "list_tasks" -Args @{ epicId = $taskEpicId; limit = 500 }
+                            if ($sibResp -and $sibResp.tasks) {
+                                $myOrder = 0.0
+                                $mine = $sibResp.tasks | Where-Object { $_.id -eq $preflightTaskId } | Select-Object -First 1
+                                if ($mine -and $null -ne $mine.order) { $myOrder = [double]$mine.order }
+                                $siblingMax = ($sibResp.tasks |
+                                    ForEach-Object { if ($null -ne $_.order) { [double]$_.order } else { 0.0 } } |
+                                    Measure-Object -Maximum).Maximum
+                                if ($null -ne $siblingMax -and $myOrder -lt $siblingMax) { $isEpicFinal = $false }
+                            }
+                        } catch {
+                            $isEpicFinal = $true
                         }
-                    } catch {
-                        $isEpicFinal = $true
                     }
                 }
             }

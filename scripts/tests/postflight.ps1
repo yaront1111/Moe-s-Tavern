@@ -82,6 +82,10 @@ try {
     #   FAKE_TASK_STATUS                 status get_context/list_tasks report
     #   FAKE_GET_CONTEXT_FAIL=empty|mismatch
     #   FAKE_SIBLING_ORDER, FAKE_LIST_TASKS_TRUNCATED   (epic-final / pagination)
+    #   FAKE_CTX_IS_EPIC_FINAL=true|false                daemon-computed
+    #                                    isEpicFinal in get_context (unset =
+    #                                    old daemon); FAKE_CTX_IS_EPIC_FINAL_AT=top
+    #                                    serves it top-level instead of task-level
     #   FAKE_SCOPE_ASSERTED / FAKE_SCOPE_PLANNED         comma lists overriding
     #                                    the on-disk record's declared sets
     #   FAKE_SCOPE_PEER_DECLARED         "path:taskId,..." overriding the peer
@@ -168,7 +172,7 @@ switch (tool) {
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
       : (args.taskId || 'task-postflight');
-    ok({
+    const ctxPayload = {
       task: {
         id: ctxTaskId,
         status: process.env.FAKE_TASK_STATUS || 'WORKING',
@@ -177,7 +181,18 @@ switch (tool) {
         definitionOfDone: []
       },
       project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
-    });
+    };
+    // FAKE_CTX_IS_EPIC_FINAL=true|false models the newer daemon that computes
+    // epic-final board-side; unset = an old daemon that doesn't serve the
+    // field. FAKE_CTX_IS_EPIC_FINAL_AT=top places it top-level (beside the
+    // epic) instead of on the task projection -- the wrapper accepts both.
+    const fakeIef = process.env.FAKE_CTX_IS_EPIC_FINAL;
+    if (fakeIef === 'true' || fakeIef === 'false') {
+      const iefVal = fakeIef === 'true';
+      if (process.env.FAKE_CTX_IS_EPIC_FINAL_AT === 'top') ctxPayload.isEpicFinal = iefVal;
+      else ctxPayload.task.isEpicFinal = iefVal;
+    }
+    ok(ctxPayload);
     break;
   }
   case 'list_tasks': {
@@ -468,6 +483,41 @@ switch (tool) {
                 try {
                     $gateMidCode = Invoke-GateWrapper $gateMidDir $wrapperGateMidOut
                 } finally {
+                    Remove-Item Env:FAKE_SIBLING_ORDER -ErrorAction SilentlyContinue
+                }
+
+                # Daemon-provided isEpicFinal: newer daemons compute epic-final
+                # board-side and serve it in get_context; when present the
+                # wrapper must PREFER it over the list_tasks fallback (the
+                # mid-epic case above, which runs with the field absent, keeps
+                # pinning the fallback for old daemons). Two directions, each a
+                # discriminator against silently using the fallback.
+                # b1: daemon says false (task-level) with NO sibling knob — the
+                # fallback would compute final=true and run the failing gate;
+                # the daemon value must defer it, so the commit lands.
+                $gateDaemonMidDir = Join-Path $tempRoot 'gate-daemonmid'
+                New-GateProject $gateDaemonMidDir 'exit 9'
+                $wrapperGateDaemonMidOut = Join-Path $tempRoot 'wrapper-gate-daemonmid.out'
+                $env:FAKE_CTX_IS_EPIC_FINAL = 'false'
+                try {
+                    $gateDaemonMidCode = Invoke-GateWrapper $gateDaemonMidDir $wrapperGateDaemonMidOut
+                } finally {
+                    Remove-Item Env:FAKE_CTX_IS_EPIC_FINAL -ErrorAction SilentlyContinue
+                }
+                # b2: daemon says true (top-level placement) while the sibling
+                # page says mid-epic — the fallback would defer; the daemon
+                # value must run the failing gate, which blocks the commit.
+                $gateDaemonFinalDir = Join-Path $tempRoot 'gate-daemonfinal'
+                New-GateProject $gateDaemonFinalDir 'exit 3'
+                $wrapperGateDaemonFinalOut = Join-Path $tempRoot 'wrapper-gate-daemonfinal.out'
+                $env:FAKE_CTX_IS_EPIC_FINAL = 'true'
+                $env:FAKE_CTX_IS_EPIC_FINAL_AT = 'top'
+                $env:FAKE_SIBLING_ORDER = '99'
+                try {
+                    $gateDaemonFinalCode = Invoke-GateWrapper $gateDaemonFinalDir $wrapperGateDaemonFinalOut
+                } finally {
+                    Remove-Item Env:FAKE_CTX_IS_EPIC_FINAL -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_CTX_IS_EPIC_FINAL_AT -ErrorAction SilentlyContinue
                     Remove-Item Env:FAKE_SIBLING_ORDER -ErrorAction SilentlyContinue
                 }
 
@@ -1225,6 +1275,8 @@ switch (tool) {
                 $gatePassCommits = [int](& git -C $gatePassDir rev-list --count HEAD 2>$null)
                 $gateSkipCommits = [int](& git -C $gateSkipDir rev-list --count HEAD 2>$null)
                 $gateMidCommits = [int](& git -C $gateMidDir rev-list --count HEAD 2>$null)
+                $gateDaemonMidCommits = [int](& git -C $gateDaemonMidDir rev-list --count HEAD 2>$null)
+                $gateDaemonFinalCommits = [int](& git -C $gateDaemonFinalDir rev-list --count HEAD 2>$null)
                 $gateFailMessages = Get-Content -Raw -Path (Join-Path $gateFailDir '.moe\messages\chan-general.jsonl')
             } finally {
                 Remove-Item Env:FAKE_TASK_STATUS -ErrorAction SilentlyContinue
@@ -1345,6 +1397,30 @@ switch (tool) {
         if ($gateMidCommits -ne 2) {
             Get-Content $wrapperGateMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
             throw "Mid-epic task should commit without running the gate (found $gateMidCommits commits)"
+        }
+        if ($gateDaemonMidCode -ne 0) {
+            Get-Content $wrapperGateDaemonMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-daemonmid wrapper exited with $gateDaemonMidCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateDaemonMidOut) -notlike '*qualityGate deferred*') {
+            Get-Content $wrapperGateDaemonMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'A daemon isEpicFinal=false must defer the gate even when the sibling page would say epic-final'
+        }
+        if ($gateDaemonMidCommits -ne 2) {
+            Get-Content $wrapperGateDaemonMidOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Daemon-deferred gate must not block the commit (found $gateDaemonMidCommits commits)"
+        }
+        if ($gateDaemonFinalCode -ne 0) {
+            Get-Content $wrapperGateDaemonFinalOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "Gate-daemonfinal wrapper exited with $gateDaemonFinalCode"
+        }
+        if ((Get-Content -Raw -Path $wrapperGateDaemonFinalOut) -notlike '*qualityGate failed (exit 3)*') {
+            Get-Content $wrapperGateDaemonFinalOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw 'A daemon isEpicFinal=true must run the gate even when the sibling page says mid-epic'
+        }
+        if ($gateDaemonFinalCommits -ne 1) {
+            Get-Content $wrapperGateDaemonFinalOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+            throw "The daemon-final failing gate must block the commit (found $gateDaemonFinalCommits commits)"
         }
         if ($gateTruncCode -ne 0) {
             Get-Content $wrapperGateTruncOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }

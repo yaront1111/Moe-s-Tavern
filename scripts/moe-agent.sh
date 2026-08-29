@@ -3677,16 +3677,23 @@ except Exception:
                 fi
             fi
             # BLOCKED hold: the daemon parked this worker's task via
-            # moe.report_blocked (usually waiting on a shared-resource lease)
-            # and will auto-flip it back to its pre-block status when the
-            # blocker clears. Relaunching a CLI onto it is pure waste -- nothing
-            # can be done until the daemon unblocks it -- and every relaunch
-            # would burn one of the MOE_RESUME_MAX_ATTEMPTS budget. Suppress
-            # the resume entirely (no chat escalation: a BLOCKED hold is
-            # expected daemon state, not a dying CLI) and clear the tracker so
-            # the eventual unblock starts the resume path fresh with its full
-            # attempt budget. Clearing RESUME_TASK_ID routes this iteration
-            # into the existing no-task path (same mechanism as the cap path).
+            # moe.report_blocked while it waits on a shared-resource lease,
+            # and the grant path will auto-flip it back to its pre-block
+            # status (returning it to THIS parked worker by design). With
+            # daemon seat-freeing, an assignee-reported non-resource
+            # report_blocked releases the seat instead (task
+            # BLOCKED-unassigned, worker IDLE claims other work), so
+            # alreadyAssigned{status:BLOCKED} now happens only for resource
+            # blocks and third-party (workerId-less) blocks on an assigned
+            # task. Relaunching a CLI onto it is pure waste -- nothing can be
+            # done until the lease is granted / a human clears it -- and every
+            # relaunch would burn one of the MOE_RESUME_MAX_ATTEMPTS budget.
+            # Suppress the resume entirely (no chat escalation: a BLOCKED
+            # hold is expected daemon state, not a dying CLI) and clear the
+            # tracker so the eventual unblock starts the resume path fresh
+            # with its full attempt budget. Clearing RESUME_TASK_ID routes
+            # this iteration into the existing no-task path (same mechanism
+            # as the cap path).
             if [ -n "$RESUME_TASK_ID" ] && [ "$RESUME_TASK_STATUS" = "BLOCKED" ]; then
                 BLOCKED_DETAIL="no reason given"
                 if [ -n "$RESUME_TASK_BLOCKED_RESOURCE" ]; then
@@ -3694,7 +3701,7 @@ except Exception:
                 elif [ -n "$RESUME_TASK_BLOCKED_REASON" ]; then
                     BLOCKED_DETAIL="$RESUME_TASK_BLOCKED_REASON"
                 fi
-                echo -e "${YELLOW}[blocked]${NC} $RESUME_TASK_ID is BLOCKED ($BLOCKED_DETAIL) -- suppressing auto-resume; will idle until the daemon un-blocks it."
+                echo -e "${YELLOW}[blocked]${NC} $RESUME_TASK_ID is BLOCKED ($BLOCKED_DETAIL) -- suppressing auto-resume; only resource-lease waits and third-party blocks hold a seat now (an assignee-reported non-resource block frees it), so idling until the daemon un-blocks it."
                 # Land-on-every-exit (A5): the held BLOCKED task may carry a
                 # lingering baseline from the session that blocked it. Recover
                 # it onto the branch NOW so a blocked task's files reach git
@@ -4841,17 +4848,25 @@ try:
     t = d.get('task') or {}
     e = d.get('epic') or {}
     if not t.get('id'):
-        sys.stdout.write('NOTASK\x1f\x1f\x1f')
+        sys.stdout.write('NOTASK\x1f\x1f\x1f\x1f')
     elif t.get('id') != sys.argv[1]:
-        sys.stdout.write('MISMATCH\x1f' + str(t.get('id')) + '\x1f\x1f')
+        sys.stdout.write('MISMATCH\x1f' + str(t.get('id')) + '\x1f\x1f\x1f')
     else:
         # \x1f-separated so we don't collide with whitespace in fields
         # (NOT NUL: command substitution strips NUL bytes).
+        # isEpicFinal: newer daemons compute epic-final board-side and serve
+        # it in get_context (task-level, else top-level). Serialize only an
+        # exact JSON boolean; anything else stays '' = absent (old daemon).
+        ief = t.get('isEpicFinal')
+        if ief is None:
+            ief = d.get('isEpicFinal')
+        ief_s = 'true' if ief is True else ('false' if ief is False else '')
         sys.stdout.write(
             'OK\x1f'
             + (t.get('status') or '') + '\x1f'
             + str(t.get('reopenCount') or 0) + '\x1f'
             + (e.get('id') or '') + '\x1f'
+            + ief_s + '\x1f'
         )
 except Exception:
     pass
@@ -4859,11 +4874,13 @@ except Exception:
         fi
         LOOKUP_OUTCOME=""
         LOOKUP_DETAIL=""
+        DAEMON_IS_EPIC_FINAL=""
         if [ -n "$PARSED_POSTFLIGHT" ]; then
             { IFS= read -r -d $'\x1f' LOOKUP_OUTCOME
               IFS= read -r -d $'\x1f' LOOKUP_DETAIL
               IFS= read -r -d $'\x1f' FINAL_REOPEN_COUNT
               IFS= read -r -d $'\x1f' TASK_EPIC_ID
+              IFS= read -r -d $'\x1f' DAEMON_IS_EPIC_FINAL
             } <<< "$PARSED_POSTFLIGHT" 2>/dev/null || true
         fi
         case "${LOOKUP_OUTCOME:-}" in
@@ -4874,22 +4891,30 @@ except Exception:
                 ;;
             MISMATCH)
                 STATUS_LOOKUP_ERROR="get_context resolved a different task (${LOOKUP_DETAIL:-?}) -- the requested id no longer exists"
+                DAEMON_IS_EPIC_FINAL=""
                 ;;
             *)
                 # The RPC failed, returned nothing, or carried no task. That is
                 # NOT the same as "the task isn't in REVIEW" -- see below.
                 STATUS_LOOKUP_ERROR="get_context returned no task"
+                DAEMON_IS_EPIC_FINAL=""
                 ;;
         esac
         FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
         # Epic-final = highest 'order' among this epic's tasks (ties count).
         # Drives the qualityGate scope: the epic's integration-and-hardening
-        # task owns the full gate; mid-epic tasks stay lean. Missing epicId or
-        # unparsable orders default to final (gate on the safe side). Asked
-        # epic-SCOPED: one epic's siblings is a legitimately bounded collection,
-        # unlike the whole project, so a limit is safe here -- and the page is
+        # task owns the full gate; mid-epic tasks stay lean. Newer daemons
+        # compute the same rule board-side and serve it as get_context
+        # isEpicFinal -- prefer that value (and skip the sibling RPC); the
+        # list_tasks+python fallback below stays for old daemons that don't
+        # serve the field. Missing epicId or unparsable orders default to
+        # final (gate on the safe side). The fallback asks epic-SCOPED: one
+        # epic's siblings is a legitimately bounded collection, unlike the
+        # whole project, so a limit is safe here -- and the page is
         # guaranteed to contain this task, so it also supplies MY_ORDER.
-        if [ -z "$STATUS_LOOKUP_ERROR" ] && [ -n "$TASK_EPIC_ID" ]; then
+        if [ "$DAEMON_IS_EPIC_FINAL" = "true" ] || [ "$DAEMON_IS_EPIC_FINAL" = "false" ]; then
+            IS_EPIC_FINAL="$DAEMON_IS_EPIC_FINAL"
+        elif [ -z "$STATUS_LOOKUP_ERROR" ] && [ -n "$TASK_EPIC_ID" ]; then
             SIBLING_STATE=$(moe_rpc list_tasks \
                 "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'epicId':sys.argv[1],'limit':500}))" "$TASK_EPIC_ID" 2>/dev/null)" \
                 2>/dev/null || echo "")

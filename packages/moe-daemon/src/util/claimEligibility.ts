@@ -1,5 +1,6 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { Task } from '../types/schema.js';
+import { unmetDependsOn } from '../state/dependencyUnblock.js';
 
 /**
  * One definition of "this worker is encumbered", shared by claim_next_task and
@@ -20,6 +21,19 @@ export interface BlockedHoldRef {
   id: string;
   blockedReason?: string | null;
   blockedResourceId?: string | null;
+  blockedOnTaskIds?: string[] | null;
+}
+
+/**
+ * dependsOn gates WORKING-status claims ONLY: a WORKING candidate whose
+ * declared prerequisites are not all DONE/ARCHIVED is withheld from both
+ * claim_next_task's ranked pool and wait_for_task's matcher (the two MUST stay
+ * in lockstep — a task that is wait-visible but claim-ineligible re-creates
+ * the wake→claim→refuse spin this module exists to prevent). Planning and
+ * review claims are unaffected; missing/deleted ids count as satisfied.
+ */
+export function isClaimGatedByDependsOn(state: StateManager, task: Task): boolean {
+  return task.status === 'WORKING' && unmetDependsOn(state, task).length > 0;
 }
 
 export interface NextActionHint {
@@ -36,6 +50,7 @@ export interface HeldTaskRefusal {
     status: string;
     blockedReason?: string;
     blockedResourceId?: string;
+    blockedOnTaskIds?: string[];
   };
   nextAction: NextActionHint;
 }
@@ -67,12 +82,17 @@ export function blockingHold(
  */
 export function blockedHoldNextAction(hold: BlockedHoldRef, workerId: string): NextActionHint {
   const onResource = Boolean(hold.blockedResourceId);
+  const onTasks = Array.isArray(hold.blockedOnTaskIds) && hold.blockedOnTaskIds.length > 0;
   const why = onResource
     ? ` waiting on resource ${hold.blockedResourceId}`
-    : ` (${hold.blockedReason ?? 'needs a human'})`;
+    : onTasks
+      ? ` waiting on task(s) ${hold.blockedOnTaskIds!.join(', ')}`
+      : ` (${hold.blockedReason ?? 'needs a human'})`;
   const idle = onResource
     ? 'the resource grant auto-unblocks it'
-    : 'a human or governor must unblock it';
+    : onTasks
+      ? 'the daemon auto-unblocks it when those tasks are DONE/ARCHIVED'
+      : 'a human or governor must unblock it';
   return {
     tool: 'moe.release_task',
     args: { taskId: hold.id, workerId },
@@ -102,7 +122,10 @@ export function heldTaskRefusal(hold: Task, workerId: string): HeldTaskRefusal {
       ...(blocked
         ? {
             blockedReason: hold.blockedReason ?? undefined,
-            blockedResourceId: hold.blockedResourceId ?? undefined
+            blockedResourceId: hold.blockedResourceId ?? undefined,
+            ...(Array.isArray(hold.blockedOnTaskIds) && hold.blockedOnTaskIds.length > 0
+              ? { blockedOnTaskIds: hold.blockedOnTaskIds }
+              : {})
           }
         : {})
     },

@@ -5,7 +5,9 @@ import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { reportBlockedTool } from './reportBlocked.js';
 import { unblockWorkerTool } from './unblockWorker.js';
+import { setTaskStatusTool } from './setTaskStatus.js';
 import { LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
+import { runDependencyUnblock } from '../state/dependencyUnblock.js';
 import type { Epic, Project, Task, TeamRole } from '../types/schema.js';
 
 describe('moe.report_blocked', () => {
@@ -119,7 +121,7 @@ describe('moe.report_blocked', () => {
     const result = await report();
 
     expect(result.notified).toEqual({ target: 'architect-a', via: 'freshest-live-architect' });
-    expect(result.message).toBe('Worker marked as blocked. Pinged architect-a (freshest live architect).');
+    expect(result.message).toBe('Task blocked; seat freed — claim other work. Pinged architect-a (freshest live architect).');
 
     // Exactly one general copy is prefixed — postSystemMessage forwards to the
     // same channel, so a second prefixed copy would page architect-a twice.
@@ -153,7 +155,7 @@ describe('moe.report_blocked', () => {
     const result = await report();
 
     expect(result.notified).toEqual({ target: '@governors', via: 'governors-fallback' });
-    expect(result.message).toBe('Worker marked as blocked. No live architect — escalated to @governors.');
+    expect(result.message).toBe('Task blocked; seat freed — claim other work. No live architect — escalated to @governors.');
     expect(mentionedGeneralPosts()[0]).toMatch(/^@governors /);
     // Nobody to page in #architects — the escalation carries the mention instead.
     expect(rolePosts.map(([role]) => role)).not.toContain('architects');
@@ -195,7 +197,7 @@ describe('moe.report_blocked', () => {
     expect(rolePosts.find(([role]) => role === 'governors')![1]).toMatch(/^@governors 🚧 /);
   });
 
-  it('still succeeds and still marks the worker BLOCKED when every chat post rejects', async () => {
+  it('still succeeds and still frees the seat when every chat post rejects', async () => {
     await addWorker('architect-a', 'architect', 5);
     vi.spyOn(state, 'postSystemMessage').mockRejectedValue(new Error('chat down'));
     vi.mocked(state.postToGeneral).mockRejectedValue(new Error('chat down'));
@@ -205,37 +207,41 @@ describe('moe.report_blocked', () => {
 
     expect(result.success).toBe(true);
     expect(result.notified).toEqual({ target: 'architect-a', via: 'freshest-live-architect' });
-    expect(state.getWorker('worker-1')!.status).toBe('BLOCKED');
-    expect(state.getWorker('worker-1')!.lastError).toBe('npm install fails behind the proxy');
+    // Non-resource block: the seat is freed even when chat is down.
+    expect(state.getWorker('worker-1')!.status).toBe('IDLE');
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
   });
 
-  it('keeps the validation contract and flips the task to BLOCKED', async () => {
+  it('keeps the validation contract, flips the task to BLOCKED and FREES the seat (non-resource)', async () => {
     await expect(report({ reason: '   ' })).rejects.toThrow(/reason/);
     await expect(report({ reason: 'x'.repeat(2001) })).rejects.toThrow(/too long/);
     await expect(report({ taskId: 'task-nope' })).rejects.toThrow(/not found|NOT_FOUND/i);
+    await expect(report({ blockedOnTaskIds: 'task-2' })).rejects.toThrow(/blockedOnTaskIds/);
+    await expect(report({ blockedOnTaskIds: [42] })).rejects.toThrow(/blockedOnTaskIds/);
 
     const result = await report();
     expect(result.success).toBe(true);
-    // The task itself parks: this is what stops the wrapper's resume-loop
-    // churn (claim_next_task answers alreadyAssigned{status:BLOCKED} and the
-    // wrapper skips the CLI relaunch).
+    // The task itself parks — but unlike a resource block, the SEAT IS FREED:
+    // the deadlock the old hold+idle design produced was a fleet where every
+    // seat held a blocked task and starved. The wrapper checkpointed the work
+    // at block time (bf3f8fa), so any worker can resume from the landed bytes.
     expect(result.taskStatus).toBe('BLOCKED');
-    expect(result.workerStatus).toBe('BLOCKED');
+    expect(result.seatFreed).toBe(true);
+    expect(result.workerStatus).toBe('IDLE');
     const task = state.getTask('task-1')!;
     expect(task.status).toBe('BLOCKED');
-    // REGRESSION GUARD: updateTask clears assignment on any status change when
-    // the caller omits it — the flip must pass it explicitly, or the parked
-    // worker loses its hold, alreadyAssigned{BLOCKED} never fires and the
-    // wrapper suppression is dead code.
-    expect(task.assignedWorkerId).toBe('worker-1');
+    // Seat-freeing contract: assignment cleared, worker IDLE with no task
+    // pointer, task keeps its block bookkeeping (release_task semantics).
+    expect(task.assignedWorkerId).toBeNull();
+    expect(state.getWorker('worker-1')!.status).toBe('IDLE');
+    expect(state.getWorker('worker-1')!.currentTaskId).toBeNull();
     expect(task.blockedFromStatus).toBe('WORKING');
     expect(task.blockedReason).toBe('npm install fails behind the proxy');
     expect(task.blockedResourceId).toBeNull();
     expect(task.blockedAt).toEqual(expect.any(String));
-    // Non-resource block keeps the wait_for_task hint (statuses from the
-    // pre-flip status, since BLOCKED itself is not waitable).
+    // The freed worker is pointed at OTHER work, not at waiting on this task.
     expect(result.nextAction).toMatchObject({
-      tool: 'moe.wait_for_task',
+      tool: 'moe.claim_next_task',
       args: { workerId: 'worker-1', statuses: ['WORKING'] },
     });
   });
@@ -276,6 +282,9 @@ describe('moe.report_blocked', () => {
     // Resource blocks emit NO nextAction: ending the session is the correct
     // next step (the wrapper idles; the daemon auto-unblocks on grant).
     expect(result.nextAction).toBeUndefined();
+    // Resource blocks KEEP the seat — the grant path returns the task to the
+    // same parked worker by design (seat-freeing is non-resource only).
+    expect(result.seatFreed).toBe(false);
     const blocked = state.getTask('task-1')!;
     expect(blocked.status).toBe('BLOCKED');
     expect(blocked.assignedWorkerId).toBe('worker-1');
@@ -328,6 +337,180 @@ describe('moe.report_blocked', () => {
     expect(unblocked.assignedWorkerId).toBeNull();
   });
 
+  // ---- structured dependency ids (blockedOnTaskIds) ----
+
+  it('records validated blockedOnTaskIds, auto-parses ids out of the reason, and reports ignored strays', async () => {
+    const depA = await state.createTask({ epicId: 'epic-1', title: 'Dep A', status: 'WORKING' });
+    const depB = await state.createTask({ epicId: 'epic-1', title: 'Dep B', status: 'BACKLOG' });
+
+    const result = await report({
+      reason: `BUILD-ORDER BLOCK on ${depA.id}; also mentions task-eeeeee which was deleted, and itself task-1`,
+      blockedOnTaskIds: [depB.id, depB.id, 'task-nope'],
+    }) as Record<string, unknown>;
+
+    const task = state.getTask('task-1')!;
+    // Supplied ids first, then reason-parsed ids; deduped; own id and unknown
+    // ids never stored (a missing id counts as satisfied anyway).
+    expect(task.blockedOnTaskIds).toEqual([depB.id, depA.id]);
+    expect(result.blockedOnTaskIds).toEqual([depB.id, depA.id]);
+    // Only EXPLICITLY supplied unknown ids are reported back; parsed strays
+    // (deleted rows) vanish silently.
+    expect(result.ignoredBlockedOnTaskIds).toEqual(['task-nope']);
+  });
+
+  it('a repeat carrying NEW blockedOnTaskIds is not an identical repeat — ids union, provenance survives', async () => {
+    const depA = await state.createTask({ epicId: 'epic-1', title: 'Dep A', status: 'WORKING' });
+    const depB = await state.createTask({ epicId: 'epic-1', title: 'Dep B', status: 'WORKING' });
+
+    await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depA.id] });
+    const firstBlockedAt = state.getTask('task-1')!.blockedAt;
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([depA.id]);
+
+    // Same reason + a NEW id: a write, not a no-op.
+    const second = await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depB.id] });
+    expect(second.alreadyBlocked).toBe(true);
+    expect(second.reasonUpdated).toBe(true);
+    const corrected = state.getTask('task-1')!;
+    // UNION — the correction must never lose earlier ids.
+    expect(corrected.blockedOnTaskIds).toEqual([depA.id, depB.id]);
+    expect(corrected.blockedAt).toBe(firstBlockedAt);
+    expect(corrected.blockedFromStatus).toBe('WORKING');
+
+    // Same reason + same ids (order/dupes irrelevant): identical repeat again.
+    const third = await report({ reason: 'waiting on upstream', blockedOnTaskIds: [depB.id, depA.id] });
+    expect(third.alreadyBlocked).toBe(true);
+    expect(third.reasonUpdated).toBe(false);
+  });
+
+  it('caps the union at 20 dependency ids', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      const t = await state.createTask({ epicId: 'epic-1', title: `Dep ${i}`, status: 'BACKLOG' });
+      ids.push(t.id);
+    }
+    await report({ reason: 'waiting on the world', blockedOnTaskIds: ids });
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toHaveLength(20);
+  });
+
+  it('does NOT block when every named prerequisite is already DONE/ARCHIVED (no claim-thrash livelock)', async () => {
+    // The measured moe-next pattern: "blocks point at tasks that are now DONE
+    // and the block still stands". With the auto-unblock live, recording an
+    // instantly-satisfied list is a livelock (flip → scan restores → next
+    // worker claims → same wall → flip). Mirror the resource arm instead:
+    // nothing to wait on → not blocked, nothing written, nobody paged.
+    const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
+    const archived = await state.createTask({ epicId: 'epic-1', title: 'Shelved', status: 'ARCHIVED' });
+    await addWorker('architect-a', 'architect', 5);
+
+    const result = await report({
+      reason: `cannot proceed until ${done.id} lands`,
+      blockedOnTaskIds: [archived.id],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.blocked).toBe(false);
+    expect(result.dependenciesSatisfied).toBe(true);
+    expect(result.satisfiedBlockedOnTaskIds).toEqual([archived.id, done.id]);
+    expect(result.taskStatus).toBe('WORKING');
+    expect(result.seatFreed).toBeUndefined();
+    expect(result.notified).toEqual({ target: null, via: 'not-blocked-dependencies-satisfied' });
+    // The "continue" pointer: read the landed prerequisites' evidence and go on.
+    expect(result.nextAction).toMatchObject({
+      tool: 'moe.get_context',
+      args: { taskId: 'task-1', workerId: 'worker-1' },
+    });
+    // Nothing written: status, seat and block fields untouched; nobody paged.
+    const task = state.getTask('task-1')!;
+    expect(task.status).toBe('WORKING');
+    expect(task.assignedWorkerId).toBe('worker-1');
+    expect(task.blockedOnTaskIds ?? null).toBeNull();
+    expect(task.blockedReason ?? null).toBeNull();
+    expect(state.getWorker('worker-1')!.status).not.toBe('BLOCKED');
+    expect(generalPosts).toHaveLength(0);
+    expect(rolePosts).toHaveLength(0);
+  });
+
+  it('a partially-landed list blocks on the UNMET ids only and reports the satisfied ones', async () => {
+    const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
+    const open = await state.createTask({ epicId: 'epic-1', title: 'Open', status: 'WORKING' });
+
+    const result = await report({ reason: 'waiting on both', blockedOnTaskIds: [done.id, open.id] });
+
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.dependenciesSatisfied).toBeUndefined();
+    expect(result.blockedOnTaskIds).toEqual([open.id]);
+    expect(result.satisfiedBlockedOnTaskIds).toEqual([done.id]);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([open.id]);
+  });
+
+  it('the reason-update arm on an already-BLOCKED row KEEPS satisfied ids — the backfill path the sweep repairs', async () => {
+    const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
+    await report({ reason: 'needs a human decision' }); // dep-less block, seat freed
+    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+
+    const second = await report({ reason: `BUILD-ORDER BLOCK on ${done.id}` });
+    expect(second.alreadyBlocked).toBe(true);
+    expect(second.reasonUpdated).toBe(true);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([done.id]);
+
+    // The next dependency scan (sweep backstop / any DONE transition) repairs it.
+    expect(await runDependencyUnblock(state)).toEqual(['task-1']);
+    expect(state.getTask('task-1')!.status).toBe('WORKING');
+    expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+  });
+
+  it('drops an id that would close a dependency cycle (dependsOn ∪ blockedOnTaskIds), warns, and alerts #governors', async () => {
+    // x is BLOCKED waiting on task-1; y (WORKING) declares dependsOn [task-1];
+    // z is an honest prerequisite. Blocking task-1 on x or y closes a loop.
+    const x = await state.createTask({ epicId: 'epic-1', title: 'X', status: 'WORKING' });
+    await state.updateTask(x.id, {
+      status: 'BLOCKED', blockedReason: 'waits on task-1', blockedOnTaskIds: ['task-1'],
+      blockedFromStatus: 'WORKING', blockedAt: new Date().toISOString(),
+    });
+    const y = await state.createTask({ epicId: 'epic-1', title: 'Y', status: 'WORKING', dependsOn: ['task-1'] });
+    const z = await state.createTask({ epicId: 'epic-1', title: 'Z', status: 'WORKING' });
+
+    const result = await report({ reason: `needs ${x.id} and ${z.id}`, blockedOnTaskIds: [y.id] });
+
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.droppedCycleBlockedOnTaskIds).toEqual([y.id, x.id]);
+    expect(result.blockedOnTaskIds).toEqual([z.id]);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([z.id]);
+    const warnings = result.warnings as string[];
+    expect(warnings.some((w) => w.includes('DEPENDENCY_CYCLE') && w.includes(`task-1 → ${y.id} → task-1`))).toBe(true);
+    expect(warnings.some((w) => w.includes('DEPENDENCY_CYCLE') && w.includes(`task-1 → ${x.id} → task-1`))).toBe(true);
+    expect(rolePosts.some(([role, msg]) =>
+      role === 'governors' && msg.includes('dependency cycle') && msg.includes(y.id) && msg.includes(x.id)
+    )).toBe(true);
+  });
+
+  it('auto-parse is boundary-anchored: "sub<task-id>" never records the embedded id, a punctuated mention does', async () => {
+    const real = await state.createTask({ epicId: 'epic-1', title: 'Real', status: 'WORKING' });
+
+    const embedded = await report({ reason: `cleaning up after the sub${real.id} refactor fallout` });
+    expect(embedded.blockedOnTaskIds).toBeUndefined();
+    expect(state.getTask('task-1')!.blockedOnTaskIds ?? null).toBeNull();
+
+    const punctuated = await report({ reason: `waiting on ${real.id}, then done.` });
+    expect(punctuated.blockedOnTaskIds).toEqual([real.id]);
+  });
+
+  it('seat-freeing never wipes a worker pointer that references a DIFFERENT task (dangling assignment)', async () => {
+    // worker-1 is CODING `other` (its own pointer) while task-1 still dangles
+    // assigned to it (a partial release failure). Freeing task-1's seat must
+    // not force the worker IDLE mid-step on the task it is actually coding.
+    const other = await state.createTask({ epicId: 'epic-1', title: 'Other', status: 'WORKING', assignedWorkerId: 'worker-1' });
+    await state.updateWorker('worker-1', { status: 'CODING', currentTaskId: other.id });
+
+    const result = await report();
+
+    expect(result.seatFreed).toBe(true);
+    expect(state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    const worker = state.getWorker('worker-1')!;
+    expect(worker.status).toBe('CODING');
+    expect(worker.currentTaskId).toBe(other.id);
+  });
+
   // ---- repeat report_blocked on an already-BLOCKED task ----
   // A correction used to return success:true while storing nothing, so the next
   // claimer was served the STALE recipe. These arms pin the store, not the
@@ -355,7 +538,9 @@ describe('moe.report_blocked', () => {
     // would wedge the task in BLOCKED forever on unblock.
     expect(corrected.blockedFromStatus).toBe('WORKING');
     expect(corrected.blockedAt).toBe(firstBlockedAt);
-    expect(corrected.assignedWorkerId).toBe('worker-1');
+    // Seat freed on the original non-resource flip; the correction never
+    // re-assigns.
+    expect(corrected.assignedWorkerId).toBeNull();
     expect(corrected.status).toBe('BLOCKED');
 
     // Only then the response shape: a caller must be able to tell a first block
@@ -370,25 +555,23 @@ describe('moe.report_blocked', () => {
   });
 
   it('block -> correct -> unblock restores the ORIGINAL pre-block status', async () => {
-    // REVIEW, not WORKING: unblock_worker falls back to 'WORKING' when
-    // blockedFromStatus is missing, so a WORKING fixture would stay green even
-    // if the correction wiped the restore target.
+    // REVIEW, not WORKING: set_task_status falls back through effectiveFrom,
+    // so a WORKING fixture would stay green even if the correction wiped the
+    // restore target.
     await state.updateTask('task-1', { status: 'REVIEW', assignedWorkerId: 'worker-1' });
 
     await report({ reason: 'first reason' });
     const correction = await report({ reason: 'corrected reason' });
     expect(state.getTask('task-1')!.blockedFromStatus).toBe('REVIEW');
-    // The repeat's OWN status is BLOCKED, which is not agent-claimable, so a
-    // hint resolved from it would tell a REVIEW-blocked owner to wait on
-    // WORKING -- a wait its own task can never satisfy.
-    expect(correction.nextAction).toMatchObject({ args: { statuses: ['REVIEW'] } });
+    // Seat was freed on the flip, so the correction has no held worker to
+    // steer — no nextAction (matches the old unassigned-task contract).
+    expect(correction.nextAction).toBeUndefined();
+    expect(correction.alreadyBlocked).toBe(true);
+    expect(correction.reasonUpdated).toBe(true);
 
-    // resolveBlocks:true is the "blocker is gone" lever; a plain unblock_worker
-    // frees only the seat and would leave the task BLOCKED (asserted below).
-    const unblock = unblockWorkerTool(state);
-    await unblock.handler(
-      { workerId: 'worker-1', resolution: 'blocker resolved', retryTask: true, resolveBlocks: true }, state
-    );
+    // The new-world unblock for a seat-freed block is set_task_status (or a
+    // governor); restoring to blockedFromStatus clears every blocked field.
+    await setTaskStatusTool(state).handler({ taskId: 'task-1', status: 'REVIEW' }, state);
 
     const restored = state.getTask('task-1')!;
     expect(restored.status).toBe('REVIEW');
@@ -396,9 +579,17 @@ describe('moe.report_blocked', () => {
     expect(restored.blockedFromStatus).toBeNull();
   });
 
-  it('a plain unblock_worker frees the seat and leaves the task BLOCKED with its reason', async () => {
-    await report({ reason: 'waiting on the schema decision' });
-    expect(state.getTask('task-1')!.status).toBe('BLOCKED');
+  it('unblock_worker keeps its untouched semantics on a legacy still-assigned hold', async () => {
+    // Legacy-shaped hold (pre-seat-freeing rows still exist on live boards):
+    // task BLOCKED and still assigned, worker parked BLOCKED.
+    await state.updateTask('task-1', {
+      status: 'BLOCKED',
+      assignedWorkerId: 'worker-1',
+      blockedReason: 'waiting on the schema decision',
+      blockedFromStatus: 'WORKING',
+      blockedAt: new Date().toISOString(),
+    });
+    await state.updateWorker('worker-1', { status: 'BLOCKED', currentTaskId: 'task-1' });
 
     const result = await unblockWorkerTool(state).handler(
       { workerId: 'worker-1', resolution: 'seat freed for other work' }, state
@@ -448,7 +639,8 @@ describe('moe.report_blocked', () => {
     });
     const partial = await report({ reason: 'stuck on step 2' }) as { warning?: string; nextAction?: { tool: string } };
     expect(partial.warning).toBeUndefined();
-    expect(partial.nextAction?.tool).toBe('moe.wait_for_task');
+    // Seat freed on a non-resource block: the worker is pointed at other work.
+    expect(partial.nextAction?.tool).toBe('moe.claim_next_task');
 
     // Resource waits are auto-unblocked on grant; no complete_task nudge.
     await state.updateTask('task-1', {
@@ -562,7 +754,9 @@ describe('moe.report_blocked', () => {
     // task in BLOCKED forever on unblock.
     expect(corrected.blockedFromStatus).toBe('WORKING');
     expect(corrected.blockedAt).toBe(firstBlockedAt);
-    expect(corrected.assignedWorkerId).toBe('worker-1');
+    // Seat freed by the original non-resource flip; the grant-path correction
+    // never re-assigns.
+    expect(corrected.assignedWorkerId).toBeNull();
     expect(corrected.status).toBe('BLOCKED');
 
     // The lease is still handed over -- the fix must not cost the caller its grant.
@@ -707,24 +901,67 @@ describe('moe.report_blocked', () => {
   beforeEach(async () => {
     h.setupMoeFolder();
     h.createEpic();
-    h.createTask({ assignedWorkerId: 'worker-1' });
+    h.createTask({ assignedWorkerId: 'worker-1', status: 'WORKING' });
     h.createWorker();
     await h.state.load();
   });
 
-  it('marks worker as blocked', async () => {
+  it('a workerId-less (third-party) block on an ASSIGNED task keeps the hold — the live worker is never yanked', async () => {
+    // assertWorkerOwns permits the missing-workerId call (human/plugin flow),
+    // but freeing a LIVE worker's seat from the outside would unassign the
+    // task under a running session: the auto-unblock would then hand it to a
+    // second worker while the first is still editing the same files.
+    await h.state.updateWorker('worker-1', { status: 'CODING', currentTaskId: 'task-1' });
     const tool = reportBlockedTool(h.state);
     const result = await tool.handler({
       taskId: 'task-1',
       reason: 'Need clarification',
-    }, h.state) as { success: boolean; workerStatus: string };
+    }, h.state) as { success: boolean; workerStatus: string; seatFreed?: boolean; taskStatus: string; nextAction?: { tool: string } };
 
     expect(result.success).toBe(true);
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.seatFreed).toBe(false);
     expect(result.workerStatus).toBe('BLOCKED');
+    expect(result.nextAction?.tool).toBe('moe.wait_for_task');
 
+    // Old hold semantics: assignment kept, worker marked BLOCKED, pointer intact.
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBe('worker-1');
     const worker = h.state.getWorker('worker-1');
     expect(worker?.status).toBe('BLOCKED');
-    expect(worker?.lastError).toBe('Need clarification');
+    expect(worker?.currentTaskId).toBe('task-1');
+  });
+
+  it('parks the task and frees the seat when the ASSIGNEE reports a non-resource block', async () => {
+    await h.state.updateWorker('worker-1', { status: 'CODING', currentTaskId: 'task-1' });
+    const tool = reportBlockedTool(h.state);
+    const result = await tool.handler({
+      taskId: 'task-1',
+      reason: 'Need clarification',
+      workerId: 'worker-1',
+    }, h.state) as { success: boolean; workerStatus: string; seatFreed?: boolean; taskStatus: string };
+
+    expect(result.success).toBe(true);
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.seatFreed).toBe(true);
+    expect(result.workerStatus).toBe('IDLE');
+
+    // The task parks unassigned; the worker stays free to claim other work.
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBeNull();
+    const worker = h.state.getWorker('worker-1');
+    expect(worker?.status).toBe('IDLE');
+    expect(worker?.currentTaskId).toBeNull();
+  });
+
+  it('a workerId-less block on an UNASSIGNED task frees nothing but still parks the task', async () => {
+    await h.state.updateTask('task-1', { assignedWorkerId: null });
+    const tool = reportBlockedTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', reason: 'Need clarification' }, h.state) as {
+      taskStatus: string; seatFreed?: boolean;
+    };
+    expect(result.taskStatus).toBe('BLOCKED');
+    expect(result.seatFreed).toBe(true);
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBeNull();
+    expect(h.state.getWorker('worker-1')?.status).toBe('IDLE');
   });
 
   it('throws for non-existent task', async () => {

@@ -289,4 +289,36 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
     expect(result.hasNext).toBe(true);
     expect((result.task as { id: string }).id).toBe('task-held');
   });
+
+  it('does NOT offer a WORKING task with unmet dependsOn (claim would skip it → spin) — and wakes when the dep lands DONE', async () => {
+    // Prerequisite parked in REVIEW (not DONE): neither in the WORKING pool
+    // nor a solo-worker epic+status conflict.
+    writeTask('task-prereq', { status: 'REVIEW', assignedWorkerId: null, order: 1 });
+    writeTask('task-gated', { status: 'WORKING', assignedWorkerId: null, order: 2, dependsOn: ['task-prereq'] });
+    writeWorker('worker-dep');
+    await state.load();
+
+    const tool = waitForTaskTool(state);
+    // Immediate path: the gated task must not be offered.
+    const refused = await tool.handler(
+      { statuses: ['WORKING'], workerId: 'worker-dep', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+    expect(refused.hasNext).toBe(false);
+    expect(refused.timedOut).toBe(true);
+
+    // Wake path: park, then flip the prerequisite DONE — the TASK_UPDATED
+    // event re-runs the matcher and the gate lifts. No new event plumbing.
+    const pending = tool.handler(
+      { statuses: ['WORKING'], workerId: 'worker-dep', timeoutMs: 5000 },
+      state
+    ) as Promise<Record<string, unknown>>;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(activeWaiters.has('worker-dep')).toBe(true);
+
+    await state.updateTask('task-prereq', { status: 'DONE' });
+    const woken = await pending;
+    expect(woken.hasNext).toBe(true);
+    expect((woken.task as { id: string }).id).toBe('task-gated');
+  });
 });

@@ -354,3 +354,143 @@ describe('moe.claim_next_task', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// dependsOn claim gating: a WORKING candidate whose declared prerequisites are
+// not all DONE/ARCHIVED is withheld from the ranked pool and refused on an
+// explicit-taskId claim. PLANNING is unaffected; missing ids are satisfied;
+// resuming an own-held task stays allowed. The wait_for_task mirror lives in
+// waitForTask.test.ts — both read the SAME predicate (util/claimEligibility).
+// ---------------------------------------------------------------------------
+describe('moe.claim_next_task dependsOn gating', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    // Prerequisite in REVIEW (not DONE) so it neither pollutes the WORKING
+    // pool nor trips the solo-worker epic+status rule.
+    h.createTask({ id: 'task-prereq', status: 'REVIEW', order: 1 });
+    h.createTask({ id: 'task-gated', status: 'WORKING', order: 2, dependsOn: ['task-prereq'] });
+    h.createTask({ id: 'task-open', status: 'WORKING', order: 3 });
+    await h.state.load();
+  });
+
+  it('ranked claim skips the gated candidate and hands out the next eligible', async () => {
+    const tool = claimNextTaskTool(h.state);
+    const result = await tool.handler({
+      statuses: ['WORKING'],
+      workerId: 'worker-dep',
+    }, h.state) as { hasNext: boolean; task: { id: string } };
+
+    expect(result.hasNext).toBe(true);
+    // task-gated has the lower order but is withheld.
+    expect(result.task.id).toBe('task-open');
+    expect(h.state.getTask('task-gated')!.assignedWorkerId).toBeNull();
+  });
+
+  it('explicit-taskId claim of a gated WORKING task is refused, naming the unmet ids and the escape hatch', async () => {
+    const tool = claimNextTaskTool(h.state);
+    await expect(tool.handler({
+      statuses: ['WORKING'],
+      taskId: 'task-gated',
+      workerId: 'worker-dep',
+    }, h.state)).rejects.toThrow(/unmet dependencies: task-prereq[\s\S]*set_task_dependencies/);
+    expect(h.state.getTask('task-gated')!.assignedWorkerId).toBeNull();
+  });
+
+  it('the gate lifts when the prerequisite lands DONE (and ARCHIVED counts too)', async () => {
+    await h.state.updateTask('task-prereq', { status: 'DONE' });
+    const tool = claimNextTaskTool(h.state);
+    const result = await tool.handler({
+      statuses: ['WORKING'],
+      workerId: 'worker-dep',
+    }, h.state) as { hasNext: boolean; task: { id: string } };
+    expect(result.task.id).toBe('task-gated');
+  });
+
+  it('missing/deleted dependsOn ids count as satisfied', async () => {
+    h.createTask({ id: 'task-ghostdep', status: 'WORKING', order: 0, dependsOn: ['task-gone-forever'] });
+    await h.state.load();
+    const tool = claimNextTaskTool(h.state);
+    const result = await tool.handler({
+      statuses: ['WORKING'],
+      workerId: 'worker-dep',
+    }, h.state) as { task: { id: string } };
+    expect(result.task.id).toBe('task-ghostdep');
+  });
+
+  it('PLANNING claims are NOT dependsOn-gated (planning may proceed before prerequisites land)', async () => {
+    h.createTask({ id: 'task-plan-ahead', status: 'PLANNING', order: 5, dependsOn: ['task-prereq'] });
+    await h.state.load();
+    const tool = claimNextTaskTool(h.state);
+    const result = await tool.handler({
+      statuses: ['PLANNING'],
+      taskId: 'task-plan-ahead',
+      workerId: 'architect-dep',
+    }, h.state) as { hasNext: boolean; task: { id: string } };
+    expect(result.hasNext).toBe(true);
+    expect(result.task.id).toBe('task-plan-ahead');
+  });
+
+  it('resuming your OWN held dep-gated task stays allowed (deps declared mid-flight must not strand the incumbent)', async () => {
+    await h.state.updateTask('task-gated', { assignedWorkerId: 'worker-incumbent' });
+    await h.state.createWorker({
+      id: 'worker-incumbent', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: 'task-gated', status: 'CODING',
+    });
+    const tool = claimNextTaskTool(h.state);
+    const result = await tool.handler({
+      statuses: ['WORKING'],
+      taskId: 'task-gated',
+      workerId: 'worker-incumbent',
+    }, h.state) as { hasNext: boolean; task: { id: string } };
+    expect(result.hasNext).toBe(true);
+    expect(result.task.id).toBe('task-gated');
+  });
+});
+
+// alreadyAssigned surfacing: a legacy BLOCKED hold now names the tasks it
+// waits on, and the hold guidance points at the dependency auto-unblock.
+describe('moe.claim_next_task blockedOnTaskIds surfacing', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  it('a held BLOCKED task carries blockedOnTaskIds in the alreadyAssigned refusal', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-prereq', status: 'WORKING', order: 1 });
+    h.createTask({
+      id: 'task-heldb', status: 'BLOCKED', order: 2,
+      assignedWorkerId: 'worker-legacy',
+      blockedReason: 'BUILD-ORDER BLOCK on task-prereq',
+      blockedOnTaskIds: ['task-prereq'],
+      blockedFromStatus: 'WORKING',
+      blockedAt: new Date().toISOString(),
+    });
+    await h.state.load();
+    await h.state.createWorker({
+      id: 'worker-legacy', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: 'task-heldb', status: 'BLOCKED',
+    });
+
+    const result = await claimNextTaskTool(h.state).handler({
+      statuses: ['WORKING'],
+      workerId: 'worker-legacy',
+    }, h.state) as {
+      hasNext: boolean;
+      alreadyAssigned: { taskId: string; status: string; blockedOnTaskIds?: string[] };
+      nextAction: { reason: string };
+    };
+
+    expect(result.hasNext).toBe(false);
+    expect(result.alreadyAssigned.taskId).toBe('task-heldb');
+    expect(result.alreadyAssigned.blockedOnTaskIds).toEqual(['task-prereq']);
+    // The hold guidance names the dependency auto-unblock, not "needs a human".
+    expect(result.nextAction.reason).toContain('task-prereq');
+    expect(result.nextAction.reason).toContain('auto-unblocks');
+  });
+});

@@ -98,6 +98,18 @@ for tool in get_commit_scope record_commit; do
   require_both "RPC tool" "$tool"
 done
 
+# Daemon get_context fields both wrappers must consume identically (the
+# daemon-computed epic-final preferred over the list_tasks fallback).
+for fld in isEpicFinal; do
+  require_both "context field" "$fld"
+done
+
+# BLOCKED-hold prose: with daemon seat-freeing only resource blocks hold a
+# seat; both wrappers must state it in the same words.
+for prose in 'only resource-lease waits and third-party blocks hold a seat now'; do
+  require_both "blocked-hold prose" "$prose"
+done
+
 # Deferred features must not be advertised by either wrapper.
 for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$SH"; then fail "deferred setting '$deferred' is referenced by moe-agent.sh"; fi

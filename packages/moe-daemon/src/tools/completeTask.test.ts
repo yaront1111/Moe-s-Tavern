@@ -409,3 +409,64 @@ describe('moe.complete_task', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// completionSummary persistence: `summary` used to be accepted and silently
+// DISCARDED — the exact gap moe-next's rule 16 measured. Now it lands on the
+// task (capped at 2000 chars, truncated — never a rejection).
+// ---------------------------------------------------------------------------
+describe('moe.complete_task summary persistence', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      id: 'task-1',
+      status: 'WORKING',
+      assignedWorkerId: 'worker-a',
+      implementationPlan: [
+        { stepId: 'step-1', description: 'd', status: 'COMPLETED', affectedFiles: [] },
+      ],
+    });
+    await h.state.load();
+  });
+
+  it('persists summary as task.completionSummary and echoes it', async () => {
+    const result = await completeTaskTool(h.state).handler({
+      taskId: 'task-1',
+      workerId: 'worker-a',
+      verification: { command: 'npm test', exitCode: 0 },
+      summary: '  Landed the parser fix; all 42 tests green.  ',
+    }, h.state) as { completionSummary?: string };
+
+    expect(result.completionSummary).toBe('Landed the parser fix; all 42 tests green.');
+    expect(h.state.getTask('task-1')!.completionSummary).toBe('Landed the parser fix; all 42 tests green.');
+  });
+
+  it('truncates an over-long summary at 2000 chars instead of rejecting the completion', async () => {
+    await completeTaskTool(h.state).handler({
+      taskId: 'task-1',
+      workerId: 'worker-a',
+      verification: { command: 'npm test', exitCode: 0 },
+      summary: 'x'.repeat(5000),
+    }, h.state);
+
+    const stored = h.state.getTask('task-1')!.completionSummary!;
+    expect(stored).toHaveLength(2000);
+    expect(h.state.getTask('task-1')!.status).toBe('REVIEW');
+  });
+
+  it('omits completionSummary entirely when no summary (or a blank one) is sent', async () => {
+    await completeTaskTool(h.state).handler({
+      taskId: 'task-1',
+      workerId: 'worker-a',
+      verification: { command: 'npm test', exitCode: 0 },
+      summary: '   ',
+    }, h.state);
+
+    expect(h.state.getTask('task-1')!.completionSummary).toBeUndefined();
+  });
+});

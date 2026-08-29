@@ -75,7 +75,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           additionalProperties: false
         },
         prLink: { type: 'string' },
-        summary: { type: 'string' },
+        summary: { type: 'string', description: 'What was delivered — persisted as task.completionSummary (capped at 2000 chars) and surfaced to QA and dependent tasks via get_context.' },
         currentBranch: { type: 'string', description: 'Branch the worker is on; enables the consolidationBranch policy check' },
         workerId: { type: 'string' }
       },
@@ -117,6 +117,14 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           .filter((s) => s.status === 'COMPLETED')
           .flatMap((s) => s.modifiedFiles || s.affectedFiles || [])
       ));
+      // The summary used to be accepted and silently DISCARDED — persist it
+      // (capped like qa_approve's reviewSummary; truncated, never rejected, so
+      // an over-long summary can't fail an otherwise-valid completion).
+      const completionSummary =
+        typeof params.summary === 'string' && params.summary.trim().length > 0
+          ? params.summary.trim().slice(0, 2000)
+          : undefined;
+
       // Stamp reviewStartedAt only. completedAt means "finished" and is stamped
       // at DONE by qa_approve — not here at REVIEW entry (that was a misnomer).
       const updated = await state.updateTask(
@@ -127,6 +135,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           reviewStartedAt: now,
           verification: { ...verification, reportedAt: now },
           filesModified,
+          ...(completionSummary ? { completionSummary } : {}),
         },
         'TASK_COMPLETED'
       );
@@ -152,6 +161,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         success: true,
         taskId: updated.id,
         status: 'REVIEW',
+        ...(completionSummary ? { completionSummary } : {}),
         stats: {
           stepsCompleted: completedSteps.length,
           totalSteps: implementationPlan.length,

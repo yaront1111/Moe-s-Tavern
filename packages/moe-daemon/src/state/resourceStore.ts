@@ -299,6 +299,7 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
           assignedWorkerId: task.assignedWorkerId,
           blockedReason: null,
           blockedResourceId: null,
+          blockedOnTaskIds: null,
           blockedFromStatus: null,
           blockedAt: null,
         }, 'TASK_UNBLOCKED');

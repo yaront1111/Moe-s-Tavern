@@ -32,6 +32,12 @@ import {
   sanitizeStringIdArray,
   trimComments,
 } from './validators.js';
+import { runDependencyUnblock } from './dependencyUnblock.js';
+
+/** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
+export const MAX_TASK_DEPENDENCY_IDS = 20;
+
+const CREATED_BY_VALUES = new Set(['HUMAN', 'WORKER', 'ARCHITECT', 'QA', 'GOVERNOR']);
 
 export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
   if (!state.project) {
@@ -79,8 +85,11 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     prLink: input.prLink || null,
     reopenCount: typeof input.reopenCount === 'number' ? Math.max(0, input.reopenCount) : 0,
     reopenReason: input.reopenReason || null,
-    createdBy: input.createdBy === 'WORKER' ? 'WORKER' : 'HUMAN',
+    createdBy: CREATED_BY_VALUES.has(input.createdBy as string) ? input.createdBy! : 'HUMAN',
     parentTaskId: input.parentTaskId || null,
+    ...(Array.isArray(input.dependsOn) && input.dependsOn.length > 0
+      ? { dependsOn: sanitizeStringIdArray(input.dependsOn).slice(0, MAX_TASK_DEPENDENCY_IDS) }
+      : {}),
     priority: (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(input.priority as string) ? input.priority : 'MEDIUM') as TaskPriority,
     order: input.order ?? state.nextTaskOrder(input.epicId),
     comments: trimComments(Array.isArray(input.comments) ? input.comments : []),
@@ -143,6 +152,15 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   }
   if (sanitized.stepsCompleted !== undefined) {
     sanitized.stepsCompleted = sanitizeStringIdArray(sanitized.stepsCompleted);
+  }
+  // Dependency id arrays: dedupe/trim like every other id array, capped. A
+  // null blockedOnTaskIds is the sanctioned "clear" (the unblock paths write
+  // it); dependsOn is cleared with [].
+  if (sanitized.dependsOn !== undefined) {
+    sanitized.dependsOn = sanitizeStringIdArray(sanitized.dependsOn).slice(0, MAX_TASK_DEPENDENCY_IDS);
+  }
+  if (sanitized.blockedOnTaskIds !== undefined && sanitized.blockedOnTaskIds !== null) {
+    sanitized.blockedOnTaskIds = sanitizeStringIdArray(sanitized.blockedOnTaskIds).slice(0, MAX_TASK_DEPENDENCY_IDS);
   }
 
   const hasCommentsUpdate = Object.prototype.hasOwnProperty.call(sanitized, 'comments');
@@ -230,6 +248,20 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
       const planAnnouncement = `📋 New plan needed: ${updated.title} (${updated.id}) — claim with moe.claim_next_task {workerId, statuses:["PLANNING"]}`;
       state.postToRoleChannel('architects', planAnnouncement).catch(() => {});
       state.postToRoleChannel('governors', planAnnouncement).catch(() => {});
+    }
+
+    // Dependency auto-unblock: a task landing DONE/ARCHIVED may be the last
+    // unmet prerequisite of a BLOCKED row. Single hook — every terminal
+    // transition (qa_approve, set_task_status, archive_task/epic, board)
+    // funnels through this function. runDependencyUnblock never throws and
+    // guards its own re-entrancy; the restores it performs are ordinary
+    // updateTask calls whose events wake wait_for_task waiters.
+    if (updated.status === 'DONE' || updated.status === 'ARCHIVED') {
+      try {
+        await runDependencyUnblock(state, updated.id);
+      } catch (error) {
+        logger.warn({ taskId: updated.id, error }, 'Dependency unblock scan failed after terminal transition');
+      }
     }
   }
 

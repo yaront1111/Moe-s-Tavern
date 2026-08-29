@@ -80,6 +80,7 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
         status: (owned.blockedFromStatus ?? 'WORKING') as TaskStatus,
         blockedReason: null,
         blockedResourceId: null,
+        blockedOnTaskIds: null,
         blockedFromStatus: null,
         blockedAt: null,
       });

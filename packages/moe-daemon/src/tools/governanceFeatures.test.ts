@@ -441,6 +441,50 @@ describe('governance control-plane features', () => {
       // Critique does NOT auto-approve — verdict='pass' alone never moves a task to WORKING
     });
 
+    it('block with a category stores it; a category-less block is WARNED and counted as uncategorized (rollout compat)', async () => {
+      setupMoe('CONTROL');
+      writeEpic();
+      writeTask({ id: 'task-cat', status: 'AWAITING_APPROVAL', implementationPlan: [
+        { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
+      ] });
+      writeTask({ id: 'task-nocat', status: 'AWAITING_APPROVAL', implementationPlan: [
+        { stepId: 'step-1', description: 's', status: 'PENDING', affectedFiles: [] },
+      ] });
+      await state.load();
+      await registerGovernor('governor-1');
+
+      const critique = submitPlanCritiqueTool(state);
+      const categorized = await critique.handler({
+        taskId: 'task-cat', verdict: 'block', category: 'dependency',
+        concerns: ['B depends on A but is planned first'], workerId: 'governor-1',
+      }, state) as { category?: string; warning?: string; planCritiqueResult: { category?: string } };
+      expect(categorized.category).toBe('dependency');
+      expect(categorized.warning).toBeUndefined();
+      expect(state.getTask('task-cat')!.planCritiqueResult!.category).toBe('dependency');
+
+      // Old-governor shape: block without category — never rejected, warned,
+      // stored as 'uncategorized' so it stays countable.
+      const uncategorized = await critique.handler({
+        taskId: 'task-nocat', verdict: 'block',
+        concerns: ['add more evidence rows'], workerId: 'governor-1',
+      }, state) as { success: boolean; category?: string; warning?: string };
+      expect(uncategorized.success).toBe(true);
+      expect(uncategorized.category).toBe('uncategorized');
+      expect(uncategorized.warning).toContain('uncategorized');
+      expect(state.getTask('task-nocat')!.planCritiqueResult!.category).toBe('uncategorized');
+
+      // An unknown category is a caller error; a category-less PASS stays bare.
+      await expect(critique.handler({
+        taskId: 'task-cat', verdict: 'block', category: 'vibes',
+        concerns: ['x'], workerId: 'governor-1',
+      }, state)).rejects.toThrow(/category/);
+      const pass = await critique.handler({
+        taskId: 'task-cat', verdict: 'pass', workerId: 'governor-1',
+      }, state) as { category?: string; warning?: string };
+      expect(pass.category).toBeUndefined();
+      expect(pass.warning).toBeUndefined();
+    });
+
     it('rejects a non-governor caller (role gate)', async () => {
       setupMoe('CONTROL');
       writeEpic();

@@ -39,6 +39,35 @@ describe('moe.list_tasks', () => {
     expect(result.counts.backlog).toBe(1);
   });
 
+  it('surfaces dependsOn/dependsOnUnmet and blocking info in summaries (a row must explain why it is not offered)', async () => {
+    h.createTask({
+      id: 'task-dep', epicId: 'epic-1', status: 'WORKING', order: 5,
+      dependsOn: ['task-1', 'task-3'], // task-3 is DONE; task-1 is BACKLOG → 1 unmet
+    });
+    h.createTask({
+      id: 'task-blk', epicId: 'epic-1', status: 'BLOCKED', order: 6,
+      blockedReason: 'BUILD-ORDER BLOCK on task-1',
+      blockedOnTaskIds: ['task-1'],
+      blockedFromStatus: 'WORKING',
+      blockedAt: new Date().toISOString(),
+    });
+    await h.state.load();
+
+    const tool = listTasksTool(h.state);
+    const result = await tool.handler({ epicId: 'epic-1' }, h.state) as {
+      tasks: Array<{ id: string; dependsOn?: string[]; dependsOnUnmet?: number; blockedReason?: string; blockedOnTaskIds?: string[] }>;
+    };
+    const byId = new Map(result.tasks.map((t) => [t.id, t]));
+    expect(byId.get('task-dep')).toMatchObject({ dependsOn: ['task-1', 'task-3'], dependsOnUnmet: 1 });
+    expect(byId.get('task-blk')).toMatchObject({
+      blockedReason: 'BUILD-ORDER BLOCK on task-1',
+      blockedOnTaskIds: ['task-1'],
+    });
+    // Plain rows carry none of the new keys.
+    expect(byId.get('task-2')!.dependsOn).toBeUndefined();
+    expect(byId.get('task-2')!.blockedReason).toBeUndefined();
+  });
+
   it('returns status counts', async () => {
     const tool = listTasksTool(h.state);
     const result = await tool.handler({}, h.state) as { counts: { backlog: number; inProgress: number; done: number } };

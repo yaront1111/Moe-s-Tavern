@@ -4,7 +4,7 @@ import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
-import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
+import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
@@ -135,6 +135,10 @@ function findMatchingTask(
     // A REVIEW task parked for a human (qa_reject hard cap) is excluded from
     // the QA claim queue until a human clears it — mirror that here.
     .filter((t) => !(t.status === 'REVIEW' && t.needsHumanReview === true))
+    // dependsOn gate (WORKING candidates only) — mirrors claim_next_task's
+    // ranked pool via the SAME predicate (util/claimEligibility.ts); a drift
+    // here wakes the waiter into a claim that refuses (the measured spin).
+    .filter((t) => !isClaimGatedByDependsOn(state, t))
     // Single-worker-per-epic-status (solo workers only): claim skips a
     // candidate when a live OTHER worker holds a different task in the same
     // epic+status — mirror that too.

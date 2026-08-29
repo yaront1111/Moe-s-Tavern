@@ -5,6 +5,7 @@ import { invalidState } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
+import { unmetDependsOn } from '../state/dependencyUnblock.js';
 
 /** Newest commits surfaced per task (the ledger itself is capped at MAX_COMMITS_PER_TASK). */
 const MAX_CONTEXT_COMMITS = 20;
@@ -176,27 +177,75 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       }));
       const rescueRefs = commits.filter((c) => c.kind === 'rescue').map((c) => c.ref);
       const unattributedPaths = task && Array.isArray(task.unattributedPaths) ? task.unattributedPaths : [];
-      // Prerequisites in the same epic (lower order), nearest first, bounded.
-      const epicSiblings = task
+      // Declared prerequisites (dependsOn ∪ blockedOnTaskIds) bypass the
+      // lower-order filter and the sibling cap, and carry the full evidence
+      // block (verification/reviewSummary/completionSummary) so a dependent
+      // task can READ what its prerequisite delivered from the board instead
+      // of grepping HEAD.
+      const declaredTargetIds = new Set<string>([
+        ...(task && Array.isArray(task.dependsOn) ? task.dependsOn : []),
+        ...(task && Array.isArray(task.blockedOnTaskIds) ? task.blockedOnTaskIds : []),
+      ]);
+      const siblingEntry = (t: Task) => {
+        const siblingCommits = taskCommits(t);
+        const landed = taskLanded(t, siblingCommits);
+        const landing = buildLanding(siblingCommits);
+        const declared = declaredTargetIds.has(t.id);
+        return {
+          id: t.id,
+          title: t.title,
+          order: t.order,
+          status: t.status,
+          landing: { ...(landing.lastCompletion ? { lastCompletion: landing.lastCompletion } : {}), merged: landed },
+          landed,
+          ...(declared
+            ? {
+                declaredDependency: true,
+                verification: t.verification
+                  ? {
+                      command: t.verification.command,
+                      exitCode: t.verification.exitCode,
+                      reportedAt: t.verification.reportedAt,
+                    }
+                  : null,
+                reviewSummary: t.reviewSummary ?? null,
+                completionSummary: t.completionSummary ?? null,
+              }
+            : {}),
+        };
+      };
+      // Prerequisites in the same epic (lower order), nearest first, bounded —
+      // plus EVERY declared dependency target regardless of order/epic/cap.
+      const baseSiblings = task
         ? Array.from(state.tasks.values())
             .filter((t) => t.epicId === task.epicId && t.id !== task.id && t.order < task.order)
             .sort((a, b) => b.order - a.order)
             .slice(0, MAX_EPIC_SIBLINGS)
             .sort((a, b) => a.order - b.order)
-            .map((t) => {
-              const siblingCommits = taskCommits(t);
-              const landed = taskLanded(t, siblingCommits);
-              const landing = buildLanding(siblingCommits);
-              return {
-                id: t.id,
-                title: t.title,
-                order: t.order,
-                status: t.status,
-                landing: { ...(landing.lastCompletion ? { lastCompletion: landing.lastCompletion } : {}), merged: landed },
-                landed,
-              };
-            })
         : [];
+      const baseSiblingIds = new Set(baseSiblings.map((t) => t.id));
+      const declaredExtras = task
+        ? Array.from(declaredTargetIds)
+            .filter((id) => id !== task.id && !baseSiblingIds.has(id))
+            .map((id) => state.getTask(id))
+            .filter((t): t is Task => Boolean(t))
+            .sort((a, b) => a.order - b.order)
+        : [];
+      const epicSiblings = [...baseSiblings, ...declaredExtras].map(siblingEntry);
+      // Epic-final = highest `order` among the epic's non-ARCHIVED tasks (ties
+      // count; missing epicId defaults to final — gate on the safe side). Same
+      // rule the agent wrapper computes via list_tasks; the wrapper prefers
+      // this daemon-provided value when present.
+      const isEpicFinal = task
+        ? !task.epicId
+          ? true
+          : (task.order ?? 0) >= Math.max(
+              (task.order ?? 0),
+              ...Array.from(state.tasks.values())
+                .filter((t) => t.epicId === task.epicId && t.status !== 'ARCHIVED')
+                .map((t) => (typeof t.order === 'number' && Number.isFinite(t.order) ? t.order : 0))
+            )
+        : undefined;
 
       // Record ownership bookkeeping so start_step can enforce context-fetched ordering.
       if (task && callerWorkerId) {
@@ -247,15 +296,33 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               reopenCount: task.reopenCount,
               reopenReason: task.reopenReason,
               rejectionDetails: task.rejectionDetails || null,
+              // Epic-final flag (drives the wrapper's qualityGate scope) and
+              // dependency surface: declared prerequisites plus, on a BLOCKED
+              // task, the structured block bookkeeping.
+              isEpicFinal,
+              ...(Array.isArray(task.dependsOn) && task.dependsOn.length > 0
+                ? { dependsOn: task.dependsOn, dependsOnUnmet: unmetDependsOn(state, task) }
+                : {}),
+              ...(task.status === 'BLOCKED'
+                ? {
+                    blockedReason: task.blockedReason ?? null,
+                    blockedOnTaskIds: task.blockedOnTaskIds ?? null,
+                    blockedResourceId: task.blockedResourceId ?? null,
+                    blockedFromStatus: task.blockedFromStatus ?? null,
+                    blockedAt: task.blockedAt ?? null,
+                  }
+                : {}),
               // Size pressure from the latest submit_plan (warn-zone only) —
               // an architect re-claiming after a size-critic block sees why.
               ...(task.planSizeWarnings && task.planSizeWarnings.length > 0
                 ? { planSizeWarnings: task.planSizeWarnings }
                 : {}),
               // Evidence surface for QA: what the worker ran to claim done,
-              // the aggregated changed-file set, and recent rejection history
-              // (newest-first) so repeat failures are visible without digging.
+              // its complete_task summary, the aggregated changed-file set, and
+              // recent rejection history (newest-first) so repeat failures are
+              // visible without digging.
               verification: task.verification || null,
+              ...(task.completionSummary ? { completionSummary: task.completionSummary } : {}),
               filesModified: task.filesModified || [],
               // Git landing evidence: what the wrapper recorded (moe.record_commit),
               // the ASSERTED attribution tier the next exit will commit, and the

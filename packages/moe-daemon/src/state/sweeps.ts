@@ -27,6 +27,7 @@ import { isWorkerAlive, nextStatusForRelease } from './workerLifecycle.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import { cleanupStaleResourceWaiters } from '../tools/waitForResource.js';
 import { reapResources } from './resourceStore.js';
+import { alertStaleBlocks, runDependencyUnblock } from './dependencyUnblock.js';
 
 // Copied verbatim from StateManager: the statuses that count as an ACTIVE
 // assignment for stale-worker cleanup. Kept in sync by step-9's move.
@@ -236,6 +237,24 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
         // to BACKLOG would lose the auto-unblock-on-grant. Its bound is the
         // lease reaper (maxLeaseMs) plus queue-entry reaping, not this sweep.
         if (owned.status === 'BLOCKED' && owned.blockedResourceId) continue;
+        // A dependency-waiting BLOCKED hold (a third-party block on an
+        // assigned task, or a legacy still-assigned row — seat-freeing leaves
+        // assignee-reported blocks unassigned) keeps its BLOCKED status: its
+        // bound is the dependency auto-unblock, which only scans BLOCKED rows,
+        // so a park to BACKLOG would strand it past its deps landing. But the
+        // SEAT is released — the worker is being timed out as a corpse right
+        // below, and a row left assigned to it would be restored by the
+        // auto-unblock onto a now-IDLE record: unclaimable (isTaskClaimable
+        // needs the owner missing or DEAD) and unprunable (Layer 3 keeps a
+        // worker that "owns active work") until a daemon restart.
+        if (
+          owned.status === 'BLOCKED'
+          && Array.isArray(owned.blockedOnTaskIds)
+          && owned.blockedOnTaskIds.length > 0
+        ) {
+          await state.updateTask(owned.id, { assignedWorkerId: null }, 'WORKER_TIMEOUT');
+          continue;
+        }
         await state.updateTask(owned.id, {
           assignedWorkerId: null,
           status: nextStatusForRelease(owned, 'park'),
@@ -284,6 +303,32 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
     if (owner.currentTaskId === task.id) {
       await state.updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt });
     }
+  }
+
+  // Dependency-unblock backstop: task-keyed (works on UNASSIGNED rows, which
+  // the worker-keyed pass above never visits). Restores BLOCKED tasks whose
+  // blockedOnTaskIds are all DONE/ARCHIVED — this is what repairs rows whose
+  // prerequisite landed before this sweep existed, or while the daemon was
+  // down. Resource-parked rows (blockedResourceId) are skipped inside; their
+  // bound is the lease reaper below. Never throws.
+  try {
+    const depUnblocked = await runDependencyUnblock(state);
+    if (depUnblocked.length > 0) {
+      logger.info({ taskIds: depUnblocked }, 'Dependency sweep un-blocked tasks with satisfied blockedOnTaskIds');
+    }
+  } catch (error) {
+    logger.error({ error }, 'Failed to run dependency-unblock sweep');
+  }
+
+  // Visibility (alert only, never auto-park): page #governors once per block
+  // instance for resource-less BLOCKED rows past their age line — dep-less
+  // rows (no machine on their side), dep-waiting rows whose prerequisite is
+  // itself BLOCKED/BACKLOG (a cycle or a parked prerequisite: the auto-unblock
+  // cannot fire without a human), and dep-waiting rows past the general bound.
+  try {
+    await alertStaleBlocks(state, now);
+  } catch (error) {
+    logger.error({ error }, 'Failed to alert stale blocks');
   }
 
   // Shared-resource hygiene: force-release leases past their hard cap, drop

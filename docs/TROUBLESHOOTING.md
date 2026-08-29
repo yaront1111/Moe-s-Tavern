@@ -546,6 +546,28 @@ disk/declared-only attribution; an old wrapper against the new daemon keeps its 
 
 ---
 
+### moe-next board doctrine rewrite (after the dependency-fields reinstall)
+
+Runbook for retiring a board's free-text "verify-or-block" gate doctrine once the plugin build carrying
+`dependsOn`/`blockedOnTaskIds` is installed (moe-next is the reference case: 17 stale BLOCKED rows whose
+free-text reasons pointed at tasks that were long DONE, 119/632 meta evidence rows, 24 `customRules`
+rails at ~20KB per `get_context`). The rails existed because dependencies were prose, not fields — with
+the fields live, rewrite the rails. Apply via `moe.update_settings` / `scripts/moe-call.sh`, never by
+hand-editing `.moe/`:
+
+1. **Rewrite `customRules[13]`** (the verify-or-block DoD gate rule): "declare
+   `blockedOnTaskIds`/`dependsOn`; read the prerequisite's `verification` from `epicSiblings`; DoD grep
+   gates only for code the prerequisite does not own."
+2. **Collapse duplicate rules 7/8**; restore truncated content and delete scar-tissue rules 10/11;
+   soften rules 22/23 (spinoffs may go to BACKLOG again once deps gate claims); add the consolidation
+   rule (fold meta evidence rows into the epic-final hardening task — `create_task` now warns on
+   meta-titled duplicates). Net: 24 rails → ~18, ~20KB → ~14KB per `get_context`.
+3. **One-shot backfill**: re-file the stale BLOCKED rows' referenced task ids into `blockedOnTaskIds`
+   (`report_blocked` auto-parses `task-…` ids out of the reason on the next report; the sweep backstop
+   then clears every row whose deps are all DONE).
+
+---
+
 ## Performance Issues
 
 ### Large activity.log slowing things down

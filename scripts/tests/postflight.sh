@@ -149,7 +149,7 @@ switch (tool) {
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
       : (args.taskId || 'task-postflight');
-    ok({
+    const ctxPayload = {
       task: {
         id: ctxTaskId,
         status: process.env.FAKE_TASK_STATUS || 'WORKING',
@@ -158,7 +158,18 @@ switch (tool) {
         definitionOfDone: []
       },
       project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
-    });
+    };
+    // FAKE_CTX_IS_EPIC_FINAL=true|false models the newer daemon that computes
+    // epic-final board-side; unset = an old daemon that doesn't serve the
+    // field. FAKE_CTX_IS_EPIC_FINAL_AT=top places it top-level (beside the
+    // epic) instead of on the task projection -- the wrapper accepts both.
+    const fakeIef = process.env.FAKE_CTX_IS_EPIC_FINAL;
+    if (fakeIef === 'true' || fakeIef === 'false') {
+      const iefVal = fakeIef === 'true';
+      if (process.env.FAKE_CTX_IS_EPIC_FINAL_AT === 'top') ctxPayload.isEpicFinal = iefVal;
+      else ctxPayload.task.isEpicFinal = iefVal;
+    }
+    ok(ctxPayload);
     break;
   }
   case 'list_tasks': {
@@ -651,6 +662,63 @@ if command -v git >/dev/null 2>&1; then
     echo "Mid-epic task should commit without running the gate (scope=epicFinal)" >&2
     exit 1
   fi
+
+  # Case 4b: daemon-provided isEpicFinal. Newer daemons compute epic-final
+  # board-side and serve it in get_context; when present the wrapper must
+  # PREFER it over the list_tasks fallback (Case 4 above, which runs with the
+  # field absent, keeps pinning the fallback for old daemons). Two directions,
+  # each one a discriminator against silently using the fallback:
+  #   b1: daemon says false (task-level) with NO sibling knob -- the fallback
+  #       would compute final=true and run the failing gate; the daemon value
+  #       must defer it instead, so the commit lands.
+  echo "[case 4b] daemon isEpicFinal is preferred over the list_tasks fallback"
+  GATE_DMID_DIR="$TMP_DIR/gate-daemonmid"
+  make_gate_project "$GATE_DMID_DIR" "exit 9"
+  set +e
+  FAKE_CTX_IS_EPIC_FINAL=false run_gate_wrapper "$GATE_DMID_DIR" "$TMP_DIR/wrapper-gate-daemonmid.out"
+  gate_dmid_code=$?
+  set -e
+  if [ "$gate_dmid_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-daemonmid.out" >&2 || true
+    echo "Gate-daemonmid wrapper exited with $gate_dmid_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'qualityGate deferred' "$TMP_DIR/wrapper-gate-daemonmid.out"; then
+    cat "$TMP_DIR/wrapper-gate-daemonmid.out" >&2 || true
+    echo "A daemon isEpicFinal=false must defer the gate even when the sibling page would say epic-final" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_DMID_DIR" rev-list --count HEAD)" -ne 2 ]; then
+    cat "$TMP_DIR/wrapper-gate-daemonmid.out" >&2 || true
+    echo "Daemon-deferred gate must not block the commit (expected 2 commits)" >&2
+    exit 1
+  fi
+  #   b2: daemon says true (top-level placement) while the sibling page says
+  #       mid-epic -- the fallback would defer; the daemon value must run the
+  #       failing gate, which blocks the commit.
+  GATE_DFINAL_DIR="$TMP_DIR/gate-daemonfinal"
+  make_gate_project "$GATE_DFINAL_DIR" "exit 3"
+  set +e
+  FAKE_CTX_IS_EPIC_FINAL=true FAKE_CTX_IS_EPIC_FINAL_AT=top FAKE_SIBLING_ORDER=99 \
+    run_gate_wrapper "$GATE_DFINAL_DIR" "$TMP_DIR/wrapper-gate-daemonfinal.out"
+  gate_dfinal_code=$?
+  set -e
+  if [ "$gate_dfinal_code" -ne 0 ]; then
+    cat "$TMP_DIR/wrapper-gate-daemonfinal.out" >&2 || true
+    echo "Gate-daemonfinal wrapper exited with $gate_dfinal_code" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'qualityGate failed (exit 3)' "$TMP_DIR/wrapper-gate-daemonfinal.out"; then
+    cat "$TMP_DIR/wrapper-gate-daemonfinal.out" >&2 || true
+    echo "A daemon isEpicFinal=true must run the gate even when the sibling page says mid-epic" >&2
+    exit 1
+  fi
+  if [ "$(git -C "$GATE_DFINAL_DIR" rev-list --count HEAD)" -ne 1 ]; then
+    cat "$TMP_DIR/wrapper-gate-daemonfinal.out" >&2 || true
+    echo "The daemon-final failing gate must block the commit (expected 1 commit)" >&2
+    exit 1
+  fi
+  echo "[case 4b] ok"
 
   # Case 5: REGRESSION — the post-flight must not resolve the task's final
   # status through an UNSCOPED list_tasks. The daemon caps that call at

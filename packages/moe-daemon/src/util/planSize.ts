@@ -18,6 +18,8 @@ export const WARN_STEPS_DEFAULT = 8;
 export const MAX_STEPS_DEFAULT = 12;
 export const WARN_DISTINCT_FILES_DEFAULT = 5;
 export const MAX_DISTINCT_FILES_DEFAULT = 10;
+/** Advisory per-epic task ceiling checked at create_task (warn-only — creation never hard-fails). */
+export const DEFAULT_MAX_TASKS_PER_EPIC = 40;
 
 export interface ResolvedTaskSizing {
   warnSteps: number;
@@ -56,6 +58,11 @@ export function resolveTaskSizing(sizing?: TaskSizingSettings): ResolvedTaskSizi
       positiveInt(sizing?.maxDistinctFiles, MAX_DISTINCT_FILES_DEFAULT)
     ),
   };
+}
+
+/** Resolve the advisory tasks-per-epic ceiling (settings.taskSizing.maxTasksPerEpic, default 40). */
+export function resolveMaxTasksPerEpic(sizing?: TaskSizingSettings): number {
+  return positiveInt(sizing?.maxTasksPerEpic, DEFAULT_MAX_TASKS_PER_EPIC);
 }
 
 /** Union of affectedFiles across steps (paths are already normalized by submit_plan). */

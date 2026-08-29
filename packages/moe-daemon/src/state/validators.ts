@@ -328,6 +328,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
       'maxSteps',
       'warnDistinctFiles',
       'maxDistinctFiles',
+      'maxTasksPerEpic',
       'autoCritique',
     ], 'taskSizing setting');
     const merged: NonNullable<ProjectSettings['taskSizing']> = { ...(next.taskSizing || {}) };
@@ -342,6 +343,9 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     }
     if (incoming.maxDistinctFiles !== undefined) {
       merged.maxDistinctFiles = validateIntegerValue(incoming.maxDistinctFiles, 'taskSizing.maxDistinctFiles', 1, 100);
+    }
+    if (incoming.maxTasksPerEpic !== undefined) {
+      merged.maxTasksPerEpic = validateIntegerValue(incoming.maxTasksPerEpic, 'taskSizing.maxTasksPerEpic', 1, 1000);
     }
     if (incoming.autoCritique !== undefined) {
       merged.autoCritique = validateBooleanValue(incoming.autoCritique, 'taskSizing.autoCritique');

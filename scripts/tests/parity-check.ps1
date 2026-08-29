@@ -58,6 +58,8 @@ $required = [ordered]@{
     'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
     'RPC tools' = @('get_commit_scope', 'record_commit')
+    'context fields' = @('isEpicFinal')
+    'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

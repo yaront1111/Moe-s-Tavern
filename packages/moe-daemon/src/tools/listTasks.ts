@@ -7,6 +7,7 @@ import {
   normalizeIntegerOption,
   taskSummary,
 } from '../util/taskPayload.js';
+import { unmetDependsOn } from '../state/dependencyUnblock.js';
 
 export function listTasksTool(_state: StateManager): ToolDefinition {
   return {
@@ -111,7 +112,7 @@ export function listTasksTool(_state: StateManager): ToolDefinition {
         epicId: epic?.id ?? params.epicId ?? null,
         epicTitle: epic?.title ?? null,
         epicStatus: epic?.status ?? null,
-        tasks: pagedTasks.map((t) => taskSummary(t)),
+        tasks: pagedTasks.map((t) => taskSummary(t, { dependsOnUnmet: unmetDependsOn(state, t).length })),
         counts,
         pagination: {
           limit,

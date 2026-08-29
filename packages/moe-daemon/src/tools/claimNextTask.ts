@@ -3,7 +3,8 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
-import { blockingHold, heldTaskRefusal } from '../util/claimEligibility.js';
+import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
+import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { assertNoLiveLease, claimLostRace } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
@@ -139,6 +140,19 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
+          // dependsOn gates WORKING-status claims: an explicit-taskId claim of
+          // a WORKING task with unmet prerequisites is refused so the gate
+          // cannot be trivially bypassed by naming the row. Resuming your own
+          // held task stays allowed (deps may have been declared mid-flight;
+          // stranding the incumbent would be worse than letting it finish).
+          if (!ownedBySelf && isClaimGatedByDependsOn(state, requested)) {
+            const unmet = unmetDependsOn(state, requested);
+            throw notAllowed(
+              'claim',
+              `Task ${requested.id} has unmet dependencies: ${unmet.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
+              `An architect/governor can edit them with moe.set_task_dependencies.`
+            );
+          }
           if (!state.isTaskClaimable(requested) && !ownedBySelf && !params.replaceExisting) {
             throw notAllowed(
               'claim',
@@ -164,6 +178,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // A REVIEW task parked for a human (qa_reject hard cap / critique
             // block cap) is excluded from the QA queue until a human clears it.
             .filter((t) => !(t.status === 'REVIEW' && t.needsHumanReview === true))
+            // dependsOn gate (WORKING candidates only) — MUST mirror
+            // wait_for_task's matcher (util/claimEligibility.ts) or the
+            // wake→claim→refuse spin returns.
+            .filter((t) => !isClaimGatedByDependsOn(state, t))
             .sort((a, b) => {
               // When preferAdjacentInEpic is on and a hint epic is set,
               // rank in-epic candidates ahead of out-of-epic. This lets a

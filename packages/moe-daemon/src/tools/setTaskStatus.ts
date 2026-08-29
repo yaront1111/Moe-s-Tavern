@@ -168,6 +168,7 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       } else if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
         updates.blockedReason = null;
         updates.blockedResourceId = null;
+        updates.blockedOnTaskIds = null;
         updates.blockedFromStatus = null;
         updates.blockedAt = null;
         // Preserve the parked worker only when the task RETURNS to where it was

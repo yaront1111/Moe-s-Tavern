@@ -39,6 +39,14 @@ export type TaskSummary = {
   descriptionPreview?: string;
   descriptionTruncated?: boolean;
   descriptionOriginalLength?: number;
+  /** Declared prerequisites (when any) — see Task.dependsOn. */
+  dependsOn?: string[];
+  /** How many dependsOn ids are not yet DONE/ARCHIVED — explains why a WORKING row isn't offered to claimers. */
+  dependsOnUnmet?: number;
+  /** Blocking info, present only on BLOCKED rows — list_tasks used to show nothing about a block. */
+  blockedReason?: string;
+  blockedOnTaskIds?: string[];
+  blockedResourceId?: string;
 };
 
 export type CompactTaskComment = TaskComment & {
@@ -80,6 +88,11 @@ export function taskSummary(
   options: {
     includeDescriptionPreview?: boolean;
     maxDescriptionChars?: number;
+    /**
+     * Count of unmet dependsOn ids, resolved by the caller (this module is
+     * pure and holds no state handle) — e.g. via unmetDependsOn(state, task).
+     */
+    dependsOnUnmet?: number;
   } = {}
 ): TaskSummary {
   const summary: TaskSummary = {
@@ -97,6 +110,20 @@ export function taskSummary(
     planStepCount: task.implementationPlan?.length ?? 0,
     completedStepCount: task.implementationPlan?.filter(step => step.status === 'COMPLETED').length ?? 0,
   };
+
+  if (Array.isArray(task.dependsOn) && task.dependsOn.length > 0) {
+    summary.dependsOn = task.dependsOn;
+    if (typeof options.dependsOnUnmet === 'number') {
+      summary.dependsOnUnmet = options.dependsOnUnmet;
+    }
+  }
+  if (task.status === 'BLOCKED') {
+    if (task.blockedReason) summary.blockedReason = task.blockedReason;
+    if (Array.isArray(task.blockedOnTaskIds) && task.blockedOnTaskIds.length > 0) {
+      summary.blockedOnTaskIds = task.blockedOnTaskIds;
+    }
+    if (task.blockedResourceId) summary.blockedResourceId = task.blockedResourceId;
+  }
 
   if (options.includeDescriptionPreview) {
     const maxChars = options.maxDescriptionChars ?? DEFAULT_TASK_PREVIEW_CHARS;

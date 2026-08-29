@@ -59,7 +59,7 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
-  'architect.reference.md': `<!-- moe-generated: sha=08b07943437a -->
+  'architect.reference.md': `<!-- moe-generated: sha=da49d54ff8fe -->
 
 # Architect — Reference
 
@@ -106,7 +106,13 @@ The full sizing table (daemon-enforced; thresholds tunable via \`project.json\` 
 | DoD items | 3–7, mechanically checkable | >7 (\`create_task\` warning) | — |
 | Net changed LOC | ≤200 | — | >400 (QA rejects as oversized) |
 
-One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones. Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — \`moe-epic-breakdown\` has the procedure.
+One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past \`taskSizing.maxTasksPerEpic\`, default 40, \`create_task\` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — \`moe-epic-breakdown\` has the procedure.
+
+## Dependencies and evidence at breakdown time
+
+- **Declare build-order deps structurally**: \`moe.create_task { dependsOn: ["task-…"] }\` when task B needs task A landed first. \`dependsOn\` gates WORKING-status claims only — the row can still be planned, it just isn't offered for execution until every target is DONE/ARCHIVED (missing/deleted ids count as satisfied). Prose in the description explains *why*; the field is what actually holds the claim. A mis-declared list is fixed with \`moe.set_task_dependencies { taskId, dependsOn }\` (architect/governor) — never by deleting the prerequisite. Both writers cap the list at 20 (\`create_task\` names the ids it dropped past the cap — split the task instead) and refuse a cycle: \`set_task_dependencies\` rejects an id from which the task is already reachable (over \`dependsOn ∪ blockedOnTaskIds\`), naming the path; \`create_task\` drops such ids with a warning.
+- **Workers read prerequisites from the board**: every \`dependsOn\` target rides in the dependent's \`get_context.epicSiblings\` with \`landed\`, \`verification\`, \`reviewSummary\` and \`completionSummary\` — so never write DoD items that grep HEAD for a sibling's output or "verify-or-block" on another task's code.
+- **No per-slice evidence rows**: security/evidence/verification/hardening rows per slice are the "by evidence type" anti-seam (\`moe-epic-breakdown\`) — each task proves its own slice, the epic's ONE final hardening task owns the concentrated pass. \`create_task\` warns on meta-titled duplicates and past the epic ceiling but never fails; treat the warnings as a re-slice signal, not noise.
 
 ## Rail Proposals (escape hatch)
 
@@ -139,7 +145,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=a0c5bc216e41 -->
+  'governor.md': `<!-- moe-generated: sha=f882385984d6 -->
 
 # Governor
 
@@ -174,7 +180,9 @@ What you'll see in \`#governors\`:
 | \`📋\` | \`StateManager\` (PLANNING task created) | New plan needed | Cross-posted from \`#architects\` — informational; no action needed |
 | \`⚠️\` | Stale-worker watcher | Worker quiet past the presence window while holding a task | Ping the worker first. Quiet ≠ dead (builds/tests are silent) — NEVER release on idle time alone; release needs a confirmed crash plus the human's nod |
 | \`❌\` | \`moe.qa_reject\` | QA rejected a task | Check \`rejectionDetails\`; if it's the same task being rejected repeatedly, flip back to PLANNING; otherwise let the worker fix |
-| \`🚧\` | \`moe.report_blocked\` | Worker self-reported blocked | Read the reason; if rail conflict, consider \`propose_rail\`; if requirements gap, ping the architect. "Prerequisite absent at HEAD" → check the prerequisite task's \`task.commits\` / \`git log --grep 'Moe-Task: <sibling>'\`. Clear a resolved block with \`unblock_worker { resolveBlocks: true }\` or \`set_task_status\`, never a bare \`unblock_worker\` (seat-only) |
+| \`🚧\` | \`moe.report_blocked\` | Worker self-reported blocked (assignee-reported non-resource blocks free the seat — the task parks unassigned, the worker claims other work; a third-party block keeps the hold) | Read the reason. \`blockedOnTaskIds\` set → leave it: the daemon auto-unblocks when those tasks are DONE/ARCHIVED (ids already DONE at report time never block — the worker was told to continue). Rail conflict → consider \`propose_rail\`; requirements gap → ping the architect. Clear a resolved human-block with \`unblock_worker { resolveBlocks: true }\` or \`set_task_status\` (the only escape for an unassigned BLOCKED row), never a bare \`unblock_worker\` (seat-only) |
+| \`⚠️\` dependency cycle | \`moe.report_blocked\` | A worker tried to block on a task that already waits (directly or transitively, via \`dependsOn\`/\`blockedOnTaskIds\`) on the reporting task; the id was dropped | Two rows are trying to wait on each other — one side needs a re-plan; fix a wrong \`dependsOn\` with \`set_task_dependencies\` (it rejects cycles) |
+| \`blockedAt\`-age alert | Blocked-timeout sweep | A BLOCKED task past the age line: no \`blockedOnTaskIds\`/\`blockedResourceId\` (nothing auto-clears it), OR its unmet prerequisite is itself BLOCKED/BACKLOG (a cycle or a parked prerequisite — the alert names each dep's status), OR dep-waiting past 2× the timeout | Visibility, not auto-park — triage it: get the human answer then \`resolveBlocks\`/\`set_task_status\`; unblock or promote the stuck prerequisite; if it's really waiting on another task, re-file the dep (\`report_blocked\` auto-parses task ids from the reason); if every step is COMPLETED, it's BLOCKED misused as "done" |
 | \`🔓\` | \`moe.release_task\` | Task assignment was cleared | Informational — next claim will pick it up |
 | \`🚫\` \`PUSH-BLOCKED:\` | Wrapper post-flight | \`qualityGate\` failed (bytes in a rescue ref, worker loop stopped) or the status lookup failed (\`status=UNKNOWN\` checkpoint landed) | Read the output tail on the task comment; a new worker session fixes the gate. Never hand-land the sources |
 | \`MOE_RESCUE_REF\` | Wrapper / \`record_commit { kind: 'rescue' }\` | A landing failed (\`gate-failed\` / \`peel-failed\` / \`commit-failed\` / \`ref-contention\` / \`teardown\`); bytes parked under \`refs/moe/rescue/<task>/\` | Self-heals at the task's next session (baseline kept); \`git show <ref> --stat\` only if the checkout is gone |
@@ -188,7 +196,7 @@ Follow \`nextAction\` on every Moe tool response. On \`moe.claim_next_task\` the
 
 1. \`moe.chat_wait\` blocks until a signal lands in \`#governors\` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`declare_files\` (attribute stranded paths to the task that edited them).
+3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`set_task_dependencies\` (fix a mis-declared \`dependsOn\` that is withholding a row from WORKING claims), \`declare_files\` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If \`nextAction\` includes \`recommendedSkill\`, load that skill before calling the hinted tool.
@@ -206,7 +214,7 @@ For a worker that is in trouble, escalate in this order — only move down a ste
 
 Never combine 5 and 6 in a single move without the human's nod. A release-and-re-plan is destructive to the worker's local state (its bytes are checkpointed, but its context is not).
 
-Unassigned BLOCKED tasks — a seat freed without resolving the block — are never auto-parked; they stay in the Working column until someone acts. Sweep them each tick with \`moe.list_tasks { status: "BLOCKED" }\` and route each one: resource-blocked (leave alone), human-blocked (get the answer, then \`resolveBlocks\`), or BLOCKED misused as "done" (every step COMPLETED → the worker should \`complete_task\`).
+Unassigned BLOCKED tasks are the **norm** now, not an anomaly: a non-resource \`report_blocked\` frees the seat by design (the worker claims other work; the wrapper checkpointed the bytes). They are never auto-parked. Sweep them each tick with \`moe.list_tasks { status: "BLOCKED" }\` and route each one: dependency-blocked (\`blockedOnTaskIds\` set — leave alone while the prerequisites are moving, it auto-unblocks when they land; a prerequisite that is itself BLOCKED/BACKLOG needs you: unblock/promote it, or re-plan a cycle), resource-blocked (leave alone, auto-unblocks on grant), human-blocked (get the answer, then \`resolveBlocks\`/\`set_task_status\`), or BLOCKED misused as "done" (every step COMPLETED → the worker should \`complete_task\`). The sweep's \`blockedAt\`-age alert flags the dep-less ones, the stuck-prerequisite ones, and dep-waits past 2× the timeout for you.
 
 ## Plan critique (CONTROL mode)
 
@@ -217,7 +225,7 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 ## Mention Response Protocol
 
 When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
-  'governor.reference.md': `<!-- moe-generated: sha=86f01763da81 -->
+  'governor.reference.md': `<!-- moe-generated: sha=9a404246e6ed -->
 
 # Governor — Reference
 
@@ -247,13 +255,26 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 
 ## Unblocking: seat vs task
 
-\`moe.unblock_worker\` is **seat-only by default**: the worker goes IDLE (and, without \`retryTask\`, drops the assignment) but its BLOCKED task stays BLOCKED with \`blockedReason\` intact — the response lists it in \`stillBlockedTaskIds\`. Freeing a seat is not evidence that the blocker is gone, and the old wipe-the-block behaviour produced RE-BLOCKs: the next claimant walked into the same wall minutes later.
+Most seats free themselves now: a non-resource \`moe.report_blocked\` releases the seat at report time (worker → IDLE, task BLOCKED-unassigned), and blocks with \`blockedOnTaskIds\` or \`blockedResourceId\` auto-unblock without you. \`moe.unblock_worker\` is for the leftovers, and it is **seat-only by default**: the worker goes IDLE (and, without \`retryTask\`, drops the assignment) but its BLOCKED task stays BLOCKED with \`blockedReason\` intact — the response lists it in \`stillBlockedTaskIds\`. Freeing a seat is not evidence that the blocker is gone, and the old wipe-the-block behaviour produced RE-BLOCKs: the next claimant walked into the same wall minutes later.
 
 - **Blocker actually resolved** → \`moe.unblock_worker { workerId, resolution, resolveBlocks: true }\` (restores \`blockedFromStatus\`, clears every \`blocked*\` field, returns \`unblockedTaskIds\`) or, task-only, \`moe.set_task_status { taskId, status: <blockedFromStatus> }\`.
 - **Seat stuck, blocker still real** → bare \`unblock_worker\`. The task stays BLOCKED-unassigned and is not auto-parked — sweep \`moe.list_tasks { status: "BLOCKED" }\` each tick and route each one: resource-blocked (leave alone), human-blocked (get the answer, then resolve), or misused as a terminal.
 - **BLOCKED misused as a terminal** ("done, blocked by design", every step COMPLETED): the daemon already warned the worker (\`ALL_STEPS_COMPLETE\`). Ask the worker to \`complete_task\` with verification, or \`set_task_status\` → REVIEW yourself when the evidence is already on the task.
 - \`retryTask: true\` without \`resolveBlocks\` leaves a BLOCKED task untouched (still assigned, still BLOCKED) — for when the same worker should resume once the block clears.
 - Git is never a reason to hurry an unblock: the wrapper checkpointed the task's files on the BLOCKED exit and lands any lingering baseline at the next pre-flight, so nothing is stranded while a task waits.
+
+## Task dependencies: gating, auto-unblock, and the escape hatch
+
+Two structured fields replaced free-text "BUILD-ORDER BLOCK on task-X" prose:
+
+- **\`dependsOn\`** (set at \`create_task\`, prevention): gates **WORKING-status claims only** — \`claim_next_task\`/\`wait_for_task\` withhold the row until every target is DONE/ARCHIVED. Planning proceeds regardless; a missing/deleted id counts as satisfied, so a deleted prerequisite can never wedge its dependents. \`moe.list_tasks\` rows carry \`dependsOnUnmet\` — that is why a row "isn't being offered".
+- **\`blockedOnTaskIds\`** (set at \`report_blocked\`, cure): parks an already-claimed task; the daemon auto-unblocks it (status → \`blockedFromStatus\`, unassigned, claimable by anyone — a still-assigned hold returns to its worker only while that worker exists, is not DEAD and still points at the task) the moment every listed task is DONE/ARCHIVED — event-driven, with a sweep backstop for rows blocked before the upgrade. \`report_blocked\` also auto-parses \`task-…\` ids out of the free-text reason, so legacy-style blocks become structured with zero agent effort. Ids that are ALL already DONE/ARCHIVED at report time do **not** block (\`dependenciesSatisfied:true\`, the worker is told to continue — no claim-thrash), and an id that would close a dependency cycle (over \`dependsOn ∪ blockedOnTaskIds\`) is dropped with a warning and a \`#governors\` alert.
+
+Your levers:
+
+- **\`moe.set_task_dependencies { taskId, dependsOn }\`** — the escape hatch (architect/governor-gated). Full replacement, \`[]\` clears. Use it when a mis-declared \`dependsOn\` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over \`dependsOn ∪ blockedOnTaskIds\`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
+- **Stale-block alert triage** (\`blockedAt\`-age line in \`#governors\`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then \`unblock_worker { resolveBlocks: true }\` / \`set_task_status\`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should \`complete_task\`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with \`set_task_dependencies\`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
+- Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or \`resolveBlocks\` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the \`blockedFromStatus\` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
 
 ## Rail proposal patterns
 
@@ -379,7 +400,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=4351f8a02fb9 -->
+  'worker.md': `<!-- moe-generated: sha=e4fa2a4da833 -->
 
 # Worker
 
@@ -392,7 +413,7 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` — run the plan's named verification command fresh and submit its result; exit code must be 0 or the daemon rejects completion. Never claim success without that fresh output.
 - If \`settings.qualityGate\` is set, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before \`complete_task\`.
-- Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), so work only in the project root (never a \`.worktrees/\` checkout), never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout.
+- Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), so work only in the project root (never a \`.worktrees/\` checkout), never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout — read its \`verification\`/\`completionSummary\` from that same \`epicSiblings\` entry, never via HEAD greps.
 
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
@@ -404,8 +425,8 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
-Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=de20c773900d -->
+Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
+  'worker.reference.md': `<!-- moe-generated: sha=4b041787b980 -->
 
 # Worker — Reference
 
@@ -468,7 +489,7 @@ Practical rules:
 
 - \`modifiedFiles\` on every \`complete_step\` is the whole game. Omitting it draws a \`warning\`, and with another worker registered an unreported, non-tool-written edit does not land.
 - The shared checkout is dirty by design. \`[attribution] <K> pre-session dirty path(s) untouched\` is informational; never revert, stash or commit those paths, and never stop because of them — note them in your step note and continue.
-- A prerequisite has landed iff \`get_context.epicSiblings[*].landed\` is true (or \`git log <branch> --grep 'Moe-Task: <sibling>'\` finds it). Uncommitted files in a peer's checkout are not a prerequisite; a \`report_blocked\` on a missing prerequisite names the sibling task.
+- A prerequisite has landed iff \`get_context.epicSiblings[*].landed\` is true (or \`git log <branch> --grep 'Moe-Task: <sibling>'\` finds it) — and its evidence (\`verification { command, exitCode }\`, \`reviewSummary\`, \`completionSummary\`) rides on the same \`epicSiblings\` entry, so read what it delivered from the board, never via HEAD greps. Your task's \`dependsOn\` targets appear there too, regardless of order. Uncommitted files in a peer's checkout are not a prerequisite; a \`report_blocked\` on a missing prerequisite passes the sibling id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks the task the moment they are all DONE/ARCHIVED, and a non-resource block you report on your own task frees your seat (worker → IDLE, \`nextAction\` → \`claim_next_task\`) so you take other work instead of idling on the wall. If every id you name is ALREADY DONE/ARCHIVED the task is not blocked at all (\`dependenciesSatisfied:true\`, \`nextAction\` → \`get_context\`): read their evidence from \`epicSiblings\` and continue — re-file only if something else blocks you, with a reason that names the real blocker. An id that already waits on your task (a dependency cycle) is dropped with a \`DEPENDENCY_CYCLE\` warning — page the architect, one side needs a re-plan. Resource blocks (\`resourceId\`) keep the seat parked — the grant path returns the task to you by design.
 - Banners you may see in \`#general\`: \`PUSH-BLOCKED:\` (gate failed or status lookup failed — your bytes are in a rescue ref / \`status=UNKNOWN\` checkpoint; on a gate failure the loop stopped), \`PUSH FAILED … do not review until pushed\` (committed locally only), \`CHECKPOINT-UNPUSHED task=<id>\` (checkpoint local only), \`MOE_RESCUE_REF task=<id> ref=… reason=…\`. Refusals: \`MOE_COMMIT_REFUSED_NO_OWNED_PATHS\` (nothing attributable — declare paths), \`MOE_COMMIT_REFUSED_OWNED_PATH_MISSING\` (asserted paths gone from disk and HEAD), \`MOE_COMMIT_NOTHING_TO_COMMIT\` (already in HEAD; harmless).
 - A RESUME prompt that lists rescue refs means an earlier session's landing failed: \`git show <ref> --stat\` / \`git checkout <ref> -- <path>\` before redoing work. A lingering baseline is landed automatically before your CLI starts (\`MOE_CHECKPOINT_RECOVERED\`).
 - \`moe.record_commit\` and \`moe.get_commit_scope\` are wrapper-called — do not call them yourself. \`moe.declare_files { taskId, paths }\` is yours to use when you know a path is your edit but it was not reported.

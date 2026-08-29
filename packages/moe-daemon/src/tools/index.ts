@@ -64,6 +64,7 @@ import { waitForResourceTool } from './waitForResource.js';
 import { getCommitScopeTool } from './getCommitScope.js';
 import { recordCommitTool } from './recordCommit.js';
 import { declareFilesTool } from './declareFiles.js';
+import { setTaskDependenciesTool } from './setTaskDependencies.js';
 
 export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
 
@@ -145,5 +146,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     getCommitScopeTool(state),
     recordCommitTool(state),
     declareFilesTool(state),
+    setTaskDependenciesTool(state),
   ];
 }

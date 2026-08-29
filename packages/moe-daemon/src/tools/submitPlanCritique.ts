@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { PlanCritiqueResult } from '../types/schema.js';
-import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
+import type { PlanCritiqueCategory, PlanCritiqueResult } from '../types/schema.js';
+import { MAX_CRITIQUE_BLOCKS_DEFAULT, PLAN_CRITIQUE_CATEGORIES } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound, notAllowed } from '../util/errors.js';
 
 const MAX_CONCERNS = 20;
@@ -16,6 +16,11 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       properties: {
         taskId: { type: 'string' },
         verdict: { type: 'string', enum: ['pass', 'block'] },
+        category: {
+          type: 'string',
+          enum: [...PLAN_CRITIQUE_CATEGORIES],
+          description: 'What kind of problem a "block" names (size|correctness|rails|dependency) — makes blocks countable. A block without one is counted as "uncategorized" and warned about.'
+        },
         concerns: { type: 'array', items: { type: 'string' } },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
@@ -26,6 +31,7 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as {
         taskId?: string;
         verdict?: string;
+        category?: string;
         concerns?: unknown;
         workerId?: string;
       };
@@ -34,6 +40,15 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       if (params.verdict !== 'pass' && params.verdict !== 'block') {
         throw invalidInput('verdict', 'must be "pass" or "block"');
       }
+      if (params.category !== undefined
+        && !(PLAN_CRITIQUE_CATEGORIES as readonly string[]).includes(params.category)) {
+        throw invalidInput('category', `must be one of: ${PLAN_CRITIQUE_CATEGORIES.join(', ')}`);
+      }
+      const category = params.category as PlanCritiqueCategory | undefined;
+      // WARN-when-missing, never hard-required: old governors don't send a
+      // category yet, and a critique that fails on rollout is worse than an
+      // uncategorized one. Their blocks are counted as 'uncategorized'.
+      const uncategorizedBlock = params.verdict === 'block' && category === undefined;
 
       // Role gate: critique is governor-only (mirrors enter_governance). A
       // missing/non-governor workerId has no governor team, so it's rejected —
@@ -77,6 +92,11 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
         reviewedBy: reviewer,
         reviewedAt: new Date().toISOString(),
         ...(concerns && concerns.length > 0 ? { concerns } : {}),
+        ...(category
+          ? { category }
+          : uncategorizedBlock
+            ? { category: 'uncategorized' as const }
+            : {}),
       };
 
       const updates: Record<string, unknown> = {
@@ -173,6 +193,13 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
         taskId: updated.id,
         status: updated.status,
         verdict: params.verdict,
+        ...(result.category ? { category: result.category } : {}),
+        ...(uncategorizedBlock
+          ? {
+              warning:
+                `Block verdict without a category — recorded as 'uncategorized'. Pass category (${PLAN_CRITIQUE_CATEGORIES.join('|')}) so blocks stay countable per failure kind.`
+            }
+          : {}),
         concerns: concerns ?? [],
         planCritiqueResult: result,
         flipped: didFlip,

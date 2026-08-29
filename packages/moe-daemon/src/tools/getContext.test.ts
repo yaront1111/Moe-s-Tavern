@@ -343,3 +343,144 @@ describe('moe.get_context', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Dependency surface: declared dependsOn/blockedOnTaskIds targets appear in
+// epicSiblings regardless of the lower-order filter and the 20-cap, carrying
+// the prerequisite's evidence (verification/reviewSummary/completionSummary)
+// so dependents read the board instead of grepping HEAD. Plus isEpicFinal.
+// ---------------------------------------------------------------------------
+describe('moe.get_context dependency surface + isEpicFinal', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  interface DepSibling {
+    id: string;
+    order: number;
+    status: string;
+    declaredDependency?: boolean;
+    verification?: { command: string; exitCode: number; reportedAt?: string } | null;
+    reviewSummary?: string | null;
+    completionSummary?: string | null;
+  }
+
+  it('includes higher-order and cross-epic declared targets, enriched with their evidence', async () => {
+    h.setupMoeFolder();
+    h.createEpic({ id: 'epic-1' });
+    h.createEpic({ id: 'epic-2' });
+    // Declared dep with HIGHER order (the lower-order filter would drop it).
+    h.createTask({
+      id: 'task-dep-hi', status: 'DONE', order: 9,
+      verification: { command: 'npm test', exitCode: 0, outputTail: 'tail', reportedAt: '2026-08-28T10:00:00.000Z' },
+      reviewSummary: 'QA re-ran npm test',
+      completionSummary: 'Shipped the schema change',
+    });
+    // Declared block target in ANOTHER epic (the epic filter would drop it).
+    h.createTask({ id: 'task-dep-far', epicId: 'epic-2', status: 'WORKING', order: 1 });
+    // Ordinary lower-order sibling — present but NOT enriched.
+    h.createTask({ id: 'task-plain', status: 'DONE', order: 1 });
+    h.createTask({
+      id: 'task-1', status: 'WORKING', order: 5,
+      dependsOn: ['task-dep-hi'],
+      blockedOnTaskIds: ['task-dep-far'],
+    });
+    await h.state.load();
+
+    const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      task: {
+        epicSiblings: DepSibling[];
+        dependsOn?: string[];
+        dependsOnUnmet?: string[];
+        isEpicFinal: boolean;
+      };
+    };
+
+    const ids = result.task.epicSiblings.map((s) => s.id);
+    expect(ids).toContain('task-plain');
+    expect(ids).toContain('task-dep-hi');
+    expect(ids).toContain('task-dep-far');
+
+    const byId = new Map(result.task.epicSiblings.map((s) => [s.id, s]));
+    expect(byId.get('task-dep-hi')).toMatchObject({
+      declaredDependency: true,
+      verification: { command: 'npm test', exitCode: 0, reportedAt: '2026-08-28T10:00:00.000Z' },
+      reviewSummary: 'QA re-ran npm test',
+      completionSummary: 'Shipped the schema change',
+    });
+    // Projection only — outputTail stays off the sibling payload.
+    expect((byId.get('task-dep-hi')!.verification as Record<string, unknown>).outputTail).toBeUndefined();
+    expect(byId.get('task-dep-far')).toMatchObject({ declaredDependency: true, verification: null });
+    expect(byId.get('task-plain')!.declaredDependency).toBeUndefined();
+
+    // Task projection carries the declared deps and which are still unmet.
+    expect(result.task.dependsOn).toEqual(['task-dep-hi']);
+    expect(result.task.dependsOnUnmet).toEqual([]);
+    // task-dep-hi has order 9 > 5 → not epic-final.
+    expect(result.task.isEpicFinal).toBe(false);
+  });
+
+  it('declared targets bypass the 20-sibling cap', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    for (let i = 1; i <= 25; i++) {
+      h.createTask({ id: `task-fill-${i}`, status: 'DONE', order: i });
+    }
+    // The declared dep has the LOWEST order — exactly the row the nearest-first
+    // cap would evict.
+    h.createTask({ id: 'task-dep-old', status: 'DONE', order: 0 });
+    h.createTask({ id: 'task-1', status: 'WORKING', order: 99, dependsOn: ['task-dep-old'] });
+    await h.state.load();
+
+    const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      task: { epicSiblings: DepSibling[] };
+    };
+    const dep = result.task.epicSiblings.find((s) => s.id === 'task-dep-old');
+    expect(dep).toBeDefined();
+    expect(dep!.declaredDependency).toBe(true);
+  });
+
+  it('isEpicFinal: highest order wins, ties count, ARCHIVED siblings are ignored', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-mid', status: 'WORKING', order: 5 });
+    h.createTask({ id: 'task-tie', status: 'WORKING', order: 7 });
+    h.createTask({ id: 'task-last', status: 'REVIEW', order: 7 });
+    // ARCHIVED with a higher order must NOT steal finality.
+    h.createTask({ id: 'task-zomb', status: 'ARCHIVED', order: 11 });
+    await h.state.load();
+
+    const read = async (taskId: string) => (await getContextTool(h.state).handler({ taskId }, h.state) as {
+      task: { isEpicFinal: boolean };
+    }).task.isEpicFinal;
+
+    expect(await read('task-mid')).toBe(false);
+    expect(await read('task-tie')).toBe(true);
+    expect(await read('task-last')).toBe(true);
+  });
+
+  it('surfaces the structured block bookkeeping on a BLOCKED task', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-dep111', status: 'WORKING', order: 1 });
+    h.createTask({
+      id: 'task-1', status: 'BLOCKED', order: 2,
+      blockedReason: 'waiting on task-dep111',
+      blockedOnTaskIds: ['task-dep111'],
+      blockedFromStatus: 'WORKING',
+      blockedAt: '2026-08-28T10:00:00.000Z',
+    });
+    await h.state.load();
+
+    const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      task: {
+        blockedReason: string | null;
+        blockedOnTaskIds: string[] | null;
+        blockedFromStatus: string | null;
+      };
+    };
+    expect(result.task.blockedReason).toBe('waiting on task-dep111');
+    expect(result.task.blockedOnTaskIds).toEqual(['task-dep111']);
+    expect(result.task.blockedFromStatus).toBe('WORKING');
+  });
+});

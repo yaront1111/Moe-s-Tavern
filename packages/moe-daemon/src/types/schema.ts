@@ -64,6 +64,13 @@ export interface TaskSizingSettings {
   warnDistinctFiles?: number;  // default: 5
   maxDistinctFiles?: number;   // default: 10
   /**
+   * Advisory ceiling on tasks per epic, checked at create_task. Past it the
+   * creation still succeeds but the response carries a re-slice warning —
+   * creation NEVER hard-fails (a full board must not wedge a rail-mandated
+   * spinoff). default: 40
+   */
+  maxTasksPerEpic?: number;
+  /**
    * CONTROL mode only: when true and NO governor is online, submit_plan
    * auto-blocks warn-zone plans (over warnSteps/warnDistinctFiles but under
    * the hard caps) back to PLANNING with "split the task" concerns, reusing
@@ -461,9 +468,20 @@ export interface PendingPlanCritique {
   requestedAt: string;
 }
 
+/**
+ * Category vocabulary for governor plan-critique `block` verdicts, so
+ * open-ended critiques ("add more evidence rows") become countable. A block
+ * that arrives without one (old governors) is stored as 'uncategorized' and
+ * warned about — never rejected, for rollout compatibility.
+ */
+export const PLAN_CRITIQUE_CATEGORIES = ['size', 'correctness', 'rails', 'dependency'] as const;
+export type PlanCritiqueCategory = typeof PLAN_CRITIQUE_CATEGORIES[number];
+
 export interface PlanCritiqueResult {
   verdict: 'pass' | 'block';
   concerns?: string[];
+  /** See PLAN_CRITIQUE_CATEGORIES; 'uncategorized' = block verdict from a governor that sent none. */
+  category?: PlanCritiqueCategory | 'uncategorized';
   reviewedBy: string;
   reviewedAt: string;
 }
@@ -609,8 +627,22 @@ export interface Task {
    * `moe.request_replan` when work is shipped back to PLANNING.
    */
   priorAttempt?: PriorAttempt;
-  createdBy: 'HUMAN' | 'WORKER';
+  /**
+   * Who filed the task. Beyond the original HUMAN/WORKER pair, create_task
+   * resolves the caller's team role (workerId param) so agent-created rows are
+   * attributable per role. Additive widening — old records stay valid.
+   */
+  createdBy: 'HUMAN' | 'WORKER' | 'ARCHITECT' | 'QA' | 'GOVERNOR';
   parentTaskId: string | null;
+  /**
+   * Declared prerequisites (task ids). Gates WORKING-status claims ONLY:
+   * claim_next_task/wait_for_task skip a WORKING candidate until every listed
+   * task is DONE/ARCHIVED (missing/deleted ids count as satisfied). Planning
+   * and review claims are unaffected. Edited via moe.set_task_dependencies
+   * (architect/governor escape hatch) so a mis-declared dep can never
+   * permanently stick a row.
+   */
+  dependsOn?: string[];
   priority: TaskPriority;
   order: number;
   createdAt: string;
@@ -623,6 +655,12 @@ export interface Task {
   reviewCompletedAt?: string;
   /** What QA verified at approval (commands re-run, DoD items checked) — set by qa_approve. */
   reviewSummary?: string;
+  /**
+   * The worker's own account of what was delivered — the `summary` param of
+   * moe.complete_task, persisted (it used to be accepted and discarded).
+   * Surfaced to QA and to dependent tasks via get_context's epicSiblings.
+   */
+  completionSummary?: string;
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
   contextFetchedBy?: string[];
@@ -714,6 +752,16 @@ export interface Task {
    * or unblock_worker { resolveBlocks: true }).
    */
   blockedResourceId?: string | null;
+  /**
+   * Task ids this block is waiting on — the structured form of "BUILD-ORDER
+   * BLOCK on task-X" free text. Written by report_blocked (explicit param
+   * unioned with ids auto-parsed out of `reason`; existing ids only, deduped,
+   * capped). When every listed task is DONE/ARCHIVED the daemon auto-unblocks
+   * the task (status → blockedFromStatus) — event-driven on the prerequisite's
+   * DONE/ARCHIVED transition, with a sweep backstop for pre-existing rows.
+   * Missing/deleted ids count as satisfied.
+   */
+  blockedOnTaskIds?: string[] | null;
   /** Status to restore when the block clears. Set on the WORKING/PLANNING/REVIEW → BLOCKED flip. */
   blockedFromStatus?: TaskStatus | null;
   /** ISO timestamp of the BLOCKED flip. Cleared when the block is resolved (not on a seat-only unblock). */
@@ -842,6 +890,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'TASK_BLOCK_PARKED',
   'TASK_COMMIT_RECORDED',
   'TASK_FILES_DECLARED',
+  'TASK_DEPENDENCIES_SET',
   'RESOURCE_ACQUIRED',
   'RESOURCE_QUEUED',
   'RESOURCE_RELEASED',

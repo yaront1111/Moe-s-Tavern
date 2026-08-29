@@ -83,6 +83,19 @@ describe('validateSettingsUpdate — wrapper landing settings', () => {
     expect(() => validateSettingsUpdate(project(), { parkUnassignedBlocked: true } as never)).toThrow('parkUnassignedBlocked');
     expect(() => validateSettingsUpdate(project(), { recoverOrphanBaselines: true } as never)).toThrow('recoverOrphanBaselines');
   });
+
+  it('accepts taskSizing.maxTasksPerEpic as a bounded integer and rejects garbage', () => {
+    const next = validateSettingsUpdate(project(), { taskSizing: { maxTasksPerEpic: 25 } });
+    expect(next.taskSizing?.maxTasksPerEpic).toBe(25);
+    // Merges with the stored taskSizing block instead of replacing it.
+    const stored = project({ taskSizing: { warnSteps: 6 } });
+    const merged = validateSettingsUpdate(stored, { taskSizing: { maxTasksPerEpic: 30 } });
+    expect(merged.taskSizing).toEqual({ warnSteps: 6, maxTasksPerEpic: 30 });
+
+    expect(() => validateSettingsUpdate(project(), { taskSizing: { maxTasksPerEpic: 0 } })).toThrow('maxTasksPerEpic');
+    expect(() => validateSettingsUpdate(project(), { taskSizing: { maxTasksPerEpic: 1001 } })).toThrow('maxTasksPerEpic');
+    expect(() => validateSettingsUpdate(project(), { taskSizing: { maxTasksPerEpic: 'lots' } as never })).toThrow('maxTasksPerEpic');
+  });
 });
 
 describe('trimCommits', () => {

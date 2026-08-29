@@ -61,8 +61,13 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // could fake a resource wait and exempt the task from the blocked-timeout park.
   'blockedReason',
   'blockedResourceId',
+  'blockedOnTaskIds',
   'blockedFromStatus',
   'blockedAt',
+  // Dependency declarations are owned by create_task / moe.set_task_dependencies
+  // — a full-task board echo carrying a stale array must not clobber a newer
+  // set_task_dependencies edit.
+  'dependsOn',
   // Commit ledger + attribution evidence are owned by moe.record_commit /
   // moe.declare_files / complete_task / qa_approve. A full-task board echo
   // must not clobber them — a wiped ledger reads as "never committed".
@@ -75,6 +80,7 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'filesModified',
   'verification',
   'reviewSummary',
+  'completionSummary',
 ]);
 
 export type PluginMessage =
@@ -352,6 +358,7 @@ export class MoeWebSocketServer {
                       ...safeUpdates,
                       blockedReason: null,
                       blockedResourceId: null,
+                      blockedOnTaskIds: null,
                       blockedFromStatus: null,
                       blockedAt: null,
                       ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),

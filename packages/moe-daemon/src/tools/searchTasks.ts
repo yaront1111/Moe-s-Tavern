@@ -10,6 +10,7 @@ import {
   taskSummary,
   type TaskDetailMode,
 } from '../util/taskPayload.js';
+import { unmetDependsOn } from '../state/dependencyUnblock.js';
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const MIN_SEARCH_LIMIT = 1;
@@ -163,6 +164,7 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
           : results.map(task => taskSummary(task, {
               includeDescriptionPreview: true,
               maxDescriptionChars,
+              dependsOnUnmet: unmetDependsOn(state, task).length,
             })),
         totalMatches,
         query: queryValue,
