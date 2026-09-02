@@ -359,3 +359,38 @@ describe('utils', () => {
     });
   });
 });
+
+describe('injectWorkerId: tools where workerId is a filter', () => {
+  // Regression, 2026-09-02: `get_activity_log { taskId }` from a governor seat
+  // returned 0 events while 12 matched, because the proxy injected
+  // workerId: "governor-..." and the daemon ANDs taskId with workerId. A task
+  // audit came back empty and looked authoritative — a wrong answer, not an error.
+  it('does NOT inject into moe_get_activity_log, whose workerId is a query filter', () => {
+    const msg = {
+      method: 'tools/call',
+      params: { name: 'moe_get_activity_log', arguments: { taskId: 'task-1' } },
+    };
+    const mutated = injectWorkerId(msg, 'governor-1');
+    expect(mutated).toBe(false);
+    expect(msg.params.arguments).toEqual({ taskId: 'task-1' });
+  });
+
+  it('still injects into an ordinary tool that omits workerId', () => {
+    const msg = {
+      method: 'tools/call',
+      params: { name: 'moe_complete_step', arguments: { taskId: 'task-1' } },
+    };
+    const mutated = injectWorkerId(msg, 'worker-1');
+    expect(mutated).toBe(true);
+    expect((msg.params.arguments as Record<string, unknown>).workerId).toBe('worker-1');
+  });
+
+  it('still respects an explicit workerId on a filter tool', () => {
+    const msg = {
+      method: 'tools/call',
+      params: { name: 'moe_get_activity_log', arguments: { workerId: 'worker-9' } },
+    };
+    expect(injectWorkerId(msg, 'governor-1')).toBe(false);
+    expect((msg.params.arguments as Record<string, unknown>).workerId).toBe('worker-9');
+  });
+});

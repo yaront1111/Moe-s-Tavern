@@ -136,8 +136,24 @@ export function isValidJson(str: string): boolean {
 }
 
 /**
+ * Tools whose `workerId` argument is a FILTER, not the caller's identity.
+ *
+ * Injecting the seat's own id into these silently narrows the query to the
+ * caller and returns a confident WRONG answer rather than an error. Measured
+ * 2026-09-02: `get_activity_log { taskId }` from a governor seat returned 0
+ * events while 12 matched the task, because the proxy had added
+ * `workerId: "governor-..."` and the daemon ANDs the two filters. A task audit
+ * came back empty and looked authoritative.
+ */
+const WORKER_ID_IS_A_FILTER = new Set([
+  'moe_get_activity_log',
+  'get_activity_log',
+]);
+
+/**
  * Inject MOE_WORKER_ID into tools/call arguments when the caller omits workerId.
- * Only runs for MCP tools/call requests — never touches initialize/tools/list/ping.
+ * Only runs for MCP tools/call requests — never touches initialize/tools/list/ping,
+ * and never touches a tool that uses `workerId` as a query filter.
  * Returns true if the parsed object was mutated. Never throws.
  */
 export function injectWorkerId(
@@ -151,6 +167,8 @@ export function injectWorkerId(
     if (msg.method !== 'tools/call') return false;
     const params = msg.params as Record<string, unknown> | undefined;
     if (!params || typeof params !== 'object') return false;
+    const toolName = typeof params.name === 'string' ? params.name : '';
+    if (WORKER_ID_IS_A_FILTER.has(toolName)) return false;
     const args = params.arguments as Record<string, unknown> | undefined;
     if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
     if (Object.prototype.hasOwnProperty.call(args, 'workerId')) return false;
