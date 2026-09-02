@@ -210,11 +210,14 @@ class ChatWaitSession {
       // Cursors have not advanced yet, so the trigger is normally re-read here;
       // appending it is the safety net for the case where MESSAGE_CREATED is
       // emitted before the JSONL append is visible to a re-read.
-      const drained = await collectChatBacklog(this.ctx.state, this.ctx.workerId, this.ctx.channelSet, this.ctx.sinceId);
+      const drained = await collectChatBacklog(
+        this.ctx.state, this.ctx.workerId, this.ctx.channelSet, this.ctx.sinceId, this.ctx.maxContentChars
+      );
       const burst = summarizeChatBurst(
         drained.messages,
         [...this.buffered, trigger],
-        { partialChannels: drained.partialChannels, scannedChannels: drained.scannedChannels }
+        { partialChannels: drained.partialChannels, scannedChannels: drained.scannedChannels },
+        this.ctx.maxContentChars
       );
       await this.settle(burst);
     } catch (error) {
@@ -224,7 +227,7 @@ class ChatWaitSession {
       await this.settle(summarizeChatBurst([], [trigger], {
         partialChannels: new Set(),
         scannedChannels: new Set(),
-      }));
+      }, this.ctx.maxContentChars));
     }
   }
 
@@ -232,7 +235,9 @@ class ChatWaitSession {
   private async drainOnEntry(): Promise<void> {
     let drained: ChatBurst | null = null;
     try {
-      drained = await collectChatBacklog(this.ctx.state, this.ctx.workerId, this.ctx.channelSet, this.ctx.sinceId);
+      drained = await collectChatBacklog(
+        this.ctx.state, this.ctx.workerId, this.ctx.channelSet, this.ctx.sinceId, this.ctx.maxContentChars
+      );
     } catch (error) {
       // Fall through to blocking rather than failing the tool.
       logger.warn({ workerId: this.ctx.workerId, error }, 'chat_wait entry drain failed; blocking for new messages');
@@ -250,7 +255,7 @@ class ChatWaitSession {
     const burst = summarizeChatBurst(scanned, this.buffered, {
       partialChannels: drained?.partialChannels ?? new Set(),
       scannedChannels: drained?.scannedChannels ?? new Set(),
-    });
+    }, this.ctx.maxContentChars);
     logger.info(
       { workerId: this.ctx.workerId, count: burst.messages.length, hasMore: burst.hasMore },
       'chat_wait returning backlog (messages arrived before wait — avoided lost wakeup)'

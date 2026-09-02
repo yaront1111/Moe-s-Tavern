@@ -7,7 +7,12 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
 import { logger } from './logger.js';
-import { countTruncatedMessages, truncateChatMessages } from './chatPayload.js';
+import {
+  DEFAULT_CHAT_CONTENT_CHARS,
+  capChatMessagesToResponseBudget,
+  countTruncatedMessages,
+  truncateChatMessages,
+} from './chatPayload.js';
 
 /** Messages scanned per channel in one drain. */
 export const PER_CHANNEL_SCAN_LIMIT = 50;
@@ -60,7 +65,8 @@ export interface BurstScope {
 export function summarizeChatBurst(
   scanned: ChatMessage[],
   offBus: ChatMessage[],
-  scope: BurstScope
+  scope: BurstScope,
+  maxContentChars: number = DEFAULT_CHAT_CONTENT_CHARS
 ): ChatBurst {
   const { partialChannels, scannedChannels } = scope;
   const scannedIds = new Set(scanned.map((message) => message.id));
@@ -81,8 +87,18 @@ export function summarizeChatBurst(
 
   // Keep the OLDEST slice, matching getMessages' forward-paging semantics: each
   // call advances the cursor, so repeated calls walk the backlog in order.
-  const messages = deduped.slice(0, MAX_BURST_MESSAGES);
-  const dropped = deduped.slice(MAX_BURST_MESSAGES);
+  //
+  // TWO ceilings, and the size one has to be applied HERE rather than when the
+  // response is shaped: cursorUpdates below are derived from `messages`, so
+  // trimming later would advance a cursor past a message the caller never
+  // received. The count cap alone did not bound the payload — 100 messages of
+  // governance prose overflowed the client's limit, the whole response was
+  // rejected, and the caller re-read the same window on every retry.
+  const counted = deduped.slice(0, MAX_BURST_MESSAGES);
+  const countDropped = deduped.slice(MAX_BURST_MESSAGES);
+  const capped = capChatMessagesToResponseBudget(counted, maxContentChars);
+  const messages = capped.delivered;
+  const dropped = [...capped.dropped, ...countDropped];
 
   const incomplete = new Set(partialChannels);
   for (const message of dropped) incomplete.add(message.channel);
@@ -133,11 +149,12 @@ export async function collectChatBacklog(
   state: StateManager,
   workerId: string,
   channelSet: Set<string> | null,
-  explicitSinceId?: string
+  explicitSinceId?: string,
+  maxContentChars: number = DEFAULT_CHAT_CONTENT_CHARS
 ): Promise<ChatBurst> {
   const channelIds = backlogChannelIds(state, workerId, channelSet, explicitSinceId);
   if (channelIds.length === 0) {
-    return summarizeChatBurst([], [], { partialChannels: new Set(), scannedChannels: new Set() });
+      return summarizeChatBurst([], [], { partialChannels: new Set(), scannedChannels: new Set() }, maxContentChars);
   }
 
   const worker = state.getWorker(workerId);
@@ -161,7 +178,7 @@ export async function collectChatBacklog(
     }
   }
 
-  return summarizeChatBurst(raw, [], { partialChannels, scannedChannels });
+  return summarizeChatBurst(raw, [], { partialChannels, scannedChannels }, maxContentChars);
 }
 
 /** Advance cursors / clear unread for messages actually being delivered. */

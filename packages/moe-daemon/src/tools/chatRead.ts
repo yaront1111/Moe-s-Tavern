@@ -7,6 +7,8 @@ import {
   DEFAULT_CHAT_CONTENT_CHARS,
   MAX_CHAT_CONTENT_CHARS,
   MAX_CHAT_LIMIT,
+  MAX_CHAT_RESPONSE_CHARS,
+  chatMessageResponseCost,
   truncateChatMessages,
 } from '../util/chatPayload.js';
 
@@ -89,6 +91,27 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         allChannelFetchedMessages = allMessages.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
         messages = allChannelFetchedMessages
           .slice(-limit);
+      }
+
+      // Bound the RESPONSE, not just each message. `maxContentChars` caps one
+      // message; without this a 200-message read still overflowed an MCP
+      // client's payload limit and the whole result was rejected — measured at
+      // ~68KB even with maxContentChars: 1, because metadata dominates. Trim
+      // the OLDEST of the window: this read already keeps the newest `limit`
+      // messages, and the cursor below points at the newest delivered one, so
+      // dropping from the front preserves both the semantics and the cursor.
+      // Applied BEFORE the cursor is derived, never after.
+      if (messages.length > 1) {
+        let used = 0;
+        let firstKept = 0;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          used += chatMessageResponseCost(messages[i], maxContentChars);
+          if (used > MAX_CHAT_RESPONSE_CHARS && i < messages.length - 1) {
+            firstKept = i + 1;
+            break;
+          }
+        }
+        if (firstKept > 0) messages = messages.slice(firstKept);
       }
 
       const cursor = messages.length > 0 ? messages[messages.length - 1].id : sinceId || null;
