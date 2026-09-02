@@ -33,6 +33,7 @@ import { generateId } from '../util/ids.js';
 import { sanitizeString } from '../util/sanitize.js';
 import { atomicWriteJson } from '../util/atomicWrite.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
+import { parseRawMentions } from '../util/mentionRouter.js';
 
 /** Increment unread count for a worker on a channel. */
 /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -156,16 +157,9 @@ export async function sendMessage(state: StateManager, opts: {
     throw new Error('Message content exceeds 10KB limit');
   }
 
-  // Parse raw @mentions from text content. Keep this pattern in sync with
-  // util/mentionRouter.ts so daemon-side parsing matches the router.
-  const rawMentions: string[] = [];
-  const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
-  let match: RegExpExecArray | null;
-  while ((match = mentionRegex.exec(content)) !== null) {
-    if (!rawMentions.includes(match[1])) {
-      rawMentions.push(match[1]);
-    }
-  }
+  // One parser, imported — this used to be a second copy of the router's regex
+  // kept in sync by comment, which is how the two drifted apart on quoting.
+  const rawMentions = parseRawMentions(content);
 
   // Compute routing targets via MentionRouter (expands @all, applies loop guards)
   let routingTargets: string[];

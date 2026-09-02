@@ -359,3 +359,39 @@ describe('MentionRouter', () => {
     });
   });
 });
+
+describe('mentions inside quoted spans', () => {
+  // Regression, 2026-09-02: a governor wrote "stop using `@all`" to END a
+  // broadcast loop and the daemon parsed the quoted token as a real group
+  // mention — the message announcing the loop routed to every seat and obliged
+  // all of them to reply, becoming another turn of it (msg-642f7e788e9e).
+  it('does not route a group token that only appears inside an inline code span', () => {
+    const router = new MentionRouter();
+    const ids = ['worker-a', 'worker-b'];
+    const parsed = router.parseMentions(
+      'Stop using `@all` in this channel; the Loop Guard does not throttle `@all`.',
+      ids
+    );
+    expect(parsed).toEqual([]);
+  });
+
+  it('still routes a real mention in the same message that quotes one', () => {
+    const router = new MentionRouter();
+    const ids = ['worker-a', 'worker-b'];
+    const parsed = router.parseMentions(
+      '@worker-a your read is right — and note `@all` is what caused it.',
+      ids
+    );
+    expect(parsed).toEqual(['worker-a']);
+  });
+
+  it('does not route mentions buried in a fenced code block', () => {
+    const router = new MentionRouter();
+    const ids = ['worker-a'];
+    const parsed = router.parseMentions(
+      'Example transcript:\n```\n@worker-a did the thing\n```\nNothing to action.',
+      ids
+    );
+    expect(parsed).toEqual([]);
+  });
+});

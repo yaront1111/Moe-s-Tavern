@@ -11,6 +11,29 @@ export interface RoutingResult {
   hopCount: number;    // current hop count for the channel
 }
 
+/**
+ * Blank out fenced code blocks and inline code spans. Mentions inside them are
+ * QUOTED, not addressed — see parseMentions for why this matters.
+ */
+export function stripQuotedSpans(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ');
+}
+
+/** The one mention pattern. chatStore imports this rather than re-declaring it. */
+export function parseRawMentions(content: string): string[] {
+  if (!content) return [];
+  const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  const quoteless = stripQuotedSpans(content);
+  while ((m = mentionRegex.exec(quoteless)) !== null) {
+    if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
 export class MentionRouter {
   private hopCounts = new Map<string, number>();
   private pausedChannels = new Set<string>();
@@ -27,13 +50,22 @@ export class MentionRouter {
   parseMentions(content: string, knownWorkerIds: string[], workers?: Worker[], teams?: Team[]): string[] {
     if (!content) return [];
 
+    // Mentions inside code spans/blocks are QUOTED, not addressed. Without this
+    // you cannot discuss a group token without invoking it: a governor writing
+    // "stop using `@all`" broadcast to every seat and obliged all of them to
+    // reply — the message announcing the loop became another turn of it
+    // (observed 2026-09-02, msg-642f7e788e9e parsed mentions ['worker-...','all']
+    // from prose that only ever quoted the token). Strip fenced blocks first,
+    // then inline spans, so the offsets of what remains stay independent.
+    const quoteless = stripQuotedSpans(content);
+
     // Match @<id> only when the @ is not preceded by another @ or a word char.
     // This prevents emails (yaron@worker-alice.com) and "@@" injections from
     // being parsed as mentions, while still allowing punctuation/whitespace prefixes.
     const mentionRegex = /(?<![\w@])@(\w[\w-]*)/g;
     const rawMentions: string[] = [];
     let match: RegExpExecArray | null;
-    while ((match = mentionRegex.exec(content)) !== null) {
+    while ((match = mentionRegex.exec(quoteless)) !== null) {
       rawMentions.push(match[1]);
     }
 
