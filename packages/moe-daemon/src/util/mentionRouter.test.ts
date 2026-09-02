@@ -435,3 +435,34 @@ describe('group tokens only address from an addressing position', () => {
     ).toEqual(['worker-a']);
   });
 });
+
+describe('a quoted broadcast does not re-fire', () => {
+  const ids = ['worker-a', 'worker-b'];
+
+  // worker-17a62b7e measured this against the BUILT bundle after the addressing
+  // -position fix shipped: '>' was skipped alongside spaces and tabs, so citing
+  // an earlier broadcast in order to discuss it broadcast again — the same
+  // re-arm shape the guard exists to stop.
+  it('does not address from behind a markdown quote marker', () => {
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('> @all daemon restart incoming, checkpoint now.', ids)
+    ).toEqual([]);
+  });
+
+  it('does not address from a quote marker on a later line', () => {
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('Quoting the thread:\n> @all re-anchor on HEAD', ids)
+    ).toEqual([]);
+  });
+
+  it('CONTROL: the same body without the quote marker still broadcasts', () => {
+    // Proves the two arms above fail for the quote marker and not because the
+    // fixture is incapable of routing at all.
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('@all daemon restart incoming, checkpoint now.', ids)
+    ).toEqual(expect.arrayContaining(['worker-a', 'worker-b']));
+  });
+});

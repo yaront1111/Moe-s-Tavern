@@ -26,11 +26,19 @@ export function isGroupToken(token: string): boolean {
  * ("@qa @architects here is the thing"), and only the first would qualify under
  * a strict start-of-line rule. Prose before the token ("and no @all, per your
  * ruling") disqualifies it, which is the case this exists to stop.
+ *
+ * A markdown quote marker ('>') is NOT skipped, and that is the point: quoting a
+ * broadcast in order to DISCUSS it must not re-fire it, which is the same re-arm
+ * shape this guard exists to stop. Citing a message is the normal way to talk
+ * about one, and `replyTo` already exists for genuine threading, so nothing
+ * legitimate needs a group token to address from behind a quote marker.
+ * (worker-17a62b7e measured this against the built bundle: "> @all restart
+ * incoming" still routed to every seat.)
  */
 export function inAddressingPrefix(text: string, atIndex: number): boolean {
   let i = atIndex - 1;
   for (;;) {
-    while (i >= 0 && (text[i] === ' ' || text[i] === '\t' || text[i] === '>')) i--;
+    while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) i--;
     if (i < 0 || text[i] === '\n') return true;
     // Walk back over a preceding @token and keep going; anything else is prose.
     let j = i;
