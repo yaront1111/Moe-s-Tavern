@@ -116,9 +116,8 @@ export interface ProjectSettings {
   /** Plan-size warn/reject thresholds for moe.submit_plan; see TaskSizingSettings. */
   taskSizing?: TaskSizingSettings;
   /**
-   * Soft wall-clock milliseconds budgeted per plan step. moe.submit_plan
-   * multiplies this by the step count to seed task.budget.wallClockMs when the
-   * architect supplies no explicit budget. default: 900000 (15 min/step).
+   * DEPRECATED and ignored. Seeded the removed task time-budget feature.
+   * Still accepted so existing project.json files that set it keep loading.
    */
   pacePerStepMs?: number;
   /**
@@ -447,18 +446,6 @@ export interface TaskMetrics {
 }
 
 /**
- * Soft budget on first-claim → DONE wall-clock duration. Daemon posts a
- * one-shot warning at 80% and an escalation at 100% to `#governors`.
- *
- * // TODO: token budget once Agent SDK is wired
- */
-export interface TaskBudget {
-  wallClockMs?: number;
-  warnedAt?: string;
-  escalatedAt?: string;
-}
-
-/**
  * Plan critique state. Governors call `moe.submit_plan_critique` after a
  * plan is submitted to flag concerns BEFORE human approval. A `block`
  * verdict flips the task back to PLANNING; `pass` is informational.
@@ -710,8 +697,14 @@ export interface Task {
   lastCommitOutcome?: TaskLastCommitOutcome;
   /** Auto-populated lifecycle metrics; see TaskMetrics. */
   metrics?: TaskMetrics;
-  /** Soft wall-clock budget on first-claim → DONE; see TaskBudget. */
-  budget?: TaskBudget;
+  /**
+   * DEPRECATED and ignored. The task time-budget feature (80%/100% warn and
+   * escalate) was removed: its clock ran first-claim → now in calendar time,
+   * so it counted BLOCKED time and fired a false "escalate or wrap up" at any
+   * transition out of a long park. Typed as unknown so legacy on-disk task
+   * JSON round-trips without reintroducing a contract.
+   */
+  budget?: unknown;
   /** Set when submit_plan posts a critique request to governors. */
   pendingPlanCritique?: PendingPlanCritique;
   /** Result of a governor's plan critique; informational unless verdict='block'. */
@@ -745,6 +738,15 @@ export interface Task {
    * the worker's seat and leaves this intact on the still-BLOCKED task.
    */
   blockedReason?: string | null;
+  /**
+   * The last `blockedReason` this task carried, retained when the block is
+   * cleared. `blockedReason` is nulled on every exit from BLOCKED so a later
+   * grant or sweep cannot act on stale block state — but that also destroyed
+   * the only record of WHY the task was parked, forcing every unblocker to
+   * hand-copy the prose into `reopenReason` to preserve it. The operational
+   * fields still clear; this keeps the evidence.
+   */
+  priorBlockedReason?: string | null;
   /**
    * Shared-resource id the task is queued on while BLOCKED. When the lease is
    * granted the daemon auto-unblocks the task (status → blockedFromStatus).

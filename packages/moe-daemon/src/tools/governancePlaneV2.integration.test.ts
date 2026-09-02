@@ -26,7 +26,6 @@ import type { Epic, HandoffNote, Project, ProjectSettings, Task } from '../types
 vi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));
 const mockedSignature = vi.mocked(computeDiskStateSignature);
 
-const PACE_PER_STEP_MS = 60_000;
 const EXISTING_FILE = 'src/existing.ts';
 const MISSING_FILE = 'src/created-by-this-task.ts';
 
@@ -95,7 +94,7 @@ describe('governance plane v2 — cross-feature composition', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  describe('submit_plan: path gate + newFiles exemption + budget seeding + size warning', () => {
+  describe('submit_plan: path gate + newFiles exemption + size warning', () => {
     /** Three steps: two distinct files, so both warn thresholds are crossed but neither max is. */
     function planSteps(withNewFiles: boolean) {
       return [
@@ -118,7 +117,6 @@ describe('governance plane v2 — cross-feature composition', () => {
 
     beforeEach(async () => {
       setupProject({
-        pacePerStepMs: PACE_PER_STEP_MS,
         // Warn on this plan (3 steps / 2 files) without rejecting it.
         taskSizing: { warnSteps: 2, maxSteps: 12, warnDistinctFiles: 1, maxDistinctFiles: 10 },
       });
@@ -135,17 +133,16 @@ describe('governance plane v2 — cross-feature composition', () => {
         new RegExp(`${MISSING_FILE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*newFiles`)
       );
 
-      // The rejection must be total: no plan, no budget, no size warnings.
+      // The rejection must be total: no plan, no size warnings.
       const task = state.getTask('task-1')!;
       expect(task.status).toBe('PLANNING');
       expect(task.implementationPlan).toEqual([]);
-      expect(task.budget).toBeUndefined();
       expect(task.planSizeWarnings).toBeUndefined();
       // The path that DOES exist is never reported as missing.
       expect(fs.existsSync(path.join(testDir, EXISTING_FILE))).toBe(true);
     });
 
-    it('accepts the corrected resubmit and composes newFiles, seeded budget and size warning in one write', async () => {
+    it('accepts the corrected resubmit and composes newFiles and size warning in one write', async () => {
       await expect(submit(false)).rejects.toThrow(/newFiles/);
 
       const result = await submit(true);
@@ -154,27 +151,14 @@ describe('governance plane v2 — cross-feature composition', () => {
       expect(result.status).toBe('WORKING'); // TURBO auto-approval
       expect(result.stepCount).toBe(3);
       expect(result.newFileCount).toBe(1);
-      // Budget seeding: no explicit budget was passed, so stepCount * pace.
-      expect(result.budget).toBe(3 * PACE_PER_STEP_MS);
       expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('steps')]));
 
       const task = state.getTask('task-1')!;
       // newFiles survives the plan sanitizer's allowlist.
       expect(task.implementationPlan[1].newFiles).toEqual([MISSING_FILE]);
       expect(task.implementationPlan[0].newFiles ?? []).toEqual([]);
-      expect(task.budget?.wallClockMs).toBe(3 * PACE_PER_STEP_MS);
       expect(task.planSizeWarnings?.length).toBeGreaterThan(0);
       expect(task.status).toBe('WORKING');
-    });
-
-    it('does not clobber an explicit budget with the seeded one', async () => {
-      const result = await submitPlanTool(state).handler(
-        { taskId: 'task-1', workerId: 'architect-1', steps: planSteps(true), budget: { wallClockMs: 12_345 } },
-        state
-      ) as Record<string, unknown>;
-
-      expect(result.budget).toBe(12_345);
-      expect(state.getTask('task-1')!.budget?.wallClockMs).toBe(12_345);
     });
   });
 

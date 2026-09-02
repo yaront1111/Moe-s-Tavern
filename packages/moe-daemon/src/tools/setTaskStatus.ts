@@ -166,6 +166,11 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         updates.assignedWorkerId = task.assignedWorkerId;
         if (params.reason) updates.blockedReason = params.reason;
       } else if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
+        // Archive the prose before clearing it. Only the OPERATIONAL fields
+        // below can be acted on by a later grant/sweep; the reason is inert
+        // text, and nulling it outright destroyed the only record of why the
+        // task was parked.
+        if (task.blockedReason) updates.priorBlockedReason = task.blockedReason;
         updates.blockedReason = null;
         updates.blockedResourceId = null;
         updates.blockedOnTaskIds = null;
@@ -189,6 +194,18 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
 
       if (params.reason) {
         updates.reopenReason = params.reason;
+      }
+
+      // A human moving a task that is parked for human review IS the review
+      // that unparks it — the same authority release_task already exercises.
+      // Without this the flag survives the move and claim_next_task/
+      // wait_for_task keep fencing the row out of the QA queue while the board
+      // shows it as a normal REVIEW task: set_task_status reports success, the
+      // column changes, and every claim is refused with no visible cause.
+      // The reopen path below only clears it for WORKING/BACKLOG/PLANNING, so
+      // the natural "put it back in the QA queue" move (→ REVIEW) missed it.
+      if (task.needsHumanReview === true) {
+        updates.needsHumanReview = false;
       }
 
       // Only increment reopen count when actually reopening a completed/reviewed task

@@ -199,6 +199,8 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'commitHooks',
     'attribution',
     'taskSizing',
+    // Accepted and ignored: the task time-budget feature was removed. Kept in
+    // the allowlist so existing project.json files carrying it still load.
     'pacePerStepMs',
     'qualityGate',
     'qualityGateScope',
@@ -215,10 +217,6 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   if (input.speedModeDelayMs !== undefined) {
     next.speedModeDelayMs = validateIntegerValue(input.speedModeDelayMs, 'speedModeDelayMs', 0, 60000);
-  }
-  if (input.pacePerStepMs !== undefined) {
-    // Avoid near-zero alert timing and typo-sized values that disable alerts.
-    next.pacePerStepMs = validateIntegerValue(input.pacePerStepMs, 'pacePerStepMs', 1000, 86400000);
   }
   if (input.autoCreateBranch !== undefined) {
     next.autoCreateBranch = validateBooleanValue(input.autoCreateBranch, 'autoCreateBranch');

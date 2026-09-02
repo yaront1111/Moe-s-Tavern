@@ -2,7 +2,6 @@
 // 1. typed affectedFiles + claim-time collision warnings
 // 2. handoff notes on release_task + get_handoff_history
 // 3. task metrics auto-population + list_metrics aggregate
-// 4. task budgets with warn/escalate thresholds
 // 5. plan critique tool with block→PLANNING flip
 // 6. failed-DoD-item tracker auto-flipping on same-item-twice
 
@@ -21,7 +20,6 @@ import { qaRejectTool } from './qaReject.js';
 import { releaseTaskTool } from './releaseTask.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
-import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import type { Project, Epic, Task } from '../types/schema.js';
 
@@ -349,67 +347,6 @@ describe('governance control-plane features', () => {
         totalToolCalls: 0,
       });
       expect(result.tasks).toEqual([]);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Feature 4: task.budget — warn at 80%, escalate at 100%, idempotent
-  // ---------------------------------------------------------------------------
-  describe('task budget', () => {
-    it('warns at 80% and escalates at 100%, each only once', async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-05-15T00:00:00.000Z'));
-      try {
-        setupMoe('TURBO');
-        writeEpic();
-        writeTask({
-          id: 'task-b',
-          status: 'WORKING',
-          assignedWorkerId: 'worker-a',
-          contextFetchedBy: ['worker-a'],
-          metrics: { firstClaimAt: '2026-05-15T00:00:00.000Z' },
-          budget: { wallClockMs: 10_000 },
-          implementationPlan: [
-            { stepId: 'step-1', description: 's1', status: 'IN_PROGRESS', affectedFiles: [] },
-            { stepId: 'step-2', description: 's2', status: 'PENDING', affectedFiles: [] },
-          ],
-        });
-        await state.load();
-
-        const completeStep = completeStepTool(state);
-
-        // At 8s elapsed (80% of 10s) → warnedAt populated
-        vi.setSystemTime(new Date('2026-05-15T00:00:08.000Z'));
-        await completeStep.handler({ taskId: 'task-b', stepId: 'step-1', workerId: 'worker-a' }, state);
-        let b = state.getTask('task-b')!.budget!;
-        expect(b.warnedAt).toBeDefined();
-        expect(b.escalatedAt).toBeUndefined();
-        const firstWarnedAt = b.warnedAt;
-
-        // Re-invoking before 100% does NOT change warnedAt (idempotent)
-        const startStep = startStepTool(state);
-        vi.setSystemTime(new Date('2026-05-15T00:00:09.000Z'));
-        await startStep.handler({ taskId: 'task-b', stepId: 'step-2', workerId: 'worker-a' }, state);
-        b = state.getTask('task-b')!.budget!;
-        expect(b.warnedAt).toBe(firstWarnedAt);
-        expect(b.escalatedAt).toBeUndefined();
-
-        // Past 100% → escalatedAt populated
-        vi.setSystemTime(new Date('2026-05-15T00:00:11.000Z'));
-        await completeStep.handler({ taskId: 'task-b', stepId: 'step-2', workerId: 'worker-a' }, state);
-        b = state.getTask('task-b')!.budget!;
-        expect(b.warnedAt).toBe(firstWarnedAt); // unchanged
-        expect(b.escalatedAt).toBeDefined();
-        const firstEscalatedAt = b.escalatedAt;
-
-        // set_task_budget on top of escalated task does not re-mutate the marks
-        const setBudget = setTaskBudgetTool(state);
-        await setBudget.handler({ taskId: 'task-b', wallClockMs: 10_000 }, state);
-        b = state.getTask('task-b')!.budget!;
-        expect(b.escalatedAt).toBe(firstEscalatedAt);
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 

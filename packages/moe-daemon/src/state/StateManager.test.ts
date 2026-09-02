@@ -506,22 +506,6 @@ describe('StateManager', () => {
       await expect(stateManager.updateSettings({ unexpected: true } as never)).rejects.toThrow('unexpected');
     });
 
-    it.each([0, -1, 999, 900000.5, 86400001])(
-      'rejects invalid pacePerStepMs value %s',
-      async (pacePerStepMs) => {
-        await expect(stateManager.updateSettings({ pacePerStepMs })).rejects.toThrow('pacePerStepMs');
-      },
-    );
-
-    it('accepts and preserves pacePerStepMs across unrelated updates', async () => {
-      const updated = await stateManager.updateSettings({ pacePerStepMs: 600000 });
-      expect(updated.settings.pacePerStepMs).toBe(600000);
-
-      const preserved = await stateManager.updateSettings({ agentCommand: 'codex' });
-      expect(preserved.settings.pacePerStepMs).toBe(600000);
-      const stored = JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf8')) as Project;
-      expect(stored.settings.pacePerStepMs).toBe(600000);
-    });
 
     it('accepts valid partial settings and preserves unspecified settings', async () => {
       const updated = await stateManager.updateSettings({

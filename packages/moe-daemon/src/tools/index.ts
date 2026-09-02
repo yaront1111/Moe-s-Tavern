@@ -52,7 +52,6 @@ import { chatCreateChannelTool } from './chatCreateChannel.js';
 import { getHandoffHistoryTool } from './getHandoffHistory.js';
 import { listMetricsTool } from './listMetrics.js';
 import { getActivityLogTool } from './getActivityLog.js';
-import { setTaskBudgetTool } from './setTaskBudget.js';
 import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import { amendPlanStepTool } from './amendPlanStep.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
@@ -134,7 +133,6 @@ export function getTools(state: StateManager): ToolDefinition[] {
     getHandoffHistoryTool(state),
     listMetricsTool(state),
     getActivityLogTool(state),
-    setTaskBudgetTool(state),
     submitPlanCritiqueTool(state),
     amendPlanStepTool(state),
     deregisterWorkerTool(state),

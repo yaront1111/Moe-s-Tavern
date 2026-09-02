@@ -3,7 +3,6 @@ import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
-import { maybeApplyBudgetWarnings } from '../util/budget.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -58,9 +57,6 @@ export function startStepTool(_state: StateManager): ToolDefinition {
 
       // Update worker liveness/status to CODING without requiring a worker record to exist.
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
-
-      // Best-effort budget check — never blocks step start.
-      await maybeApplyBudgetWarnings(state, updatedTask).catch(() => {});
 
       // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
       // on the final step. Both are advisory.

@@ -10,18 +10,6 @@ import { assessPlanSize } from '../util/planSize.js';
 
 /** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
 export const MAX_STEP_DESCRIPTION_CHARS = 10000;
-export const PACE_PER_STEP_MS_DEFAULT = 15 * 60 * 1000;
-
-function resolvePacePerStepMs(settings: ProjectSettings): number {
-  const configured = settings.pacePerStepMs;
-  return typeof configured === 'number'
-    && Number.isFinite(configured)
-    && Number.isInteger(configured)
-    && configured > 0
-    ? configured
-    : PACE_PER_STEP_MS_DEFAULT;
-}
-
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
 
@@ -151,14 +139,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
           },
           additionalProperties: false
-        },
-        budget: {
-          type: 'object',
-          description: 'Soft wall-clock budget (first-claim → DONE). Daemon warns at 80% and escalates at 100% in #governors.',
-          properties: {
-            wallClockMs: { type: 'number', description: 'Soft cap in milliseconds; must be > 0' }
-          },
-          additionalProperties: false
         }
       },
       required: ['taskId', 'steps'],
@@ -175,7 +155,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           risks?: string;
           keyFiles?: string[];
         };
-        budget?: { wallClockMs?: number };
       };
 
       const task = state.getTask(params.taskId);
@@ -394,26 +373,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
         };
       }
-      if (params.budget && typeof params.budget.wallClockMs === 'number') {
-        if (!Number.isFinite(params.budget.wallClockMs) || params.budget.wallClockMs <= 0) {
-          throw invalidInput('budget.wallClockMs', 'must be a positive number of milliseconds');
-        }
-        // Preserve existing warn/escalate marks if architect resubmits a plan.
-        updatePayload.budget = {
-          ...(task.budget ?? {}),
-          wallClockMs: params.budget.wallClockMs,
-        };
-      } else if (!(typeof task.budget?.wallClockMs === 'number'
-        && Number.isFinite(task.budget.wallClockMs)
-        && task.budget.wallClockMs > 0)) {
-        // A positive existing budget wins so an architect resubmit cannot
-        // clobber a human's moe.set_task_budget override.
-        updatePayload.budget = {
-          ...(task.budget ?? {}),
-          wallClockMs: implementationPlan.length * resolvePacePerStepMs(project.settings),
-        };
-      }
-
       await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED');
       // Use the captured assignee because updateTask clears assignedWorkerId on
       // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
@@ -562,9 +521,6 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         stepCount: implementationPlan.length,
         distinctFileCount: planSize.distinctFileCount,
         newFileCount: exemptKeys.size,
-        budget: (updatePayload.budget as { wallClockMs?: number } | undefined)?.wallClockMs
-          ?? task.budget?.wallClockMs
-          ?? null,
         ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),
         message,
         nextAction

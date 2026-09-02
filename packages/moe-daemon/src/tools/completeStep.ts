@@ -3,7 +3,6 @@ import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
-import { maybeApplyBudgetWarnings } from '../util/budget.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
@@ -98,9 +97,6 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         'STEP_COMPLETED'
       );
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
-
-      // Best-effort budget check — never blocks step completion.
-      await maybeApplyBudgetWarnings(state, updatedTask).catch(() => {});
 
       // Report the step as the worker was actually instructed to do it: an
       // amended step reads as plan drift if we echo the superseded text.

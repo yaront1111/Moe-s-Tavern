@@ -8,7 +8,6 @@ import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { assertNoLiveLease, claimLostRace } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
-import { maybeApplyBudgetWarnings } from '../util/budget.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import {
   healTeamMembership,
@@ -359,11 +358,6 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           task = await state.updateTask(task.id, { metrics: nextMetrics });
         } catch { /* never block claim */ }
       }
-
-      // Budget warn/escalate checks run on every WORKING-path tool call so
-      // crossings get caught the next time the worker touches Moe — no separate
-      // scheduler needed.
-      task = await maybeApplyBudgetWarnings(state, task);
 
       // Compute file-collision warnings against every OTHER WORKING task.
       // Advisory only — never blocks the claim. We post a heads-up to

@@ -117,5 +117,59 @@ describe('moe.set_task_status', () => {
       expect(task.blockedFromStatus).toBeNull();
     });
   });
+
+  // --------------------------------------------------------------------------
+  // Regression: unblocking must not destroy the reason the task was parked for.
+  // --------------------------------------------------------------------------
+  it('archives blockedReason into priorBlockedReason when leaving BLOCKED', async () => {
+    await h.state.updateTask('task-1', {
+      status: 'BLOCKED',
+      blockedFromStatus: 'PLANNING',
+      blockedReason: 'waiting on an external prerequisite',
+      blockedOnTaskIds: ['task-9'],
+      blockedAt: '2026-09-01T00:00:00.000Z',
+    });
+
+    const tool = setTaskStatusTool(h.state);
+    await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+
+    const task = h.state.getTask('task-1')!;
+    // The prose survives...
+    expect(task.priorBlockedReason).toBe('waiting on an external prerequisite');
+    // ...while every field a later grant/sweep could act on is still cleared.
+    expect(task.blockedReason).toBeNull();
+    expect(task.blockedOnTaskIds).toBeNull();
+    expect(task.blockedFromStatus).toBeNull();
+    expect(task.blockedAt).toBeNull();
+  });
+
+  // --------------------------------------------------------------------------
+  // Regression: a task parked with needsHumanReview stayed unclaimable after a
+  // human moved it, because only WORKING/BACKLOG/PLANNING cleared the latch —
+  // so the natural "put it back in the QA queue" move (-> REVIEW) left the row
+  // fenced out of claim_next_task while the board showed it as normal REVIEW.
+  // --------------------------------------------------------------------------
+  it('clears needsHumanReview when a human moves the parked task back to REVIEW', async () => {
+    await h.state.updateTask('task-1', { status: 'REVIEW', needsHumanReview: true });
+
+    const tool = setTaskStatusTool(h.state);
+    await tool.handler({ taskId: 'task-1', status: 'REVIEW' }, h.state);
+
+    expect(h.state.getTask('task-1')!.needsHumanReview).toBe(false);
+  });
+
+  it('clears needsHumanReview when a human reopens the parked task to WORKING', async () => {
+    await h.state.updateTask('task-1', { status: 'REVIEW', needsHumanReview: true });
+
+    const tool = setTaskStatusTool(h.state);
+    await tool.handler({ taskId: 'task-1', status: 'WORKING', reason: 'reopened' }, h.state);
+
+    // The reopen path strips the latch entirely rather than setting it false.
+    // Both representations unfence the row: claim_next_task and wait_for_task
+    // gate on `needsHumanReview === true`, so what matters is only that it is
+    // no longer true. Asserted against that guard, not against a shape.
+    expect(h.state.getTask('task-1')!.needsHumanReview).toBeUndefined();
+    expect(h.state.getTask('task-1')!.needsHumanReview).not.toBe(true);
+  });
 });
 
