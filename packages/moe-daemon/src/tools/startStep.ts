@@ -53,7 +53,7 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       if (!task.workStartedAt) {
         updates.workStartedAt = new Date().toISOString();
       }
-      const updatedTask = await state.updateTask(task.id, updates, 'STEP_STARTED');
+      const updatedTask = await state.updateTask(task.id, updates, 'STEP_STARTED', params.workerId);
 
       // Update worker liveness/status to CODING without requiring a worker record to exist.
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });

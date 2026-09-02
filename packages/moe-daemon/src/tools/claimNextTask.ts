@@ -275,7 +275,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
 
           try {
-            task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId });
+            task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId }, undefined, params.workerId);
           } catch (err: unknown) {
             // Optimistic concurrency failure — the row was claimed between our
             // eligibility snapshot and this write. Tell the caller it LOST, and
@@ -355,7 +355,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       if (!task.metrics?.firstClaimAt) {
         const nextMetrics = { ...(task.metrics ?? {}), firstClaimAt: new Date().toISOString() };
         try {
-          task = await state.updateTask(task.id, { metrics: nextMetrics });
+          task = await state.updateTask(task.id, { metrics: nextMetrics }, undefined, params.workerId);
         } catch { /* never block claim */ }
       }
 

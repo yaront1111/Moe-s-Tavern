@@ -112,7 +112,7 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
   return task;
 }
 
-export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType): Promise<Task> {
+export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
@@ -228,10 +228,13 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
     }
   }
 
+  // actorWorkerId is threaded from the tool that knows who called it. Without
+  // it every task event was written with no actor and the per-worker audit
+  // trail was empty; see appendActivity for why we do not guess the assignee.
   if (event) {
-    state.appendActivity(event, updates, updated);
+    state.appendActivity(event, updates, updated, undefined, undefined, undefined, actorWorkerId);
   } else {
-    state.appendActivity('TASK_UPDATED', updates, updated);
+    state.appendActivity('TASK_UPDATED', updates, updated, undefined, undefined, undefined, actorWorkerId);
   }
   state.emit({ type: 'TASK_UPDATED', payload: updated });
 

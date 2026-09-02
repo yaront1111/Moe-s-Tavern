@@ -502,9 +502,10 @@ export class StateManager {
     task?: Task,
     worker?: Worker,
     proposal?: RailProposal,
-    epic?: Epic
+    epic?: Epic,
+    actorWorkerId?: string
   ): void {
-    appendActivity(this, event, payload, task, worker, proposal, epic);
+    appendActivity(this, event, payload, task, worker, proposal, epic, actorWorkerId);
   }
 
   async appendActivityAsync(
@@ -613,8 +614,8 @@ export class StateManager {
     return createTask(this, input);
   }
 
-  async updateTask(taskId: string, updates: Partial<Task>, event?: ActivityEventType): Promise<Task> {
-    return updateTask(this, taskId, updates, event);
+  async updateTask(taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
+    return updateTask(this, taskId, updates, event, actorWorkerId);
   }
 
   async deleteTask(taskId: string): Promise<Task> {

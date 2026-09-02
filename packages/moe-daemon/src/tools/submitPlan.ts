@@ -373,7 +373,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
         };
       }
-      await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED');
+      await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId);
       // Use the captured assignee because updateTask clears assignedWorkerId on
       // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
       // records and never blocks a successfully submitted plan.

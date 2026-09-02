@@ -33,7 +33,8 @@ export function appendActivity(state: StateManager,
   task?: Task,
   worker?: Worker,
   proposal?: RailProposal,
-  epic?: Epic
+  epic?: Epic,
+  actorWorkerId?: string
 ): void {
   // Backpressure: if the activity write queue is unbounded, drop new writes
   // and warn at most once every 30 s so the log doesn't spam either.
@@ -70,7 +71,16 @@ export function appendActivity(state: StateManager,
     projectId: state.project.id,
     epicId: task?.epicId || epic?.id,
     taskId: task?.id,
-    workerId: worker?.id || proposal?.workerId,
+    // Who DID this. `worker`/`proposal` carry it on the paths that have an
+    // entity to hand; actorWorkerId is for the task paths, which previously
+    // recorded no actor at all — every task event was written with workerId
+    // undefined, so `get_activity_log { workerId }` returned only WORKER_CREATED
+    // for every seat and the per-worker audit trail was empty by construction.
+    //
+    // Deliberately NOT falling back to task.assignedWorkerId: a governor moving
+    // someone else's row would then be recorded as that worker, and a false
+    // attribution in an audit log is worse than an absent one.
+    workerId: worker?.id || proposal?.workerId || actorWorkerId,
     event,
     payload
   };

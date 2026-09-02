@@ -94,7 +94,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       const updatedTask = await state.updateTask(
         task.id,
         { implementationPlan: steps, stepsCompleted, metrics: nextMetrics },
-        'STEP_COMPLETED'
+        'STEP_COMPLETED',
+        params.workerId
       );
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
 

@@ -65,13 +65,17 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       properties: {
         taskId: { type: 'string' },
         status: { type: 'string', enum: VALID_STATUSES },
-        reason: { type: 'string' }
+        reason: { type: 'string' },
+        // Declared so the caller's identity is a first-class input rather than
+        // an undeclared extra the proxy injects: it is recorded as the actor on
+        // the resulting audit event.
+        workerId: { type: 'string', description: 'Acting worker id, recorded as the actor in the activity log' }
       },
       required: ['taskId', 'status'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { taskId?: string; status?: string; reason?: string };
+      const params = (args || {}) as { taskId?: string; status?: string; reason?: string; workerId?: string };
       if (!params.taskId) {
         throw missingRequired('taskId');
       }
@@ -239,7 +243,7 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
         event = 'TASK_COMPLETED';
       }
 
-      const updated = await state.updateTask(params.taskId, updates, event);
+      const updated = await state.updateTask(params.taskId, updates, event, params.workerId);
 
       // Hand the acting agent a next step. The reopen path (governor REVIEW→
       // PLANNING flip, human un-park) is the one most likely to strand a task
