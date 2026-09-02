@@ -395,3 +395,43 @@ describe('mentions inside quoted spans', () => {
     expect(parsed).toEqual([]);
   });
 });
+
+describe('group tokens only address from an addressing position', () => {
+  const ids = ['worker-a', 'worker-b'];
+
+  // Receipts, 2026-09-02. Quoting alone was not enough: both of these sentences
+  // DECLARE that they are not broadcasting, and both routed to fifteen seats.
+  it('does not broadcast when the group token is mid-sentence prose', () => {
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('Not an ack, and no @all, per your ruling.', ids)
+    ).toEqual([]);
+  });
+
+  it('does not broadcast when the token is named as the subject of discussion', () => {
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('answering the @all leg of the sixth-axis post', ids)
+    ).toEqual([]);
+  });
+
+  it('STILL broadcasts when the token opens the message — the deliberate case', () => {
+    const router = new MentionRouter();
+    const parsed = router.parseMentions('@all daemon restart incoming, checkpoint now.', ids);
+    expect(parsed).toEqual(expect.arrayContaining(['worker-a', 'worker-b']));
+  });
+
+  it('STILL broadcasts when the token opens a later line', () => {
+    const router = new MentionRouter();
+    const parsed = router.parseMentions('Context first.\n@all please re-anchor on HEAD.', ids);
+    expect(parsed).toEqual(expect.arrayContaining(['worker-a', 'worker-b']));
+  });
+
+  it('leaves individual mentions unrestricted anywhere in the body', () => {
+    // Naming one seat mid-sentence is normal and cheap; waking every seat is not.
+    const router = new MentionRouter();
+    expect(
+      router.parseMentions('I agree with @worker-a about the root check.', ids)
+    ).toEqual(['worker-a']);
+  });
+});

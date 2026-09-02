@@ -11,6 +11,35 @@ export interface RoutingResult {
   hopCount: number;    // current hop count for the channel
 }
 
+/** Group tokens address many seats at once, so they are position-sensitive. */
+const GROUP_TOKENS = new Set(['all', 'architects', 'architect', 'workers', 'worker', 'qa', 'governors', 'governor']);
+
+export function isGroupToken(token: string): boolean {
+  return GROUP_TOKENS.has(token.toLowerCase());
+}
+
+/**
+ * True when this offset sits in the ADDRESSING PREFIX of its line: everything
+ * before it on the line is whitespace or other @mentions.
+ *
+ * Not merely "opens the line" — real address lines stack recipients
+ * ("@qa @architects here is the thing"), and only the first would qualify under
+ * a strict start-of-line rule. Prose before the token ("and no @all, per your
+ * ruling") disqualifies it, which is the case this exists to stop.
+ */
+export function inAddressingPrefix(text: string, atIndex: number): boolean {
+  let i = atIndex - 1;
+  for (;;) {
+    while (i >= 0 && (text[i] === ' ' || text[i] === '\t' || text[i] === '>')) i--;
+    if (i < 0 || text[i] === '\n') return true;
+    // Walk back over a preceding @token and keep going; anything else is prose.
+    let j = i;
+    while (j >= 0 && /[\w-]/.test(text[j])) j--;
+    if (j >= 0 && text[j] === '@' && j < i) { i = j - 1; continue; }
+    return false;
+  }
+}
+
 /**
  * Blank out fenced code blocks and inline code spans. Mentions inside them are
  * QUOTED, not addressed — see parseMentions for why this matters.
@@ -66,6 +95,16 @@ export class MentionRouter {
     const rawMentions: string[] = [];
     let match: RegExpExecArray | null;
     while ((match = mentionRegex.exec(quoteless)) !== null) {
+      // A GROUP token only ADDRESSES when it opens the message or a line.
+      // Anywhere else it is discussion, and discussion must not broadcast.
+      //
+      // Quoting alone was not enough. Measured 2026-09-02: a worker wrote
+      // "and no @all, per your ruling" — declaring it was NOT broadcasting —
+      // and chat_send routed to fifteen seats. Every attempt to close the
+      // thread re-armed it, because the topic could not be named without
+      // being invoked. Individual @worker-ids are unrestricted: naming one
+      // seat mid-sentence is normal and cheap; waking every seat is not.
+      if (isGroupToken(match[1]) && !inAddressingPrefix(quoteless, match.index)) continue;
       rawMentions.push(match[1]);
     }
 
