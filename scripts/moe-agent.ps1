@@ -6,6 +6,9 @@
     [string]$ProjectName,
     [string]$WorkerId,
 
+    # Agent CLI: claude (default), codex, gemini, grok, or a custom command path.
+    # The basename (extension stripped) selects the launch branch and the
+    # per-CLI MCP config writer.
     [string]$Command = "claude",
     [string[]]$CommandArgs = @(),
 
@@ -34,6 +37,13 @@
     # Use gemini headless mode (non-interactive, --yolo) instead of interactive
     [switch]$GeminiExec,
 
+    # Force grok into headless mode (non-interactive, --prompt-file --yolo).
+    # Unlike codex/gemini, grok's default polarity is role-based exactly like
+    # claude's: architect/governor open the TUI, worker/qa run headless, and an
+    # explicit -Interactive / -Interactive:$false wins. -GrokExec overrides all
+    # of that to headless (JetBrains passes it for hands-off fleet launches).
+    [switch]$GrokExec,
+
     # Force claude into interactive TUI mode (no --print, no stream-json parser).
     # Use when you want to drive the agent yourself — typing into the REPL after
     # the pre-flight has claimed a task and loaded the role/MCP context.
@@ -47,7 +57,9 @@
     # Explicit model override (e.g. "claude-sonnet-5", "claude-opus-4-8").
     # When empty, the launcher picks a per-role default — all roles → Opus 5.
     # Per-project overrides via .moe/project.json settings.models.{role}. Only
-    # applies to the `claude` CLI; codex/gemini pick their own model.
+    # applies to the `claude` CLI; codex/gemini pick their own model. Grok gets
+    # `-m <model>` only when one is explicit (-Model, settings.models.<role>,
+    # MOE_GROK_MODEL) - the per-role default below is never passed to grok.
     [string]$Model = ""
 )
 
@@ -374,6 +386,11 @@ if ($serenaPath -and (Test-Path $serenaPath)) {
 $myPid = if ($PID) { $PID } else { [System.Diagnostics.Process]::GetCurrentProcess().Id }
 $mcpConfigFile = Join-Path $env:TEMP "moe-mcp-config-$Role-$myPid.json"
 $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -Path $mcpConfigFile -Encoding UTF8
+# Grok's per-iteration prompt file (set in the grok launch branch, removed in
+# the outer finally on every exit path) and the pre-launch values of the GROK_*
+# env the branch overrides (restored in the same finally).
+$script:GrokPromptFile = $null
+$script:GrokEnvPrev = $null
 
 if (-not $NoStartDaemon) {
     $daemonInfoPath = Join-Path $moeDir "daemon.json"
@@ -594,12 +611,17 @@ if ($cmdForDetect) {
 $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
+elseif ($cmdBase -eq "grok") { $cliType = "grok" }
 # Codex is interactive by default, but -CodexExec enables non-interactive headless mode
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
 # Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
 $geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)
 # Claude defaults to --print (one-shot stream); -Interactive flips it to TUI.
 $claudeInteractive = ($cliType -eq "claude") -and $Interactive
+# Grok follows claude's role polarity, not codex/gemini's always-interactive
+# default: $Interactive is already resolved above (architect/governor true,
+# worker/qa false, an explicit switch wins), and -GrokExec forces headless.
+$grokInteractive = ($cliType -eq "grok") -and $Interactive -and (-not $GrokExec)
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 if ($cliType -eq "codex") {
@@ -848,6 +870,107 @@ $serenaTomlBlock
         }
     } catch {
         Write-Error "Failed to write Gemini MCP config: $_"
+        exit 1
+    }
+} elseif ($cliType -eq "grok") {
+    # For grok: write project-scoped .grok/config.toml - the same
+    # [mcp_servers.<name>] TOML shape as codex, with two load-bearing
+    # differences: (1) a grok PROJECT config may only carry [mcp_servers.*],
+    # [plugins], [permission] and [mcp] tables, so NO top-level keys are
+    # written (no model_reasoning_effort / developer_instructions /
+    # project_doc_fallback_filenames); (2) grok expands ${VAR} / ${VAR:-default}
+    # inside env/args/command values at load time, so MOE_WORKER_ID is written
+    # as a LITERAL template that resolves per process - the launchers export
+    # the real id, a human running grok by hand gets "" (which the proxy
+    # treats as unset). Serena's --context is "agent" here (not "codex").
+    Write-Host "Writing project-scoped Grok MCP config..."
+    $grokConfigDir = Join-Path $projectPath ".grok"
+    $grokConfigFile = Join-Path $grokConfigDir "config.toml"
+    try {
+        if (-not (Test-Path $grokConfigDir)) {
+            New-Item -ItemType Directory -Force -Path $grokConfigDir | Out-Null
+        }
+
+        # Forward slashes: TOML basic strings treat backslashes as escapes.
+        $proxyScriptForToml = $proxyScript.ToString().Replace('\', '/')
+        $projectPathForToml = $projectPath.ToString().Replace('\', '/')
+        # Same startup_timeout_sec key and the same reason as codex: the proxy
+        # waits out a supervised daemon restart, which outlasts a 30s default.
+        # Digits only; anything else keeps 120.
+        $grokMcpStartupTimeout = 120
+        if ($env:MOE_GROK_MCP_STARTUP_TIMEOUT_SEC -match '^\d+$') {
+            $grokMcpStartupTimeout = [int]$env:MOE_GROK_MCP_STARTUP_TIMEOUT_SEC
+        }
+        # Persist a daemon host override (WSL mode) so the spawned proxy dials
+        # the right address even if grok doesn't forward the wrapper's env.
+        $grokDaemonHostLine = if ($env:MOE_DAEMON_HOST) { "`nMOE_DAEMON_HOST = `"$($env:MOE_DAEMON_HOST)`"" } else { "" }
+        # Single-quoted on purpose: ${MOE_WORKER_ID:-} is grok's template
+        # syntax, and a double-quoted PowerShell string would try to expand it.
+        $grokWorkerIdLine = 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"'
+        $grokMoeTomlBlock = (@(
+            "",
+            "[mcp_servers.moe]",
+            "command = `"node`"",
+            "args = [`"$proxyScriptForToml`"]",
+            "startup_timeout_sec = $grokMcpStartupTimeout",
+            "",
+            "[mcp_servers.moe.env]",
+            "MOE_PROJECT_PATH = `"$projectPathForToml`"",
+            ($grokWorkerIdLine + $grokDaemonHostLine)
+        ) -join "`n")
+
+        # Serena block (LSP code intelligence + memory, pinned to this project):
+        # present only while Serena is installed, stripped otherwise.
+        $grokSerenaTomlBlock = ""
+        if ($serenaPath -and (Test-Path $serenaPath)) {
+            $serenaPathForToml = $serenaPath.ToString().Replace('\', '/')
+            $serenaProjectForToml = $serenaProject.Replace('\', '/')
+            $grokSerenaTomlBlock = (@(
+                "",
+                "[mcp_servers.serena]",
+                "command = `"$serenaPathForToml`"",
+                "args = [`"start-mcp-server`", `"--context`", `"agent`", `"--project`", `"$serenaProjectForToml`", `"--enable-web-dashboard`", `"false`", `"--enable-gui-log-window`", `"false`"]"
+            ) -join "`n")
+        }
+
+        # Idempotent merge, same rules as the codex writer: drop the sections
+        # this writer owns and re-emits ([mcp_servers.moe], [mcp_servers.moe.env],
+        # [mcp_servers.serena]; orphaned [mcp_servers.serena.*] subtables too
+        # when Serena is not installed), keep every other user section
+        # verbatim, then append fresh blocks. A missing file starts from the
+        # header only. Both routes produce the same bytes, so a re-run leaves
+        # the file byte-identical.
+        $grokHeader = "# Grok project config (auto-generated by moe-agent)"
+        $grokCleanedText = $grokHeader
+        if (Test-Path $grokConfigFile) {
+            $rawContent = Get-Content -Path $grokConfigFile -Raw
+            $serenaInstalled = -not [string]::IsNullOrEmpty($grokSerenaTomlBlock)
+            $lines = @("$rawContent" -split '\r?\n')
+            $cleaned = @()
+            $skip = $false
+            foreach ($line in $lines) {
+                $stripped = $line.Trim()
+                if ($stripped.StartsWith('[')) {
+                    $skip = ($stripped -match '^\[mcp_servers\.moe(\]|\.env\])') -or
+                            ($stripped -match '^\[mcp_servers\.serena\]') -or
+                            ((-not $serenaInstalled) -and $stripped -match '^\[mcp_servers\.serena\.')
+                }
+                if (-not $skip) {
+                    $cleaned += $line
+                }
+            }
+            $grokCleanedText = ($cleaned -join "`n").TrimEnd()
+            if ([string]::IsNullOrWhiteSpace($grokCleanedText)) {
+                $grokCleanedText = $grokHeader
+            }
+        }
+        $grokConfigText = $grokCleanedText + "`n" + $grokMoeTomlBlock + $grokSerenaTomlBlock + "`n"
+        # No BOM: a TOML reader may choke on one, and the merge above must see
+        # exactly the bytes it wrote.
+        [System.IO.File]::WriteAllText($grokConfigFile, $grokConfigText, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Grok MCP config written to: $grokConfigFile"
+    } catch {
+        Write-Error "Failed to write Grok MCP config: $_"
         exit 1
     }
 } else {
@@ -1752,7 +1875,7 @@ function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtabl
     foreach ($dr in $denyRoots) {
         if ($k.StartsWith("$dr.moe/")) { return $true }
         if ($k -eq "$dr.mcp.json") { return $true }
-        foreach ($pre in @('.codex/', '.gemini/', '.claude/agents/', '.worktrees/', '.moe-worktree')) {
+        foreach ($pre in @('.codex/', '.gemini/', '.grok/', '.claude/agents/', '.worktrees/', '.moe-worktree')) {
             if ($k.StartsWith("$dr$pre")) { return $true }
         }
         if ($k -eq "$dr.claude/settings.local.json") { return $true }
@@ -2895,9 +3018,16 @@ if ($cliType -eq "gemini") {
         Write-Host "Gemini mode: interactive"
     }
 }
+if ($cliType -eq "grok") {
+    if ($grokInteractive) {
+        Write-Host "Grok mode: interactive"
+    } else {
+        Write-Host "Grok mode: headless (--prompt-file --yolo)"
+    }
+}
 $loopEnabled = (($AutoClaim -or $Loop) -and (-not $NoLoop) -and ($PollInterval -gt 0))
-if ($codexInteractive -or $geminiInteractive) {
-    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+if ($codexInteractive -or $geminiInteractive -or $grokInteractive) {
+    # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
     # interactive mode is fine to loop: each iteration spawns a fresh CLI
     # invocation, so per-task cache replay matches --print mode.
@@ -3514,6 +3644,8 @@ $mentionsJson
     }
 
     # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh).
+    # Grok is handled in its launch branch below: its prompt file must also carry the final role
+    # directive ($claimPromptBody, built after this block), so it is written right before the launch.
     # For codex and gemini we ALSO fold $dynamicContext (claimed_task_context, routed_mentions, skill JIT)
     # into the file. Reason: PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
     # forwarding native-command args on Windows. Task JSON serialized into $dynamicContext routinely
@@ -3592,7 +3724,11 @@ $mentionsJson
     # completion notification", and died mid-review — the notification can
     # never arrive in --print mode. Say so explicitly in the prompt. Governor
     # is excluded: its prompt is a chat_wait loop, not a finish-and-stop task.
-    if ($claimPromptBody -and -not $Interactive -and $Role -ne 'governor') {
+    # Headless polarity: claude keys on -not $Interactive; grok's headless is
+    # -not $grokInteractive (an architect launched with -GrokExec is one-shot
+    # too), matching the sh twin's GROK_INTERACTIVE gate.
+    $oneShotSession = if ($cliType -eq 'grok') { -not $grokInteractive } else { -not $Interactive }
+    if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor') {
         $claimPromptBody += " CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
     }
 
@@ -3742,6 +3878,144 @@ $mentionsJson
             }
         } finally {
             Stop-HeartbeatSidecar
+        }
+    } elseif ($cliType -eq "grok") {
+        # Check grok is available
+        $grokCheck = Get-Command $Command -ErrorAction SilentlyContinue
+        if (-not $grokCheck) {
+            Write-Error "Grok command not found: $Command. Install Grok Build first (irm https://x.ai/cli/install.ps1 | iex  or  npm install -g @xai-official/grok)."
+            exit 1
+        }
+        # Auth is XAI_API_KEY or the OAuth cache `grok login` leaves at
+        # ~/.grok/auth.json. Neither present means the CLI will fail to
+        # authenticate - warn, don't refuse: an interactive operator may be
+        # about to log in from the TUI, and the message names the fix.
+        $grokAuthFile = Join-Path $env:USERPROFILE ".grok\auth.json"
+        if ([string]::IsNullOrEmpty($env:XAI_API_KEY) -and -not (Test-Path $grokAuthFile)) {
+            Write-Host "[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate." -ForegroundColor Yellow
+        }
+
+        # Model: `-m <model>` ONLY when one is explicit - -Model, then
+        # settings.models.<role>, then MOE_GROK_MODEL. $resolvedModel is NOT
+        # used here: its claude-opus-5 per-role fallback is a claude model and
+        # must never reach grok; with none of the three set grok picks its own
+        # default. `--effort <lvl>` only when MOE_GROK_EFFORT is set.
+        $grokModel = ""
+        if (-not [string]::IsNullOrWhiteSpace($Model)) {
+            $grokModel = $Model
+        } elseif ($projConfig -and $projConfig.settings -and $projConfig.settings.models -and $projConfig.settings.models.$Role) {
+            $grokModel = [string]$projConfig.settings.models.$Role
+        } elseif (-not [string]::IsNullOrWhiteSpace($env:MOE_GROK_MODEL)) {
+            $grokModel = $env:MOE_GROK_MODEL
+        }
+        $grokModelArgs = @()
+        if ($grokModel) { $grokModelArgs = @("-m", $grokModel) }
+        $grokEffortArgs = @()
+        if (-not [string]::IsNullOrWhiteSpace($env:MOE_GROK_EFFORT)) { $grokEffortArgs = @("--effort", $env:MOE_GROK_EFFORT) }
+
+        # No-task fast path, ported from the claude branch (same gates, same
+        # reasoning): a headless session whose only job would be to park in
+        # moe.wait_for_task is skipped and the outer loop polls instead.
+        # Governor is excluded (it never claims and still needs its terminal),
+        # -NoLoop must still launch (there is no next iteration), and routed
+        # mentions already consumed by the pre-flight chat_read must reach a
+        # CLI. An interactive grok TUI never loops ($loopEnabled is false), so
+        # this only ever fires for headless runs.
+        $grokLaunchSkipped = $false
+        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor' -and $loopEnabled -and (-not $grokInteractive) -and ($preflightRoutedMentions.Count -eq 0)) {
+            Write-Host "[no-task] Skipping CLI launch — wrapper will poll again in $PollInterval s." -ForegroundColor DarkGray
+            $script:CliExitCode = 0
+            $grokLaunchSkipped = $true
+        }
+
+        if (-not $grokLaunchSkipped) {
+            # Per-iteration prompt file. Grok has no --prompt flag and does not
+            # read stdin: headless takes --prompt-file, the TUI takes a
+            # positional prompt. So the role system prompt, the per-iteration
+            # session context (claimed_task_context, inbox, routed_mentions,
+            # skill JIT, baseline notices) and the role directive travel in ONE
+            # temp file under $env:TEMP - never AGENTS.md or anything in the
+            # project root (grok already auto-loads repo AGENTS.md/CLAUDE.md as
+            # rules, and a project-root file would be attributable debris).
+            # Argv stays quote-free, which sidesteps the PS < 7.3 native-arg
+            # word-split that bit codex/gemini. The path is script-scoped so the
+            # outer finally removes the file on every exit path.
+            if ($claimPromptBody) {
+                # Claimed / resumed task, the governor loop, or the legacy
+                # multi-step prompt when the pre-flight claim RPC failed - the
+                # file route carries embedded quotes fine.
+                $grokDirective = $claimPromptBody
+            } elseif ($AutoClaim) {
+                # No task this iteration but something must be answered (routed
+                # mentions) or there is no next iteration (-NoLoop): the session
+                # context above already says wait_for_task first.
+                $grokDirective = "If a routed_mentions block is present in the session context above, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+            } else {
+                $roleWorkflow = switch ($Role) {
+                    "architect" { "Workflow: join chat -> read messages -> claim task -> get_context -> read Serena memory -> explore codebase -> submit_plan -> write Serena memory (handoff + learnings) -> announce in chat" }
+                    "worker"    { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> start_step -> implement -> complete_step -> complete_task -> write Serena memory (handoff + learnings) -> announce in chat" }
+                    "qa"        { "Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> review code and tests -> qa_approve or qa_reject -> write Serena memory (handoff + learnings) -> announce in chat" }
+                    default     { "Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff" }
+                }
+                $grokDirective = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+            }
+            $grokFileBody = $systemAppend
+            if ($dynamicContext) {
+                $grokFileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
+            }
+            $grokFileBody += "`n`n" + $grokDirective
+            $script:GrokPromptFile = Join-Path $env:TEMP "moe-grok-prompt-$Role-$myPid.md"
+            [System.IO.File]::WriteAllText($script:GrokPromptFile, $grokFileBody, [System.Text.UTF8Encoding]::new($false))
+            Write-Host "Agent prompt written to: $($script:GrokPromptFile)"
+
+            # Grok auto-merges MCP servers from ~/.claude.json, .cursor/mcp.json
+            # and the project .mcp.json unless told not to - a second `moe`
+            # entry (another machine's absolute proxy path, a stale port) would
+            # race the one in .grok/config.toml. Disable the merges and the
+            # in-process auto-updater for this launch (the CLI also gets
+            # --no-auto-update below; the env covers the interactive TUI). The
+            # pre-launch values are restored by the outer finally.
+            if ($null -eq $script:GrokEnvPrev) {
+                $script:GrokEnvPrev = @{
+                    GROK_CLAUDE_MCPS_ENABLED = $env:GROK_CLAUDE_MCPS_ENABLED
+                    GROK_CURSOR_MCPS_ENABLED = $env:GROK_CURSOR_MCPS_ENABLED
+                    GROK_DISABLE_AUTOUPDATER = $env:GROK_DISABLE_AUTOUPDATER
+                }
+            }
+            $env:GROK_CLAUDE_MCPS_ENABLED = "0"
+            $env:GROK_CURSOR_MCPS_ENABLED = "0"
+            $env:GROK_DISABLE_AUTOUPDATER = "1"
+
+            # Heartbeat sidecar - same rationale as the codex/gemini branches.
+            Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+            try {
+                if ($grokInteractive) {
+                    # Interactive TUI: the initial prompt is a POSITIONAL argument -
+                    # a short quote-free pointer at the prompt file (the path is one
+                    # argv token, spaces and all); the TUI reads the role doc and
+                    # session context from there.
+                    $grokPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:GrokPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    Write-Host "Command: $Command --cwd `"$projectPath`" $($grokModelArgs -join ' ') `"<prompt>`""
+                    try {
+                        Push-Location $projectPath
+                        & $Command @CommandArgs --cwd "$projectPath" @grokModelArgs "$grokPointerPrompt"
+                        $script:CliExitCode = $LASTEXITCODE
+                    } finally { Pop-Location }
+                } else {
+                    # Headless: --prompt-file carries the whole prompt, --yolo
+                    # auto-approves tool calls (the fleet equivalent of claude's
+                    # bypassPermissions), --output-format plain keeps the
+                    # transcript greppable. The prompt body is never echoed.
+                    Write-Host "Command: $Command --prompt-file `"$($script:GrokPromptFile)`" --yolo --cwd `"$projectPath`" --no-auto-update --output-format plain $($grokModelArgs -join ' ') $($grokEffortArgs -join ' ')"
+                    try {
+                        Push-Location $projectPath
+                        & $Command @CommandArgs --prompt-file "$($script:GrokPromptFile)" --yolo --cwd "$projectPath" --no-auto-update --output-format plain @grokModelArgs @grokEffortArgs
+                        $script:CliExitCode = $LASTEXITCODE
+                    } finally { Pop-Location }
+                }
+            } finally {
+                Stop-HeartbeatSidecar
+            }
         }
     } else {
         # Enable Claude Code subagents for all Moe roles by default. Architects
@@ -4201,6 +4475,18 @@ $mentionsJson
     if ($systemPromptFile -and (Test-Path $systemPromptFile)) {
         Remove-Item -Path $systemPromptFile -Force -ErrorAction SilentlyContinue
     }
+    if ($script:GrokPromptFile -and (Test-Path $script:GrokPromptFile)) {
+        Remove-Item -Path $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
+    }
     # Clean up agent teams env var so it doesn't leak to parent session
     Remove-Item Env:\CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS -ErrorAction SilentlyContinue
+    # Restore the grok launch env (MCP auto-merge + auto-updater opt-outs) to
+    # its pre-launch values so a wrapper run with `&` in an interactive shell
+    # leaves the operator's own GROK_* settings as it found them.
+    if ($script:GrokEnvPrev) {
+        foreach ($k in @($script:GrokEnvPrev.Keys)) {
+            $v = $script:GrokEnvPrev[$k]
+            if ($null -ne $v) { Set-Item -Path "Env:\$k" -Value $v } else { Remove-Item -Path "Env:\$k" -ErrorAction SilentlyContinue }
+        }
+    }
 }

@@ -320,6 +320,32 @@ describe('utils', () => {
       expect((parsed.params.arguments as Record<string, unknown>).workerId).toBeUndefined();
     });
 
+    // The grok MCP config pins `MOE_WORKER_ID = "${MOE_WORKER_ID:-}"`, which grok
+    // expands to "" when a human runs `grok` by hand (no wrapper, no seat). An
+    // empty id must behave exactly like an unset one — never `workerId: ""`.
+    it('treats an EMPTY envWorkerId as unset (grok expands ${MOE_WORKER_ID:-} to "")', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step', arguments: { taskId: 't1' } },
+      };
+      expect(injectWorkerId(parsed, '')).toBe(false);
+      expect((parsed.params.arguments as Record<string, unknown>).workerId).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(parsed.params.arguments, 'workerId')).toBe(false);
+    });
+
+    it('treats a whitespace-only envWorkerId as unset', () => {
+      const parsed = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'moe.start_step', arguments: { taskId: 't1' } },
+      };
+      expect(injectWorkerId(parsed, '   ')).toBe(false);
+      expect((parsed.params.arguments as Record<string, unknown>).workerId).toBeUndefined();
+    });
+
     it('does nothing for non-tool methods', () => {
       const cases = [
         { method: 'initialize', params: {} },

@@ -28,7 +28,9 @@ export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
 export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
-export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI';
+// Mirrors the daemon schema; the daemon records every worker as 'CLAUDE' today
+// (it cannot see the CLI) — the other values are reserved.
+export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK';
 
 export type WorkerStatus =
   | 'IDLE'

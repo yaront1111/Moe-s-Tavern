@@ -69,6 +69,9 @@ moe-daemon stop --project /path/to/project
 # Codex (interactive)
 ./scripts/moe-agent.sh -r worker -p ~/myproject -c codex
 
+# Grok Build (headless for worker/qa; install: curl -fsSL https://x.ai/cli/install.sh | bash)
+./scripts/moe-agent.sh -r worker -p ~/myproject -c grok
+
 # List registered projects
 ./scripts/moe-agent.sh --list-projects
 ```
@@ -110,6 +113,7 @@ Use this checklist to verify your installation works correctly.
 - [ ] Role documentation loads (shows "Loaded role doc from:")
 - [ ] MCP config updates for project
 - [ ] Codex registers MCP when using `--command codex`
+- [ ] Grok registers MCP when using `--command grok` (writes `.grok/config.toml`; `grok mcp list` shows `moe`)
 
 ### JetBrains Plugin (Optional)
 

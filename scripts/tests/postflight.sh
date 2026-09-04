@@ -1661,12 +1661,193 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario X] ok"
 
+  # Scenario Y -- the grok CLI (xAI Grok Build). A fake CLI literally named
+  # `grok` (detection keys on the command basename) records its argv and
+  # copies the --prompt-file it was handed. Pre-flight must write
+  # .grok/config.toml ([mcp_servers.moe] + the LITERAL ${MOE_WORKER_ID:-} env,
+  # [mcp_servers.serena] iff Serena resolves, NO top-level keys) and re-write it
+  # byte-identically; the headless launch carries --prompt-file/--yolo/--cwd
+  # with the per-iteration prompt in the file and never the wrapper's claude
+  # model fallback; a non-zero CLI exit propagates into the session-ended line;
+  # the config never rides into the landing commit (DENY tier); and the role
+  # polarity puts an architect on the interactive TUI unless --grok-exec.
+  echo "[scenario Y] grok CLI: config writer, headless argv, exit propagation, DENY tier, polarity"
+  GROK_CLI="$TMP_DIR/grok"
+  GROK_ARGS_FILE="$TMP_DIR/grok-args.txt"
+  GROK_PROMPT_COPY="$TMP_DIR/grok-prompt-copy.md"
+  cat > "$GROK_CLI" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$GROK_ARGS_FILE"
+prev=""
+for a in "\$@"; do
+  if [ "\$prev" = "--prompt-file" ]; then cp "\$a" "$GROK_PROMPT_COPY" 2>/dev/null || true; fi
+  prev="\$a"
+done
+exit "\${FAKE_GROK_EXIT:-0}"
+EOF
+  chmod +x "$GROK_CLI"
+  FAKE_SERENA="$TMP_DIR/fake-serena"
+  SCOPE_Y_DIR="$TMP_DIR/scope-y"
+  make_scope_project "$SCOPE_Y_DIR" '["owned-a.txt"]'
+  echo owned-a > "$SCOPE_Y_DIR/owned-a.txt"
+  SCOPE_Y_CFG="$SCOPE_Y_DIR/.grok/config.toml"
+  rm -f "$GROK_ARGS_FILE" "$GROK_PROMPT_COPY"
+  set +e
+  MOE_SERENA_PATH="$FAKE_SERENA" FAKE_GROK_EXIT=7 FAKE_TASK_STATUS=REVIEW \
+    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y.out" "$GROK_CLI" worker worker-scope-y --grok-exec
+  scope_y_code=$?
+  set -e
+  [ "$scope_y_code" -eq 0 ] || scope_fail Y "wrapper exited with $scope_y_code" "$TMP_DIR/scope-y.out"
+  # -- config writer --
+  [ -f "$SCOPE_Y_CFG" ] || scope_fail Y "expected .grok/config.toml to be written at pre-flight" "$TMP_DIR/scope-y.out"
+  if ! grep -Fq 'Grok MCP config written to:' "$TMP_DIR/scope-y.out"; then
+    scope_fail Y "expected the 'Grok MCP config written to:' banner" "$TMP_DIR/scope-y.out"
+  fi
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' '[mcp_servers.serena]' '"--context", "agent"'; do
+    if ! grep -Fq -- "$needle" "$SCOPE_Y_CFG"; then
+      cat "$SCOPE_Y_CFG" >&2 || true
+      scope_fail Y "expected [$needle] in .grok/config.toml" "$TMP_DIR/scope-y.out"
+    fi
+  done
+  # Basename, not the full path: under Git Bash the MSYS layer rewrites the
+  # /tmp/... argv into a C:/... path before python quotes it into the TOML.
+  if ! grep -Fq -- 'fake-serena' "$SCOPE_Y_CFG"; then
+    cat "$SCOPE_Y_CFG" >&2 || true
+    scope_fail Y "the serena entry must use MOE_SERENA_PATH" "$TMP_DIR/scope-y.out"
+  fi
+  # No top-level keys: the first non-comment, non-blank line must open a table.
+  scope_y_first="$(grep -vE '^[[:space:]]*(#|$)' "$SCOPE_Y_CFG" | head -n1)"
+  case "$scope_y_first" in
+    "["*) : ;;
+    *) cat "$SCOPE_Y_CFG" >&2 || true; scope_fail Y "grok project config must carry NO top-level keys; first line is [$scope_y_first]" "$TMP_DIR/scope-y.out" ;;
+  esac
+  if grep -Eq '^(model_reasoning_effort|developer_instructions|project_doc_fallback_filenames|model_instructions_file)' "$SCOPE_Y_CFG"; then
+    cat "$SCOPE_Y_CFG" >&2 || true
+    scope_fail Y "codex-only top-level keys leaked into .grok/config.toml" "$TMP_DIR/scope-y.out"
+  fi
+  # -- headless argv + prompt file --
+  if ! grep -Fq 'Grok mode: headless (--prompt-file --yolo)' "$TMP_DIR/scope-y.out"; then
+    scope_fail Y "expected the 'Grok mode: headless (--prompt-file --yolo)' banner" "$TMP_DIR/scope-y.out"
+  fi
+  [ -f "$GROK_ARGS_FILE" ] || scope_fail Y "the fake grok CLI was never launched" "$TMP_DIR/scope-y.out"
+  for flag in '--prompt-file' '--yolo' '--cwd' '--no-auto-update' '--output-format' 'plain'; do
+    if ! grep -Fqx -- "$flag" "$GROK_ARGS_FILE"; then
+      cat "$GROK_ARGS_FILE" >&2 || true
+      scope_fail Y "expected [$flag] in the headless grok argv" "$TMP_DIR/scope-y.out"
+    fi
+  done
+  if grep -Fqx -- '-m' "$GROK_ARGS_FILE" || grep -Fq 'claude-opus-5' "$GROK_ARGS_FILE"; then
+    cat "$GROK_ARGS_FILE" >&2 || true
+    scope_fail Y "grok must not receive the wrapper's claude model fallback" "$TMP_DIR/scope-y.out"
+  fi
+  [ -f "$GROK_PROMPT_COPY" ] || scope_fail Y "the --prompt-file path handed to grok did not exist" "$TMP_DIR/scope-y.out"
+  for needle in 'Role: worker' '# Session Context (per-iteration)' 'Claimed task id: task-postflight' 'CRITICAL (one-shot session)'; do
+    if ! grep -Fq -- "$needle" "$GROK_PROMPT_COPY"; then
+      scope_fail Y "expected [$needle] in the grok prompt file" "$TMP_DIR/scope-y.out"
+    fi
+  done
+  if [ -e "$SCOPE_Y_DIR/AGENTS.md" ] || [ -e "$SCOPE_Y_DIR/grok-prompt.md" ]; then
+    scope_fail Y "the grok prompt must never be written into the project root" "$TMP_DIR/scope-y.out"
+  fi
+  # -- exit propagation + landing (DENY tier keeps the config out) --
+  if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=7)' "$SCOPE_Y_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$SCOPE_Y_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    scope_fail Y "a non-zero grok exit must propagate into the session-ended line (CLI exit=7)" "$TMP_DIR/scope-y.out"
+  fi
+  scope_y_files="$(committed_paths "$SCOPE_Y_DIR")"
+  if [ "$scope_y_files" != "owned-a.txt " ]; then
+    scope_fail Y "the completion must contain ONLY the owned path; got [$scope_y_files]" "$TMP_DIR/scope-y.out"
+  fi
+  if git -C "$SCOPE_Y_DIR" cat-file -e HEAD:.grok/config.toml 2>/dev/null; then
+    scope_fail Y ".grok/config.toml reached HEAD -- it must be DENY-tier excluded" "$TMP_DIR/scope-y.out"
+  fi
+  if ! git -C "$SCOPE_Y_DIR" status --porcelain --untracked-files=all | grep -q '^?? \.grok/config\.toml$'; then
+    git -C "$SCOPE_Y_DIR" status --porcelain --untracked-files=all >&2 || true
+    scope_fail Y ".grok/config.toml must stay untracked after the landing" "$TMP_DIR/scope-y.out"
+  fi
+  # -- idempotent re-run: byte-identical config --
+  cp "$SCOPE_Y_CFG" "$TMP_DIR/scope-y-cfg-1.toml"
+  set +e
+  MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=REVIEW \
+    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y2.out" "$GROK_CLI" worker worker-scope-y --grok-exec
+  scope_y2_code=$?
+  set -e
+  [ "$scope_y2_code" -eq 0 ] || scope_fail Y "second wrapper run exited with $scope_y2_code" "$TMP_DIR/scope-y2.out"
+  if ! cmp -s "$TMP_DIR/scope-y-cfg-1.toml" "$SCOPE_Y_CFG"; then
+    diff "$TMP_DIR/scope-y-cfg-1.toml" "$SCOPE_Y_CFG" >&2 || true
+    scope_fail Y "a second run must rewrite .grok/config.toml byte-identically" "$TMP_DIR/scope-y2.out"
+  fi
+  if [ "$(grep -c '^\[mcp_servers\.moe\]' "$SCOPE_Y_CFG")" -ne 1 ] || [ "$(grep -c '^\[mcp_servers\.serena\]' "$SCOPE_Y_CFG")" -ne 1 ]; then
+    cat "$SCOPE_Y_CFG" >&2 || true
+    scope_fail Y "the merge must not duplicate the moe/serena tables" "$TMP_DIR/scope-y2.out"
+  fi
+  # -- serena iff resolvable: without MOE_SERENA_PATH the wrapper falls back to
+  # ~/.local/bin/serena then PATH (HOME is the harness home); mirror that.
+  if [ -x "$HOME_DIR/.local/bin/serena" ] || command -v serena >/dev/null 2>&1; then
+    scope_y_expect_serena=1
+  else
+    scope_y_expect_serena=0
+  fi
+  set +e
+  FAKE_TASK_STATUS=REVIEW \
+    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y3.out" "$GROK_CLI" worker worker-scope-y --grok-exec
+  scope_y3_code=$?
+  set -e
+  [ "$scope_y3_code" -eq 0 ] || scope_fail Y "third wrapper run exited with $scope_y3_code" "$TMP_DIR/scope-y3.out"
+  if [ "$scope_y_expect_serena" -eq 1 ]; then
+    if ! grep -Fq '[mcp_servers.serena]' "$SCOPE_Y_CFG" || grep -Fq -- 'fake-serena' "$SCOPE_Y_CFG"; then
+      cat "$SCOPE_Y_CFG" >&2 || true
+      scope_fail Y "with Serena resolvable the serena table must be refreshed from the resolved binary" "$TMP_DIR/scope-y3.out"
+    fi
+  else
+    if grep -Fq '[mcp_servers.serena' "$SCOPE_Y_CFG"; then
+      cat "$SCOPE_Y_CFG" >&2 || true
+      scope_fail Y "without Serena the stale serena table must be stripped" "$TMP_DIR/scope-y3.out"
+    fi
+  fi
+  if ! grep -Fq '[mcp_servers.moe]' "$SCOPE_Y_CFG"; then
+    scope_fail Y "the moe table must survive the serena-less rewrite" "$TMP_DIR/scope-y3.out"
+  fi
+  # -- polarity: an architect goes interactive (positional pointer prompt, no
+  # --prompt-file), and --grok-exec forces it headless.
+  rm -f "$GROK_ARGS_FILE"
+  set +e
+  FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y4.out" "$GROK_CLI" architect architect-scope-y
+  scope_y4_code=$?
+  set -e
+  [ "$scope_y4_code" -eq 0 ] || scope_fail Y "architect wrapper run exited with $scope_y4_code" "$TMP_DIR/scope-y4.out"
+  if ! grep -Fq 'Grok mode: interactive' "$TMP_DIR/scope-y4.out"; then
+    scope_fail Y "an architect must default to the interactive grok TUI" "$TMP_DIR/scope-y4.out"
+  fi
+  if grep -Fqx -- '--prompt-file' "$GROK_ARGS_FILE" || grep -Fqx -- '--yolo' "$GROK_ARGS_FILE"; then
+    cat "$GROK_ARGS_FILE" >&2 || true
+    scope_fail Y "the interactive TUI must not receive --prompt-file/--yolo" "$TMP_DIR/scope-y4.out"
+  fi
+  if ! grep -Fqx -- '--cwd' "$GROK_ARGS_FILE" || ! grep -Fq 'Session context (routed mentions, pre-flight data) is in' "$GROK_ARGS_FILE"; then
+    cat "$GROK_ARGS_FILE" >&2 || true
+    scope_fail Y "the interactive TUI must get --cwd plus a positional pointer prompt" "$TMP_DIR/scope-y4.out"
+  fi
+  rm -f "$GROK_ARGS_FILE"
+  set +e
+  FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y5.out" "$GROK_CLI" architect architect-scope-y --grok-exec
+  scope_y5_code=$?
+  set -e
+  [ "$scope_y5_code" -eq 0 ] || scope_fail Y "architect --grok-exec run exited with $scope_y5_code" "$TMP_DIR/scope-y5.out"
+  if ! grep -Fq 'Grok mode: headless (--prompt-file --yolo)' "$TMP_DIR/scope-y5.out" || ! grep -Fqx -- '--prompt-file' "$GROK_ARGS_FILE"; then
+    cat "$GROK_ARGS_FILE" >&2 || true
+    scope_fail Y "--grok-exec must force an architect headless" "$TMP_DIR/scope-y5.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario Y] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 22 ]; then
-    echo "Expected 22 commit-scope scenarios (A-P, R-U, W, X); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 23 ]; then
+    echo "Expected 23 commit-scope scenarios (A-P, R-U, W-Y); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

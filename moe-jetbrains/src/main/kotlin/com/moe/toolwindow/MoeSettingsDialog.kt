@@ -3,6 +3,7 @@ package com.moe.toolwindow
 import com.moe.model.ProjectSettings
 import com.moe.services.MoeProjectService
 import com.moe.util.MoeBundle
+import com.moe.util.TerminalAgentLauncher
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -26,7 +27,14 @@ class MoeSettingsDialog(
 
     private val approvalModeCombo = ComboBox(arrayOf("CONTROL", "SPEED", "TURBO"))
     private val speedModeDelaySpinner = JSpinner(SpinnerNumberModel(2000, 500, 30000, 500))
-    private val agentCommandCombo = ComboBox(arrayOf("claude", "codex", "gemini")).apply {
+    // Built-in CLIs come from the launcher's provider enum (minus the Custom
+    // placeholder) so the settings combo cannot drift from the Agents menu.
+    private val agentCommandCombo = ComboBox(
+        TerminalAgentLauncher.AgentProvider.entries
+            .filter { it != TerminalAgentLauncher.AgentProvider.CUSTOM }
+            .map { it.command }
+            .toTypedArray()
+    ).apply {
         isEditable = true
     }
     private val autoCreateBranchCheckbox = JBCheckBox(MoeBundle.message("moe.settings.autoCreateBranch"))

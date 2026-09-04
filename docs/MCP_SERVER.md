@@ -456,7 +456,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
   activePeerIds: string[],
   peersActive: boolean,
   alwaysInclude: string[],    // BOARD: .moe/tasks/<taskId>.json (always) + .moe/epics/*.json, .moe/project.json, non-live-peer task records (when commitBoardState)
-  excludePrefixes: string[],  // settings.attribution.exclude ONLY, normalized (project-relative, trailing slash stripped). The built-in DENY list (.moe/** except BOARD, .mcp.json, .codex/**, .gemini/**, .claude/agents/**, .claude/settings.local.json, untracked .serena/**, .worktrees/**, .moe-worktree*) is hard-coded wrapper-side and never travels here.
+  excludePrefixes: string[],  // settings.attribution.exclude ONLY, normalized (project-relative, trailing slash stripped). The built-in DENY list (.moe/** except BOARD, .mcp.json, .codex/**, .gemini/**, .grok/**, .claude/agents/**, .claude/settings.local.json, untracked .serena/**, .worktrees/**, .moe-worktree*) is hard-coded wrapper-side and never travels here.
   policy: {
     autoCommit, checkpointCommits, checkpointPush, commitBoardState, commitHooks,
     undeclared: "solo" | "never" | "always",

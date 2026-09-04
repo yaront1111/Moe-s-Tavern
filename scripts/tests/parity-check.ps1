@@ -55,11 +55,18 @@ $required = [ordered]@{
     'commit trailers' = @('Moe-Task:', 'Moe-Kind:', 'Moe-Session:', 'Moe-Status:', 'Moe-Paths:', 'Moe-Inferred:', 'Moe-Contested:', 'Moe-Reason:')
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')
     'settings keys' = @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState', 'commitHooks', 'attribution', 'undeclared', 'contested', 'exclude', 'qualityGate', 'qualityGateScope', 'consolidationBranch')
-    'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS')
+    'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS',
+        'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
     'RPC tools' = @('get_commit_scope', 'record_commit')
     'context fields' = @('isEpicFinal')
     'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
+    # Agent-CLI parity: every CLI the launchers support is wired the same way in
+    # both wrappers - its config dir is a DENY-tier attribution prefix, its
+    # cliType literal exists, and its mode/config banners are grep-stable.
+    'cli config dirs' = @('.codex/', '.gemini/', '.grok/')
+    'cli types' = @('"grok"')
+    'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

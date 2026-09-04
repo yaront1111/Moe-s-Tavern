@@ -248,6 +248,7 @@ export function activate(context: vscode.ExtensionContext) {
             { label: 'Claude', description: lastProvider === 'claude' ? 'Last used' : '', provider: 'claude' },
             { label: 'Codex', description: lastProvider === 'codex' ? 'Last used' : '', provider: 'codex' },
             { label: 'Gemini', description: lastProvider === 'gemini' ? 'Last used' : '', provider: 'gemini' },
+            { label: 'Grok', description: lastProvider === 'grok' ? 'Last used' : '', provider: 'grok' },
             { label: 'Custom...', description: lastProvider === 'custom' && lastCustomCmd ? `Last: ${lastCustomCmd}` : 'Enter a custom CLI command', provider: 'custom' },
         ];
 

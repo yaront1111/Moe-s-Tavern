@@ -34,3 +34,9 @@ No automated VS Code extension test harness exists in this package yet; the curr
 5. Expected: no status change is sent — the task stays BLOCKED (check the daemon activity log / task JSON shows no `WORKING` transition). Dropping it onto a *different* column still moves it explicitly.
 6. Flip the task BLOCKED ↔ WORKING on the daemon side while the board stays open.
 7. Expected: the card stays in the Working column and the BLOCKED chip appears/disappears with each flip (incremental column diff picks up the status-only change).
+
+## Grok provider launches through the wrapper
+1. Run `Moe: Start Agent` → `Start Worker` and pick **Grok** in the provider QuickPick (listed between Gemini and Custom...; on the next run the last-used provider floats to the top with a `Last used` description).
+2. Expected: a `Moe Coder` terminal runs `moe-agent.sh ... --command 'grok'` (macOS/Linux) — on Windows the visible line is a `powershell ... -EncodedCommand <base64>` blob, so verify through the wrapper's own output instead; the wrapper prints `Grok MCP config written to: <project>/.grok/config.toml` and `Grok mode: headless (--prompt-file --yolo)` for a worker/qa role (`Grok mode: interactive` for architect/governor). `<project>/.grok/config.toml` contains `[mcp_servers.moe]` and the literal `MOE_WORKER_ID = "${MOE_WORKER_ID:-}"`.
+3. Run `Moe: Open Settings`: the Agent Command datalist offers `grok` alongside `claude`, `codex`, `gemini`; saving `grok` round-trips into `.moe/project.json` `settings.agentCommand`.
+4. Add a task comment whose author contains `grok` (e.g. `grok-worker-1`): it renders with the agent (green) styling in both the Task Detail and Plan Review panels, live-updated and on initial render alike.

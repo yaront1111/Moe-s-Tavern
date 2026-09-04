@@ -588,6 +588,6 @@ function isAgentAuthor(author: string | undefined): boolean {
     return lower === 'worker' || lower === 'architect' || lower === 'qa'
         || lower.includes('agent') || lower.includes('bot')
         || lower.includes('claude') || lower.includes('codex')
-        || lower.includes('gemini');
+        || lower.includes('gemini') || lower.includes('grok');
 }
 

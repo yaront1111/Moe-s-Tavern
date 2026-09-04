@@ -169,6 +169,7 @@ LOOP_REQUESTED=false
 TEAM=""
 CODEX_EXEC=false
 GEMINI_EXEC=false
+GROK_EXEC=false
 INTERACTIVE_REQUESTED=""
 MODEL=""
 
@@ -231,6 +232,10 @@ while [[ $# -gt 0 ]]; do
             GEMINI_EXEC=true
             shift
             ;;
+        --grok-exec)
+            GROK_EXEC=true
+            shift
+            ;;
         --interactive)
             INTERACTIVE_REQUESTED=true
             shift
@@ -253,7 +258,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -p, --project PATH       Project path"
             echo "  -n, --project-name NAME  Project name from registry"
             echo "  -w, --worker-id ID       Worker ID (default: same as role)"
-            echo "  -c, --command CMD        Agent command (claude, codex, gemini, or custom; default: claude)"
+            echo "  -c, --command CMD        Agent command (claude, codex, gemini, grok, or custom; default: claude)"
             echo "  -l, --list-projects      List registered projects"
             echo "  --no-start-daemon        Don't auto-start daemon"
             echo "  --no-auto-claim          Don't auto-claim a task on start"
@@ -263,6 +268,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -t, --team NAME          Team name for parallel same-role agents"
             echo "  --codex-exec             Use codex exec mode (non-interactive, headless)"
             echo "  --gemini-exec            Use gemini headless mode (non-interactive, --yolo)"
+            echo "  --grok-exec              Use grok headless mode (non-interactive, --prompt-file --yolo)"
             echo "  --interactive            Force Claude into interactive TUI (default: on for architect/governor)"
             echo "  --no-interactive         Force one-shot --print mode (default for worker/qa; fresh CLI per task)"
             echo "  --model MODEL            Claude model override (default: all roles = opus-5)"
@@ -352,6 +358,8 @@ if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
 elif [ "$CMD_BASE" = "gemini" ]; then
     CLI_TYPE="gemini"
+elif [ "$CMD_BASE" = "grok" ]; then
+    CLI_TYPE="grok"
 fi
 CODEX_INTERACTIVE=false
 if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ]; then
@@ -379,6 +387,13 @@ fi
 CLAUDE_INTERACTIVE=false
 if [ "$CLI_TYPE" = "claude" ] && [ "$INTERACTIVE" = true ]; then
     CLAUDE_INTERACTIVE=true
+fi
+# Grok follows the claude-style ROLE polarity (architect/governor TUI, worker/qa
+# headless), not the codex/gemini "interactive unless --*-exec" one -- so it is
+# computed here, AFTER INTERACTIVE is resolved. --grok-exec forces headless.
+GROK_INTERACTIVE=false
+if [ "$CLI_TYPE" = "grok" ] && [ "$INTERACTIVE" = true ] && [ "$GROK_EXEC" = false ]; then
+    GROK_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -623,7 +638,7 @@ ensure_mcp_config() {
     #   2) $MOE_SERENA_PROJECT                            (ad-hoc / CI override)
     #   3) the Moe project root                           (correct for single-repo projects)
     # Computed ONCE here (where SERENA_CMD is resolved) and exported so the
-    # claude/codex/gemini config writers below all see the same value; they read
+    # claude/codex/gemini/grok config writers below all see the same value; they read
     # it via argv (their heredocs are quoted, so bash does not interpolate inside).
     SERENA_PROJECT=""
     SERENA_PROJECT_SOURCE="project root"
@@ -1004,6 +1019,145 @@ GEMINIEOF
     fi
 fi
 
+# For grok: write project-scoped .grok/config.toml (same [mcp_servers.*] TOML
+# shape as codex). Project-level grok config may ONLY carry [mcp_servers.*] /
+# [plugins] / [permission] / [mcp] tables -- NO top-level keys -- so this is a
+# deliberate duplicate of the codex writer minus its top-level lines, not a
+# shared helper (the codex output must stay byte-identical). Grok expands
+# ${VAR:-default} inside env/args/command values at load time, so the worker
+# id is written as the LITERAL "${MOE_WORKER_ID:-}" (quoted heredoc: bash must
+# not expand it) and resolves per grok process, empty for a human running grok
+# by hand.
+if [ "$CLI_TYPE" = "grok" ]; then
+    echo "Writing project-scoped Grok MCP config..."
+    GROK_CONFIG_DIR="$PROJECT/.grok"
+    GROK_CONFIG_FILE="$GROK_CONFIG_DIR/config.toml"
+    mkdir -p "$GROK_CONFIG_DIR"
+
+    # Determine the proxy command and args for TOML
+    TOML_PROXY_CMD=""
+    TOML_PROXY_ARGS=""
+    if [ -n "$PROXY_ARGS" ]; then
+        TOML_PROXY_CMD="$NODE_CMD"
+        TOML_PROXY_ARGS="$PROXY_ARGS"
+    elif [ -n "$PROXY_CMD" ]; then
+        TOML_PROXY_CMD="$PROXY_CMD"
+    else
+        echo -e "${YELLOW}[WARN]${NC} moe-proxy not found; cannot write Grok MCP config"
+    fi
+
+    # Same normalization as the codex writer: a raw Windows backslash path from
+    # .moe-agent.json/MOE_SERENA_PROJECT becomes a forward-slash path first.
+    TOML_SERENA_PROJECT=$(normalize_path "$SERENA_PROJECT")
+
+    if [ -n "$TOML_PROXY_CMD" ]; then
+        $PYTHON_CMD - "$GROK_CONFIG_FILE" "$TOML_PROXY_CMD" "$TOML_PROXY_ARGS" "$PROJECT" "$SERENA_CMD" "$TOML_SERENA_PROJECT" << 'PYEOF'
+import sys, os, re, json
+
+config_file = sys.argv[1]
+proxy_cmd = sys.argv[2]
+proxy_args = sys.argv[3]
+project_path = sys.argv[4]
+serena_cmd = sys.argv[5] if len(sys.argv) > 5 else ""
+serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
+
+# Build the moe MCP server TOML block. Every string/array value goes through
+# json.dumps -- JSON strings are valid TOML basic strings, so Windows
+# backslashes and embedded quotes are escaped instead of corrupting the TOML.
+# Grok's MCP startup timeout key is startup_timeout_sec like codex; the proxy
+# can wait past a short default while a supervised daemon restarts.
+# Digits only (parity with the ps1 writer's ^\d+$ check): anything else keeps 120.
+_timeout_raw = os.environ.get("MOE_GROK_MCP_STARTUP_TIMEOUT_SEC", "")
+startup_timeout_sec = int(_timeout_raw) if _timeout_raw.isdigit() else 120
+moe_block_lines = [
+    "",
+    "[mcp_servers.moe]",
+    'command = ' + json.dumps(proxy_cmd),
+]
+if proxy_args:
+    moe_block_lines.append('args = ' + json.dumps([proxy_args]))
+moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)
+moe_block_lines.extend([
+    "",
+    "[mcp_servers.moe.env]",
+    'MOE_PROJECT_PATH = ' + json.dumps(project_path),
+    # Literal: grok expands ${MOE_WORKER_ID:-} per process at config load.
+    'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"',
+])
+# Persist a pre-set daemon host override (WSL cross-boundary runs). The
+# discovered-at-runtime case is handled by the post-discovery upsert in the
+# main flow -- daemon host probing runs after this writer.
+if os.environ.get("MOE_DAEMON_HOST"):
+    moe_block_lines.append('MOE_DAEMON_HOST = ' + json.dumps(os.environ["MOE_DAEMON_HOST"]))
+moe_block = "\n".join(moe_block_lines)
+
+# Serena MCP server block (LSP code intelligence + memory, pinned to this
+# project). Empty when Serena isn't installed. Context is the generic "agent".
+serena_block = ""
+if serena_cmd:
+    serena_block = "\n".join([
+        "",
+        "[mcp_servers.serena]",
+        'command = ' + json.dumps(serena_cmd),
+        'args = ' + json.dumps(["start-mcp-server", "--context", "agent", "--project", serena_project,
+                                 "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]),
+    ])
+
+header = '# Grok project config (auto-generated by moe-agent)\n'
+
+if os.path.exists(config_file):
+    # Merge: read existing, drop the sections this writer owns and re-emits
+    # ([mcp_servers.moe], [mcp_servers.moe.env], [mcp_servers.serena]); keep
+    # every other user section. Serena SUBtables ([mcp_servers.serena.*]) are
+    # kept while Serena is installed but stripped when it is not -- an
+    # orphaned subtable with no parent transport is an invalid server entry.
+    with open(config_file, "r") as f:
+        content_str = f.read()
+
+    def strips(header_line):
+        if header_line.startswith("[mcp_servers.moe]") or header_line.startswith("[mcp_servers.moe.env]"):
+            return True
+        if header_line.startswith("[mcp_servers.serena]"):
+            return True
+        if not serena_cmd and header_line.startswith("[mcp_servers.serena."):
+            return True
+        return False
+
+    lines = content_str.splitlines(True)
+    cleaned = []
+    skip = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            skip = strips(stripped)
+        if not skip:
+            cleaned.append(line)
+    content_str = "".join(cleaned)
+
+    # Safety: if the merge produced empty/whitespace-only content, start fresh.
+    if not content_str.strip():
+        content_str = header
+
+    # No top-level keys to place, so the managed blocks simply go last (after
+    # any user sections). rstrip + "\n" keeps a re-run byte-identical.
+    content = content_str.rstrip() + "\n" + moe_block + serena_block + "\n"
+else:
+    # Create new config
+    content = header + moe_block + serena_block + "\n"
+
+with open(config_file, "w") as f:
+    f.write(content)
+PYEOF
+
+        if [ -f "$GROK_CONFIG_FILE" ]; then
+            echo -e "${GREEN}[OK]${NC} Grok MCP config written to: $GROK_CONFIG_FILE"
+        else
+            echo -e "${RED}[ERROR]${NC} Failed to write Grok MCP config"
+            exit 1
+        fi
+    fi
+fi
+
 # HTTP /health probe against a daemon endpoint. Used when a PID check cannot
 # answer liveness (a Windows daemon's PID is invisible inside WSL).
 probe_daemon_health() {
@@ -1172,17 +1326,27 @@ if [ "$NO_START_DAEMON" = false ]; then
     fi
 fi
 
-# Persist the discovered cross-boundary daemon host into the codex MCP config.
-# The codex writer runs BEFORE daemon host discovery, so a WSL launch would
-# otherwise leave [mcp_servers.moe.env] without MOE_DAEMON_HOST and the proxy
-# dialing loopback whenever codex doesn't forward the wrapper's environment to
-# spawned MCP servers. Idempotent; no-op when MOE_DAEMON_HOST is unset
-# (same-host daemon) or the config doesn't exist.
-if [ "$CLI_TYPE" = "codex" ] && [ -n "${MOE_DAEMON_HOST:-}" ] && [ -f "$PROJECT/.codex/config.toml" ]; then
-    $PYTHON_CMD - "$PROJECT/.codex/config.toml" "$MOE_DAEMON_HOST" << 'PYEOF'
+# Persist the discovered cross-boundary daemon host into the codex / grok MCP
+# config. Both TOML writers run BEFORE daemon host discovery, so a WSL launch
+# would otherwise leave [mcp_servers.moe.env] without MOE_DAEMON_HOST and the
+# proxy dialing loopback whenever the CLI doesn't forward the wrapper's
+# environment to spawned MCP servers. Idempotent; no-op when MOE_DAEMON_HOST is
+# unset (same-host daemon) or the config doesn't exist.
+DAEMON_HOST_TOML_FILE=""
+DAEMON_HOST_TOML_LABEL=""
+if [ "$CLI_TYPE" = "codex" ]; then
+    DAEMON_HOST_TOML_FILE="$PROJECT/.codex/config.toml"
+    DAEMON_HOST_TOML_LABEL="Codex"
+elif [ "$CLI_TYPE" = "grok" ]; then
+    DAEMON_HOST_TOML_FILE="$PROJECT/.grok/config.toml"
+    DAEMON_HOST_TOML_LABEL="Grok"
+fi
+if [ -n "$DAEMON_HOST_TOML_FILE" ] && [ -n "${MOE_DAEMON_HOST:-}" ] && [ -f "$DAEMON_HOST_TOML_FILE" ]; then
+    $PYTHON_CMD - "$DAEMON_HOST_TOML_FILE" "$MOE_DAEMON_HOST" "$DAEMON_HOST_TOML_LABEL" << 'PYEOF'
 import sys, re, json
 
 config_file, daemon_host = sys.argv[1], sys.argv[2]
+label = sys.argv[3] if len(sys.argv) > 3 else "Codex"
 with open(config_file, "r") as f:
     lines = f.read().splitlines(True)
 
@@ -1213,7 +1377,7 @@ if in_env and not done:
 if done:
     with open(config_file, "w") as f:
         f.write("".join(out))
-    print(f"[OK] Codex MCP config: MOE_DAEMON_HOST={daemon_host}")
+    print(f"[OK] {label} MCP config: MOE_DAEMON_HOST={daemon_host}")
 PYEOF
 fi
 
@@ -1400,6 +1564,10 @@ except Exception:
     pass
 " "$PROJECT_JSON" "$ROLE" 2>/dev/null || true)
 fi
+# The EXPLICIT model (--model flag or settings.models.<role>) before the claude
+# default is applied: grok is launched with -m ONLY when one of these exists,
+# never with the claude-opus-5 fallback below.
+EXPLICIT_MODEL="$RESOLVED_MODEL"
 if [ -z "$RESOLVED_MODEL" ]; then
     # All roles default to Opus 5 -- matches moe-agent.ps1. Launched with
     # --effort max below. Override per role via project.json settings.models.{role}.
@@ -1461,8 +1629,16 @@ if [ "$NO_LOOP" = true ]; then
     LOOP_ENABLED=false
 fi
 
-if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ]; then
-    # Codex / Gemini TUIs hold a single long-lived REPL session — looping them
+# Grok launch mode, printed once (the ps1 twin prints it beside the polling gate).
+if [ "$CLI_TYPE" = "grok" ]; then
+    if [ "$GROK_INTERACTIVE" = true ]; then
+        echo "Grok mode: interactive"
+    else
+        echo "Grok mode: headless (--prompt-file --yolo)"
+    fi
+fi
+if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ]; then
+    # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
     # interactive mode is fine to loop: each iteration spawns a fresh CLI
     # invocation, so per-task cache replay matches --print mode.
@@ -2084,7 +2260,7 @@ PYEOF
 # unattributed (blob\tpath), contested (peer\tpath), missing (path), plus a
 # KEY=VALUE summary. Tiers: BOARD (own task record always; project.json /
 # epics / non-live-peer records when changed) > DENY (.moe/**, .mcp.json,
-# .codex/**, .gemini/**, .claude/agents/**, .claude/settings.local.json,
+# .codex/**, .gemini/**, .grok/**, .claude/agents/**, .claude/settings.local.json,
 # untracked .serena/**, .worktrees/**, .moe-worktree*, attribution.exclude) >
 # ASSERTED ∪ TOOL ∪ own Serena memories (committed regardless of the baseline;
 # CONTESTED when a peer declared them too) > PEER-declared (skipped) >
@@ -2226,7 +2402,7 @@ def denied(p, xy):
             return True
         if pk == pre + '.mcp.json' or pk == pre + '.claude/settings.local.json':
             return True
-        if pk.startswith(pre + '.codex/') or pk.startswith(pre + '.gemini/') or pk.startswith(pre + '.claude/agents/'):
+        if pk.startswith(pre + '.codex/') or pk.startswith(pre + '.gemini/') or pk.startswith(pre + '.grok/') or pk.startswith(pre + '.claude/agents/'):
             return True
         if pk.startswith(pre + '.serena/') and xy == '??':
             return True
@@ -4352,8 +4528,9 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # the model, owns claiming the next task. Override the wait_for_task chain
     # baked into the role bodies above and forbid ending the turn "to wait".
     # Governor is excluded: its prompt is a chat_wait loop, not a finish-and-
-    # stop task (and governors default to interactive anyway).
-    if [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ]; then
+    # stop task (and governors default to interactive anyway). Headless grok
+    # (--prompt-file --yolo) is the same one-shot shape and gets it too.
+    if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ]; then
         PROMPT_BODY="$PROMPT_BODY CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Run verification in the foreground or poll it to completion. Do NOT call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
     fi
 
@@ -4463,7 +4640,7 @@ $PROMPT_BODY"
     elif [ "$CLI_TYPE" = "gemini" ]; then
         # Check gemini is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Gemini command not found: $COMMAND_BIN. Install Gemini CLI first (npm install -g @anthropic-ai/gemini-cli or see https://github.com/google-gemini/gemini-cli)."
+            echo -e "${RED}[ERROR]${NC} Gemini command not found: $COMMAND_BIN. Install Gemini CLI first (npm install -g @google/gemini-cli or see https://github.com/google-gemini/gemini-cli)."
             exit 1
         fi
 
@@ -4518,6 +4695,115 @@ $PROMPT_BODY"
             set +e
 
             (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-interactive "$SHORT_PROMPT")
+
+            CLI_EXIT_CODE=$?
+
+            set -e
+        fi
+    elif [ "$CLI_TYPE" = "grok" ]; then
+        # Check grok (xAI Grok Build) is available
+        if ! command -v "$COMMAND_BIN" &> /dev/null; then
+            echo -e "${RED}[ERROR]${NC} Grok command not found: $COMMAND_BIN. Install Grok Build first (curl -fsSL https://x.ai/cli/install.sh | bash)."
+            exit 1
+        fi
+
+        # Auth is XAI_API_KEY or the OAuth cache from `grok login`; missing
+        # both is a WARN, not a stop -- grok reports the real failure itself.
+        if [ -z "${XAI_API_KEY:-}" ] && [ ! -f "$HOME/.grok/auth.json" ]; then
+            echo -e "${YELLOW}[WARN]${NC} XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate."
+        fi
+
+        # Grok instruction delivery chain:
+        # 1. AGENTS.md / CLAUDE.md -> auto-loaded as project rules (like codex)
+        # 2. .grok/config.toml -> MCP servers (moe proxy + Serena), written at pre-flight
+        # 3. GROK_PROMPT_FILE below -> role doc + pre-flight results + role body,
+        #    delivered via --prompt-file (headless) or pointed at from a short
+        #    positional prompt (interactive). grok reads no stdin and has no
+        #    --prompt flag, so the per-iteration prompt travels through a file
+        #    under the secure temp dir (removed with it at exit) -- never a
+        #    file in the project root.
+        if [ "$AUTO_CLAIM" = true ]; then
+            # PROMPT already holds the pre-flight body, the legacy body when the
+            # claim RPC failed, and the one-shot CRITICAL suffix when headless.
+            GROK_PROMPT_BODY="$PROMPT"
+        else
+            ROLE_WORKFLOW=""
+            case $ROLE in
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → read Serena memory → explore codebase → submit_plan → write Serena memory (handoff + learnings) → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → start_step → implement → complete_step → complete_task → write Serena memory (handoff + learnings) → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → review code and tests → qa_approve or qa_reject → write Serena memory (handoff + learnings) → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → read Serena memory → complete task → write Serena memory handoff" ;;
+            esac
+            GROK_PROMPT_BODY="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+        fi
+        # -m ONLY for an explicit model (--model, settings.models.<role>, else
+        # MOE_GROK_MODEL) -- never the wrapper's claude-opus-5 fallback.
+        # --effort only when MOE_GROK_EFFORT is set.
+        GROK_MODEL_ARGS=()
+        GROK_MODEL="${EXPLICIT_MODEL:-${MOE_GROK_MODEL:-}}"
+        if [ -n "$GROK_MODEL" ]; then
+            GROK_MODEL_ARGS=(-m "$GROK_MODEL")
+        fi
+        GROK_EFFORT_ARGS=()
+        if [ -n "${MOE_GROK_EFFORT:-}" ]; then
+            GROK_EFFORT_ARGS=(--effort "$MOE_GROK_EFFORT")
+        fi
+        # Grok auto-merges MCP servers from ~/.claude.json / .cursor/mcp.json /
+        # the project .mcp.json unless told not to -- the moe entry must come
+        # from .grok/config.toml only (one proxy per session, worker id via
+        # ${MOE_WORKER_ID:-}), and the auto-updater must not race a fleet launch.
+        # GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0
+        # GROK_DISABLE_AUTOUPDATER=1 go on as an inline env prefix of both
+        # launch lines below. The display string mirrors the optional argv.
+        GROK_EXTRA_DISPLAY=""
+        [ ${#GROK_MODEL_ARGS[@]} -gt 0 ] && GROK_EXTRA_DISPLAY="$GROK_EXTRA_DISPLAY ${GROK_MODEL_ARGS[*]}"
+        [ ${#GROK_EFFORT_ARGS[@]} -gt 0 ] && GROK_EXTRA_DISPLAY="$GROK_EXTRA_DISPLAY ${GROK_EFFORT_ARGS[*]}"
+
+        # No-task fast path for headless grok (same gates as the claude one-shot
+        # path below: never for governors / the interactive TUI, only when the
+        # loop will retry, and never when a routed mention is waiting).
+        LAUNCH_SKIPPED=false
+        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$ROLE" != "governor" ] && [ "$GROK_INTERACTIVE" = false ] \
+            && [ "$LOOP_ENABLED" = true ] && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
+            echo "[no-task] Skipping CLI launch -- wrapper will poll again in ${POLL_INTERVAL} s."
+            CLI_EXIT_CODE=0
+            LAUNCH_SKIPPED=true
+        fi
+
+        # SYSTEM_APPEND + per-iteration session context (bash PROMPT already
+        # carries DYNAMIC_CONTEXT + the role body -- it is not added twice).
+        # Written only when a CLI actually launches this iteration.
+        GROK_PROMPT_FILE="$(create_secure_temp)/grok-prompt.md"
+        if [ "$LAUNCH_SKIPPED" = false ]; then
+            printf '%s\n\n# Session Context (per-iteration)\n%s' "$SYSTEM_APPEND" "$GROK_PROMPT_BODY" > "$GROK_PROMPT_FILE"
+            echo -e "${GREEN}[OK]${NC} Grok prompt file written to: $GROK_PROMPT_FILE"
+        fi
+
+        # The heartbeat sidecar is started once, centrally, before this
+        # dispatch (start_heartbeat_sidecar above) and stopped after it -- no
+        # per-branch start here.
+        if [ "$LAUNCH_SKIPPED" = true ]; then
+            : # CLI spawn skipped this iteration; post-flight + loop continue below.
+        elif [ "$GROK_INTERACTIVE" = false ]; then
+            # Non-interactive headless mode
+            echo ""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --prompt-file \"$GROK_PROMPT_FILE\" --yolo --cwd \"$PROJECT\" --no-auto-update --output-format plain$GROK_EXTRA_DISPLAY"
+            set +e
+
+            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --prompt-file "$GROK_PROMPT_FILE" --yolo --cwd "$PROJECT" --no-auto-update --output-format plain "${GROK_MODEL_ARGS[@]}" "${GROK_EFFORT_ARGS[@]}")
+
+            CLI_EXIT_CODE=$?
+
+            set -e
+        else
+            # Interactive TUI: the initial prompt is a positional argument, so
+            # keep it a short quote-free pointer at the prompt file.
+            GROK_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $GROK_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
+            echo ""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} --cwd \"$PROJECT\"${GROK_MODEL_ARGS:+ ${GROK_MODEL_ARGS[*]}} \"<prompt>\""
+            set +e
+
+            (cd "$PROJECT" && GROK_CLAUDE_MCPS_ENABLED=0 GROK_CURSOR_MCPS_ENABLED=0 GROK_DISABLE_AUTOUPDATER=1 "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --cwd "$PROJECT" "${GROK_MODEL_ARGS[@]}" "$GROK_POINTER_PROMPT")
 
             CLI_EXIT_CODE=$?
 
@@ -4591,7 +4877,7 @@ $PROMPT_BODY"
         # post-flight attribution: a path this session's tools wrote is the
         # session's own even when a peer's plan also names it and even with
         # other workers active. Absolute paths outside the repo are dropped
-        # with a WARN. Codex/gemini have no such stream: their TOOL set is
+        # with a WARN. Codex/gemini/grok have no such stream: their TOOL set is
         # empty (documented).
         STREAM_JSON_PARSER=$(cat <<'PYEOF'
 import json, os, re, sys
