@@ -10,7 +10,7 @@ AI agents are stateless. Every session starts from zero. An architect spends min
 
 ## The Solution: Serena's Memory Tools
 
-Memory is provided by [Serena](https://github.com/oraios/serena), the same MCP server that gives agents LSP-backed symbol navigation. The agent launchers (`scripts/moe-agent.ps1` / `scripts/moe-agent.sh`) inject Serena — pinned to the project — for the `claude`, `codex`, and `gemini` CLIs. If Serena is not installed, the launchers **no-op** and agents simply run without cross-session memory (everything else still works).
+Memory is provided by [Serena](https://github.com/oraios/serena), the same MCP server that gives agents LSP-backed symbol navigation. The agent launchers (`scripts/moe-agent.ps1` / `scripts/moe-agent.sh`) inject Serena — pinned to the project — for the `claude`, `codex`, `gemini`, and `grok` CLIs. If Serena is not installed, the launchers **no-op** and agents simply run without cross-session memory (everything else still works).
 
 ### Where memory lives
 

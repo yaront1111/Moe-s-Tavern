@@ -212,6 +212,48 @@ ls .moe/tasks/
 
 ---
 
+### Grok CLI cannot see `moe.*` tools
+
+**Symptom:** A `--command grok` agent launches (`Grok MCP config written to: <project>/.grok/config.toml`,
+`Grok mode: headless (--prompt-file --yolo)` or `Grok mode: interactive`) but never calls a `moe.*`
+tool, reports them as unknown, or fails before the first call.
+
+**Diagnose in this order:**
+
+1. **Is the server registered?** From the project root, `grok mcp list` must show `moe` (and `serena`
+   when it is installed); `grok mcp doctor moe` starts the proxy and reports the failure verbatim.
+   `grok inspect` shows the effective configuration — the wrapper-written project `.grok/config.toml`
+   beats anything grok auto-merges from `~/.claude.json`, `.cursor/mcp.json` or the project
+   `.mcp.json` (the wrapper also sets `GROK_CLAUDE_MCPS_ENABLED=0` / `GROK_CURSOR_MCPS_ENABLED=0` for
+   the spawned process, so those merges are off for agents; a hand-run `grok` may still see them).
+2. **Proxy stderr:** `~/.grok/logs/mcp/moe.stderr.log` holds the proxy's own output. A
+   `.moe/daemon.json` project-path mismatch or a dead daemon shows up here, not in the agent's
+   transcript — the proxy reads `MOE_PROJECT_PATH` from `[mcp_servers.moe.env]`, and in WSL mode the
+   wrapper upserts `MOE_DAEMON_HOST` into the same table after host discovery.
+3. **`MOE_WORKER_ID` is empty:** the config carries the literal `MOE_WORKER_ID = "${MOE_WORKER_ID:-}"`,
+   expanded by grok per process. Under the wrapper it becomes the launched worker's id; a human running
+   `grok` by hand gets `""`, which the proxy treats as unset (no `workerId` injection) — pass `workerId`
+   explicitly in tool calls.
+4. **Auth:** `[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to
+   authenticate.` at launch means neither credential exists. When both exist the cached `grok login`
+   token (`~/.grok/auth.json`) wins over `XAI_API_KEY` — a stale or wrong-account cached login fails
+   every request while the MCP config looks fine; re-run `grok login` (or remove the cached file to fall
+   back to the key).
+5. **Wrong `grok` binary:** the community `grok-cli` npm package installs a binary of the same name.
+   `grok --version` must identify xAI Grok Build; otherwise reinstall (`irm https://x.ai/cli/install.ps1 | iex`
+   on Windows, `curl -fsSL https://x.ai/cli/install.sh | bash` on Mac/Linux/WSL) or point
+   `-Command`/`--command` at the full path. The wrapper detects grok by basename — a differently named
+   binary is treated as a custom CLI and gets no `.grok/config.toml` at all.
+
+The config is rewritten idempotently on every launch: other `[mcp_servers.*]` sections you added by
+hand survive, but a project `.grok/config.toml` may not carry top-level keys (only `[mcp_servers.*]`,
+`[plugins]`, `[permission]`, `[mcp]`) — put model/effort choices in `MOE_GROK_MODEL` / `MOE_GROK_EFFORT`
+instead. `.grok/config.toml` is on the attribution DENY list (`.grok/**`), so the wrapper never lands it
+in a task commit; this repo also gitignores it — add it to your own project's `.gitignore` (it holds
+machine-local absolute paths).
+
+---
+
 ## Task Sync Issues
 
 ### Tasks not appearing in plugin
@@ -400,7 +442,7 @@ unattributed. The codes:
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `MOE_ATTR_EXCLUDED` | On the DENY list: `.moe/**` (except board records), `.mcp.json`, `.codex/**`, `.gemini/**`, `.claude/agents/**`, `.claude/settings.local.json`, untracked `.serena/**`, `.worktrees/**`, `.moe-worktree*`, `settings.attribution.exclude` | Nothing — these never belong in a task commit. |
+| `MOE_ATTR_EXCLUDED` | On the DENY list: `.moe/**` (except board records), `.mcp.json`, `.codex/**`, `.gemini/**`, `.grok/**`, `.claude/agents/**`, `.claude/settings.local.json`, untracked `.serena/**`, `.worktrees/**`, `.moe-worktree*`, `settings.attribution.exclude` | Nothing — these never belong in a task commit. |
 | `MOE_ATTR_PEER_DECLARED(task-<peer>)` | Another live task declares this path and this task never asserted it | Nothing — the peer's own exit lands it. If it really is this task's edit, `moe.declare_files` onto this task (it then lands as contested). |
 | `MOE_ATTR_CONTESTED` | Asserted by this task **and** declared by a live peer, with `settings.attribution.contested: "skip"` | Decide who owns it. With the default `"commit"` it lands here with a `Moe-Contested: <path> (task-<peer>)` trailer. |
 | `MOE_ATTR_PREEXISTING` | Dirty before this task's first session and byte-identical now — the hard constraint: a path the task never asserted and never changed is never committed | Nothing for this task. Debris left by a DONE task → "Dirty paths owned only by DONE tasks" below. |

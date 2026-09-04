@@ -1,6 +1,10 @@
 #!/bin/bash
 # Moe Agent Team Launcher for Mac/Linux
 # Launches worker, qa, and architect agents in separate terminal windows
+#
+# Each agent runs scripts/moe-agent.sh with its default agent command (claude).
+# The supported agent commands live there (claude, codex, gemini, grok, or a
+# custom path via --command); this launcher adds no command switch of its own.
 
 set -e
 

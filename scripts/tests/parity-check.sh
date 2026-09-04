@@ -93,6 +93,23 @@ for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_P
   require_both "env name" "$env_name"
 done
 
+# Agent-CLI vocabulary (claude / codex / gemini / grok): the per-CLI config
+# dirs (also the attribution DENY prefixes), the grok cliType value, the grok
+# env names and the grok banners must be spelled identically in both wrappers.
+for cfg_dir in '.codex/' '.gemini/' '.grok/'; do
+  require_both "cli config dir" "$cfg_dir"
+done
+for cli_type in '"grok"'; do
+  require_both "cli type" "$cli_type"
+done
+for env_name in MOE_GROK_MODEL MOE_GROK_EFFORT MOE_GROK_MCP_STARTUP_TIMEOUT_SEC \
+  GROK_CLAUDE_MCPS_ENABLED GROK_CURSOR_MCPS_ENABLED GROK_DISABLE_AUTOUPDATER; do
+  require_both "env name" "$env_name"
+done
+for banner in 'Grok MCP config written to:' 'Grok mode: headless' 'Grok mode: interactive'; do
+  require_both "grok banner" "$banner"
+done
+
 # MCP tools the wrappers call for the ledger.
 for tool in get_commit_scope record_commit; do
   require_both "RPC tool" "$tool"

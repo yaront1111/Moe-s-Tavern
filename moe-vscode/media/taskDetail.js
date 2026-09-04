@@ -19,7 +19,7 @@
         return lower === 'worker' || lower === 'architect' || lower === 'qa'
             || lower.indexOf('agent') !== -1 || lower.indexOf('bot') !== -1
             || lower.indexOf('claude') !== -1 || lower.indexOf('codex') !== -1
-            || lower.indexOf('gemini') !== -1;
+            || lower.indexOf('gemini') !== -1 || lower.indexOf('grok') !== -1;
     }
 
     // Save

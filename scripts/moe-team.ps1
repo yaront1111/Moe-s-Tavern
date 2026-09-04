@@ -5,7 +5,7 @@ param(
     # Delay in seconds BETWEEN launching each window
     [int]$DelayBetween = 1,
 
-    # Agent command and args (claude, codex, gemini, or custom path)
+    # Agent command and args (claude, codex, gemini, grok, or custom path)
     [string]$Command = "claude",
     [string[]]$CommandArgs = @(),
     [string]$Team = "",

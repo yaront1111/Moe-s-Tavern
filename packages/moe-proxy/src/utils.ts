@@ -154,6 +154,10 @@ const WORKER_ID_IS_A_FILTER = new Set([
  * Inject MOE_WORKER_ID into tools/call arguments when the caller omits workerId.
  * Only runs for MCP tools/call requests — never touches initialize/tools/list/ping,
  * and never touches a tool that uses `workerId` as a query filter.
+ * An EMPTY or whitespace-only env value counts as unset: the grok MCP config
+ * pins `MOE_WORKER_ID = "${MOE_WORKER_ID:-}"`, which grok expands to "" for a
+ * human running `grok` by hand — injecting that would send `workerId: ""` to
+ * the daemon instead of letting the call through unattributed.
  * Returns true if the parsed object was mutated. Never throws.
  */
 export function injectWorkerId(
@@ -161,7 +165,7 @@ export function injectWorkerId(
   envWorkerId: string | undefined
 ): boolean {
   try {
-    if (!envWorkerId) return false;
+    if (typeof envWorkerId !== 'string' || envWorkerId.trim() === '') return false;
     if (!parsed || typeof parsed !== 'object') return false;
     const msg = parsed as Record<string, unknown>;
     if (msg.method !== 'tools/call') return false;

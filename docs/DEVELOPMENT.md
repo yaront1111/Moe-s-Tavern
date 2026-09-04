@@ -170,7 +170,8 @@ Key flags:
 - `-Role` / `--role`: `architect`, `worker`, or `qa`
 - `-Project` / `--project`: Path to your project
 - `-ProjectName` / `--project-name`: Look up project from `~/.moe/projects.json` registry
-- `-Command` / `--command`: Agent CLI to run (`claude`, `codex`, `gemini`, or custom path)
+- `-Command` / `--command`: Agent CLI to run (`claude`, `codex`, `gemini`, `grok`, or custom path). `grok` is xAI's Grok Build — install with `irm https://x.ai/cli/install.ps1 | iex` (or `npm install -g @xai-official/grok`) on Windows, `curl -fsSL https://x.ai/cli/install.sh | bash` on Mac/Linux/WSL; auth via `XAI_API_KEY` or `grok login`
+- `-GrokExec` / `--grok-exec`: Force the `grok` CLI headless (`--prompt-file --yolo`) for roles that default to the interactive TUI (architect/governor); worker/qa are headless already. The wrapper writes `<project>/.grok/config.toml` (`[mcp_servers.moe]`, plus `[mcp_servers.serena]` when Serena is installed) on every launch
 - `-NoLoop` / `--no-loop`: Run once and exit (default: poll for new tasks every 30s)
 - `-PollInterval` / `--poll-interval`: Seconds between polls (default: 30)
 - `-ListProjects` / `--list-projects`: Show registered projects

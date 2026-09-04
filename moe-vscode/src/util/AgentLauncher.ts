@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'custom';
+export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'custom';
 export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
 
 interface ResolvedScript {

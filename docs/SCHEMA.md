@@ -788,7 +788,10 @@ interface Worker {
 type WorkerType =
   | 'CLAUDE'    // Claude Code CLI
   | 'CODEX'     // OpenAI Codex CLI
-  | 'GEMINI';   // Google Gemini CLI
+  | 'GEMINI'    // Google Gemini CLI
+  | 'GROK';     // xAI Grok Build CLI
+// NOTE: the daemon cannot see which CLI a worker runs — claim_next_task / join_team
+// record every worker as 'CLAUDE' today; CODEX / GEMINI / GROK are reserved values.
 
 type WorkerStatus =
   | 'IDLE'              // Connected, no task

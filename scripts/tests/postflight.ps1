@@ -297,6 +297,23 @@ switch (tool) {
     $slowCmd = Join-Path $tempRoot 'slow.cmd'
     Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
 
+    # Fake Grok Build CLI, literally named grok.cmd: the wrapper strips the
+    # extension before matching the basename, so this shim takes the grok
+    # launch branch. It records its argv to FAKE_GROK_ARGV_FILE (and its cwd
+    # to <that>.cwd), copies the --prompt-file (argv 2 in headless mode) to
+    # FAKE_GROK_PROMPT_COPY when set, dirties .grok/config.toml mid-session
+    # when FAKE_GROK_TOUCH_CONFIG=1 (the DENY-tier discriminator: a config
+    # changed since the baseline would otherwise be MEASURED-committed), and
+    # exits with FAKE_GROK_EXIT (0 by default).
+    $grokCmd = Join-Path $tempRoot 'grok.cmd'
+    Set-Content -Path $grokCmd -Encoding ASCII -Value ("@echo off`r`n" +
+        "echo %* > `"%FAKE_GROK_ARGV_FILE%`"`r`n" +
+        "echo %CD%> `"%FAKE_GROK_ARGV_FILE%.cwd`"`r`n" +
+        "if defined FAKE_GROK_PROMPT_COPY copy /y `"%~2`" `"%FAKE_GROK_PROMPT_COPY%`" >nul`r`n" +
+        "if defined FAKE_GROK_TOUCH_CONFIG echo # touched by the session>> `"%MOE_PROJECT_PATH%\.grok\config.toml`"`r`n" +
+        "if defined FAKE_GROK_EXIT exit /b %FAKE_GROK_EXIT%`r`n" +
+        "exit /b 0`r`n")
+
     # File-creating fake CLIs. The ps1 claude launch does NOT cd into the
     # project (it binds via MOE_PROJECT_PATH), so every path is written via
     # %MOE_PROJECT_PATH% — a relative path would land in the harness cwd.
@@ -569,7 +586,8 @@ switch (tool) {
                 }
 
                 # --- Completion-hook COMMIT SCOPE, scenarios A-E, then the
-                # land-on-every-exit scenarios F-V and X ---------------------
+                # land-on-every-exit scenarios F-V and X, then the grok CLI
+                # scenario Y ------------------------------------------------
                 # Twin of the same scenarios in postflight.sh (W is bash-only:
                 # kill -INT). The twins drift easily, so these are matched case
                 # by case against that scenario list rather than by reading the
@@ -1257,11 +1275,150 @@ switch (tool) {
                 $scopeScenariosRun++
                 Write-Host '[scenario X] ok'
 
+                # Scenario Y — grok CLI. A fake grok.cmd takes the grok launch
+                # branch (-GrokExec = headless). Run 1: .grok/config.toml is
+                # written (moe + serena, since MOE_SERENA_PATH resolves) with
+                # the LITERAL ${MOE_WORKER_ID:-} template and no top-level
+                # keys; argv carries --prompt-file/--yolo/--cwd; the prompt
+                # file holds role doc + session context + directive under
+                # $env:TEMP (removed on exit); the fake's exit 3 propagates
+                # into the post-flight (chat line + checkpoint subject); the
+                # config never lands. Run 2: byte-identical config, explicit
+                # MOE_GROK_MODEL/MOE_GROK_EFFORT reach argv. Run 3: Serena
+                # "uninstalled" strips its block while a user [permission]
+                # table survives, and a config dirtied MID-SESSION (changed
+                # since the baseline, so only the DENY tier keeps it out)
+                # still never lands.
+                Write-Host '[scenario Y] grok: config.toml written idempotently, headless argv, exit propagated, config never landed'
+                $scopeYDir = Join-Path $tempRoot 'scope-y'
+                New-ScopeProject $scopeYDir @('owned-a.txt') -Status 'WORKING'
+                Set-Content -Path (Join-Path $scopeYDir 'owned-a.txt') -Value 'owned-a'
+                $scopeYConfig = Join-Path $scopeYDir '.grok\config.toml'
+                $scopeYArgv = Join-Path $tempRoot 'scope-y-argv.txt'
+                $scopeYPrompt = Join-Path $tempRoot 'scope-y-prompt.md'
+                function Invoke-GrokWrapper([string]$outFile) {
+                    Remove-Item -LiteralPath $scopeYArgv -Force -ErrorAction SilentlyContinue
+                    return (Invoke-WrapperProcess @('-Project', $scopeYDir, '-WorkerId', 'worker-grok', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $grokCmd, '-GrokExec', '-NoLoop', '-PollInterval', '0') $outFile)
+                }
+                $scopeYPrevSerena = $env:MOE_SERENA_PATH
+                $scopeYPrevKey = $env:XAI_API_KEY
+                # Operator env that would change run 1's argv/TOML (documented
+                # MOE_GROK_* knobs, WSL MOE_DAEMON_HOST): snapshot, clear, restore.
+                $scopeYPrevOperatorEnv = @{}
+                foreach ($name in @('MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'MOE_DAEMON_HOST')) {
+                    $scopeYPrevOperatorEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+                    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+                }
+                $env:FAKE_TASK_STATUS = 'WORKING'
+                $env:FAKE_GROK_ARGV_FILE = $scopeYArgv
+                $env:FAKE_GROK_PROMPT_COPY = $scopeYPrompt
+                # Any existing file passes the writer's Test-Path; the shim is
+                # never executed as Serena. USERPROFILE is the empty $homeDir,
+                # so ~/.grok/auth.json is absent and the auth WARN must fire.
+                $env:MOE_SERENA_PATH = $trueCmd
+                Remove-Item Env:XAI_API_KEY -ErrorAction SilentlyContinue
+                try {
+                    # Run 1: fresh config, fake exit 3.
+                    $env:FAKE_GROK_EXIT = '3'
+                    $scopeYOut = Join-Path $tempRoot 'scope-y.out'
+                    try {
+                        Assert-ScopeRun 'Y' (Invoke-GrokWrapper $scopeYOut) $scopeYOut
+                    } finally { Remove-Item Env:FAKE_GROK_EXIT -ErrorAction SilentlyContinue }
+                    $scopeYText = Get-Content -Raw -Path $scopeYOut
+                    if (-not (Test-Path -LiteralPath $scopeYConfig)) { Write-Host $scopeYText; throw 'SCENARIO Y FAILED: .grok/config.toml was not written' }
+                    $scopeYToml = [System.IO.File]::ReadAllText($scopeYConfig)
+                    $scopeYBytes1 = [System.IO.File]::ReadAllBytes($scopeYConfig)
+                    if ($scopeYBytes1.Length -ge 3 -and $scopeYBytes1[0] -eq 0xEF -and $scopeYBytes1[1] -eq 0xBB -and $scopeYBytes1[2] -eq 0xBF) { throw 'SCENARIO Y FAILED: .grok/config.toml must be written without a BOM' }
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'startup_timeout_sec = 120', '[mcp_servers.serena]', '"--context", "agent"')) {
+                        if (-not $scopeYToml.Contains($needle)) { Write-Host $scopeYToml; throw "SCENARIO Y FAILED: .grok/config.toml must contain [$needle]" }
+                    }
+                    if ($scopeYToml -match '(?m)^(model_reasoning_effort|developer_instructions|model_instructions_file|project_doc_fallback_filenames)\s*=') { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: a grok project config must carry NO top-level keys' }
+                    if ($scopeYToml.Contains('\')) { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: paths in .grok/config.toml must be forward-slashed' }
+                    foreach ($banner in @('Grok MCP config written to:', 'Grok mode: headless (--prompt-file --yolo)', '[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate.', 'Command: ')) {
+                        if (-not $scopeYText.Contains($banner)) { Write-Host $scopeYText; throw "SCENARIO Y FAILED: expected [$banner] in the wrapper output" }
+                    }
+                    if (-not (Test-Path -LiteralPath $scopeYArgv)) { Write-Host $scopeYText; throw 'SCENARIO Y FAILED: the fake grok was never launched (no argv file)' }
+                    $scopeYArgvText = Get-Content -Raw -Path $scopeYArgv
+                    foreach ($flag in @('--prompt-file', '--yolo', '--cwd', '--no-auto-update', '--output-format plain')) {
+                        if (-not $scopeYArgvText.Contains($flag)) { Write-Host $scopeYArgvText; throw "SCENARIO Y FAILED: grok argv must carry $flag" }
+                    }
+                    if ($scopeYArgvText -match '(^|\s)-m(\s|$)' -or $scopeYArgvText.Contains('--effort') -or $scopeYArgvText.Contains('claude-opus')) { Write-Host $scopeYArgvText; throw 'SCENARIO Y FAILED: without an explicit model/effort there must be no -m / --effort on argv (and never the claude fallback model)' }
+                    if ($scopeYArgvText.Contains('--prompt ') -or $scopeYArgvText.Contains('--print')) { Write-Host $scopeYArgvText; throw 'SCENARIO Y FAILED: grok has no --prompt / --print flag' }
+                    if ($scopeYArgvText.IndexOf($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { Write-Host $scopeYArgvText; throw 'SCENARIO Y FAILED: the prompt file must live under $env:TEMP, never in the project' }
+                    $scopeYCwd = (Get-Content -Raw -Path "$scopeYArgv.cwd").Trim()
+                    if ((Get-Item -LiteralPath $scopeYCwd).FullName.TrimEnd('\') -ne (Get-Item -LiteralPath $scopeYDir).FullName.TrimEnd('\')) { throw "SCENARIO Y FAILED: grok must run with cwd = project; got [$scopeYCwd]" }
+                    if (-not (Test-Path -LiteralPath $scopeYPrompt)) { Write-Host $scopeYText; throw 'SCENARIO Y FAILED: the --prompt-file path was not readable by the fake grok' }
+                    $scopeYPromptText = Get-Content -Raw -Path $scopeYPrompt
+                    foreach ($needle in @('Role: worker', '# Session Context (per-iteration)', '<claimed_task_context>', 'Task task-postflight is claimed')) {
+                        if (-not $scopeYPromptText.Contains($needle)) { Write-Host $scopeYPromptText; throw "SCENARIO Y FAILED: the grok prompt file must contain [$needle]" }
+                    }
+                    if (@(Get-ChildItem -Path $tempRoot -Filter 'moe-grok-prompt-*.md' -File -ErrorAction SilentlyContinue).Count -ne 0) { throw 'SCENARIO Y FAILED: the wrapper must remove its grok prompt file on exit' }
+                    if (Test-Path -LiteralPath (Join-Path $scopeYDir 'AGENTS.md')) { throw 'SCENARIO Y FAILED: the wrapper must not write AGENTS.md into the project' }
+                    $scopeYChat = Get-Content -Raw -Path (Join-Path $scopeYDir '.moe\messages\chan-general.jsonl')
+                    if ($scopeYChat -notlike '*worker session ended: task=task-postflight (CLI exit=3)*') { Write-Host $scopeYChat; throw 'SCENARIO Y FAILED: the fake grok exit 3 must propagate into the session-ended line' }
+                    if ((Get-HeadSubject $scopeYDir) -ne 'wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=3]') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: unexpected checkpoint subject [$(Get-HeadSubject $scopeYDir)]" }
+                    if ((Get-CommittedPaths $scopeYDir) -ne 'owned-a.txt') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: only owned-a.txt may land; got [$(Get-CommittedPaths $scopeYDir)]" }
+                    $scopeYHash1 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+
+                    # Run 2: byte-identical re-write; an explicit model + effort
+                    # reach argv; nothing new to land.
+                    $env:MOE_GROK_MODEL = 'grok-4-fast'
+                    $env:MOE_GROK_EFFORT = 'high'
+                    $scopeYOut2 = Join-Path $tempRoot 'scope-y-2.out'
+                    try {
+                        Assert-ScopeRun 'Y' (Invoke-GrokWrapper $scopeYOut2) $scopeYOut2
+                    } finally {
+                        Remove-Item Env:MOE_GROK_MODEL -ErrorAction SilentlyContinue
+                        Remove-Item Env:MOE_GROK_EFFORT -ErrorAction SilentlyContinue
+                    }
+                    $scopeYHash2 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+                    if ($scopeYHash1 -ne $scopeYHash2) { Write-Host ([System.IO.File]::ReadAllText($scopeYConfig)); throw 'SCENARIO Y FAILED: a second run must leave .grok/config.toml byte-identical' }
+                    $scopeYArgvText2 = Get-Content -Raw -Path $scopeYArgv
+                    if (-not $scopeYArgvText2.Contains('-m grok-4-fast') -or -not $scopeYArgvText2.Contains('--effort high')) { Write-Host $scopeYArgvText2; throw 'SCENARIO Y FAILED: MOE_GROK_MODEL / MOE_GROK_EFFORT must reach argv as -m / --effort' }
+                    if ([int](& git -C $scopeYDir rev-list --count HEAD 2>$null) -ne 2) { Get-Content $scopeYOut2 | ForEach-Object { Write-Host $_ }; throw 'SCENARIO Y FAILED: an unchanged tree must not land a second commit' }
+
+                    # Run 3: Serena "uninstalled" (MOE_SERENA_PATH points at
+                    # nothing) strips its block, a user [permission] table
+                    # survives, and the config dirtied mid-session never lands.
+                    $env:MOE_SERENA_PATH = Join-Path $tempRoot 'no-such-serena.exe'
+                    [System.IO.File]::AppendAllText($scopeYConfig, "`n[permission]`nmode = `"auto`"`n", (New-Object System.Text.UTF8Encoding($false)))
+                    Set-Content -Path (Join-Path $scopeYDir 'owned-a.txt') -Value 'owned-a-again'
+                    $env:FAKE_GROK_TOUCH_CONFIG = '1'
+                    $scopeYOut3 = Join-Path $tempRoot 'scope-y-3.out'
+                    try {
+                        Assert-ScopeRun 'Y' (Invoke-GrokWrapper $scopeYOut3) $scopeYOut3
+                    } finally { Remove-Item Env:FAKE_GROK_TOUCH_CONFIG -ErrorAction SilentlyContinue }
+                    $scopeYToml3 = [System.IO.File]::ReadAllText($scopeYConfig)
+                    if ($scopeYToml3.Contains('[mcp_servers.serena]')) { Write-Host $scopeYToml3; throw 'SCENARIO Y FAILED: a stale serena block must be stripped when Serena is not installed' }
+                    if (-not $scopeYToml3.Contains('[permission]') -or -not $scopeYToml3.Contains('mode = "auto"')) { Write-Host $scopeYToml3; throw 'SCENARIO Y FAILED: a user [permission] table must survive the merge' }
+                    if (([regex]::Matches($scopeYToml3, '\[mcp_servers\.moe\]')).Count -ne 1) { Write-Host $scopeYToml3; throw 'SCENARIO Y FAILED: exactly one [mcp_servers.moe] block must remain after the merge' }
+                    if (-not $scopeYToml3.Contains('# touched by the session')) { Write-Host $scopeYToml3; throw 'SCENARIO Y FAILED: the shim did not dirty the config, so the DENY discriminator is inert' }
+                    if ((Get-HeadSubject $scopeYDir) -ne 'wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=0]') { Get-Content $scopeYOut3 | ForEach-Object { Write-Host $_ }; throw "SCENARIO Y FAILED: unexpected run-3 subject [$(Get-HeadSubject $scopeYDir)]" }
+                    if ((Get-CommittedPaths $scopeYDir) -ne 'owned-a.txt') { Get-Content $scopeYOut3 | ForEach-Object { Write-Host $_ }; throw "SCENARIO Y FAILED: a mid-session-dirtied .grok/config.toml must never land; got [$(Get-CommittedPaths $scopeYDir)]" }
+                    & git -C $scopeYDir cat-file -e HEAD:.grok/config.toml 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { throw 'SCENARIO Y FAILED: .grok/config.toml reached HEAD' }
+                    if (@(& git -C $scopeYDir status --porcelain --untracked-files=all 2>$null) -notcontains '?? .grok/config.toml') { throw 'SCENARIO Y FAILED: .grok/config.toml must still be untracked' }
+                    if ((Get-Content -Raw -Path $scopeYOut3) -notlike '*MOE_ATTR_EXCLUDED*') { Get-Content $scopeYOut3 | ForEach-Object { Write-Host $_ }; throw 'SCENARIO Y FAILED: the dirtied config must be reported under MOE_ATTR_EXCLUDED' }
+                } finally {
+                    Remove-Item Env:FAKE_GROK_ARGV_FILE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_GROK_PROMPT_COPY -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_GROK_EXIT -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_GROK_TOUCH_CONFIG -ErrorAction SilentlyContinue
+                    if ($null -ne $scopeYPrevSerena) { $env:MOE_SERENA_PATH = $scopeYPrevSerena } else { Remove-Item Env:MOE_SERENA_PATH -ErrorAction SilentlyContinue }
+                    if ($null -ne $scopeYPrevKey) { $env:XAI_API_KEY = $scopeYPrevKey }
+                    foreach ($name in $scopeYPrevOperatorEnv.Keys) {
+                        if ($null -ne $scopeYPrevOperatorEnv[$name]) { [Environment]::SetEnvironmentVariable($name, $scopeYPrevOperatorEnv[$name]) } else { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+                    }
+                    $env:FAKE_TASK_STATUS = 'REVIEW'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario Y] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 23) {
-                    throw "Expected 23 commit-scope scenarios (A-V, X); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 24) {
+                    throw "Expected 24 commit-scope scenarios (A-V, X, Y); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

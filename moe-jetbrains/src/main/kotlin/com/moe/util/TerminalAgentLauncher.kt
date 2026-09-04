@@ -74,10 +74,17 @@ object TerminalAgentLauncher {
         "governor" to "Moe Governor"
     )
 
+    /**
+     * Enum order is menu order (the Agents popup iterates `entries`); CUSTOM
+     * must stay last. Every entry (CUSTOM included) needs a
+     * `moe.panel.provider.<name>` bundle string; each non-custom entry's
+     * `command` is the wrapper's `-Command`/`--command` value.
+     */
     enum class AgentProvider(val displayName: String, val command: String) {
         CLAUDE("Claude", "claude"),
         CODEX("Codex", "codex"),
         GEMINI("Gemini", "gemini"),
+        GROK("Grok", "grok"),
         CUSTOM("Custom...", "");
 
         companion object {
@@ -359,7 +366,11 @@ object TerminalAgentLauncher {
         val execArg = if (codexExec) {
             val provider = AgentProvider.fromCommand(agentCommand)
             when (provider) {
+                AgentProvider.CODEX -> " -CodexExec"
                 AgentProvider.GEMINI -> " -GeminiExec"
+                AgentProvider.GROK -> " -GrokExec"
+                // CLAUDE / CUSTOM keep the historical -CodexExec (the wrapper
+                // ignores it for non-codex commands; tests pin this).
                 else -> " -CodexExec"
             }
         } else ""
@@ -385,9 +396,11 @@ object TerminalAgentLauncher {
      *   land it by hand. Workers stay on one-shot --print, which exits at
      *   end_turn; the stream-json parser still prints every tool call live.
      *
-     * Codex / Gemini providers ignore this gate: they have their own native TUI vs
-     * headless toggles (`-CodexExec`, `-GeminiExec`). codexExec=true also forces
-     * a non-interactive run regardless of role.
+     * Codex / Gemini / Grok providers ignore this gate: they have their own native
+     * TUI vs headless toggles (`-CodexExec`, `-GeminiExec`, `-GrokExec`). Grok's
+     * role-based interactive polarity (architect/governor TUI, worker/qa headless)
+     * lives in the wrapper, not here — JetBrains never passes `-Interactive` for
+     * it. codexExec=true also forces a non-interactive run regardless of role.
      */
     internal fun shouldLaunchClaudeInteractive(
         role: String,
@@ -442,7 +455,12 @@ object TerminalAgentLauncher {
         val execArg = if (codexExec) {
             val provider = AgentProvider.fromCommand(agentCommand)
             when (provider) {
+                AgentProvider.CODEX -> " --codex-exec"
                 AgentProvider.GEMINI -> " --gemini-exec"
+                AgentProvider.GROK -> " --grok-exec"
+                // CLAUDE / CUSTOM keep the historical --codex-exec (the wrapper
+                // ignores it for non-codex commands; mirrors the PowerShell arm,
+                // whose fallback is the test-pinned one).
                 else -> " --codex-exec"
             }
         } else ""

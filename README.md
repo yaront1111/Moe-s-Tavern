@@ -37,7 +37,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 - **Governance Mode** - Architects can pause a running task to revise rails, then hand it back
 - **Branch Safety** - Agents are blocked from auto-committing to `main` and peel onto a dated worker branch
 - **Land on Every Exit** - Every agent session exit commits its task's own files: a completion commit on REVIEW, a `wip(task-<id>)` checkpoint otherwise, a rescue ref when a gate or commit fails — attributed per task so one agent never sweeps another's edits
-- **Flexibility** - Works with Claude, Codex, Gemini, and any MCP-compatible agent
+- **Flexibility** - Works with Claude, Codex, Gemini, Grok, and any MCP-compatible agent
 
 > *"Let AI do the coding, but keep humans in the loop."*
 
@@ -57,7 +57,7 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 | **Self-Healing Daemon** | Supervisor auto-restarts on crash with exponential backoff |
 | **Runtime-Driven Workflow** | Per-task agent respawn, streaming output, trimmed prompts — long sessions stay responsive |
 | **Agent Chat** | Real-time messaging with @mentions, channels, and a Mention Response Protocol that forces tagged agents to reply |
-| **Multi-Agent** | Architect, worker, QA, and governor roles across Claude, Codex, Gemini, and any MCP-compatible agent |
+| **Multi-Agent** | Architect, worker, QA, and governor roles across Claude, Codex, Gemini, Grok, and any MCP-compatible agent |
 | **MCP Protocol** | 40+ tools including `release_task`, `enter_governance`, `list_workers`, `propose_rail`, chat, teams (memory is provided by the Serena MCP server) |
 | **Real-time Sync** | Live updates via WebSocket |
 | **Activity Log** | Complete audit trail with log rotation |
@@ -226,15 +226,18 @@ graph LR
         Claude[Claude Code]
         Codex[Codex]
         Gemini[Gemini]
+        Grok[Grok Build]
     end
 
     Plugin <-->|WebSocket| Daemon
     Claude <-->|MCP| Daemon
     Codex <-->|MCP| Daemon
     Gemini <-->|MCP| Daemon
+    Grok <-->|MCP| Daemon
     Claude <-->|MCP| Serena["Serena MCP<br/>(code intel + memory)"]
     Codex <-->|MCP| Serena
     Gemini <-->|MCP| Serena
+    Grok <-->|MCP| Serena
 ```
 
 **Key Principles:**
