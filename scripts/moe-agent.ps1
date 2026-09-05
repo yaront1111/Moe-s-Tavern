@@ -93,6 +93,36 @@ function Load-Registry {
     }
 }
 
+# Grok refuses a project's .grok/config.toml MCP servers until the folder is
+# trusted in ~/.grok/trusted_folders.toml - silently: the servers never spawn
+# and the session reports them as "failed to connect" (grok mcp doctor says
+# "folder untrusted"). The TUI asks on first open; a headless worker never
+# sees that prompt. Grant trust up front; idempotent, a present entry is left
+# alone. Key format mirrors grok's own writes: [folders.'<absolute path>'].
+function Grant-GrokFolderTrust {
+    param([string]$ProjectPath)
+    try {
+        $key = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\', '/')
+        if ($key.Contains("'")) {
+            Write-Host "[WARN] Cannot pre-trust '$key' for grok (quote in path) - accept the trust prompt once in the grok TUI."
+            return
+        }
+        $grokHome = Join-Path $env:USERPROFILE ".grok"
+        $trustFile = Join-Path $grokHome "trusted_folders.toml"
+        $existing = ""
+        if (Test-Path $trustFile) { $existing = [System.IO.File]::ReadAllText($trustFile) }
+        if ($existing.Contains("[folders.'$key']")) { return }
+        if (-not (Test-Path $grokHome)) { New-Item -ItemType Directory -Force -Path $grokHome | Out-Null }
+        $epoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $block = "[folders.'$key']`ntrusted = true`ndecided_at = $epoch`n"
+        $text = if ([string]::IsNullOrWhiteSpace($existing)) { $block } else { $existing.TrimEnd() + "`n`n" + $block }
+        [System.IO.File]::WriteAllText($trustFile, $text, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Grok folder trust granted: $key"
+    } catch {
+        Write-Host "[WARN] Could not pre-trust the project for grok: $_"
+    }
+}
+
 function Get-MoeInstallPath {
     $configPath = Join-Path $env:USERPROFILE ".moe\\config.json"
     if (-not (Test-Path $configPath)) { return $null }
@@ -907,6 +937,12 @@ $serenaTomlBlock
         # Single-quoted on purpose: ${MOE_WORKER_ID:-} is grok's template
         # syntax, and a double-quoted PowerShell string would try to expand it.
         $grokWorkerIdLine = 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"'
+        # Grok drops any MCP tool whose name contains a dot (it namespaces
+        # tools as <server>__<tool> and validates the result), so the daemon's
+        # moe.<name> tools all vanish - the server shows as connected with 0
+        # tools, then "failed to connect" (measured 2026-09-05, grok 1.0.13).
+        # The proxy exposes moe_<name> instead and maps it back on tools/call.
+        $grokToolNameStyleLine = 'MOE_TOOL_NAME_STYLE = "underscore"'
         $grokMoeTomlBlock = (@(
             "",
             "[mcp_servers.moe]",
@@ -916,7 +952,8 @@ $serenaTomlBlock
             "",
             "[mcp_servers.moe.env]",
             "MOE_PROJECT_PATH = `"$projectPathForToml`"",
-            ($grokWorkerIdLine + $grokDaemonHostLine)
+            $grokWorkerIdLine,
+            ($grokToolNameStyleLine + $grokDaemonHostLine)
         ) -join "`n")
 
         # Serena block (LSP code intelligence + memory, pinned to this project):
@@ -969,6 +1006,7 @@ $serenaTomlBlock
         # exactly the bytes it wrote.
         [System.IO.File]::WriteAllText($grokConfigFile, $grokConfigText, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Grok MCP config written to: $grokConfigFile"
+        Grant-GrokFolderTrust -ProjectPath $projectPath
     } catch {
         Write-Error "Failed to write Grok MCP config: $_"
         exit 1
@@ -3056,6 +3094,11 @@ if ($AutoClaim) {
 # is moe_<name> on the server named "moe" — without this line every fresh
 # per-task session burns a discovery round-trip re-learning the prefix.
 $systemAppendPre += "`n`nTool naming: moe.<name> in docs/prompts is shorthand for MCP tool moe_<name> on the server named 'moe' (Claude Code exposes it as mcp__moe__moe_<name>, e.g. moe.submit_plan -> mcp__moe__moe_submit_plan). Serena tools are on the server named 'serena'. If tool schemas are deferred, batch-load every tool you need in ONE ToolSearch select call - do not guess tool names."
+if ($cliType -eq "grok") {
+    # Grok never lists MCP tools directly: they are reached through its
+    # search_tool/use_tool dispatchers under <server>__<tool> names.
+    $systemAppendPre += "`nGrok: MCP tools are not in your direct tool list - discover them with search_tool and call them with use_tool using the qualified name moe__moe_<name> (e.g. use_tool 'moe__moe_submit_plan'); Serena tools are serena__<tool>."
+}
 if ($approvalMode) {
     $systemAppendPre += "`n`n# Project Settings`nApproval mode: $approvalMode"
 }

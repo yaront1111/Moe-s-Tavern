@@ -198,3 +198,86 @@ export function parseJsonLines(buffer: string): { lines: string[]; remaining: st
 
   return { lines, remaining };
 }
+
+// -----------------------------------------------------------------------------
+// Tool-name style
+// -----------------------------------------------------------------------------
+
+/**
+ * How the proxy spells tool names to its MCP client.
+ *
+ * The daemon names every tool `moe.<name>`. Claude Code sanitises that itself
+ * (`mcp__moe__moe_<name>`), codex/gemini pass it through, but Grok Build
+ * DROPS any MCP tool whose name contains a dot — it namespaces tools as
+ * `<server>__<tool>` and validates the result — so the whole `moe` server
+ * shows up as "connected, 0 tools" and is then reported as failed to connect
+ * (measured 2026-09-05, grok 1.0.13). With `MOE_TOOL_NAME_STYLE=underscore`
+ * (the launchers pin it in grok's `[mcp_servers.moe.env]`) the proxy exposes
+ * `moe_<name>` in `tools/list` and maps the alias back on `tools/call`, so the
+ * daemon never sees the alias.
+ */
+export type ToolNameStyle = 'dot' | 'underscore';
+
+export function toolNameStyleFromEnv(value: string | undefined): ToolNameStyle {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'underscore' ? 'underscore' : 'dot';
+}
+
+/** The name a tool is exposed under for the given style. */
+export function exposeToolName(name: string, style: ToolNameStyle): string {
+  if (style !== 'underscore') return name;
+  return name.replace(/\./g, '_');
+}
+
+/**
+ * Rewrite a `tools/list` result in place for the style, recording every alias
+ * in `aliases` (alias → daemon name) so `tools/call` can map it back exactly.
+ * Returns true when anything changed. Never throws on an odd shape.
+ */
+export function rewriteToolsListResult(
+  parsed: unknown,
+  style: ToolNameStyle,
+  aliases: Map<string, string>
+): boolean {
+  if (style !== 'underscore') return false;
+  if (!parsed || typeof parsed !== 'object') return false;
+  const result = (parsed as { result?: { tools?: unknown } }).result;
+  if (!result || typeof result !== 'object' || !Array.isArray(result.tools)) return false;
+  let changed = false;
+  for (const tool of result.tools as Array<{ name?: unknown }>) {
+    if (!tool || typeof tool !== 'object' || typeof tool.name !== 'string') continue;
+    const exposed = exposeToolName(tool.name, style);
+    if (exposed === tool.name) continue;
+    aliases.set(exposed, tool.name);
+    tool.name = exposed;
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Map an aliased `tools/call` name back to the daemon's name, in place.
+ * A recorded alias wins; otherwise the `moe_<name>` → `moe.<name>` prefix rule
+ * applies REGARDLESS of style — no daemon tool is spelled `moe_…`, and role
+ * docs already describe the wire name as `moe_<name>`, so a client that
+ * guesses that form gets the tool instead of "Tool not found".
+ * Returns true when the name was changed.
+ */
+export function resolveToolCallName(parsed: unknown, aliases: Map<string, string>): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const msg = parsed as { method?: unknown; params?: { name?: unknown } };
+  if (msg.method !== 'tools/call') return false;
+  const params = msg.params;
+  if (!params || typeof params !== 'object' || typeof params.name !== 'string') return false;
+  const alias = params.name;
+  const recorded = aliases.get(alias);
+  if (recorded !== undefined) {
+    if (recorded === alias) return false;
+    params.name = recorded;
+    return true;
+  }
+  if (alias.startsWith('moe_')) {
+    params.name = 'moe.' + alias.slice('moe_'.length);
+    return true;
+  }
+  return false;
+}

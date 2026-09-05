@@ -12,6 +12,10 @@ import {
   isValidJson,
   parseJsonLines,
   injectWorkerId,
+  toolNameStyleFromEnv,
+  exposeToolName,
+  rewriteToolsListResult,
+  resolveToolCallName,
   type DaemonInfo,
 } from './utils.js';
 
@@ -418,5 +422,65 @@ describe('injectWorkerId: tools where workerId is a filter', () => {
     };
     expect(injectWorkerId(msg, 'governor-1')).toBe(false);
     expect((msg.params.arguments as Record<string, unknown>).workerId).toBe('worker-9');
+  });
+  describe('tool-name style', () => {
+    it('reads the style from the env, defaulting to dot', () => {
+      expect(toolNameStyleFromEnv(undefined)).toBe('dot');
+      expect(toolNameStyleFromEnv('')).toBe('dot');
+      expect(toolNameStyleFromEnv('dot')).toBe('dot');
+      expect(toolNameStyleFromEnv('underscore')).toBe('underscore');
+      expect(toolNameStyleFromEnv(' UNDERSCORE ')).toBe('underscore');
+      expect(toolNameStyleFromEnv('camel')).toBe('dot');
+    });
+
+    it('exposes moe.<name> as moe_<name> only in underscore style', () => {
+      expect(exposeToolName('moe.submit_plan', 'underscore')).toBe('moe_submit_plan');
+      expect(exposeToolName('moe.submit_plan', 'dot')).toBe('moe.submit_plan');
+      expect(exposeToolName('plain', 'underscore')).toBe('plain');
+    });
+
+    it('rewrites a tools/list result in place and records the aliases', () => {
+      const aliases = new Map<string, string>();
+      const msg = { jsonrpc: '2.0', id: 7, result: { tools: [
+        { name: 'moe.get_context', description: 'd', inputSchema: {} },
+        { name: 'moe.wait_for_task', description: 'd', inputSchema: {} },
+        { name: 'plain', description: 'd', inputSchema: {} },
+      ] } };
+      expect(rewriteToolsListResult(msg, 'underscore', aliases)).toBe(true);
+      expect(msg.result.tools.map((t) => t.name)).toEqual(['moe_get_context', 'moe_wait_for_task', 'plain']);
+      expect(aliases.get('moe_get_context')).toBe('moe.get_context');
+      expect(aliases.get('moe_wait_for_task')).toBe('moe.wait_for_task');
+      expect(aliases.has('plain')).toBe(false);
+    });
+
+    it('leaves a tools/list result alone in dot style and on odd shapes', () => {
+      const aliases = new Map<string, string>();
+      const msg = { jsonrpc: '2.0', id: 7, result: { tools: [{ name: 'moe.get_context' }] } };
+      expect(rewriteToolsListResult(msg, 'dot', aliases)).toBe(false);
+      expect(msg.result.tools[0].name).toBe('moe.get_context');
+      expect(rewriteToolsListResult({ jsonrpc: '2.0', id: 7, error: { code: -1, message: 'x' } }, 'underscore', aliases)).toBe(false);
+      expect(rewriteToolsListResult(null, 'underscore', aliases)).toBe(false);
+      expect(rewriteToolsListResult({ result: { tools: 'nope' } }, 'underscore', aliases)).toBe(false);
+    });
+
+    it('maps a recorded alias back on tools/call, and moe_<name> by prefix rule otherwise', () => {
+      const aliases = new Map<string, string>([['moe_get_context', 'moe.get_context']]);
+      const recorded = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'moe_get_context', arguments: {} } };
+      expect(resolveToolCallName(recorded, aliases)).toBe(true);
+      expect(recorded.params.name).toBe('moe.get_context');
+
+      const guessed = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'moe_submit_plan', arguments: {} } };
+      expect(resolveToolCallName(guessed, aliases)).toBe(true);
+      expect(guessed.params.name).toBe('moe.submit_plan');
+
+      const daemonName = { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'moe.submit_plan', arguments: {} } };
+      expect(resolveToolCallName(daemonName, aliases)).toBe(false);
+      expect(daemonName.params.name).toBe('moe.submit_plan');
+
+      const other = { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'serena_read', arguments: {} } };
+      expect(resolveToolCallName(other, aliases)).toBe(false);
+      expect(resolveToolCallName({ jsonrpc: '2.0', id: 5, method: 'tools/list' }, aliases)).toBe(false);
+      expect(resolveToolCallName(null, aliases)).toBe(false);
+    });
   });
 });

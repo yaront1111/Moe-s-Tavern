@@ -1028,6 +1028,36 @@ fi
 # id is written as the LITERAL "${MOE_WORKER_ID:-}" (quoted heredoc: bash must
 # not expand it) and resolves per grok process, empty for a human running grok
 # by hand.
+# Grok refuses a project's .grok/config.toml MCP servers until the folder is
+# trusted in ~/.grok/trusted_folders.toml -- silently: the servers never spawn
+# and the session reports them as "failed to connect" (grok mcp doctor says
+# "folder untrusted"). The TUI asks on first open; a headless worker never sees
+# that prompt. Grant trust up front; idempotent, a present entry is left alone.
+# Key format mirrors grok's own writes: [folders.'<absolute path>'].
+grant_grok_folder_trust() {
+    local project="${1%/}"
+    local grok_home="$HOME/.grok"
+    local trust_file="$grok_home/trusted_folders.toml"
+    case "$project" in
+        *"'"*)
+            echo -e "${YELLOW}[WARN]${NC} Cannot pre-trust '$project' for grok (quote in path) - accept the trust prompt once in the grok TUI."
+            return 0
+            ;;
+    esac
+    if [ -f "$trust_file" ] && grep -qF "[folders.'$project']" "$trust_file"; then
+        return 0
+    fi
+    mkdir -p "$grok_home" 2>/dev/null || return 0
+    {
+        if [ -s "$trust_file" ]; then printf '\n'; fi
+        printf "[folders.'%s']\ntrusted = true\ndecided_at = %s\n" "$project" "$(date +%s)"
+    } >> "$trust_file" 2>/dev/null || {
+        echo -e "${YELLOW}[WARN]${NC} Could not pre-trust the project for grok (cannot write $trust_file)."
+        return 0
+    }
+    echo -e "${GREEN}[OK]${NC} Grok folder trust granted: $project"
+}
+
 if [ "$CLI_TYPE" = "grok" ]; then
     echo "Writing project-scoped Grok MCP config..."
     GROK_CONFIG_DIR="$PROJECT/.grok"
@@ -1083,6 +1113,12 @@ moe_block_lines.extend([
     'MOE_PROJECT_PATH = ' + json.dumps(project_path),
     # Literal: grok expands ${MOE_WORKER_ID:-} per process at config load.
     'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"',
+    # Grok drops any MCP tool whose name contains a dot (it namespaces tools
+    # as <server>__<tool> and validates the result), so the daemon's moe.<name>
+    # tools all vanish -- "connected, 0 tools", then "failed to connect"
+    # (measured 2026-09-05, grok 1.0.13). The proxy exposes moe_<name> instead
+    # and maps it back on tools/call.
+    'MOE_TOOL_NAME_STYLE = "underscore"',
 ])
 # Persist a pre-set daemon host override (WSL cross-boundary runs). The
 # discovered-at-runtime case is handled by the post-discovery upsert in the
@@ -1151,6 +1187,7 @@ PYEOF
 
         if [ -f "$GROK_CONFIG_FILE" ]; then
             echo -e "${GREEN}[OK]${NC} Grok MCP config written to: $GROK_CONFIG_FILE"
+            grant_grok_folder_trust "$PROJECT"
         else
             echo -e "${RED}[ERROR]${NC} Failed to write Grok MCP config"
             exit 1
@@ -4308,6 +4345,12 @@ PYEOF
     SYSTEM_APPEND="$SYSTEM_APPEND
 
 Tool naming: moe.<name> in docs/prompts is shorthand for MCP tool moe_<name> on the server named 'moe' (Claude Code exposes it as mcp__moe__moe_<name>, e.g. moe.submit_plan -> mcp__moe__moe_submit_plan). Serena tools are on the server named 'serena'. If tool schemas are deferred, batch-load every tool you need in ONE ToolSearch select call - do not guess tool names."
+    if [ "$CLI_TYPE" = "grok" ]; then
+        # Grok never lists MCP tools directly: they are reached through its
+        # search_tool/use_tool dispatchers under <server>__<tool> names.
+        SYSTEM_APPEND="$SYSTEM_APPEND
+Grok: MCP tools are not in your direct tool list - discover them with search_tool and call them with use_tool using the qualified name moe__moe_<name> (e.g. use_tool 'moe__moe_submit_plan'); Serena tools are serena__<tool>."
+    fi
 
     # Append approval mode
     if [ -n "$APPROVAL_MODE" ]; then

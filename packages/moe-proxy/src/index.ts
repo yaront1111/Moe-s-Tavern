@@ -5,7 +5,15 @@
 // =============================================================================
 
 import WebSocket from 'ws';
-import { getDaemonHost, getProjectPath, injectWorkerId, readDaemonInfoResult } from './utils.js';
+import {
+  getDaemonHost,
+  getProjectPath,
+  injectWorkerId,
+  readDaemonInfoResult,
+  resolveToolCallName,
+  rewriteToolsListResult,
+  toolNameStyleFromEnv,
+} from './utils.js';
 
 // Reconnect configuration
 // Keep retrying for a generous wall-clock window rather than a fixed attempt
@@ -40,6 +48,15 @@ let pendingRequestIds = new Set<string | number>();
 let pendingRequestTimes = new Map<string | number, { sentAt: number; timeoutMs: number }>();
 let timeoutCheckTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
+
+// Tool-name style (see utils.ts): `underscore` exposes `moe.<name>` as
+// `moe_<name>` for clients that drop dotted tool names (Grok Build). Aliases
+// seen in tools/list are mapped back on tools/call before anything else
+// looks at params.name (timeout tiering, workerId injection, the daemon).
+const TOOL_NAME_STYLE = toolNameStyleFromEnv(process.env.MOE_TOOL_NAME_STYLE);
+const toolAliases = new Map<string, string>();
+// ids of in-flight tools/list requests whose result must be rewritten.
+const pendingToolsListIds = new Set<string | number>();
 
 /**
  * Check if it's safe to send a message on the WebSocket.
@@ -365,6 +382,11 @@ function connect(projectPath: string): void {
         // Remove the request ID from pending set (handles success and error responses)
         pendingRequestIds.delete(parsed.id);
         pendingRequestTimes.delete(parsed.id);
+        if (pendingToolsListIds.delete(parsed.id) &&
+            rewriteToolsListResult(parsed, TOOL_NAME_STYLE, toolAliases)) {
+          safeStdoutWrite(JSON.stringify(parsed) + '\n');
+          return;
+        }
       }
       // Notifications (no id) forward unconditionally.
       safeStdoutWrite(message + '\n');
@@ -480,8 +502,15 @@ function connect(projectPath: string): void {
         // Validate JSON before sending to daemon
         try {
           const parsed = JSON.parse(line);
+          // Alias → daemon name first, so the timeout tier and the workerId
+          // filter list below see the real tool name.
+          const renamed = resolveToolCallName(parsed, toolAliases);
           const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
-          const payload = mutated ? JSON.stringify(parsed) : line;
+          const payload = (renamed || mutated) ? JSON.stringify(parsed) : line;
+          if (TOOL_NAME_STYLE === 'underscore' && parsed.method === 'tools/list' &&
+              parsed.id !== undefined && parsed.id !== null) {
+            pendingToolsListIds.add(parsed.id);
+          }
           if (isSafeToSend()) {
             // Track request ID for proper pending count and timeout
             if (parsed.id !== undefined && parsed.id !== null) {

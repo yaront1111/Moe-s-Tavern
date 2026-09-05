@@ -142,6 +142,15 @@ The hook gates only ownership-sensitive Moe MCP tools:
 `mcp__moe__moe_(start_step|complete_step|complete_task|submit_plan|qa_approve|qa_reject)`.
 Read-only tools such as `get_context` and `list_tasks` bypass the hook.
 
+### Tool names on the wire
+
+The daemon registers every tool as `moe.<name>`. What the agent sees depends on its CLI: Claude Code
+sanitises to `mcp__moe__moe_<name>`; codex and gemini pass `moe.<name>` through; Grok Build drops any
+tool whose name contains a dot, so its launcher runs `moe-proxy` with `MOE_TOOL_NAME_STYLE=underscore`,
+which exposes `moe_<name>` in `tools/list` and maps the alias back on `tools/call` (grok then addresses
+it as `moe__moe_<name>` through `use_tool`). Regardless of style, the proxy accepts a `moe_<name>` call
+and forwards it as `moe.<name>` — no daemon tool is ever spelled with an underscore prefix.
+
 On each gated tool call, the hook invokes `scripts/moe-call.sh list_tasks` and verifies that
 `MOE_WORKER_ID` owns a task in `PLANNING`, `WORKING`, or `REVIEW`. Missing worker ID,
 missing `moe-call.sh`, daemon/proxy failure, malformed output, or timeout fail open with a

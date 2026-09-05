@@ -56,7 +56,7 @@ $required = [ordered]@{
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')
     'settings keys' = @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState', 'commitHooks', 'attribution', 'undeclared', 'contested', 'exclude', 'qualityGate', 'qualityGateScope', 'consolidationBranch')
     'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS',
-        'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER')
+        'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
     'RPC tools' = @('get_commit_scope', 'record_commit')
     'context fields' = @('isEpicFinal')
@@ -66,7 +66,7 @@ $required = [ordered]@{
     # cliType literal exists, and its mode/config banners are grep-stable.
     'cli config dirs' = @('.codex/', '.gemini/', '.grok/')
     'cli types' = @('"grok"')
-    'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive')
+    'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive', 'Grok folder trust granted:', 'trusted_folders.toml', 'moe__moe_<name>')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

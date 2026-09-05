@@ -226,6 +226,16 @@ tool, reports them as unknown, or fails before the first call.
    beats anything grok auto-merges from `~/.claude.json`, `.cursor/mcp.json` or the project
    `.mcp.json` (the wrapper also sets `GROK_CLAUDE_MCPS_ENABLED=0` / `GROK_CURSOR_MCPS_ENABLED=0` for
    the spawned process, so those merges are off for agents; a hand-run `grok` may still see them).
+   - **Healthy in `grok mcp doctor moe` but `MCP servers that failed to connect: - moe` in the session:**
+     the session's `events.jsonl` (`~/.grok/sessions/<project>/<sid>/`) shows `mcp_server_connected`
+     for `moe` with `"tool_count":0`. Two causes, both handled by the wrapper since 2026-09-05: grok
+     drops tools whose name contains a dot, so the proxy must run with `MOE_TOOL_NAME_STYLE=underscore`
+     (check `[mcp_servers.moe.env]` in `.grok/config.toml` — a config written by an older wrapper lacks
+     it; the `underscore` style exposes `moe_<name>`); and grok refuses project MCP servers in a folder
+     missing from `~/.grok/trusted_folders.toml` (doctor prints `folder untrusted`) — the wrapper adds the
+     project (`Grok folder trust granted: <path>`), or accept the prompt once in the TUI. Grok itself
+     only ever offers `search_tool`/`use_tool`; a moe tool is called as `use_tool` with
+     `tool_name: "moe__moe_<name>"`.
 2. **Proxy stderr:** `~/.grok/logs/mcp/moe.stderr.log` holds the proxy's own output. A
    `.moe/daemon.json` project-path mismatch or a dead daemon shows up here, not in the agent's
    transcript — the proxy reads `MOE_PROJECT_PATH` from `[mcp_servers.moe.env]`, and in WSL mode the

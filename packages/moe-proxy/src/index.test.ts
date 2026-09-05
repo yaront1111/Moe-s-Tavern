@@ -554,4 +554,58 @@ describe('moe-proxy graceful shutdown', () => {
     const elapsed = Date.now() - startTime;
     expect(elapsed).toBeLessThan(500);
   }, 10000);
+  it('exposes moe_<name> aliases under MOE_TOOL_NAME_STYLE=underscore and maps calls back', async () => {
+    const seenByDaemon: string[] = [];
+    let clientConnected = false;
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.method === 'tools/list') {
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { tools: [
+            { name: 'moe.get_context', description: 'd', inputSchema: { type: 'object' } },
+            { name: 'moe.wait_for_task', description: 'd', inputSchema: { type: 'object' } },
+          ] } }));
+        } else if (msg.method === 'tools/call') {
+          seenByDaemon.push(msg.params.name);
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: msg.params.name }] } }));
+        }
+      });
+    });
+
+    const responses: string[] = [];
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir, MOE_TOOL_NAME_STYLE: 'underscore', MOE_WORKER_ID: 'worker-t' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    proxy.stdout!.on('data', (chunk) => {
+      responses.push(...chunk.toString().trim().split('\n').filter((l: string) => l.startsWith('{')));
+    });
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => { if (clientConnected) { clearInterval(check); resolve(); } }, 50);
+    });
+
+    const waitFor = (n: number) => new Promise<void>((resolve, reject) => {
+      const t0 = Date.now();
+      const check = setInterval(() => {
+        if (responses.length >= n) { clearInterval(check); resolve(); }
+        else if (Date.now() - t0 > 5000) { clearInterval(check); reject(new Error(`only ${responses.length} responses`)); }
+      }, 25);
+    });
+
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) + '\n');
+    await waitFor(1);
+    const list = JSON.parse(responses[0]);
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['moe_get_context', 'moe_wait_for_task']);
+
+    // A recorded alias, a guessed alias and the daemon's own spelling all reach the daemon as moe.<name>.
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'moe_get_context', arguments: {} } }) + '\n');
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'moe_submit_plan', arguments: {} } }) + '\n');
+    proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'moe.list_tasks', arguments: {} } }) + '\n');
+    await waitFor(4);
+    expect(seenByDaemon).toEqual(['moe.get_context', 'moe.submit_plan', 'moe.list_tasks']);
+
+    proxy.stdin!.end();
+    await new Promise<void>((resolve) => { const t = setTimeout(() => { proxy.kill(); resolve(); }, 5000); proxy.on('exit', () => { clearTimeout(t); resolve(); }); });
+  }, 20000);
 });
