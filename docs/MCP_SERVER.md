@@ -365,7 +365,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 ```
 
 **Notes:**
-- **Role gate:** the caller's team role must be `architect` or `governor`, else `NOT_ALLOWED`. A missing or unknown `workerId` has no team and therefore fails closed — a worker cannot rewrite its own instructions.
+- **Role gate:** the caller must act as `architect` or `governor`, else `NOT_ALLOWED`. The role is the caller's team role when the team has one, else the role its worker id declares by prefix (`architect-…`/`governor-…`, the launcher's naming — `util/workerRole.ts`), so a seat on a role-less team keeps the role it was launched with. A missing or unknown `workerId` has neither and therefore fails closed — a worker cannot rewrite its own instructions.
 - Rejects a `DONE`/`ARCHIVED` task (`INVALID_STATE`) and a step whose status is `COMPLETED` (`INVALID_STATE`, message points at `moe.request_replan` — amending shipped work would rewrite history).
 - Rejects the 11th amendment on one step (`NOT_ALLOWED`, max 10): a step amended that many times is a re-plan, so it points at `moe.request_replan` too.
 - Appends the amendment to `step.amendments` and sets `step.activeAmendmentId` to it. **Step status is never changed** — a worker mid-step is not reset.
@@ -973,7 +973,7 @@ Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-decl
 }
 ```
 
-**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[NOT_ALLOWED]` when the caller is not on an architect/governor team; `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[NOT_ALLOWED]` when the caller acts as neither architect nor governor (team role, else the `architect-`/`governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
 
 **Returns:**
 ```typescript
@@ -2022,7 +2022,7 @@ Set or clear the wall-clock budget on a task. Daemon warns at 80% and escalates 
 
 ### moe.submit_plan_critique
 
-Governor-only. Record a structured critique of a submitted plan. `verdict='block'` flips the task back to `PLANNING` with concerns posted to `#architects`; `verdict='pass'` is informational. **Does not auto-approve** — humans still own approval.
+Governor-only (team role, else the `governor-` worker-id prefix — see `moe.amend_plan_step`; anything else is `NOT_ALLOWED`). Record a structured critique of a submitted plan. `verdict='block'` flips the task back to `PLANNING` with concerns posted to `#architects`; `verdict='pass'` is informational. **Does not auto-approve** — humans still own approval.
 
 **Parameters:**
 ```typescript

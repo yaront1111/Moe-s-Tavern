@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { PlanCritiqueCategory, PlanCritiqueResult } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT, PLAN_CRITIQUE_CATEGORIES } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound, notAllowed } from '../util/errors.js';
+import { workerHasRole } from '../util/workerRole.js';
 
 const MAX_CONCERNS = 20;
 const MAX_CONCERN_LEN = 1000;
@@ -50,14 +51,14 @@ export function submitPlanCritiqueTool(_state: StateManager): ToolDefinition {
       // uncategorized one. Their blocks are counted as 'uncategorized'.
       const uncategorizedBlock = params.verdict === 'block' && category === undefined;
 
-      // Role gate: critique is governor-only (mirrors enter_governance). A
-      // missing/non-governor workerId has no governor team, so it's rejected —
+      // Role gate: critique is governor-only (mirrors enter_governance). Role =
+      // team role, else the `governor-` id prefix (util/workerRole). A
+      // missing/non-governor workerId has neither, so it's rejected —
       // otherwise any agent could 'block' a plan and evict an active peer.
-      const team = state.getTeamForWorker(params.workerId || '');
-      if (team?.role !== 'governor') {
+      if (!workerHasRole(state, params.workerId || '', 'governor')) {
         throw notAllowed(
           'submit_plan_critique',
-          `governor role required (worker ${params.workerId || '(none)'} is not on a governor team)`
+          `governor role required (worker ${params.workerId || '(none)'} is not on a governor team and its id is not governor-prefixed)`
         );
       }
 

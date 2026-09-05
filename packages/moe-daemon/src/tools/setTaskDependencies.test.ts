@@ -80,6 +80,30 @@ describe('moe.set_task_dependencies', () => {
       .rejects.toThrow(/architect or governor role required/);
   });
 
+  it('an architect-prefixed seat on a role-less team keeps its role (the 2026-09-04 SPIDR failure)', async () => {
+    // The launcher registers every seat into a project-named team without a
+    // role; the id prefix is the seat's declared kind and must still pass.
+    await h.state.createWorker({
+      id: 'architect-2', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE',
+    });
+    const roleless = await h.state.createTeam({ name: 'proj-test' });
+    await h.state.addTeamMember(roleless.id, 'architect-2');
+    expect(h.state.getTeamForWorker('architect-2')?.role ?? null).toBeNull();
+
+    const result = await setDeps({ workerId: 'architect-2', dependsOn: ['task-dep111'] });
+    expect(result.success).toBe(true);
+
+    // A worker-prefixed seat on the same role-less team is still refused.
+    await h.state.createWorker({
+      id: 'worker-2', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE',
+    });
+    await h.state.addTeamMember(roleless.id, 'worker-2');
+    await expect(setDeps({ workerId: 'worker-2', dependsOn: [] }))
+      .rejects.toThrow(/architect or governor role required/);
+  });
+
   it('hard-validates ids: unknown ids and self-dependencies are errors, not silent drops', async () => {
     await expect(setDeps({ dependsOn: ['task-nope'] })).rejects.toThrow(/unknown task id: task-nope/);
     await expect(setDeps({ dependsOn: ['task-1'] })).rejects.toThrow(/cannot depend on itself/);

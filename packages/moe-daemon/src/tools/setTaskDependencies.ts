@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import { invalidInput, missingRequired, notAllowed, notFound } from '../util/errors.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
 import { findDependencyPath, formatDependencyCycle, unmetDependsOn } from '../state/dependencyUnblock.js';
+import { workerHasRole } from '../util/workerRole.js';
 
 /**
  * moe.set_task_dependencies — the architect/governor escape hatch for
@@ -38,11 +39,10 @@ export function setTaskDependenciesTool(_state: StateManager): ToolDefinition {
 
       // Role gate (mirrors submit_plan_critique): a missing/role-less workerId
       // is rejected — dependency edits reshape what the fleet may claim.
-      const team = state.getTeamForWorker(params.workerId || '');
-      if (team?.role !== 'architect' && team?.role !== 'governor') {
+      if (!workerHasRole(state, params.workerId || '', 'architect', 'governor')) {
         throw notAllowed(
           'set_task_dependencies',
-          `architect or governor role required (worker ${params.workerId || '(none)'} is on neither team)`
+          `architect or governor role required (worker ${params.workerId || '(none)'} is on neither team and its id declares neither role)`
         );
       }
 

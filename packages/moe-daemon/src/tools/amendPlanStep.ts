@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ImplementationStep, StepAmendment } from '../types/schema.js';
 import { invalidInput, invalidState, missingRequired, notAllowed, notFound, MoeError, MoeErrorCode } from '../util/errors.js';
 import { MAX_AMENDMENTS_PER_STEP, effectiveStepDescription, nextAmendmentId } from '../util/planAmendments.js';
+import { workerHasRole } from '../util/workerRole.js';
 
 const MAX_DESCRIPTION_CHARS = 5000;
 const MAX_REASON_CHARS = 2000;
@@ -51,14 +52,14 @@ export function amendPlanStepTool(_state: StateManager): ToolDefinition {
       }
 
       // Role gate (mirrors submit_plan_critique): plans belong to architects,
-      // and governors oversee them. A missing/unknown workerId has no team, so
-      // this fails closed — otherwise any worker could rewrite its own
+      // and governors oversee them. Role = team role, else the id prefix
+      // (util/workerRole). A missing/unknown workerId has neither, so this
+      // fails closed — otherwise any worker could rewrite its own
       // instructions and call the result "the plan".
-      const role = state.getTeamForWorker(params.workerId || '')?.role;
-      if (role !== 'architect' && role !== 'governor') {
+      if (!workerHasRole(state, params.workerId || '', 'architect', 'governor')) {
         throw notAllowed(
           'amend_plan_step',
-          `architect or governor role required (worker ${params.workerId || '(none)'} is not on an architect or governor team)`
+          `architect or governor role required (worker ${params.workerId || '(none)'} is not on an architect or governor team and its id declares neither role)`
         );
       }
 
