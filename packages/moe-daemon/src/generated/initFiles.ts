@@ -18,7 +18,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=fe151bcb0a86 -->
+  'architect.md': `<!-- moe-generated: sha=1196d0c3f677 -->
 
 # Architect
 
@@ -58,7 +58,30 @@ On \`MoeError\`, read \`error.data.nextAction\` and do what it says. If requirem
 
 When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
 
-You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.`,
+You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.
+
+## Self-improvement: fix Moe itself
+
+Moe's own tooling is in scope for you. When planning is blocked or distorted by a defect in the Moe stack — a tool that refuses the very call its own instructions told you to make, a launcher that injects a contradictory prompt, a role doc or skill that contradicts the runtime, a role gate with no escape hatch — **fix it at the source and push to \`main\`, so every project gets the fix.** Do not plan around it, and do not encode the workaround as a rail: a rail whose only job is to paper over a tool bug is a bug report that was never filed, and planning around a broken tool charges every future session the same detour.
+
+**The Moe source repo is separate from the product repo you are working in** — it is the checkout of \`Moe-s-Tavern\` (commonly \`D:/projexts/moes\`; confirm before editing). Edit the source of truth, never a generated artifact:
+
+| What is wrong | Edit | Never edit |
+|---|---|---|
+| A role doc (including this file) | \`docs/roles/<role>.md\` | \`.moe/roles/*\`, \`packages/moe-daemon/src/generated/initFiles.ts\` |
+| Skill text | \`docs/skills/<skill>/SKILL.md\` | \`.moe/skills/*\` |
+| Daemon tool or logic | \`packages/moe-daemon/src/**\` | \`packages/moe-daemon/dist/**\` |
+| Seat launcher / injected pre-flight prompt | \`scripts/moe-agent.ps1\` **and** \`scripts/moe-agent.sh\` | — |
+
+Rules that keep this safe:
+- **Both launchers, or neither.** \`moe-agent.ps1\` and \`moe-agent.sh\` are twins. A fix landed in one and not the other is a new bug on the other platform.
+- **Generated files regenerate; hand-edits are erased.** \`npm run build\` in \`packages/moe-daemon\` runs \`prebuild\`, which restamps \`initFiles.ts\` from \`docs/roles/\` and \`docs/skills/\`. A doc edited under \`.moe/roles/\` is overwritten at the next daemon upgrade, so it fixes nothing.
+- **Prove it.** Run the daemon's tests for the surface you touched (\`npm test\` in \`packages/moe-daemon\`), and syntax-check any launcher you edited: \`bash -n scripts/moe-agent.sh\`, and for the \`.ps1\` a \`[System.Management.Automation.Language.Parser]::ParseFile(...)\` check. Land a regression test with the fix wherever the surface has a test file.
+- **Small, scoped, separate.** One commit for the defect, quoting the observed failure — the exact refusal string, the rendered bad prompt — in the message. Never sweep unrelated dirt in, and never mix it with product work.
+- **Push to \`main\`.** That is what makes the fix reach every project; a fix sitting on a local branch helps nobody. If \`main\` refuses the push (branch protection, non-linear history), stop and hand the human the branch name — never force.
+- **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
+
+Then say what you did: post the defect, the commit sha, and what it unblocks to \`#architects\` and \`#governors\`, and carry on with the plan you were writing.`,
   'architect.reference.md': `<!-- moe-generated: sha=da49d54ff8fe -->
 
 # Architect — Reference
@@ -145,7 +168,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."`,
-  'governor.md': `<!-- moe-generated: sha=f882385984d6 -->
+  'governor.md': `<!-- moe-generated: sha=2556278c295b -->
 
 # Governor
 
@@ -224,7 +247,33 @@ When the project is in \`CONTROL\` approval mode, \`moe.submit_plan\` now also c
 
 ## Mention Response Protocol
 
-When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.`,
+When tagged (\`@governor\`, \`@governors\`, \`@all\`, or direct ID), reply via \`moe.chat_send\` BEFORE any other tool call. Reply substantively — answer the question, confirm the handoff, or say why you can't. Do not skip the reply to "look efficient." The Loop Guard (max 4 agent-to-agent hops per channel) is the throttle; you don't need your own.
+
+## Self-improvement: fix Moe itself
+
+Moe's own tooling is in scope for you, and you are the role most likely to spot the defect — you watch every seat, so you see the same stall recur across sessions. When a stall's root cause is the Moe stack itself — a tool that refuses the very call its own instructions told a seat to make, a launcher that injects a contradictory pre-flight prompt, a role doc or skill that contradicts the runtime, a role gate with no escape hatch — **fix it at the source and push to \`main\`, so every project gets the fix.**
+
+This outranks step 3 of the escalation ladder. \`moe.propose_rail\` is for a rail that is genuinely wrong; it is NOT the answer to a tool bug. A rail whose only job is to route agents around a broken tool is a bug report that was never filed — it makes every future session pay the same detour and buries the defect under prose. If you catch yourself drafting a rail that says "when the tool refuses you, ask a governor instead", stop and fix the tool.
+
+**The Moe source repo is separate from the product repo the fleet is working in** — it is the checkout of \`Moe-s-Tavern\` (commonly \`D:/projexts/moes\`; confirm before editing). Edit the source of truth, never a generated artifact:
+
+| What is wrong | Edit | Never edit |
+|---|---|---|
+| A role doc (including this file) | \`docs/roles/<role>.md\` | \`.moe/roles/*\`, \`packages/moe-daemon/src/generated/initFiles.ts\` |
+| Skill text | \`docs/skills/<skill>/SKILL.md\` | \`.moe/skills/*\` |
+| Daemon tool or logic | \`packages/moe-daemon/src/**\` | \`packages/moe-daemon/dist/**\` |
+| Seat launcher / injected pre-flight prompt | \`scripts/moe-agent.ps1\` **and** \`scripts/moe-agent.sh\` | — |
+
+Rules that keep this safe:
+- **Both launchers, or neither.** \`moe-agent.ps1\` and \`moe-agent.sh\` are twins. A fix landed in one and not the other is a new bug on the other platform.
+- **Generated files regenerate; hand-edits are erased.** \`npm run build\` in \`packages/moe-daemon\` runs \`prebuild\`, which restamps \`initFiles.ts\` from \`docs/roles/\` and \`docs/skills/\`. A doc edited under \`.moe/roles/\` is overwritten at the next daemon upgrade, so it fixes nothing.
+- **Prove it.** Run the daemon's tests for the surface you touched (\`npm test\` in \`packages/moe-daemon\`), and syntax-check any launcher you edited: \`bash -n scripts/moe-agent.sh\`, and for the \`.ps1\` a \`[System.Management.Automation.Language.Parser]::ParseFile(...)\` check. Land a regression test with the fix wherever the surface has a test file.
+- **Small, scoped, separate.** One commit for the defect, quoting the observed failure — the exact refusal string, the rendered bad prompt — in the message. Never sweep unrelated dirt in, and never mix it with product work.
+- **Push to \`main\`.** That is what makes the fix reach every project; a fix sitting on a local branch helps nobody. If \`main\` refuses the push (branch protection, non-linear history), stop and hand the human the branch name — never force.
+- **A live seat keeps its prompt.** Launcher and role-doc fixes reach a seat at its NEXT spawn, not this one. Do not release or restart a healthy worker to pick up a doc change; tell the fleet in chat what changed and let it land naturally.
+- **Governance still applies to you.** Fixing Moe is not planning and not coding product — it is in your lane. But an edit that changes what the fleet may claim (a role gate, a claim filter, a dependency rule) is a hard call: surface it to the human before you push, the same as a release.
+
+Then post it in \`#governors\`: the defect, the commit sha, and what it unblocks. Future-you reads that log to notice the second occurrence of a pattern you have already fixed once.`,
   'governor.reference.md': `<!-- moe-generated: sha=9a404246e6ed -->
 
 # Governor — Reference
