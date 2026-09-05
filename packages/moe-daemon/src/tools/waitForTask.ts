@@ -3,7 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
-import { resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
+import { noTeamMembershipRefusal, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
 
@@ -94,12 +94,36 @@ function findPendingQuestion(
   return null;
 }
 
+interface MatchingTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  epicId: string;
+}
+
+interface MatchResult {
+  match: MatchingTask | null;
+  /**
+   * True when the pool had claimable candidates and the solo epic+status rule
+   * removed every one of them. claim_next_task answers that exact case with
+   * NO_TEAM_MEMBERSHIP and a join_team nextAction; wait_for_task used to
+   * answer it with a bare hasNext:false, which reads as "nothing to do" and
+   * parked a team-less seat indefinitely. Measured 2026-09-05: a seat whose
+   * catch-all team was full (join_team refused it) idled through three
+   * governor pings; only a targeted claim ever surfaced the code.
+   */
+  skippedForNoTeam: boolean;
+}
+
+const NO_MATCH: MatchResult = { match: null, skippedForNoTeam: false };
+
 function findMatchingTask(
   state: StateManager,
   statuses: string[],
   epicId?: string,
   workerId?: string
-): { id: string; title: string; status: string; priority: string; epicId: string } | null {
+): MatchResult {
   // The caller's OWN held task wakes the waiter the moment it is in a
   // requested status — this is the un-block resume path: a worker parked on
   // wait_for_task while its task sat BLOCKED must wake when the resource
@@ -115,7 +139,10 @@ function findMatchingTask(
         !(t.status === 'REVIEW' && t.needsHumanReview === true)
     );
     if (own) {
-      return { id: own.id, title: own.title, status: own.status, priority: own.priority, epicId: own.epicId };
+      return {
+        match: { id: own.id, title: own.title, status: own.status, priority: own.priority, epicId: own.epicId },
+        skippedForNoTeam: false
+      };
     }
   }
   // The CALLER's own eligibility is part of that pool and was the one part this
@@ -123,12 +150,12 @@ function findMatchingTask(
   // hold is answered by the own-task match above, while BLOCKED is not
   // agent-claimable and so can never be a requested status. Measured spin,
   // twice in one session (task-9d5dfec6).
-  if (workerId && blockingHold(state, workerId)) return null;
+  if (workerId && blockingHold(state, workerId)) return NO_MATCH;
   // Eligibility here must be at least as strict as claim_next_task's ranked
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot
   // wake→claim→wait spin at full RPC speed for as long as the task persists.
-  const tasks = Array.from(state.tasks.values())
+  const eligible = Array.from(state.tasks.values())
     .filter((t) => statuses.includes(t.status))
     .filter((t) => (epicId ? t.epicId === epicId : true))
     .filter((t) => state.isTaskClaimable(t))
@@ -138,14 +165,16 @@ function findMatchingTask(
     // dependsOn gate (WORKING candidates only) — mirrors claim_next_task's
     // ranked pool via the SAME predicate (util/claimEligibility.ts); a drift
     // here wakes the waiter into a claim that refuses (the measured spin).
-    .filter((t) => !isClaimGatedByDependsOn(state, t))
-    // Single-worker-per-epic-status (solo workers only): claim skips a
-    // candidate when a live OTHER worker holds a different task in the same
-    // epic+status — mirror that too.
+    .filter((t) => !isClaimGatedByDependsOn(state, t));
+  // Single-worker-per-epic-status (solo workers only): claim skips a
+  // candidate when a live OTHER worker holds a different task in the same
+  // epic+status — mirror that too. Effective membership, exactly as
+  // claim_next_task resolves it: an evicted team member must not go
+  // invisible here and park forever.
+  const solo = Boolean(workerId) && !resolveEffectiveTeam(state, workerId as string);
+  const tasks = eligible
     .filter((t) => {
-      // Effective membership, exactly as claim_next_task resolves it: an
-      // evicted team member must not go invisible here and park forever.
-      if (!workerId || resolveEffectiveTeam(state, workerId)) return true;
+      if (!solo) return true;
       const otherActiveOnSameStatus = Array.from(state.tasks.values()).some((o) =>
         o.id !== t.id &&
         o.epicId === t.epicId &&
@@ -164,8 +193,17 @@ function findMatchingTask(
     });
 
   const task = tasks[0];
-  if (!task) return null;
-  return { id: task.id, title: task.title, status: task.status, priority: task.priority, epicId: task.epicId };
+  if (!task) {
+    // Same two dead ends claim_next_task distinguishes: an empty pool, or a
+    // pool the solo rule alone emptied. Only the second has a remedy the
+    // caller can act on, and hiding it behind hasNext:false is what parked
+    // team-less seats — report it so the caller reaches join_team.
+    return { match: null, skippedForNoTeam: solo && eligible.length > 0 };
+  }
+  return {
+    match: { id: task.id, title: task.title, status: task.status, priority: task.priority, epicId: task.epicId },
+    skippedForNoTeam: false
+  };
 }
 
 export function waitForTaskTool(_state: StateManager): ToolDefinition {
@@ -214,16 +252,23 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
 
       // Check if a matching task already exists
       const immediate = findMatchingTask(state, statuses, params.epicId, workerId);
-      if (immediate) {
+      if (immediate.match) {
         return {
           hasNext: true,
-          task: immediate,
+          task: immediate.match,
           nextAction: {
             tool: 'moe.claim_next_task',
             args: { statuses, workerId, epicId: params.epicId },
             reason: 'Task is available; claim it, then call moe.get_context.'
           }
         };
+      }
+      // Work exists but the caller is team-less and the solo epic+status rule
+      // withheld all of it. Answer exactly as claim_next_task does — with the
+      // code and the join_team nextAction — instead of parking the caller on a
+      // timer it cannot escape by waiting.
+      if (immediate.skippedForNoTeam) {
+        return noTeamMembershipRefusal(workerId);
       }
 
       // Check if any task has a pending question
@@ -334,19 +379,28 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           // Only react to task creation/update events
           if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;
 
-          const match = findMatchingTask(state, statuses, params.epicId, workerId);
-          if (match) {
+          const found = findMatchingTask(state, statuses, params.epicId, workerId);
+          if (found.match) {
             cleanup();
-            logger.info({ workerId, taskId: match.id }, 'Task available, waking worker');
+            logger.info({ workerId, taskId: found.match.id }, 'Task available, waking worker');
             resolve({
               hasNext: true,
-              task: match,
+              task: found.match,
               nextAction: {
                 tool: 'moe.claim_next_task',
                 args: { statuses, workerId, epicId: params.epicId },
                 reason: 'Matching task appeared; claim it, then call moe.get_context.'
               }
             });
+            return;
+          }
+          // A task appeared that only team membership keeps from this caller:
+          // wake it with the remedy rather than leaving it asleep while the
+          // row sits claimable for everyone else.
+          if (found.skippedForNoTeam) {
+            cleanup();
+            logger.info({ workerId }, 'Claimable work withheld by the solo epic+status rule; waking worker with NO_TEAM_MEMBERSHIP');
+            resolve(noTeamMembershipRefusal(workerId));
             return;
           }
 
