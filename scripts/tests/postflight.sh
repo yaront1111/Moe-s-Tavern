@@ -1693,8 +1693,15 @@ EOF
   SCOPE_Y_CFG="$SCOPE_Y_DIR/.grok/config.toml"
   rm -f "$GROK_ARGS_FILE" "$GROK_PROMPT_COPY"
   set +e
-  MOE_SERENA_PATH="$FAKE_SERENA" FAKE_GROK_EXIT=7 FAKE_TASK_STATUS=REVIEW \
-    run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y.out" "$GROK_CLI" worker worker-scope-y --grok-exec
+  # Operator env that would change the TOML the needles below assert
+  # (documented MOE_GROK_* knobs, WSL MOE_DAEMON_HOST) is scrubbed for the
+  # run; GROK_HOME too, because the wrapper writes grok's trust store under
+  # it and the harness must never touch the operator's real store.
+  (
+    unset MOE_GROK_MODEL MOE_GROK_EFFORT MOE_GROK_MCP_STARTUP_TIMEOUT_SEC MOE_GROK_MCP_TOOL_TIMEOUT_SEC MOE_DAEMON_HOST GROK_HOME
+    MOE_SERENA_PATH="$FAKE_SERENA" FAKE_GROK_EXIT=7 FAKE_TASK_STATUS=REVIEW \
+      run_scope_wrapper "$SCOPE_Y_DIR" "$TMP_DIR/scope-y.out" "$GROK_CLI" worker worker-scope-y --grok-exec
+  )
   scope_y_code=$?
   set -e
   [ "$scope_y_code" -eq 0 ] || scope_fail Y "wrapper exited with $scope_y_code" "$TMP_DIR/scope-y.out"
@@ -1702,6 +1709,15 @@ EOF
   [ -f "$SCOPE_Y_CFG" ] || scope_fail Y "expected .grok/config.toml to be written at pre-flight" "$TMP_DIR/scope-y.out"
   if ! grep -Fq 'Grok MCP config written to:' "$TMP_DIR/scope-y.out"; then
     scope_fail Y "expected the 'Grok MCP config written to:' banner" "$TMP_DIR/scope-y.out"
+  fi
+  # -- folder trust (HOME is the harness home, so this is the harness store) --
+  SCOPE_Y_TRUST="$HOME_DIR/.grok/trusted_folders.toml"
+  [ -f "$SCOPE_Y_TRUST" ] || scope_fail Y "expected grok trust store $SCOPE_Y_TRUST to be written at pre-flight" "$TMP_DIR/scope-y.out"
+  if ! grep -Fq 'Grok folder trust granted:' "$TMP_DIR/scope-y.out"; then
+    scope_fail Y "expected the 'Grok folder trust granted:' banner" "$TMP_DIR/scope-y.out"
+  fi
+  if [ "$(grep -c "^\[folders\.'" "$SCOPE_Y_TRUST")" -ne 1 ] || ! grep -Fq 'trusted = true' "$SCOPE_Y_TRUST"; then
+    scope_fail Y "expected exactly one trusted [folders.'…'] table in $SCOPE_Y_TRUST" "$SCOPE_Y_TRUST"
   fi
   for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'tool_timeout_sec = 120' 'moe_wait_for_task = 720' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' 'MOE_TOOL_NAME_STYLE = "underscore"' '[mcp_servers.serena]' '"--context", "agent"'; do
     if ! grep -Fq -- "$needle" "$SCOPE_Y_CFG"; then

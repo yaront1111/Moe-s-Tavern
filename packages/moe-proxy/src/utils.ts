@@ -146,6 +146,9 @@ export function isValidJson(str: string): boolean {
  * came back empty and looked authoritative.
  */
 const WORKER_ID_IS_A_FILTER = new Set([
+  // The daemon's wire name — the only spelling that reaches it. The alias
+  // forms below are kept for a caller that bypasses resolveToolCallName.
+  'moe.get_activity_log',
   'moe_get_activity_log',
   'get_activity_log',
 ]);

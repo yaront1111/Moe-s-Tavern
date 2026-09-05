@@ -93,33 +93,93 @@ function Load-Registry {
     }
 }
 
+# The key grok stores a folder's trust under: the absolute path with the
+# filesystem's OWN casing. Grok canonicalises its cwd before the lookup and
+# compares the key case-exactly, so an entry written with a hand-typed
+# 'D:\Projexts\x' never matches on-disk 'D:\projexts\x'. Resolve-Path and
+# GetFullPath keep the caller's casing (Get-Item.FullName fixes it only on
+# pwsh 7), so rebuild the path from the directory listings - works on
+# Windows PowerShell 5.1 too. Falls back to the plain full path on any error.
+function Get-GrokTrustKey {
+    param([string]$ProjectPath)
+    $full = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\', '/')
+    try {
+        $root = [System.IO.Path]::GetPathRoot($full)
+        if ([string]::IsNullOrEmpty($root)) { return $full }
+        $rest = $full.Substring($root.Length).Trim('\', '/')
+        $cased = $root.TrimEnd('\', '/')
+        if ($cased -match '^[a-z]:$') { $cased = $cased.ToUpperInvariant() }
+        if (-not $rest) { return ($cased + '\') }
+        foreach ($seg in ($rest -split '[\\/]+')) {
+            if (-not $seg) { continue }
+            $parent = if ($cased -match ':$') { $cased + '\' } else { $cased }
+            $hit = $null
+            try {
+                $hit = Get-ChildItem -LiteralPath $parent -Force -ErrorAction Stop |
+                    Where-Object { $_.Name -ieq $seg } | Select-Object -First 1
+            } catch { $hit = $null }
+            $name = if ($hit) { $hit.Name } else { $seg }
+            $cased = Join-Path $parent $name
+        }
+        return $cased
+    } catch {
+        return $full
+    }
+}
+
 # Grok refuses a project's .grok/config.toml MCP servers until the folder is
-# trusted in ~/.grok/trusted_folders.toml - silently: the servers never spawn
-# and the session reports them as "failed to connect" (grok mcp doctor says
-# "folder untrusted"). The TUI asks on first open; a headless worker never
-# sees that prompt. Grant trust up front; idempotent, a present entry is left
-# alone. Key format mirrors grok's own writes: [folders.'<absolute path>'].
+# trusted in <GROK_HOME|~/.grok>/trusted_folders.toml - silently: the servers
+# never spawn and the session reports them as "failed to connect" (grok mcp
+# doctor says "folder untrusted"). The TUI asks on first open; a headless
+# worker never sees that prompt. Grant trust up front; idempotent, a present
+# entry is left alone (a `trusted = false` there is a human's decline - it is
+# reported, never overturned). Key format mirrors grok's own writes:
+# [folders.'<absolute path, on-disk casing>'].
 function Grant-GrokFolderTrust {
     param([string]$ProjectPath)
+    $mutex = $null
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) { return }
     try {
-        $key = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\', '/')
+        $key = Get-GrokTrustKey -ProjectPath $ProjectPath
         if ($key.Contains("'")) {
             Write-Host "[WARN] Cannot pre-trust '$key' for grok (quote in path) - accept the trust prompt once in the grok TUI."
             return
         }
-        $grokHome = Join-Path $env:USERPROFILE ".grok"
+        # grok keeps its store under GROK_HOME when that is set, else ~/.grok.
+        $grokHome = if (-not [string]::IsNullOrWhiteSpace($env:GROK_HOME)) { $env:GROK_HOME } else { Join-Path $env:USERPROFILE ".grok" }
         $trustFile = Join-Path $grokHome "trusted_folders.toml"
+        # moe-team.ps1 launches every role at once and each wrapper runs this
+        # pre-flight; serialise the check-then-append so two first launches
+        # cannot double-append the table (grok then fails to parse the file
+        # and treats the project as untrusted for good).
+        $mutex = New-Object System.Threading.Mutex($false, 'Local\moe-grok-trusted-folders')
+        try { [void]$mutex.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { }
         $existing = ""
-        if (Test-Path $trustFile) { $existing = [System.IO.File]::ReadAllText($trustFile) }
-        if ($existing.Contains("[folders.'$key']")) { return }
-        if (-not (Test-Path $grokHome)) { New-Item -ItemType Directory -Force -Path $grokHome | Out-Null }
+        if (Test-Path -LiteralPath $trustFile) { $existing = [System.IO.File]::ReadAllText($trustFile) }
+        $header = "[folders.'$key']"
+        $at = $existing.IndexOf($header, [System.StringComparison]::Ordinal)
+        if ($at -ge 0) {
+            $tail = $existing.Substring($at + $header.Length)
+            $nextTable = $tail.IndexOf("`n[", [System.StringComparison]::Ordinal)
+            $table = if ($nextTable -ge 0) { $tail.Substring(0, $nextTable) } else { $tail }
+            if ($table -match '(?m)^\s*trusted\s*=\s*false') {
+                Write-Host "[WARN] grok trust for '$key' was declined in the grok TUI ($trustFile) - grok will not start the project's MCP servers. Set trusted = true there, or accept the prompt in the TUI."
+            }
+            return
+        }
+        if (-not (Test-Path -LiteralPath $grokHome)) { New-Item -ItemType Directory -Force -Path $grokHome | Out-Null }
         $epoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $block = "[folders.'$key']`ntrusted = true`ndecided_at = $epoch`n"
-        $text = if ([string]::IsNullOrWhiteSpace($existing)) { $block } else { $existing.TrimEnd() + "`n`n" + $block }
+        $newTable = "$header`ntrusted = true`ndecided_at = $epoch`n"
+        $text = if ([string]::IsNullOrWhiteSpace($existing)) { $newTable } else { $existing.TrimEnd() + "`n`n" + $newTable }
         [System.IO.File]::WriteAllText($trustFile, $text, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Grok folder trust granted: $key"
     } catch {
         Write-Host "[WARN] Could not pre-trust the project for grok: $_"
+    } finally {
+        if ($mutex) {
+            try { $mutex.ReleaseMutex() } catch { }
+            $mutex.Dispose()
+        }
     }
 }
 
@@ -926,9 +986,10 @@ $serenaTomlBlock
         $projectPathForToml = $projectPath.ToString().Replace('\', '/')
         # Same startup_timeout_sec key and the same reason as codex: the proxy
         # waits out a supervised daemon restart, which outlasts a 30s default.
-        # Digits only; anything else keeps 120.
+        # Digits only (at most nine, so the [int] cast cannot throw and abort
+        # the launch); anything else keeps 120.
         $grokMcpStartupTimeout = 120
-        if ($env:MOE_GROK_MCP_STARTUP_TIMEOUT_SEC -match '^\d+$') {
+        if ($env:MOE_GROK_MCP_STARTUP_TIMEOUT_SEC -match '^\d{1,9}$') {
             $grokMcpStartupTimeout = [int]$env:MOE_GROK_MCP_STARTUP_TIMEOUT_SEC
         }
         # Persist a daemon host override (WSL mode) so the spawned proxy dials
@@ -949,9 +1010,10 @@ $serenaTomlBlock
         # until cancelled by hand) is simply lost - the proxy's own 30s guard
         # only covers daemon silence. 120s fails such a call fast so the model
         # retries; the three blocking long-polls keep a budget above the
-        # daemon's 10-minute park. Digits only; anything else keeps 120.
+        # daemon's 10-minute park. Digits only (at most nine, so the [int]
+        # cast cannot throw and abort the launch); anything else keeps 120.
         $grokMcpToolTimeout = 120
-        if ($env:MOE_GROK_MCP_TOOL_TIMEOUT_SEC -match '^\d+$') {
+        if ($env:MOE_GROK_MCP_TOOL_TIMEOUT_SEC -match '^\d{1,9}$') {
             $grokMcpToolTimeout = [int]$env:MOE_GROK_MCP_TOOL_TIMEOUT_SEC
         }
         $grokMoeTomlBlock = (@(

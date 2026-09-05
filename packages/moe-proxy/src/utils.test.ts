@@ -463,6 +463,24 @@ describe('injectWorkerId: tools where workerId is a filter', () => {
       expect(rewriteToolsListResult({ result: { tools: 'nope' } }, 'underscore', aliases)).toBe(false);
     });
 
+    it('the activity-log filter guard holds for the daemon spelling, reached via the alias', () => {
+      // The daemon dispatches exactly `moe.get_activity_log`; index.ts runs
+      // resolveToolCallName BEFORE injectWorkerId, so the guard must match
+      // the wire name or a governor's { taskId } audit gets its own seat ANDed in.
+      for (const sent of ['moe_get_activity_log', 'moe.get_activity_log']) {
+        const msg = { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: sent, arguments: { taskId: 'task-1' } } };
+        resolveToolCallName(msg, new Map());
+        expect(msg.params.name).toBe('moe.get_activity_log');
+        expect(injectWorkerId(msg, 'governor-1')).toBe(false);
+        expect(msg.params.arguments).toEqual({ taskId: 'task-1' });
+      }
+      // …while an ordinary tool still gets the seat injected after the alias hop.
+      const other = { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'moe_get_context', arguments: {} } };
+      resolveToolCallName(other, new Map());
+      expect(injectWorkerId(other, 'governor-1')).toBe(true);
+      expect(other.params.arguments).toEqual({ workerId: 'governor-1' });
+    });
+
     it('maps a recorded alias back on tools/call, and moe_<name> by prefix rule otherwise', () => {
       const aliases = new Map<string, string>([['moe_get_context', 'moe.get_context']]);
       const recorded = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'moe_get_context', arguments: {} } };

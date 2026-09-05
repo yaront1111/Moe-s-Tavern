@@ -1305,7 +1305,9 @@ switch (tool) {
                 # Operator env that would change run 1's argv/TOML (documented
                 # MOE_GROK_* knobs, WSL MOE_DAEMON_HOST): snapshot, clear, restore.
                 $scopeYPrevOperatorEnv = @{}
-                foreach ($name in @('MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'MOE_DAEMON_HOST')) {
+                # GROK_HOME too: the wrapper writes grok's trust store under it,
+                # and the harness must never touch the operator's real store.
+                foreach ($name in @('MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC', 'MOE_DAEMON_HOST', 'GROK_HOME')) {
                     $scopeYPrevOperatorEnv[$name] = [Environment]::GetEnvironmentVariable($name)
                     Remove-Item "Env:$name" -ErrorAction SilentlyContinue
                 }
@@ -1334,9 +1336,15 @@ switch (tool) {
                     }
                     if ($scopeYToml -match '(?m)^(model_reasoning_effort|developer_instructions|model_instructions_file|project_doc_fallback_filenames)\s*=') { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: a grok project config must carry NO top-level keys' }
                     if ($scopeYToml.Contains('\')) { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: paths in .grok/config.toml must be forward-slashed' }
-                    foreach ($banner in @('Grok MCP config written to:', 'Grok mode: headless (--prompt-file --yolo)', '[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate.', 'Command: ')) {
+                    foreach ($banner in @('Grok MCP config written to:', 'Grok folder trust granted:', 'Grok mode: headless (--prompt-file --yolo)', '[WARN] XAI_API_KEY is not set and ~/.grok/auth.json is missing - grok will fail to authenticate.', 'Command: ')) {
                         if (-not $scopeYText.Contains($banner)) { Write-Host $scopeYText; throw "SCENARIO Y FAILED: expected [$banner] in the wrapper output" }
                     }
+                    # -- folder trust (USERPROFILE is the harness home, so this is the harness store) --
+                    $scopeYTrust = Join-Path $homeDir '.grok\trusted_folders.toml'
+                    if (-not (Test-Path -LiteralPath $scopeYTrust)) { Write-Host $scopeYText; throw "SCENARIO Y FAILED: expected grok trust store $scopeYTrust to be written at pre-flight" }
+                    $scopeYTrustText = [System.IO.File]::ReadAllText($scopeYTrust)
+                    $scopeYTrustTables = ([regex]::Matches($scopeYTrustText, "(?m)^\[folders\.'")).Count
+                    if ($scopeYTrustTables -ne 1 -or -not $scopeYTrustText.Contains('trusted = true')) { Write-Host $scopeYTrustText; throw "SCENARIO Y FAILED: expected exactly one trusted [folders.'…'] table in $scopeYTrust" }
                     if (-not (Test-Path -LiteralPath $scopeYArgv)) { Write-Host $scopeYText; throw 'SCENARIO Y FAILED: the fake grok was never launched (no argv file)' }
                     $scopeYArgvText = Get-Content -Raw -Path $scopeYArgv
                     foreach ($flag in @('--prompt-file', '--yolo', '--cwd', '--no-auto-update', '--output-format plain')) {

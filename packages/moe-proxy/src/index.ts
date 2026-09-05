@@ -165,12 +165,16 @@ function safeSend(ws: WebSocket, data: string): boolean {
 
 /**
  * Compute per-request timeout based on the tool being called.
- * moe.wait_for_task is a blocking long-poll, so it needs a much longer timeout.
+ * The daemon's blocking long-polls (`blocking: true` in getTools()) park for
+ * up to ten minutes, so they need a much longer timeout than the 30s default.
+ * Called after resolveToolCallName, so params.name is the daemon spelling.
  */
+const BLOCKING_LONG_POLLS = new Set(['moe.wait_for_task', 'moe.chat_wait', 'moe.wait_for_resource']);
+
 function getRequestTimeout(parsed: Record<string, unknown>): number {
   if (parsed.method === 'tools/call') {
     const params = parsed.params as { name?: string } | undefined;
-    if (params?.name === 'moe.wait_for_task' || params?.name === 'moe.chat_wait') {
+    if (typeof params?.name === 'string' && BLOCKING_LONG_POLLS.has(params.name)) {
       return WAIT_FOR_TASK_TIMEOUT_MS;
     }
   }

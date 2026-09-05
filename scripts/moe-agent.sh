@@ -1029,32 +1029,73 @@ fi
 # not expand it) and resolves per grok process, empty for a human running grok
 # by hand.
 # Grok refuses a project's .grok/config.toml MCP servers until the folder is
-# trusted in ~/.grok/trusted_folders.toml -- silently: the servers never spawn
-# and the session reports them as "failed to connect" (grok mcp doctor says
-# "folder untrusted"). The TUI asks on first open; a headless worker never sees
-# that prompt. Grant trust up front; idempotent, a present entry is left alone.
-# Key format mirrors grok's own writes: [folders.'<absolute path>'].
+# trusted in <GROK_HOME|~/.grok>/trusted_folders.toml -- silently: the servers
+# never spawn and the session reports them as "failed to connect" (grok mcp
+# doctor says "folder untrusted"). The TUI asks on first open; a headless
+# worker never sees that prompt. Grant trust up front; idempotent, a present
+# entry is left alone (a `trusted = false` there is a human's decline -- it is
+# reported, never overturned). Key format mirrors grok's own writes:
+# [folders.'<absolute path>'] -- the path exactly as grok sees its cwd.
 grant_grok_folder_trust() {
     local project="${1%/}"
-    local grok_home="$HOME/.grok"
+    [ -n "$project" ] || return 0
+    # grok keeps its store under GROK_HOME when that is set, else ~/.grok.
+    local grok_home="${GROK_HOME:-$HOME/.grok}"
     local trust_file="$grok_home/trusted_folders.toml"
+    # Git Bash / MSYS driving a native grok.exe: grok canonicalises --cwd to
+    # the Windows form and keys trust on that, not on the /d/... form this
+    # shell resolves. WSL and native Unix hosts keep the POSIX path.
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*)
+            if command -v cygpath >/dev/null 2>&1; then
+                project="$(cygpath -w "$project" 2>/dev/null || printf '%s' "$project")"
+                project="${project%\\}"
+            fi
+            ;;
+    esac
     case "$project" in
         *"'"*)
             echo -e "${YELLOW}[WARN]${NC} Cannot pre-trust '$project' for grok (quote in path) - accept the trust prompt once in the grok TUI."
             return 0
             ;;
     esac
-    if [ -f "$trust_file" ] && grep -qF "[folders.'$project']" "$trust_file"; then
+    if ! mkdir -p "$grok_home" 2>/dev/null; then
+        echo -e "${YELLOW}[WARN]${NC} Could not pre-trust the project for grok (cannot create $grok_home)."
         return 0
     fi
-    mkdir -p "$grok_home" 2>/dev/null || return 0
+    # moe-team.sh launches every role at once and each wrapper runs this
+    # pre-flight; serialise the check-then-append with a mkdir lock (portable:
+    # macOS ships no flock) so two first launches cannot double-append the
+    # table -- grok then fails to parse the file and treats the project as
+    # untrusted for good.
+    local lock_dir="$trust_file.lock" waited=0
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        waited=$((waited + 1))
+        if [ "$waited" -gt 100 ]; then
+            echo -e "${YELLOW}[WARN]${NC} Could not pre-trust the project for grok (lock $lock_dir held too long)."
+            return 0
+        fi
+        sleep 0.1
+    done
+    local header="[folders.'$project']"
+    if [ -f "$trust_file" ] && grep -qF "$header" "$trust_file"; then
+        # Present. `trusted = false` under it is a human's decline in the TUI;
+        # do not overturn it silently, but say why grok will refuse.
+        if MOE_TRUST_HDR="$header" awk 'BEGIN { h = ENVIRON["MOE_TRUST_HDR"] } index($0, h) == 1 { inblk = 1; next } /^[[:space:]]*\[/ { inblk = 0 } inblk && /^[[:space:]]*trusted[[:space:]]*=[[:space:]]*false/ { found = 1 } END { exit found ? 0 : 1 }' "$trust_file"; then
+            echo -e "${YELLOW}[WARN]${NC} grok trust for '$project' was declined in the grok TUI ($trust_file) - grok will not start the project's MCP servers. Set trusted = true there, or accept the prompt in the TUI."
+        fi
+        rmdir "$lock_dir" 2>/dev/null
+        return 0
+    fi
     {
         if [ -s "$trust_file" ]; then printf '\n'; fi
-        printf "[folders.'%s']\ntrusted = true\ndecided_at = %s\n" "$project" "$(date +%s)"
+        printf "%s\ntrusted = true\ndecided_at = %s\n" "$header" "$(date +%s)"
     } >> "$trust_file" 2>/dev/null || {
+        rmdir "$lock_dir" 2>/dev/null
         echo -e "${YELLOW}[WARN]${NC} Could not pre-trust the project for grok (cannot write $trust_file)."
         return 0
     }
+    rmdir "$lock_dir" 2>/dev/null
     echo -e "${GREEN}[OK]${NC} Grok folder trust granted: $project"
 }
 
@@ -1097,8 +1138,10 @@ serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 # Grok's MCP startup timeout key is startup_timeout_sec like codex; the proxy
 # can wait past a short default while a supervised daemon restarts.
 # Digits only (parity with the ps1 writer's ^\d+$ check): anything else keeps 120.
+# Digits only, at most nine (the ps1 twin's [int] cast has the same cap, so a
+# 20-digit value falls back to the default on both hosts instead of diverging).
 _timeout_raw = os.environ.get("MOE_GROK_MCP_STARTUP_TIMEOUT_SEC", "")
-startup_timeout_sec = int(_timeout_raw) if _timeout_raw.isdigit() else 120
+startup_timeout_sec = int(_timeout_raw) if (_timeout_raw.isdigit() and len(_timeout_raw) <= 9) else 120
 # Per-call timeout on grok's side. Grok's default is 6000s, and a response
 # grok fails to decode (seen once on a 68 KB list_tasks result:
 # mcp_transport_decode_error, then the call sat for minutes until cancelled
@@ -1106,7 +1149,7 @@ startup_timeout_sec = int(_timeout_raw) if _timeout_raw.isdigit() else 120
 # silence. 120s fails such a call fast so the model retries; the three
 # blocking long-polls keep a budget above the daemon's 10-minute park.
 _tool_timeout_raw = os.environ.get("MOE_GROK_MCP_TOOL_TIMEOUT_SEC", "")
-tool_timeout_sec = int(_tool_timeout_raw) if _tool_timeout_raw.isdigit() else 120
+tool_timeout_sec = int(_tool_timeout_raw) if (_tool_timeout_raw.isdigit() and len(_tool_timeout_raw) <= 9) else 120
 moe_block_lines = [
     "",
     "[mcp_servers.moe]",

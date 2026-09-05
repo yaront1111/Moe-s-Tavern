@@ -233,7 +233,9 @@ tool, reports them as unknown, or fails before the first call.
      (check `[mcp_servers.moe.env]` in `.grok/config.toml` — a config written by an older wrapper lacks
      it; the `underscore` style exposes `moe_<name>`); and grok refuses project MCP servers in a folder
      missing from `~/.grok/trusted_folders.toml` (doctor prints `folder untrusted`) — the wrapper adds the
-     project (`Grok folder trust granted: <path>`), or accept the prompt once in the TUI. Grok itself
+     project (`Grok folder trust granted: <path>`; the key carries the on-disk casing grok compares
+     against, and lives under `GROK_HOME` when that is set), or accept the prompt once in the TUI. A
+     `trusted = false` entry is a decline made in the TUI: the wrapper warns and never overturns it. Grok itself
      only ever offers `search_tool`/`use_tool`; a moe tool is called as `use_tool` with
      `tool_name: "moe__moe_<name>"`.
    - **A moe call spins for minutes in the TUI (`Run (Moe) … 5m58s`):** grok logged
