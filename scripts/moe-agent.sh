@@ -4553,6 +4553,19 @@ This is not optional. Do not rationalize skipping it (\"I'm blocking, not planni
 If after loading you decide it truly does not apply here, say so explicitly in chat -- but LOAD IT FIRST.
 </system-reminder>"
         fi
+    elif [ "$PREFLIGHT_NO_TASK" = true ] && [ "$ROLE" = "governor" ]; then
+        # Governors never claim, so the case statement above gives them
+        # STATUSES='[]' and "no claimable task" is their NORMAL state, not a
+        # stall. The generic branch below would render `statuses=[]`, which
+        # moe.wait_for_task refuses (an empty status list matches nothing and
+        # the daemon requires a non-empty filter) -- so a governor's mandated
+        # FIRST action failed, and it contradicted the governance PROMPT_BODY
+        # this same pre-flight sets. Point them at the governance loop instead.
+        DYNAMIC_CONTEXT="# Pre-flight Complete: governance mode
+The daemon reports no claimable task. For role governor that is the NORMAL state -- you do not claim tasks, and there is nothing wrong with the board.
+moe.enter_governance has already been called for you by the wrapper.
+Do NOT call moe.wait_for_task (it has no status filter for your role and will refuse) and do NOT call moe.claim_next_task.
+Your FIRST action is to read the backlog, then enter the moe.chat_wait loop with workerId=$WORKER_ID and a long timeout, exactly as the governance instructions below describe."
     elif [ "$PREFLIGHT_NO_TASK" = true ]; then
         DYNAMIC_CONTEXT="# Pre-flight Complete: no claimable task
 The daemon reports no claimable task for role $ROLE right now.

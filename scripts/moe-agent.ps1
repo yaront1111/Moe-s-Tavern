@@ -3685,11 +3685,26 @@ If after loading you decide it truly does not apply here, say so explicitly in c
 </system-reminder>
 "@
         }
+    } elseif ($preflightNoTask -and $Role -eq 'governor') {
+        # Governors never claim, so $statusMap gives them @() and "no claimable
+        # task" is their NORMAL state, not a stall. The generic branch below
+        # would render `statuses=` (an empty array pipes zero objects into
+        # ConvertTo-Json, which then emits nothing), and moe.wait_for_task
+        # refuses that with [MISSING_REQUIRED] — so a governor's mandated FIRST
+        # action failed, and it contradicted the governance $claimPromptBody
+        # this same pre-flight sets. Point them at the governance loop instead.
+        $dynamicContext += @"
+# Pre-flight Complete: governance mode
+The daemon reports no claimable task. For role governor that is the NORMAL state — you do not claim tasks, and there is nothing wrong with the board.
+moe.enter_governance has already been called for you by the wrapper.
+Do NOT call moe.wait_for_task (it has no status filter for your role and will refuse) and do NOT call moe.claim_next_task.
+Your FIRST action is to read the backlog, then enter the moe.chat_wait loop with workerId=$WorkerId and a long timeout, exactly as the governance instructions below describe.
+"@
     } elseif ($preflightNoTask) {
         $dynamicContext += @"
 # Pre-flight Complete: no claimable task
 The daemon reports no claimable task for role $Role right now.
-Your FIRST action MUST be moe.wait_for_task with statuses=$(($statuses | ConvertTo-Json -Compress)), workerId=$WorkerId.
+Your FIRST action MUST be moe.wait_for_task with statuses=$(ConvertTo-Json @($statuses) -Compress), workerId=$WorkerId.
 When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
 If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. Do not claim a new task while a routed mention is unanswered.
 "@
