@@ -205,9 +205,13 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
     expect(result.taskId).toBe('task-live');
   });
 
-  it('does NOT offer a task blocked by the solo-worker epic+status rule (claim would decline → spin)', async () => {
+  it('does NOT offer a task withheld by the solo-worker epic+status rule — and says WHY, exactly as claim_next_task does', async () => {
     // Live worker A holds task-1 (WORKING) in the epic; teamless worker B waits
-    // on WORKING. claim_next_task would skip task-2, so wait must not wake B.
+    // on WORKING. claim_next_task would skip task-2 and answer NO_TEAM_MEMBERSHIP
+    // with a join_team nextAction. wait must not wake B into that claim (spin),
+    // but it must not park B on a timer either: a bare hasNext:false reads as
+    // "nothing to do" and left a real seat idle through three governor pings
+    // on 2026-09-05 while the row sat claimable for everyone on a team.
     writeTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-a', order: 1 });
     writeTask('task-2', { status: 'WORKING', assignedWorkerId: null, order: 2 });
     writeWorker('worker-a', { currentTaskId: 'task-1', status: 'CODING' });
@@ -221,6 +225,29 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
     ) as Record<string, unknown>;
 
     expect(result.hasNext).toBe(false);
+    expect(result.task).toBeUndefined();
+    // The remedy, not a timeout: same code and nextAction claim_next_task emits.
+    expect(result.code).toBe('NO_TEAM_MEMBERSHIP');
+    expect((result.nextAction as { tool: string }).tool).toBe('moe.join_team');
+    expect((result.nextAction as { args: { workerId: string } }).args.workerId).toBe('worker-b');
+    expect(result.timedOut).toBeUndefined();
+  });
+
+  it('still times out quietly when the pool is empty for reasons other than team membership', async () => {
+    // Nothing claimable at all: no candidate was withheld by the solo rule, so
+    // the caller gets the ordinary timeout, not a NO_TEAM_MEMBERSHIP it cannot
+    // act on. Guards the discriminator from regressing into "always refuse".
+    writeWorker('worker-b');
+    await state.load();
+
+    const tool = waitForTaskTool(state);
+    const result = await tool.handler(
+      { statuses: ['WORKING'], workerId: 'worker-b', timeoutMs: 1000 },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    expect(result.code).toBeUndefined();
     expect(result.timedOut).toBe(true);
   });
 
