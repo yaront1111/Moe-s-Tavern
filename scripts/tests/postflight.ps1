@@ -1329,7 +1329,7 @@ switch (tool) {
                     $scopeYToml = [System.IO.File]::ReadAllText($scopeYConfig)
                     $scopeYBytes1 = [System.IO.File]::ReadAllBytes($scopeYConfig)
                     if ($scopeYBytes1.Length -ge 3 -and $scopeYBytes1[0] -eq 0xEF -and $scopeYBytes1[1] -eq 0xBB -and $scopeYBytes1[2] -eq 0xBF) { throw 'SCENARIO Y FAILED: .grok/config.toml must be written without a BOM' }
-                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'startup_timeout_sec = 120', '[mcp_servers.serena]', '"--context", "agent"')) {
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'MOE_TOOL_NAME_STYLE = "underscore"', 'startup_timeout_sec = 120', 'tool_timeout_sec = 120', 'moe_wait_for_task = 720', '[mcp_servers.serena]', '"--context", "agent"')) {
                         if (-not $scopeYToml.Contains($needle)) { Write-Host $scopeYToml; throw "SCENARIO Y FAILED: .grok/config.toml must contain [$needle]" }
                     }
                     if ($scopeYToml -match '(?m)^(model_reasoning_effort|developer_instructions|model_instructions_file|project_doc_fallback_filenames)\s*=') { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: a grok project config must carry NO top-level keys' }

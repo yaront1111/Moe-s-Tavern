@@ -236,6 +236,11 @@ tool, reports them as unknown, or fails before the first call.
      project (`Grok folder trust granted: <path>`), or accept the prompt once in the TUI. Grok itself
      only ever offers `search_tool`/`use_tool`; a moe tool is called as `use_tool` with
      `tool_name: "moe__moe_<name>"`.
+   - **A moe call spins for minutes in the TUI (`Run (Moe) … 5m58s`):** grok logged
+     `mcp_transport_decode_error` for `moe` and dropped the response (seen once on a 68 KB `list_tasks`
+     result; the same call succeeds headless). Since 2026-09-05 the wrapper pins `tool_timeout_sec = 120`
+     on the `moe` entry (`MOE_GROK_MCP_TOOL_TIMEOUT_SEC`) so the call fails fast and the model retries;
+     `Esc` cancels the stuck call in the TUI. Prefer `limit`/`epicId` filters on `list_tasks` to keep results small.
 2. **Proxy stderr:** `~/.grok/logs/mcp/moe.stderr.log` holds the proxy's own output. A
    `.moe/daemon.json` project-path mismatch or a dead daemon shows up here, not in the agent's
    transcript — the proxy reads `MOE_PROJECT_PATH` from `[mcp_servers.moe.env]`, and in WSL mode the

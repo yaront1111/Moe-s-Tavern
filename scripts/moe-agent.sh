@@ -1099,6 +1099,14 @@ serena_project = sys.argv[6] if len(sys.argv) > 6 else project_path
 # Digits only (parity with the ps1 writer's ^\d+$ check): anything else keeps 120.
 _timeout_raw = os.environ.get("MOE_GROK_MCP_STARTUP_TIMEOUT_SEC", "")
 startup_timeout_sec = int(_timeout_raw) if _timeout_raw.isdigit() else 120
+# Per-call timeout on grok's side. Grok's default is 6000s, and a response
+# grok fails to decode (seen once on a 68 KB list_tasks result:
+# mcp_transport_decode_error, then the call sat for minutes until cancelled
+# by hand) is simply lost -- the proxy's own 30s guard only covers daemon
+# silence. 120s fails such a call fast so the model retries; the three
+# blocking long-polls keep a budget above the daemon's 10-minute park.
+_tool_timeout_raw = os.environ.get("MOE_GROK_MCP_TOOL_TIMEOUT_SEC", "")
+tool_timeout_sec = int(_tool_timeout_raw) if _tool_timeout_raw.isdigit() else 120
 moe_block_lines = [
     "",
     "[mcp_servers.moe]",
@@ -1107,6 +1115,8 @@ moe_block_lines = [
 if proxy_args:
     moe_block_lines.append('args = ' + json.dumps([proxy_args]))
 moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)
+moe_block_lines.append('tool_timeout_sec = %d' % tool_timeout_sec)
+moe_block_lines.append('tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }')
 moe_block_lines.extend([
     "",
     "[mcp_servers.moe.env]",

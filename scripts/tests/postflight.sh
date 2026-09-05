@@ -1703,7 +1703,7 @@ EOF
   if ! grep -Fq 'Grok MCP config written to:' "$TMP_DIR/scope-y.out"; then
     scope_fail Y "expected the 'Grok MCP config written to:' banner" "$TMP_DIR/scope-y.out"
   fi
-  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' '[mcp_servers.serena]' '"--context", "agent"'; do
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'tool_timeout_sec = 120' 'moe_wait_for_task = 720' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' 'MOE_TOOL_NAME_STYLE = "underscore"' '[mcp_servers.serena]' '"--context", "agent"'; do
     if ! grep -Fq -- "$needle" "$SCOPE_Y_CFG"; then
       cat "$SCOPE_Y_CFG" >&2 || true
       scope_fail Y "expected [$needle] in .grok/config.toml" "$TMP_DIR/scope-y.out"

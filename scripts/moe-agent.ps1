@@ -943,12 +943,25 @@ $serenaTomlBlock
         # tools, then "failed to connect" (measured 2026-09-05, grok 1.0.13).
         # The proxy exposes moe_<name> instead and maps it back on tools/call.
         $grokToolNameStyleLine = 'MOE_TOOL_NAME_STYLE = "underscore"'
+        # Per-call timeout on grok's side. Grok's default is 6000s, and a
+        # response grok fails to decode (seen once on a 68 KB list_tasks
+        # result: mcp_transport_decode_error, then the call sat for minutes
+        # until cancelled by hand) is simply lost - the proxy's own 30s guard
+        # only covers daemon silence. 120s fails such a call fast so the model
+        # retries; the three blocking long-polls keep a budget above the
+        # daemon's 10-minute park. Digits only; anything else keeps 120.
+        $grokMcpToolTimeout = 120
+        if ($env:MOE_GROK_MCP_TOOL_TIMEOUT_SEC -match '^\d+$') {
+            $grokMcpToolTimeout = [int]$env:MOE_GROK_MCP_TOOL_TIMEOUT_SEC
+        }
         $grokMoeTomlBlock = (@(
             "",
             "[mcp_servers.moe]",
             "command = `"node`"",
             "args = [`"$proxyScriptForToml`"]",
             "startup_timeout_sec = $grokMcpStartupTimeout",
+            "tool_timeout_sec = $grokMcpToolTimeout",
+            "tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }",
             "",
             "[mcp_servers.moe.env]",
             "MOE_PROJECT_PATH = `"$projectPathForToml`"",

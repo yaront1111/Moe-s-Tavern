@@ -103,11 +103,13 @@ for cli_type in '"grok"'; do
   require_both "cli type" "$cli_type"
 done
 for env_name in MOE_GROK_MODEL MOE_GROK_EFFORT MOE_GROK_MCP_STARTUP_TIMEOUT_SEC \
-  GROK_CLAUDE_MCPS_ENABLED GROK_CURSOR_MCPS_ENABLED GROK_DISABLE_AUTOUPDATER MOE_TOOL_NAME_STYLE; do
+  GROK_CLAUDE_MCPS_ENABLED GROK_CURSOR_MCPS_ENABLED GROK_DISABLE_AUTOUPDATER MOE_TOOL_NAME_STYLE \
+  MOE_GROK_MCP_TOOL_TIMEOUT_SEC; do
   require_both "env name" "$env_name"
 done
 for banner in 'Grok MCP config written to:' 'Grok mode: headless' 'Grok mode: interactive' \
-  'Grok folder trust granted:' 'trusted_folders.toml' 'moe__moe_<name>'; do
+  'Grok folder trust granted:' 'trusted_folders.toml' 'moe__moe_<name>' \
+  'tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }'; do
   require_both "grok banner" "$banner"
 done
 
