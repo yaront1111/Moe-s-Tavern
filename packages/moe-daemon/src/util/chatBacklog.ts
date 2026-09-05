@@ -163,7 +163,13 @@ export async function collectChatBacklog(
   const scannedChannels = new Set<string>();
 
   for (const channelId of channelIds) {
-    const sinceId = explicitSinceId ?? worker?.chatCursors?.[channelId];
+    // An explicit catch-up id belongs to ONE channel. Applying it to a channel
+    // that does not hold it would trip getMessages' expired-cursor fallback and
+    // replay that channel's whole window on every call; those channels keep
+    // their stored cursor instead.
+    const sinceId = explicitSinceId && state.messageExistsInChannel(channelId, explicitSinceId)
+      ? explicitSinceId
+      : worker?.chatCursors?.[channelId];
     try {
       const messages = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT });
       scannedChannels.add(channelId);

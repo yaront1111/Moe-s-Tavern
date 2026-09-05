@@ -177,6 +177,20 @@ describe('moe.chat_wait', () => {
       expect(result.messages?.map((m) => m.id)).toEqual([second.id, third.id]);
     });
 
+    it('applies the id only to the channel that holds it; other channels keep their stored cursor', async () => {
+      const a1 = await post(channels.general, 'a1', 'system');
+      const a2 = await post(channels.general, 'a2', 'system');
+      await post(channels.workers, 'b1', 'system');
+      const b2 = await post(channels.workers, 'b2', 'system');
+      await state.updateWorkerCursors(WORKER_ID, { [channels.general]: a2.id, [channels.workers]: b2.id });
+
+      const result = await wait({ channels: [channels.general, channels.workers], sinceId: a1.id });
+
+      // Before the fix #workers replayed b1 and b2: the foreign id hit the
+      // expired-cursor fallback and the whole channel window came back.
+      expect(result.messages?.map((m) => m.id)).toEqual([a2.id]);
+    });
+
     it('rejects an empty sinceId', async () => {
       await expect(wait({ channels: [channels.general], sinceId: '' }))
         .rejects.toMatchObject({ context: { field: 'sinceId' } });
