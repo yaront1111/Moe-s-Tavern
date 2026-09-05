@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=5450908dd463 -->
+<!-- moe-generated: sha=7a888e2b306e -->
 
 # QA — Reference
 
@@ -23,7 +23,7 @@ Deep-dive material trimmed out of `qa.md`. Read this on demand; it is not loaded
 
 1. **Run the tests yourself.** Do not trust "tests pass" in the task chat. Type-check, lint, unit tests, integration tests.
 2. **Walk the DoD.** Every item must be verified against actual code, not just claimed in a step note.
-3. **Read the diff.** Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
+3. **Read the diff — the recorded one.** The diff is `task.commits` from `get_context`: `git show <sha>` per `completion` entry (the same session's `checkpoint` entries are part of the story too). Fall back to the working tree only when no commit exists, and then expect — and act on — the `qa_approve` `NO-COMPLETION-COMMIT` warning. Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
 4. **Walk the rails.** Every item in `allRails` must be satisfied in the diff.
 5. **Edge cases.** What breaks at scale? On malformed input? On concurrent writes? On disconnect? On cold cache?
 6. **Operational readiness.** Are errors logged? Are failures observable? Is there a way to roll back?

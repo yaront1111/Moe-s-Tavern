@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=6bd5a3cd8ed6
+# moe-generated: sha=60b1aae9db1e
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -30,6 +30,7 @@ Cut on **seams that already exist in the code**, in this order of preference:
 Anti-seams — do **not** cut here:
 
 - **By phase of work.** "Write tests" / "write code" / "write docs" as separate tasks is a step list wearing a task costume. Each task owns its own tests.
+- **By evidence type.** "Security audit of X" / "verification evidence for Y" / "hardening pass on Z" as sibling rows per slice is the same costume on the QA side. Every task already proves its own slice (mechanically checkable DoD + fresh `complete_task` verification), and the epic's ONE integration-and-hardening task owns the concentrated pass — a per-slice evidence row just inflates the board and smears the gate. `moe.create_task` warns when a meta-titled row (security/evidence/verification/hardening/audit/quality/proof/gate) is filed into an epic that already carries a higher-order hardening task; fold it into that task's DoD instead.
 - **By file.** Files move. A task scoped to a file becomes a merge conflict with a plan attached.
 - **By agent convenience.** Splitting so three workers are busy, when the second and third can't start until the first lands, just adds handoff cost.
 
@@ -44,6 +45,7 @@ Target: **≤60 minutes of human-equivalent work per task** — aim for ~30 (≈
 | Plan steps | ≤8 | >8 warns, >12 rejects at `moe.submit_plan` |
 | DoD items | 3–7, each mechanically checkable | >7 draws a `moe.create_task` warning |
 | Net changed LOC | ≤200 | >400 is QA grounds for reject-as-oversized |
+| Tasks per epic | 10–30 | >40 = re-slice into sub-epics (`moe.create_task` warns past `settings.taskSizing.maxTasksPerEpic`, default 40) |
 
 The daemon enforces this downstream (thresholds tunable via `project.json` `settings.taskSizing`): `moe.submit_plan` hard-rejects oversized plans with `CONSTRAINT_VIOLATION`. An undersliced epic doesn't save work — it bounces back here for re-slicing after the architect has already burned a planning pass. **Recalibrate your count upward:** an epic that feels like 2–3 tasks is almost always 10–30 small ones. Foundational/contract tasks first, then vertical slices, ending with the integration-and-hardening task.
 
@@ -54,7 +56,7 @@ Secondary split/merge signals:
 | DoD needs more than 7 items | Split it |
 | Touches 3+ packages | Split on the package seam, unless it's a single mechanical rename |
 | The title needs the word "and" | Usually two tasks — `create_task` warns on it; check whether the halves can land independently |
-| It can't be described without describing another unfinished task | Merge them, or make the dependency explicit via `order` |
+| It can't be described without describing another unfinished task | Merge them, or make the dependency explicit via `order` + `dependsOn` |
 | Under ~30 minutes of real work | Merge it into its neighbour; per-task overhead (claim, plan, review) exceeds the work |
 
 ### SPIDR — the split procedure
@@ -69,10 +71,10 @@ When any cap above is exceeded, split with **SPIDR**. Try each letter in order; 
 
 ## Ordering and dependencies
 
-`order` is the only dependency signal the runtime has — there is no dependency graph in the schema. So:
+`order` ranks claims; `dependsOn` gates them. So:
 
 - Producers before consumers. If task B imports what task A creates, A gets the lower `order`.
-- State the dependency in plain text in B's `description` ("depends on the `SkillMarker` type from task-…"), because nothing enforces it. A worker who claims B early needs to be able to see that.
+- Declare hard build-order dependencies structurally: `moe.create_task { dependsOn: ["task-…"] }`. A `dependsOn` task is withheld from WORKING-status claims until every target is DONE/ARCHIVED (planning proceeds regardless; missing/deleted ids count as satisfied; a mis-declared list is fixed via `moe.set_task_dependencies`). Still say *why* in B's `description` — the field gates, the prose explains.
 - Prefer orderings where the first 2–3 tasks are genuinely independent — that's what lets a fleet parallelize at all.
 - **File-disjoint tasks are the only ones parallel-claimable.** Overlapping `affectedFiles` across WORKING tasks surface as claim-time `fileCollision` warnings. Cut so concurrent-track tasks touch disjoint files; when two tasks must touch the same file, that's a sequencing decision (`order`), not something to talk workers through.
 - Tasks land in `BACKLOG` and are human-gated into `PLANNING`; ordering is advice to the human and to the governor, not a lock.

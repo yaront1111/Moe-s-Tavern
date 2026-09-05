@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=28353487e190 -->
+<!-- moe-generated: sha=da49d54ff8fe -->
 
 # Architect — Reference
 
@@ -45,7 +45,13 @@ The full sizing table (daemon-enforced; thresholds tunable via `project.json` `s
 | DoD items | 3–7, mechanically checkable | >7 (`create_task` warning) | — |
 | Net changed LOC | ≤200 | — | >400 (QA rejects as oversized) |
 
-One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones. Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
+One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
+
+## Dependencies and evidence at breakdown time
+
+- **Declare build-order deps structurally**: `moe.create_task { dependsOn: ["task-…"] }` when task B needs task A landed first. `dependsOn` gates WORKING-status claims only — the row can still be planned, it just isn't offered for execution until every target is DONE/ARCHIVED (missing/deleted ids count as satisfied). Prose in the description explains *why*; the field is what actually holds the claim. A mis-declared list is fixed with `moe.set_task_dependencies { taskId, dependsOn }` (architect/governor) — never by deleting the prerequisite. Both writers cap the list at 20 (`create_task` names the ids it dropped past the cap — split the task instead) and refuse a cycle: `set_task_dependencies` rejects an id from which the task is already reachable (over `dependsOn ∪ blockedOnTaskIds`), naming the path; `create_task` drops such ids with a warning.
+- **Workers read prerequisites from the board**: every `dependsOn` target rides in the dependent's `get_context.epicSiblings` with `landed`, `verification`, `reviewSummary` and `completionSummary` — so never write DoD items that grep HEAD for a sibling's output or "verify-or-block" on another task's code.
+- **No per-slice evidence rows**: security/evidence/verification/hardening rows per slice are the "by evidence type" anti-seam (`moe-epic-breakdown`) — each task proves its own slice, the epic's ONE final hardening task owns the concentrated pass. `create_task` warns on meta-titled duplicates and past the epic ceiling but never fails; treat the warnings as a re-slice signal, not noise.
 
 ## Rail Proposals (escape hatch)
 
@@ -64,6 +70,10 @@ moe.propose_rail {
 ```
 
 The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
+
+## Checkpoint commits of architect sessions
+
+The wrapper lands a `wip(task-<id>): <title> [status=<STATUS> role=architect cli-exit=<N>]` checkpoint on every exit of a session that holds a task — including yours, when the task moves to AWAITING_APPROVAL. Only paths attributed to the task are staged (a scaffold you created, a doc or test you touched, the task's own `.moe/tasks/<id>.json`), never the shared checkout's foreign dirt. Two consequences: exploratory edits you do not want landed belong in a step note, not on disk; and your plan's `affectedFiles`/`newFiles` are the worker's PLANNED attribution tier — name every path a step will touch, because an undeclared, unreported edit made while another worker is live is left unstaged (`MOE_ATTRIBUTION_UNRESOLVED`). Do not use `using-git-worktrees` on your own initiative: the post-flight commits from the project root only.
 
 ## Quality memory
 
