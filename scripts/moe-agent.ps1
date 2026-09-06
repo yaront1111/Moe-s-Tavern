@@ -1597,7 +1597,7 @@ function Read-MoeCommitSettings {
     $s = @{
         autoCommit = $true; checkpointCommits = $true; checkpointPush = $true
         commitBoardState = $true; commitHooks = $false
-        undeclared = 'solo'; contested = 'commit'; exclude = @()
+        undeclared = 'solo'; contested = 'skip-untouched'; exclude = @()
         qualityGate = ''; qualityGateScope = 'epicFinal'; consolidationBranch = ''
     }
     $projJsonPath = Join-Path $moeDir "project.json"
@@ -1617,7 +1617,7 @@ function Read-MoeCommitSettings {
                     $u = Get-MoeProp $attr 'undeclared'
                     if ($u -is [string] -and (@('solo', 'never', 'always') -contains $u)) { $s.undeclared = $u }
                     $c = Get-MoeProp $attr 'contested'
-                    if ($c -is [string] -and (@('commit', 'skip') -contains $c)) { $s.contested = $c }
+                    if ($c -is [string] -and (@('commit', 'skip', 'skip-untouched') -contains $c)) { $s.contested = $c }
                     $s.exclude = @(Get-MoeStringList (Get-MoeProp $attr 'exclude'))
                 }
                 $qg = Get-MoeProp $st 'qualityGate'
@@ -2026,6 +2026,85 @@ function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtabl
 
 # Section 6 of the design, exactly. Inputs are TOP-relative snapshots; declared
 # sets arrive ROOT-relative and are converted with REL here.
+# Resolve a relative import specifier against the importer's TOP-relative
+# directory; '' when it escapes the repository.
+function Resolve-MoeRelativeSpecifier([string]$Dir, [string]$Spec) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($seg in @($Dir -split '/')) { if ($seg) { $parts.Add($seg) } }
+    foreach ($seg in @($Spec -split '/')) {
+        if ($seg -eq '' -or $seg -eq '.') { continue }
+        if ($seg -eq '..') {
+            if ($parts.Count -eq 0) { return '' }
+            $parts.RemoveAt($parts.Count - 1)
+            continue
+        }
+        $parts.Add($seg)
+    }
+    return ($parts -join '/')
+}
+
+# TypeScript/Node resolution of one relative target: the literal path, the
+# `.js -> .ts/.tsx/.mts/.cts` source behind an ESM bridge specifier, and the
+# extensionless/index forms. Present when HEAD has it or it lands beside the
+# importer in this same commit.
+function Test-MoeImporteePresent([string]$Target, [hashtable]$Head, [hashtable]$Landing) {
+    $ext = [System.IO.Path]::GetExtension($Target).ToLowerInvariant()
+    $stem = if ($ext) { $Target.Substring(0, $Target.Length - $ext.Length) } else { $Target }
+    $cands = @($Target)
+    if ($ext -eq '.js') { $cands += @("$stem.ts", "$stem.tsx", "$stem.mts", "$stem.cts") }
+    elseif ($ext -eq '.mjs') { $cands += @("$stem.mts") }
+    elseif ($ext -eq '.cjs') { $cands += @("$stem.cts") }
+    elseif ($ext -eq '.jsx') { $cands += @("$stem.tsx") }
+    elseif ($ext -eq '') { $cands += @("$Target.ts", "$Target.tsx", "$Target.js", "$Target.mjs", "$Target.mts", "$Target/index.ts", "$Target/index.tsx", "$Target/index.js") }
+    foreach ($c in $cands) {
+        $k = Get-MoePathKey $c
+        if ($Head.ContainsKey($k) -or $Landing.ContainsKey($k)) { return $true }
+    }
+    return $false
+}
+
+# IMPORTEE GUARD. For every landing source file, every relative `from "./x"`,
+# `import("./x")` and `require("./x")` must resolve against HEAD plus the
+# files landing in this same commit. Returns @{ <pathKey> = <first unresolved
+# specifier> }. Measured 2026-09-06: five whole-file landings in one afternoon
+# committed an importer whose importee was still untracked (a peer's in-flight
+# module, or the task's own file left off the declaration), so HEAD stopped
+# resolving for every clean checkout while every worktree looked fine.
+function Get-MoeMissingImportees([hashtable]$Git, [array]$Candidates) {
+    $out = @{}
+    $srcExt = @('.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx')
+    $src = @()
+    $landing = @{}
+    foreach ($c in @($Candidates)) {
+        if (-not $c -or $c.Blob -eq 'D') { continue }
+        $landing[(Get-MoePathKey $c.Path)] = $true
+        if ($c.Reason -eq 'BOARD') { continue }
+        $e = [System.IO.Path]::GetExtension($c.Path).ToLowerInvariant()
+        if ($srcExt -contains $e) { $src += $c }
+    }
+    if ($src.Count -eq 0) { return $out }
+    $ls = Invoke-MoeGit -Top $Git.Top -GitArgs @('ls-tree', '-r', '--name-only', '-z', 'HEAD')
+    if ($ls.Rc -ne 0) { return $out }
+    $head = @{}
+    foreach ($n in @(($ls.Out -join '').Split([char]0))) { if ($n) { $head[(Get-MoePathKey $n)] = $true } }
+    $rx = [regex]'(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["''](\.\.?/[^"''\r\n]+)["'']'
+    foreach ($c in $src) {
+        $full = Join-Path $Git.Top $c.Path
+        $text = ''
+        try { $text = [System.IO.File]::ReadAllText($full) } catch { continue }
+        $dir = ([System.IO.Path]::GetDirectoryName($c.Path) -replace '\\', '/')
+        foreach ($m in $rx.Matches($text)) {
+            $spec = $m.Groups[1].Value
+            $target = Resolve-MoeRelativeSpecifier $dir $spec
+            if (-not $target) { continue }
+            if (Test-MoeImporteePresent $target $head $landing) { continue }
+            $out[(Get-MoePathKey $c.Path)] = $spec
+            break
+        }
+    }
+    return $out
+}
+
 function Resolve-MoeAttribution {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Git,
@@ -2124,6 +2203,17 @@ function Resolve-MoeAttribution {
                     $skipped += @{ Path = $p; Code = 'MOE_ATTR_CONTESTED' }
                     continue
                 }
+                # 'skip-untouched' (the default since 2026-09-06): a contested
+                # path lands only when THIS session's editing tools wrote it. A
+                # declared path a live peer also declares, that nobody here
+                # touched, carries the PEER's unlanded hunks -- whole-file
+                # landings of exactly that shape tore the shared branch five
+                # times in one afternoon. Left dirty, it lands at the peer's
+                # exit or at this task's next session that edits it.
+                if ($contestedPolicy -eq 'skip-untouched' -and -not $Tool.ContainsKey($k)) {
+                    $skipped += @{ Path = $p; Code = "MOE_ATTR_CONTESTED_UNTOUCHED($($peer[$k]))" }
+                    continue
+                }
             }
             $candidates += @{ Path = $p; Blob = $blob; XY = $entry.XY; Reason = 'ASSERTED'; Inferred = $false }
             continue
@@ -2146,6 +2236,25 @@ function Resolve-MoeAttribution {
             continue
         }
         $unattributed += @{ Path = $p; Blob = $blob }
+    }
+
+    # IMPORTEE GUARD: never land a source file whose relative imports HEAD
+    # cannot resolve after this commit (see Get-MoeMissingImportees). The
+    # path stays dirty, is reported as unattributed so the governors see it,
+    # and lands at the next exit once its importee is in HEAD or declared.
+    $importeeMissing = Get-MoeMissingImportees -Git $Git -Candidates $candidates
+    if ($importeeMissing.Count -gt 0) {
+        $keep = @()
+        foreach ($c in @($candidates)) {
+            $ck = Get-MoePathKey $c.Path
+            if ($importeeMissing.ContainsKey($ck)) {
+                $skipped += @{ Path = $c.Path; Code = "MOE_ATTR_IMPORTEE_MISSING($($importeeMissing[$ck]))" }
+                $unattributed += @{ Path = $c.Path; Blob = $c.Blob }
+            } else {
+                $keep += $c
+            }
+        }
+        $candidates = @($keep)
     }
 
     # Asserted paths that are neither dirty nor present nor in HEAD.

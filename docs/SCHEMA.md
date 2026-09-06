@@ -136,7 +136,7 @@ interface ProjectSettings {
   // Attribution policy for the post-flight (details in CONFIGURATION.md).
   attribution?: {
     undeclared?: 'solo' | 'never' | 'always'; // default 'solo': MEASURED paths only when no other worker is live; MOE_ATTRIBUTION=declared → 'never'
-    contested?: 'commit' | 'skip';            // default 'commit' (records Moe-Contested trailers); 'skip' → MOE_ATTR_CONTESTED
+    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched' (a contested path lands only when this session wrote it, else MOE_ATTR_CONTESTED_UNTOUCHED); 'commit' records Moe-Contested trailers; 'skip' → MOE_ATTR_CONTESTED
     exclude?: string[];                       // extra DENY prefixes (project-relative, no absolute/..); default []
   };
 
