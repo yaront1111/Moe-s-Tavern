@@ -325,14 +325,15 @@ export class MoeWebSocketServer {
               const existing = this.state.getTask(taskId);
               if (existing) {
                 // Keep in sync with VALID_TRANSITIONS in src/tools/setTaskStatus.ts.
-                // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE).
+                // ARCHIVED is reachable from resting statuses (BACKLOG / REVIEW / DONE)
+                // and, as a shelf for rows that need no work, from PLANNING and BLOCKED.
                 const VALID_TRANSITIONS: Record<string, string[]> = {
                   BACKLOG: ['PLANNING', 'WORKING', 'ARCHIVED'],
-                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED'],
+                  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED', 'ARCHIVED'],
                   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
                   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
                   REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
-                  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG'],
+                  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG', 'ARCHIVED'],
                   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
                   ARCHIVED: ['BACKLOG', 'WORKING']
                 };
@@ -350,7 +351,7 @@ export class MoeWebSocketServer {
                   // src/tools/setTaskStatus.ts.
                   if (existing.status === 'BLOCKED') {
                     const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
-                    if (newStatus !== effectiveFrom
+                    if (newStatus !== effectiveFrom && newStatus !== 'ARCHIVED'
                       && !(VALID_TRANSITIONS[effectiveFrom] ?? []).includes(newStatus)) {
                       throw new Error(`Cannot move task from BLOCKED to ${newStatus}: it was blocked from ${effectiveFrom} and ${effectiveFrom} -> ${newStatus} is not legal. Un-block to ${effectiveFrom} first.`);
                     }

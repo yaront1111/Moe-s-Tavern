@@ -625,6 +625,37 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
     }
 
+    private resolveDaemonRuntime(): { node: string; env: NodeJS.ProcessEnv } {
+        const env = { ...process.env };
+        const override = env.MOE_NODE_COMMAND;
+        const home = env.HOME || env.USERPROFILE;
+        if (process.platform === 'win32' || !home) { return { node: override || 'node', env }; }
+
+        const originalPath = env.PATH ?? '/usr/bin:/bin';
+        const entries = originalPath.split(path.delimiter);
+        const nodeDir = path.join(home, '.local', 'share', 'moe', 'node', 'current', 'bin');
+        const npmDir = path.join(home, '.local', 'share', 'moe', 'npm', 'bin');
+        for (const directory of [nodeDir, npmDir]) {
+            if (!entries.includes(directory) && fs.existsSync(directory)) { entries.push(directory); }
+        }
+        env.PATH = entries.join(path.delimiter);
+
+        const isExecutable = (candidate: string): boolean => {
+            try {
+                fs.accessSync(candidate, fs.constants.X_OK);
+                return fs.statSync(candidate).isFile();
+            } catch { return false; }
+        };
+        // Match the installer's env.sh: its managed Node replaces missing or obsolete system Node.
+        const installedNode = path.join(nodeDir, 'node');
+        const useInstalledNode = !override && isExecutable(installedNode);
+        if (useInstalledNode) {
+            env.PATH = [nodeDir, ...entries.filter(directory => directory !== nodeDir)].join(path.delimiter);
+        }
+        const node = override || (useInstalledNode ? installedNode : 'node');
+        return { node, env };
+    }
+
     private async startDaemon(command: 'init' | 'start', projectPath: string): Promise<void> {
         if (this.startInProgress) {
             return;
@@ -637,21 +668,35 @@ export class MoeDaemonClient implements vscode.Disposable {
 
         this.startInProgress = true;
         try {
-            const node = process.env.MOE_NODE_COMMAND || 'node';
+            const { node, env } = this.resolveDaemonRuntime();
             const args = [daemonPath, command, '--project', projectPath];
             if (command === 'init') {
                 args.push('--name', path.basename(projectPath));
             }
-            const proc = spawn(node, args, {
-                detached: true,
-                stdio: 'ignore',
-                windowsHide: true
+            await new Promise<void>((resolve, reject) => {
+                const proc = spawn(node, args, {
+                    detached: true,
+                    stdio: 'ignore',
+                    windowsHide: true,
+                    env
+                });
+                // Missing executables fail asynchronously; try/catch around spawn
+                // alone leaves ENOENT as an unhandled child-process error.
+                proc.once('error', reject);
+                proc.once('spawn', () => {
+                    proc.unref();
+                    resolve();
+                });
             });
-            proc.unref();
             log(`Started Moe daemon (${command}) for ${projectPath}`);
             await this.waitForDaemonInfo(projectPath, 10000);
         } catch (err) {
-            log(`Failed to start daemon: ${err instanceof Error ? err.message : String(err)}`);
+            const detail = err instanceof Error ? err.message : String(err);
+            log(`Failed to start daemon: ${detail}`);
+            const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+                ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
+                : `Moe could not start its daemon: ${detail}`;
+            vscode.window.showErrorMessage(message);
         } finally {
             this.startInProgress = false;
         }

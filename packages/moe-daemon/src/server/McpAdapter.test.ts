@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { McpAdapter, RateLimiter, type JsonRpcRequest, type JsonRpcResponse } from './McpAdapter.js';
 import type { StateManager } from '../state/StateManager.js';
 import { invalidInput, invalidState, notAllowed, notFound } from '../util/errors.js';
@@ -90,6 +91,15 @@ describe('McpAdapter', () => {
       }),
     });
   }
+
+  it('reports the installed package version during the initialize handshake', async () => {
+    const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    const response = await adapter.handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+
+    expect(response).toMatchObject({
+      result: { serverInfo: { name: 'moe-daemon', version: manifest.version } },
+    });
+  });
 
   describe('tools/list', () => {
     it('returns list of available tools', async () => {

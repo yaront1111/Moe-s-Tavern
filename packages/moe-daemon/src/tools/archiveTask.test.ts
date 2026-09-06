@@ -49,5 +49,33 @@ describe('moe.archive_task', () => {
     const tool = archiveTaskTool(h.state);
     await expect(tool.handler({ taskId: 'nope' }, h.state)).rejects.toThrow();
   });
+
+  it('archives a PLANNING ticket held by the calling architect (nothing left to plan)', async () => {
+    h.createTask({ id: 'task-pl', status: 'PLANNING', assignedWorkerId: 'architect-1' });
+    await h.state.load();
+    const tool = archiveTaskTool(h.state);
+    const result = await tool.handler({ taskId: 'task-pl', workerId: 'architect-1' }, h.state) as { status: string };
+    expect(result.status).toBe('ARCHIVED');
+    expect(h.state.getTask('task-pl')!.assignedWorkerId).toBeNull();
+  });
+
+  it('refuses to archive a PLANNING ticket held by another worker', async () => {
+    h.createTask({ id: 'task-pl2', status: 'PLANNING', assignedWorkerId: 'architect-1' });
+    await h.state.load();
+    const tool = archiveTaskTool(h.state);
+    await expect(tool.handler({ taskId: 'task-pl2', workerId: 'architect-2' }, h.state)).rejects.toThrow('held by architect-1');
+  });
+
+  it('archives an unassigned BLOCKED ticket and clears its block bookkeeping', async () => {
+    h.createTask({ id: 'task-bk', status: 'BLOCKED', blockedFromStatus: 'WORKING', blockedAt: '2026-09-05T22:22:00.000Z', blockedReason: 'needs PostgreSQL' });
+    await h.state.load();
+    const tool = archiveTaskTool(h.state);
+    const result = await tool.handler({ taskId: 'task-bk' }, h.state) as { status: string };
+    expect(result.status).toBe('ARCHIVED');
+    const task = h.state.getTask('task-bk')!;
+    expect(task.blockedFromStatus).toBeNull();
+    expect(task.blockedReason).toBeNull();
+    expect(task.priorBlockedReason).toBe('needs PostgreSQL');
+  });
 });
 

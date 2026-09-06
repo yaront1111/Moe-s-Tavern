@@ -1402,12 +1402,20 @@ function Start-HeartbeatSidecar {
     if ($env:MOE_DISABLE_HEARTBEAT -eq '1') { return $null }
     $intervalSec = 60
     if ($env:MOE_HEARTBEAT_INTERVAL_SEC -match '^\d+$') { $intervalSec = [int]$env:MOE_HEARTBEAT_INTERVAL_SEC }
-    $maxDurationSec = 7200
+    # Default 24h, and the loop below also stops the moment this wrapper
+    # process is gone. The old 2h ceiling silently ended the heartbeat under
+    # every long LIVE session (a governor's chat_wait loop, an architect
+    # planning several rows in one CLI, a QA mid-review): measured 2026-09-06,
+    # two architects' lastActivityAt froze at exactly launch+2h and the
+    # governor seat was deleted by the stale sweep twice while its CLI was
+    # running. The daemon never auto-releases WORKING/PLANNING on idle, so a
+    # longer heartbeat defeats nothing; it only stops live seats being reaped.
+    $maxDurationSec = 86400
     if ($env:MOE_HEARTBEAT_MAX_DURATION_SEC -match '^\d+$') { $maxDurationSec = [int]$env:MOE_HEARTBEAT_MAX_DURATION_SEC }
 
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
-            param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec)
+            param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid)
             $env:MOE_PROJECT_PATH = $ProjectPath
             $rpc = (@{
                 jsonrpc = "2.0"
@@ -1418,9 +1426,12 @@ function Start-HeartbeatSidecar {
             $deadline = (Get-Date).AddSeconds($MaxDurationSec)
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds $IntervalSec
+                # The wrapper that owns this job is gone (TerminateProcess leaves
+                # no finally): stop heartbeating on behalf of a dead seat.
+                if ($WrapperPid -and -not (Get-Process -Id $WrapperPid -ErrorAction SilentlyContinue)) { break }
                 try { $rpc | & node $ProxyScript 2>&1 | Out-Null } catch {}
             }
-        } -ArgumentList $ProxyScript, $ProjectPath, $WorkerId, $intervalSec, $maxDurationSec
+        } -ArgumentList $ProxyScript, $ProjectPath, $WorkerId, $intervalSec, $maxDurationSec, $PID
         return $script:CurrentHeartbeatJob
     } catch {
         Write-Host "[WARN] Failed to start heartbeat sidecar: $_ — a long silent verification step risks REVIEW self-heal eviction." -ForegroundColor Yellow
@@ -3201,6 +3212,24 @@ $script:ResumeEscalated = $false
 $resumeMaxAttempts = 5
 if ($env:MOE_RESUME_MAX_ATTEMPTS -match '^\d+$') { $resumeMaxAttempts = [int]$env:MOE_RESUME_MAX_ATTEMPTS }
 
+# Launch-failure tracking. A CLI that exits non-zero within MOE_LAUNCH_FAIL_SEC
+# of starting never did any work: provider usage limit, expired credential, a
+# crash at launch. Measured 2026-09-06: an account usage limit made every
+# claude seat exit 1 at launch; each wrapper burned its resume budget in about
+# three minutes, posted "pausing auto-resume" and then idled for hours after
+# the limit had reset -- twice in one night. Such exits are NOT counted against
+# the resume budget; the relaunch backs off exponentially instead (the held
+# task stays held, so nothing needs a release).
+$script:LaunchFailStreak = 0
+$script:LaunchFailBackoffSec = 0
+$script:CliLaunchedAt = $null
+$launchFailSec = 120
+if ($env:MOE_LAUNCH_FAIL_SEC -match '^\d+$') { $launchFailSec = [int]$env:MOE_LAUNCH_FAIL_SEC }
+$launchBackoffBaseSec = 60
+if ($env:MOE_LAUNCH_BACKOFF_BASE_SEC -match '^\d+$') { $launchBackoffBaseSec = [int]$env:MOE_LAUNCH_BACKOFF_BASE_SEC }
+$launchBackoffMaxSec = 900
+if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [int]$env:MOE_LAUNCH_BACKOFF_MAX_SEC }
+
 # --- Self-restart when this script's own bytes change on disk -----------------
 # PowerShell parses the ENTIRE script at process start, so a long-lived polling
 # loop executes its ORIGINAL bytes for its whole life. A fix can therefore be
@@ -3234,8 +3263,13 @@ try {
 do {
     if (-not $firstRun) {
         Write-Host ""
-        Write-Host "Agent idle, checking for tasks in ${PollInterval} seconds... (Ctrl+C to stop)"
-        Start-Sleep -Seconds $PollInterval
+        if ($script:LaunchFailBackoffSec -gt 0) {
+            Write-Host "[launch-failure] Backing off $($script:LaunchFailBackoffSec)s before relaunching (streak $($script:LaunchFailStreak)); the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            Start-Sleep -Seconds $script:LaunchFailBackoffSec
+        } else {
+            Write-Host "Agent idle, checking for tasks in ${PollInterval} seconds... (Ctrl+C to stop)"
+            Start-Sleep -Seconds $PollInterval
+        }
         Write-Host "Relaunching agent..."
     }
 
@@ -3787,16 +3821,26 @@ $mentionsJson
     # from --append-system-prompt-file, so its bug surface is the (mostly quote-free) role directive.
     $codexUsesFileContext = $false
     if ($cliType -eq "codex") {
+        # The project-shared .codex/agent-instructions.md keeps ONLY the
+        # identity-free role doc (it is a project_doc fallback). Everything
+        # per-seat -- "You ARE ... workerId=", the claimed task, inbox, routed
+        # mentions -- goes to a per-PROCESS file handed to codex with
+        # `-c model_instructions_file=<path>` at launch. Measured 2026-09-06:
+        # two codex seats launched 2 s apart both read the shared file, the
+        # second write won, and one seat worked the other's task under the
+        # other's workerId for ten minutes.
         $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
+        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
         if ($dynamicContext) {
             $fileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
             $codexUsesFileContext = $true
         }
-        $fileBody | Set-Content -Path $agentInstructionsPath -Encoding UTF8
-        Write-Host "Agent instructions written to: $agentInstructionsPath"
+        $fileBody | Set-Content -Path $script:CodexSeatInstructionsFile -Encoding UTF8
+        Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $projectPath ".gemini"
         if (-not (Test-Path $geminiInstructionsDir)) {
@@ -3881,6 +3925,7 @@ $mentionsJson
         $claimPrompt = $dynamicContext.TrimEnd()
     }
 
+    $script:CliLaunchedAt = Get-Date
     if ($cliType -eq "codex") {
         # Check codex is available
         $codexCheck = Get-Command $Command -ErrorAction SilentlyContinue
@@ -3901,7 +3946,7 @@ $mentionsJson
                 if ($claimPromptBody) {
                     $shortPrompt = $claimPromptBody
                 } else {
-                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in .codex/agent-instructions.md - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CodexSeatInstructionsFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                 }
             } else {
                 $shortPrompt = $claimPrompt
@@ -3937,15 +3982,26 @@ $mentionsJson
         # it for all CLIs; this must match).
         Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
         try {
+            # Per-seat config overrides, passed on argv so they can never be
+            # clobbered by a sibling seat writing the shared .codex/config.toml:
+            # this seat's instructions file, and its workerId for the proxy's
+            # injection (codex does not forward the wrapper's environment to
+            # MCP servers). Values are not valid TOML, so codex keeps them as
+            # strings; forward slashes keep the path free of TOML escapes.
+            $codexSeatArgs = @()
+            if ($script:CodexSeatInstructionsFile) {
+                $codexSeatArgs += @('-c', "model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\', '/'))")
+            }
+            $codexSeatArgs += @('-c', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")
             if ($CodexExec) {
-                # Non-interactive exec mode: codex exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
-                Write-Host "Command: $Command exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
-                & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
+                # Non-interactive exec mode: codex -c <seat overrides> exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
+                & $Command @CommandArgs @codexSeatArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             } else {
-                # Interactive TUI mode: codex -C <project> "<prompt>"
-                Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
-                & $Command @CommandArgs -C "$projectPath" "$shortPrompt"
+                # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
+                & $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             }
         } finally {
@@ -4416,6 +4472,29 @@ $mentionsJson
                 Stop-HeartbeatSidecar
             }
         }
+    }
+
+    # Launch-failure classification (tracker declared above the main loop).
+    $cliElapsedSec = if ($script:CliLaunchedAt) { [int]((Get-Date) - $script:CliLaunchedAt).TotalSeconds } else { -1 }
+    $cliExitForLaunch = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
+    if ($cliExitForLaunch -ne 0 -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
+        $script:LaunchFailStreak++
+        # Not a mid-task death: give the resume attempt back.
+        if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
+        $launchBackoffPow = [math]::Min($script:LaunchFailStreak - 1, 10)
+        $script:LaunchFailBackoffSec = [int][math]::Min($launchBackoffMaxSec, $launchBackoffBaseSec * [math]::Pow(2, $launchBackoffPow))
+        Write-Host "[launch-failure] CLI exited $cliExitForLaunch after ${cliElapsedSec}s, before doing any work (streak $($script:LaunchFailStreak)): provider usage limit, credential, or a crash at launch. Not counted against the resume budget; next relaunch in $($script:LaunchFailBackoffSec)s." -ForegroundColor Yellow
+        if ($script:LaunchFailStreak -eq 3 -and $generalChannelId) {
+            $launchFailMsg = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit or credential problem, not a task problem. Wrapper is backing off up to ${launchBackoffMaxSec}s between relaunches and keeps its task; no release needed."
+            try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchFailMsg } | Out-Null } catch {}
+        }
+    } else {
+        if ($script:LaunchFailStreak -ge 3 -and $generalChannelId) {
+            $launchOkMsg = "${WorkerId}: CLI launches again (ran ${cliElapsedSec}s, exit $cliExitForLaunch) after $($script:LaunchFailStreak) launch failures."
+            try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchOkMsg } | Out-Null } catch {}
+        }
+        $script:LaunchFailStreak = 0
+        $script:LaunchFailBackoffSec = 0
     }
 
     # -------- Post-flight: shutdown rituals after CLI exits --------

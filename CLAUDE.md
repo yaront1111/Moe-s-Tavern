@@ -25,7 +25,7 @@ Roles: **architect** plans (`submit_plan`), **worker** codes per-step, **QA** re
 | `packages/moe-proxy/` | TS (Node, ESM) | MCP stdio shim. Agent CLI speaks MCP over stdio; proxy forwards to the daemon over `ws://127.0.0.1:<port>/mcp` (reconnects, per-message timeouts). Injects `workerId` (from `MOE_WORKER_ID`, set by the launchers) into every `tools/call` that omits it. |
 | `packages/moe-claude-plugin/` | TS (Node, ESM) | Claude Code plugin: slash commands + PostToolUse hook forwarding `moe.*` tool events to the daemon's `/ws` (fire-and-forget, fail-open; opt out `MOE_DISABLE_TOOL_HOOK=1`). The hook shim imports `dist/` (not committed) and swallows errors — src edits are silently inert until `npm run build`. |
 | `moe-jetbrains/` | Kotlin/Swing | Primary plugin. Bundles daemon+proxy+scripts+role docs+skills; auto-spawns the daemon on project open (and kills it on close if it's the last project using that PID; override resolution via `MOE_DAEMON_COMMAND`/`MOE_NODE_COMMAND`). Tool window with a 5-column board over `/ws` — AWAITING_APPROVAL is display-mapped into the Planning column, not a column of its own. |
-| `moe-vscode/` | TS | VS Code / Antigravity extension (secondary). Also bundles daemon+proxy+scripts and auto-spawns the daemon; registers the bundled proxy as an MCP server on Antigravity. No automated tests (MANUAL_TESTS.md only). |
+| `moe-vscode/` | TS | VS Code / Antigravity extension (secondary). Also bundles daemon+proxy+scripts and auto-spawns the daemon; registers the bundled proxy as an MCP server on Antigravity. `npm test` covers daemon startup; MANUAL_TESTS.md covers IDE interaction. |
 
 Daemon, proxy, and claude-plugin each build with `tsc` and test with `vitest`. There are **no npm workspaces** — install/build per package. Root `package.json` only has `npm run lint` (role-doc linter).
 
@@ -41,7 +41,7 @@ cd moe-vscode          && npm install && npm run package  # .vsix via vsce (comp
 
 Both IDE plugin builds hard-fail unless daemon AND proxy each have `dist/` **and** `node_modules/` — npm install + build both first. Role-doc/skill edits reach IDE users only through a plugin rebuild (they're bundled into the plugin, then force-synced into each project's `.moe/`).
 
-Windows full install (daemon + proxy + JetBrains plugin): `.\scripts\install-all.ps1`
+Windows full build (daemon + proxy + JetBrains plugin ZIP): `.\scripts\install-all.ps1 -BuildPlugin`
 
 ## Run
 
@@ -68,6 +68,7 @@ cd packages/moe-daemon && npm test                                  # vitest run
 cd packages/moe-daemon && npx vitest run src/server/McpAdapter.test.ts   # single file
 cd packages/moe-daemon && npx vitest run -t "<test name>"                # single test by name
 cd moe-jetbrains       && ./gradlew test                            # plugin unit tests (JUnit 4, headless — a CI merge gate)
+cd moe-vscode          && npm test && npm run compile                # startup regression tests + typecheck
 bash scripts/tests/postflight.sh                                    # launcher-script harness (daemon-free; .ps1 sibling for PowerShell)
 bash scripts/tests/parity-check.sh                                  # ps1/sh wrapper string parity (codes, banners, settings keys, env names)
 npm run lint                                                        # repo root: role-doc linter (bash script — Git Bash on Windows)

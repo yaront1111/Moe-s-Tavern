@@ -28,6 +28,11 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // stale tickets can be shelved out of context — not from in-flight states
   // (PLANNING / AWAITING_APPROVAL / WORKING) where a worker may own the task;
   // move those to BACKLOG first. ARCHIVED → BACKLOG/WORKING un-archives.
+  // PLANNING → ARCHIVED and BLOCKED → ARCHIVED shelve a row that turned out to
+  // need no work at all (its DoD was met by a sibling; a dead park nobody will
+  // revive) without a two-hop detour through BACKLOG. Measured 2026-09-06: an
+  // architect had to BLOCK an already-satisfied row and page a governor because
+  // neither this tool nor archive_task could close it from PLANNING.
   // BACKLOG → REVIEW is the un-park path: the blocked-timeout sweep parks
   // in-flight tasks (including REVIEW) in BACKLOG, and a human restoring a
   // parked review must be able to send it straight back to the QA queue.
@@ -38,11 +43,11 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // park; BLOCKED is deliberately NOT reachable from human-gated columns
   // (BACKLOG/AWAITING_APPROVAL) — nothing is running there to block.
   BACKLOG: ['PLANNING', 'WORKING', 'REVIEW', 'ARCHIVED'],
-  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED'],
+  PLANNING: ['AWAITING_APPROVAL', 'BACKLOG', 'BLOCKED', 'ARCHIVED'],
   AWAITING_APPROVAL: ['WORKING', 'PLANNING'],
   WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'],
   REVIEW: ['DONE', 'WORKING', 'BACKLOG', 'PLANNING', 'ARCHIVED', 'BLOCKED'],
-  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG'],
+  BLOCKED: ['WORKING', 'PLANNING', 'REVIEW', 'BACKLOG', 'ARCHIVED'],
   DONE: ['BACKLOG', 'WORKING', 'ARCHIVED'],
   ARCHIVED: ['BACKLOG', 'WORKING']
 };
@@ -110,7 +115,9 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       const effectiveFrom: TaskStatus = task.status === 'BLOCKED'
         ? (task.blockedFromStatus ?? 'WORKING')
         : task.status;
-      if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED'
+      // ARCHIVED is a shelf, not a lifecycle gate: a dead park may be shelved
+      // whatever it was blocked from (the block bookkeeping is cleared below).
+      if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED' && newStatus !== 'ARCHIVED'
         && newStatus !== effectiveFrom && !isValidTransition(effectiveFrom, newStatus)) {
         throw notAllowed(
           'status transition',

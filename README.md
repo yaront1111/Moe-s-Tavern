@@ -69,71 +69,62 @@ AI coding agents are powerful but need guardrails. **Moe's Tavern** provides:
 
 ## Quick Start
 
-### Prerequisites
+Start with one small task in a Git project. This walkthrough builds Moe from source and uses the **JetBrains board** to create tasks and approve plans. Follow the [first-task guide](docs/GETTING_STARTED.md) for every step, checks, and fixes for common setup problems.
 
-- **Node.js 18+** - [Download](https://nodejs.org/)
-- **JetBrains IDE** (optional) - For visual Kanban board
+### 1. Download Moe
 
-### Installation
+Download the [source ZIP](https://github.com/yaront1111/Moe-s-Tavern/archive/refs/heads/main.zip), extract it, and open a terminal in the extracted Moe folder. You can also clone the repository if Git is already installed.
 
-**Windows:**
+Use a JetBrains IDE for the board. Automatic dependency installation supports **Windows with WinGet**, **macOS with Homebrew and Command Line Tools**, and **Linux with apt-get or dnf**. System package installation may ask for your operating system password or permission.
+
+### 2. Install Moe from source
+
+Run one command below. The installer handles missing Node.js/npm, Git, the selected coding CLI, and JDK 17, then builds Moe and the board plugin. On macOS/Linux it also installs Python3 and download tools; Linux includes tmux for terminal-based teams. Keep this folder: the agent launch scripts live here.
+
+**Windows (PowerShell):**
 ```powershell
-git clone https://github.com/yaront1111/Moe-s-Tavern.git
-cd Moe-s-Tavern
-.\scripts\install-all.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-all.ps1 -BuildPlugin
 ```
 
-**Mac / Linux:**
+**macOS / Linux (Bash):**
 ```bash
-git clone https://github.com/yaront1111/Moe-s-Tavern.git
-cd Moe-s-Tavern
-chmod +x scripts/*.sh
-./scripts/install-mac.sh
+bash scripts/install-mac.sh --global --skip-mcp --with-plugin
 ```
 
-### Initialize a Project
+Claude Code is the default. To install Codex instead, add `-AgentCommand codex` on Windows or `--agent codex` on macOS/Linux; `gemini` and `none` are also available. Open a new terminal after installation and run your selected CLI once in your target project to sign in. Moe cannot sign in to your provider account for you.
 
-```bash
-# Navigate to your project and initialize
-cd /path/to/your/project
-moe-daemon init
+In your IDE, open **Settings / Preferences → Plugins → gear icon → Install Plugin from Disk**, select the ZIP in `moe-jetbrains/build/distributions/`, and restart. Use this freshly built plugin; published release downloads may contain an older implementation. See the [first-task guide](docs/GETTING_STARTED.md) if installation reports a missing package manager or PATH problem.
 
-# Or specify the path explicitly
-moe-daemon init --project /path/to/project --name "My Project"
+### 3. Open your project and create a task
+
+1. Open **your target Git project** in JetBrains and open the **Moe** tool window. The plugin initializes `.moe/` and starts the daemon. Wait for **Connected**.
+2. Open **Project Settings** and keep **Approval Mode: CONTROL** so you review the plan before implementation.
+3. Click **+ Epic**, create an epic such as `First task`, then use the **+** in its **Backlog** column to create a task. Give it a clear title, description, and Definition of Done. For example: add a `GETTING_STARTED.md` containing the project's verified setup and test commands.
+4. Drag the task from **Backlog** to **Planning**. Architects claim tasks in Planning; an empty board or a task left in Backlog gives them nothing to plan.
+
+### 4. Plan, approve, implement, and review
+
+In the board's **Agents** menu, choose **Architect**, then your installed CLI. When the task shows **Awaiting Approval** in the Planning column, open it, read the plan, and click **Approve**. Then launch **Worker** and **QA** from the same menu. Keep their terminals open while they work.
+
+To launch from a terminal instead, open a **new terminal in the Moe-s-Tavern checkout**, then run one role per terminal:
+
+```powershell
+# Windows; change architect to worker or qa for the next roles
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\moe-agent.ps1 -Role architect -Project "C:\your\project"
 ```
-
-This creates the `.moe/` folder structure with project settings and starts the daemon.
-Stop it with `Ctrl+C` or `moe-daemon stop --project /path/to/project` if you only want initialization.
-
-### Run Your First Agent
-
-```bash
-# Windows
-.\scripts\moe-agent.ps1 -Role architect -Project "C:\your\project"
-
-# Mac / Linux
-./scripts/moe-agent.sh --role architect --project /your/project
-```
-
-The agent will:
-1. Connect to the daemon and load the per-role skills from `.moe/skills/`
-2. Claim a task from the board
-3. Submit a plan for your approval (architect) or execute steps (worker)
-4. Run pre-flight and post-flight checks — including the branch-safety guard that refuses to commit on `main` and peels onto `moe/work-<YYYY-MM-DD>`
-
-Claude-CLI–backed sessions are launched with `--effort max` by default. The agent process respawns per task so prompt size and memory stay bounded across long runs.
-
-### Run a Full Team
-
-Launch architect + worker + QA agents in parallel:
 
 ```bash
-# Windows
-.\scripts\moe-team.ps1 -Project "C:\your\project"
-
-# Mac / Linux
-./scripts/moe-team.sh --project /your/project
+# macOS / Linux; change architect to worker or qa for the next roles
+./scripts/moe-agent.sh --role architect --project "/your/project"
 ```
+
+These examples use Claude Code. For Codex, add `-Command codex` on Windows or `--command codex` on macOS/Linux. The launch scripts start the daemon if needed. For explicit initialization, run `moe-daemon init --project "/your/project"` in its own terminal; it keeps running until stopped.
+
+### 5. Check the result
+
+The task should move through **Working → Review → Done**. Open it to inspect the implementation steps, verification result, and QA summary, then review the changed files and recorded commit in Git. By default the launchers commit task changes and attempt to push them; review any reported Git or verification failure before treating the task as delivered.
+
+If a step stalls, use the [first-task troubleshooting guide](docs/GETTING_STARTED.md#when-a-step-does-not-work). Once one task completes, use **Agents → All Agents** to start the team together.
 
 ---
 

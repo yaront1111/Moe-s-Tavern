@@ -222,6 +222,33 @@ describe('writeClaudeHook', () => {
       });
     }
 
+    it('checks ownership without running shell login profiles', () => {
+      const projectPath = makeProjectDir();
+      const bash = findRunnableBash(projectPath);
+      if (!bash) return;
+      const hookPath = writePsHook(projectPath, '#!/usr/bin/env bash\necho \'{"tasks":[]}\'\n');
+      const profileHome = path.join(projectPath, 'home');
+      fs.mkdirSync(profileHome);
+      fs.writeFileSync(path.join(profileHome, '.bash_profile'), 'printf profile-loaded > "$HOME/profile-ran"\nprintf profile-noise\n');
+      const quotedHook = hookPath.replace(/'/g, "''");
+      // Keep only the explicitly supplied Bash candidate. A fallback shell must
+      // not hide the first candidate incorrectly sourcing a user's login profile.
+      const bootstrap = "$env:PATH = ''; $env:ProgramFiles = ''; " +
+        "[Environment]::SetEnvironmentVariable('ProgramFiles(x86)', ''); " +
+        `& '${quotedHook}'; exit $LASTEXITCODE`;
+      const result = spawnSync('pwsh', ['-NoProfile', '-Command', bootstrap], {
+        input: JSON.stringify({ tool_name: 'mcp__moe__moe_start_step' }),
+        cwd: projectPath,
+        env: { ...process.env, HOME: profileHome, CLAUDE_PROJECT_DIR: projectPath, MOE_WORKER_ID: 'worker-1', MOE_BASH_PATH: bash },
+        encoding: 'utf-8',
+        timeout: 25000,
+      });
+
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stderr).toContain('No active claim for worker worker-1');
+      expect(fs.existsSync(path.join(profileHome, 'profile-ran'))).toBe(false);
+    }, 30000);
+
     it('stays under the PowerShell hook line budget', () => {
       expect(REQUIRE_CLAIM_PS1_CONTENT.trimEnd().split('\n').length).toBeLessThanOrEqual(80);
     });

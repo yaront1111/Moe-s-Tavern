@@ -3,6 +3,7 @@
 // =============================================================================
 
 import chokidar from 'chokidar';
+import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger.js';
 
@@ -19,17 +20,35 @@ export class FileWatcher {
   private stopped = false;
   private readonly debounceMs = 150;
   private ignorePaths = new Set<string>();
+  private canonicalMoePath: string | null = null;
 
   constructor(
     private readonly moePath: string,
     private readonly onChange: (event: FileChangeEvent) => void | Promise<void>
   ) {}
 
+  private watchRoot(): string {
+    // Windows 8.3 aliases can crash libuv's native watcher when a file arrives.
+    // Resolve the existing directory before chokidar opens any native handles.
+    return this.canonicalMoePath ??= fs.realpathSync.native(path.resolve(this.moePath));
+  }
+
+  private normalizeEventPath(filePath: string): string {
+    const normalized = path.resolve(filePath);
+    const relative = path.relative(path.resolve(this.moePath), normalized);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return normalized;
+    }
+    // State writes still use the caller's alias; chokidar emits canonical paths.
+    // Map by the root so new and deleted files need not exist for suppression.
+    return path.join(this.watchRoot(), relative);
+  }
+
   /**
    * Mark a file path to be ignored on the next change event (self-write suppression).
    */
   ignorePath(filePath: string): void {
-    const normalized = path.resolve(filePath);
+    const normalized = this.normalizeEventPath(filePath);
     this.ignorePaths.add(normalized);
     // Auto-expire after 500ms to prevent leaks
     const t = setTimeout(() => this.ignorePaths.delete(normalized), 500);
@@ -39,15 +58,16 @@ export class FileWatcher {
   start(): void {
     if (this.watcher) return;
 
+    const root = this.watchRoot().split(path.sep).join('/');
     const patterns = [
-      `${this.moePath}/project.json`,
-      `${this.moePath}/epics/*.json`,
-      `${this.moePath}/tasks/*.json`,
-      `${this.moePath}/workers/*.json`,
-      `${this.moePath}/proposals/*.json`,
-      `${this.moePath}/channels/*.json`,
-      `${this.moePath}/pins/*.json`,
-      `${this.moePath}/decisions/*.json`
+      `${root}/project.json`,
+      `${root}/epics/*.json`,
+      `${root}/tasks/*.json`,
+      `${root}/workers/*.json`,
+      `${root}/proposals/*.json`,
+      `${root}/channels/*.json`,
+      `${root}/pins/*.json`,
+      `${root}/decisions/*.json`
     ];
 
     this.watcher = chokidar.watch(patterns, {
@@ -74,7 +94,7 @@ export class FileWatcher {
   private scheduleChange(event: FileChangeEvent): void {
     if (this.stopped) return;
 
-    const normalized = path.resolve(event.path);
+    const normalized = this.normalizeEventPath(event.path);
     if (this.ignorePaths.has(normalized)) {
       this.ignorePaths.delete(normalized);
       return; // Skip self-writes

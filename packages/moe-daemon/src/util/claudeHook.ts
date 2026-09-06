@@ -82,7 +82,7 @@ function Test-Bash([string]$Exe) {
     if (-not $Exe -or -not (Test-Path -LiteralPath $Exe -PathType Leaf)) { return $false }
     try {
         $p = [Diagnostics.ProcessStartInfo]::new(); $p.FileName = $Exe; $p.RedirectStandardOutput = $true; $p.RedirectStandardError = $true; $p.UseShellExecute = $false
-        @('-lc', 'printf ok') | ForEach-Object { [void]$p.ArgumentList.Add($_) }
+        @('--noprofile', '--norc', '-c', 'printf ok') | ForEach-Object { [void]$p.ArgumentList.Add($_) }
         $c = [Diagnostics.Process]::Start($p); if (-not $c.WaitForExit(2000)) { $c.Kill($true); return $false }
         return $c.ExitCode -eq 0 -and $c.StandardOutput.ReadToEnd() -eq 'ok'
     } catch { return $false }
