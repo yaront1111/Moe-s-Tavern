@@ -255,7 +255,7 @@ describe('moe.get_commit_scope', () => {
       commitBoardState: true,
       commitHooks: false,
       undeclared: 'solo',
-      contested: 'commit',
+      contested: 'skip-untouched',
     });
     expect(defaults.excludePrefixes).toEqual([]);
 
@@ -277,6 +277,11 @@ describe('moe.get_commit_scope', () => {
       contested: 'skip',
     });
     expect(overridden.excludePrefixes).toEqual(['vendor', 'build/out']);
+
+    for (const contested of ['commit', 'skip-untouched'] as const) {
+      await h.state.updateSettings({ attribution: { contested } });
+      expect((await scope()).policy.contested).toBe(contested);
+    }
   });
 
   it('touches the caller worker and validates its inputs', async () => {

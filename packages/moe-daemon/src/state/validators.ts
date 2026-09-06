@@ -268,7 +268,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
       merged.undeclared = validateEnumValue(incoming.undeclared, 'attribution.undeclared', ['solo', 'never', 'always'] as const);
     }
     if (incoming.contested !== undefined) {
-      merged.contested = validateEnumValue(incoming.contested, 'attribution.contested', ['commit', 'skip'] as const);
+      merged.contested = validateEnumValue(incoming.contested, 'attribution.contested', ['skip-untouched', 'commit', 'skip'] as const);
     }
     if (incoming.exclude !== undefined) {
       // Bounded string array, then the affected-file canonicalization so the

@@ -174,7 +174,7 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
           commitBoardState: settings.commitBoardState !== false,
           commitHooks: settings.commitHooks === true,
           undeclared: attribution.undeclared ?? 'solo',
-          contested: attribution.contested ?? 'commit',
+          contested: attribution.contested ?? 'skip-untouched',
         },
         ...(params.phase ? { phase: params.phase } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
