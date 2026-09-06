@@ -4758,7 +4758,10 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
             set +e
 
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
+            # Per-seat workerId on argv (PS twin parity): codex does not forward the
+            # wrapper's environment to MCP servers, and the shared .codex/config.toml
+            # cannot carry a per-seat value without sibling seats clobbering it.
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -4770,7 +4773,7 @@ $PROMPT_BODY"
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"$PROJECT\" \"<prompt>\""
             set +e
 
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "$PROJECT" "$SHORT_PROMPT"
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" -C "$PROJECT" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 

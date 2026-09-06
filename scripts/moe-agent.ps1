@@ -3821,16 +3821,26 @@ $mentionsJson
     # from --append-system-prompt-file, so its bug surface is the (mostly quote-free) role directive.
     $codexUsesFileContext = $false
     if ($cliType -eq "codex") {
+        # The project-shared .codex/agent-instructions.md keeps ONLY the
+        # identity-free role doc (it is a project_doc fallback). Everything
+        # per-seat -- "You ARE ... workerId=", the claimed task, inbox, routed
+        # mentions -- goes to a per-PROCESS file handed to codex with
+        # `-c model_instructions_file=<path>` at launch. Measured 2026-09-06:
+        # two codex seats launched 2 s apart both read the shared file, the
+        # second write won, and one seat worked the other's task under the
+        # other's workerId for ten minutes.
         $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
+        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
         if ($dynamicContext) {
             $fileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
             $codexUsesFileContext = $true
         }
-        $fileBody | Set-Content -Path $agentInstructionsPath -Encoding UTF8
-        Write-Host "Agent instructions written to: $agentInstructionsPath"
+        $fileBody | Set-Content -Path $script:CodexSeatInstructionsFile -Encoding UTF8
+        Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $projectPath ".gemini"
         if (-not (Test-Path $geminiInstructionsDir)) {
@@ -3936,7 +3946,7 @@ $mentionsJson
                 if ($claimPromptBody) {
                     $shortPrompt = $claimPromptBody
                 } else {
-                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in .codex/agent-instructions.md - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CodexSeatInstructionsFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                 }
             } else {
                 $shortPrompt = $claimPrompt
@@ -3972,15 +3982,26 @@ $mentionsJson
         # it for all CLIs; this must match).
         Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
         try {
+            # Per-seat config overrides, passed on argv so they can never be
+            # clobbered by a sibling seat writing the shared .codex/config.toml:
+            # this seat's instructions file, and its workerId for the proxy's
+            # injection (codex does not forward the wrapper's environment to
+            # MCP servers). Values are not valid TOML, so codex keeps them as
+            # strings; forward slashes keep the path free of TOML escapes.
+            $codexSeatArgs = @()
+            if ($script:CodexSeatInstructionsFile) {
+                $codexSeatArgs += @('-c', "model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\', '/'))")
+            }
+            $codexSeatArgs += @('-c', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")
             if ($CodexExec) {
-                # Non-interactive exec mode: codex exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
-                Write-Host "Command: $Command exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
-                & $Command @CommandArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
+                # Non-interactive exec mode: codex -c <seat overrides> exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
+                & $Command @CommandArgs @codexSeatArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             } else {
-                # Interactive TUI mode: codex -C <project> "<prompt>"
-                Write-Host "Command: $Command -C `"$projectPath`" `"<prompt>`""
-                & $Command @CommandArgs -C "$projectPath" "$shortPrompt"
+                # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
+                & $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             }
         } finally {
