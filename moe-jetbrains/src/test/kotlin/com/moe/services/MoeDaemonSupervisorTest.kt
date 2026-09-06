@@ -150,6 +150,60 @@ class MoeDaemonSupervisorTest {
     private fun initializedRoot(name: String): File =
         temporaryFolder.newFolder(name).also { File(it, ".moe").mkdirs() }
 
+    @Test
+    fun `GUI without PATH Node discovers the bootstrapped runtime`() {
+        val home = temporaryFolder.newFolder("gui-home")
+        val node = File(home, ".local/share/moe/node/current/bin/node").apply {
+            parentFile.mkdirs()
+            writeText("fixture")
+            setExecutable(true)
+        }
+
+        assertEquals(node.absolutePath, supervisor(home).resolveNodeExecutable(emptyMap(), home.absolutePath, false) { null })
+    }
+
+    @Test
+    fun `Node override wins and existing PATH is used when no managed runtime exists`() {
+        val home = temporaryFolder.newFolder("node-priority")
+        val managed = File(home, ".local/share/moe/node/current/bin/node").apply {
+            parentFile.mkdirs()
+            writeText("fixture")
+            setExecutable(true)
+        }
+        val service = supervisor(home)
+
+        assertEquals("requested-node", service.resolveNodeExecutable(mapOf("MOE_NODE_COMMAND" to "requested-node"), home.absolutePath, false) { "path-node" })
+        assertTrue(managed.delete())
+        assertEquals("path-node", service.resolveNodeExecutable(emptyMap(), home.absolutePath, false) { "path-node" })
+    }
+
+    @Test
+    fun `managed Node replaces an old system runtime for GUI launches`() {
+        val home = temporaryFolder.newFolder("old-system-node")
+        val managed = File(home, ".local/share/moe/node/current/bin/node").apply {
+            parentFile.mkdirs()
+            writeText("fixture")
+            setExecutable(true)
+        }
+        val service = supervisor(home)
+        val chosen = service.resolveNodeExecutable(emptyMap(), home.absolutePath, false) { "/usr/bin/node" }
+
+        assertEquals(managed.absolutePath, chosen)
+        assertEquals(managed.parentFile.absolutePath, service.daemonPath("/usr/bin", chosen, home.absolutePath, false).split(File.pathSeparator).first())
+    }
+
+    @Test
+    fun `daemon children discover bootstrap Node and agent bins without replacing PATH`() {
+        val home = temporaryFolder.newFolder("child-path")
+        val nodeBin = File(home, ".local/share/moe/node/current/bin").apply { mkdirs() }
+        val agentBin = File(home, ".local/share/moe/npm/bin").apply { mkdirs() }
+        val current = listOf("existing-first", "existing-second").joinToString(File.pathSeparator)
+
+        val path = supervisor(home).daemonPath(current, null, home.absolutePath, false)
+
+        assertEquals(listOf("existing-first", "existing-second", nodeBin.absolutePath, agentBin.absolutePath), path.split(File.pathSeparator))
+    }
+
     private fun supervisor(
         root: File,
         onStatus: (Boolean, String) -> Unit = { _, _ -> },

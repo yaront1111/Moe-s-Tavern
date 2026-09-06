@@ -5,6 +5,7 @@
 import type { StateManager } from '../state/StateManager.js';
 import { getTools } from '../tools/index.js';
 import { logger } from '../util/logger.js';
+import { VERSION } from '../util/version.js';
 import { MoeError } from '../util/errors.js';
 
 // Rate limiter configuration (configurable via environment variables)
@@ -245,7 +246,7 @@ export class McpAdapter {
           result: {
             protocolVersion: '2024-11-05',
             capabilities: { tools: {} },
-            serverInfo: { name: 'moe-daemon', version: '0.1.0' }
+            serverInfo: { name: 'moe-daemon', version: VERSION }
           }
         };
       }

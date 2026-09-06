@@ -1,140 +1,142 @@
 param(
     [switch]$InstallPlugin,
-    [string]$PyCharmVersion = "PyCharm2025.2",
-    [string]$PluginZip = ""
+    [switch]$BuildPlugin,
+    [Alias('PyCharmVersion')]
+    [string]$IdeVersion = "",
+    [string]$PluginZip = "",
+    [ValidateSet('claude', 'codex', 'gemini', 'grok', 'none')]
+    [string]$AgentCommand = 'claude'
 )
 
 $ErrorActionPreference = "Stop"
-
-$shouldInstallPlugin = if ($PSBoundParameters.ContainsKey('InstallPlugin')) { $InstallPlugin.IsPresent } else { $true }
-
 $root = Split-Path -Parent $PSScriptRoot
+# Resolve a supplied relative archive before entering the package directories.
+if ($PluginZip) { $PluginZip = (Resolve-Path -LiteralPath $PluginZip).Path }
 
-Write-Host "Installing Moe daemon..."
-Set-Location "$root\packages\moe-daemon"
-npm install
-if ($LASTEXITCODE -ne 0) { throw "npm install failed in packages/moe-daemon (exit $LASTEXITCODE)" }
-npm run build
-if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/moe-daemon (exit $LASTEXITCODE)" }
-
-Write-Host "Installing Moe proxy..."
-Set-Location "$root\packages\moe-proxy"
-npm install
-if ($LASTEXITCODE -ne 0) { throw "npm install failed in packages/moe-proxy (exit $LASTEXITCODE)" }
-npm run build
-if ($LASTEXITCODE -ne 0) { throw "npm run build failed in packages/moe-proxy (exit $LASTEXITCODE)" }
-
-function Resolve-PyCharmVersion([string]$Preferred) {
-    $jbRoot = Join-Path $env:APPDATA "JetBrains"
-    if ($Preferred -and (Test-Path (Join-Path $jbRoot $Preferred))) {
-        return $Preferred
-    }
-
-    if (Test-Path $jbRoot) {
-        $dirs = Get-ChildItem -Path $jbRoot -Directory -Filter "PyCharm*"
-        if ($dirs) {
-            return ($dirs | Sort-Object Name -Descending | Select-Object -First 1).Name
-        }
-    }
-
-    return $Preferred
+function Install-NodePackage([string]$Name) {
+    Write-Host "Installing $Name..."
+    Set-Location -LiteralPath (Join-Path $root "packages\$Name")
+    npm install
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed for $Name (exit $LASTEXITCODE)" }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "npm run build failed for $Name (exit $LASTEXITCODE)" }
+    npm link
+    if ($LASTEXITCODE -ne 0) { throw "npm link failed for $Name (exit $LASTEXITCODE). Check your npm global prefix permissions." }
 }
 
-if ($shouldInstallPlugin) {
-    $zip = $null
-    if ($PluginZip) {
-        if (-not (Test-Path $PluginZip)) {
-            Write-Host "Plugin zip not found at $PluginZip"
-            exit 1
-        }
-        $zip = Get-Item $PluginZip
-    } elseif (Test-Path "$root\installer\assets\moe-jetbrains.zip") {
-        $zip = Get-Item "$root\installer\assets\moe-jetbrains.zip"
-    } else {
-        Write-Host "Building Moe plugin..."
-        $ensureGradle = Join-Path $root "moe-jetbrains\\scripts\\ensure-gradle.ps1"
-        if (Test-Path $ensureGradle) {
-            $gradleBin = & $ensureGradle -ProjectRoot (Join-Path $root "moe-jetbrains")
-            Set-Location "$root\moe-jetbrains"
-            & $gradleBin buildPlugin
-        } else {
-            $gradlew = Join-Path $root "moe-jetbrains\\gradlew.bat"
-            if (-not (Test-Path $gradlew)) {
-                Write-Host "Gradle wrapper not found at $gradlew"
-                Write-Host "Open moe-jetbrains in PyCharm and run Gradle task buildPlugin once."
-                Write-Host "Then re-run this script with -InstallPlugin."
-                exit 0
-            }
-            Set-Location "$root\\moe-jetbrains"
-            & $gradlew buildPlugin
-        }
-
-        $zip = Get-ChildItem "$root\moe-jetbrains\build\distributions\*.zip" | Sort-Object LastWriteTime -Desc | Select-Object -First 1
-        if (-not $zip) {
-            Write-Host "Plugin zip not found in build\\distributions."
-            exit 1
-        }
-    }
-
+function Resolve-IdeDirectory {
     $jbRoot = Join-Path $env:APPDATA "JetBrains"
-    $PyCharmVersion = Resolve-PyCharmVersion $PyCharmVersion
-    $pluginRoot = Join-Path $jbRoot $PyCharmVersion
-    if (-not (Test-Path $pluginRoot)) {
-        Write-Host "PyCharm config not found at $pluginRoot"
-        Write-Host "Set -PyCharmVersion to match your config folder (e.g., PyCharm2025.2)."
-        exit 1
+    if ($IdeVersion) {
+        if ($IdeVersion -notmatch '^[A-Za-z][A-Za-z0-9.\-]*$') { throw "-IdeVersion must be a JetBrains config folder name." }
+        $preferred = Join-Path $jbRoot $IdeVersion
+        if (-not (Test-Path -LiteralPath $preferred -PathType Container)) { throw "JetBrains config not found at $preferred. Open the IDE once, then retry." }
+        return $preferred
     }
+    $ide = if (Test-Path -LiteralPath $jbRoot) {
+        Get-ChildItem -LiteralPath $jbRoot -Directory |
+            Where-Object { $_.Name -match '^(IntelliJIdea|IdeaIC|PyCharm|PyCharmCE|WebStorm|GoLand|CLion|Rider|RubyMine|PhpStorm|DataGrip|RustRover|Aqua)\d' } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
+    if (-not $ide) { throw "No JetBrains IDE config found. Open your IDE once, or install without -InstallPlugin and use Plugins > Install Plugin from Disk." }
+    Write-Host "Using JetBrains config $($ide.Name); select another with -IdeVersion."
+    return $ide.FullName
+}
 
+function Resolve-PluginArchive {
+    if ($PluginZip) { return Get-Item -LiteralPath $PluginZip }
+    $bundled = Join-Path $root "installer\assets\moe-jetbrains.zip"
+    if (Test-Path -LiteralPath $bundled) { return Get-Item -LiteralPath $bundled }
+    Write-Host "Building Moe plugin..."
+    $project = Join-Path $root "moe-jetbrains"
+    $ensureGradle = Join-Path $project "scripts\ensure-gradle.ps1"
+    if (Test-Path -LiteralPath $ensureGradle) {
+        $gradleBin = & $ensureGradle -ProjectRoot $project
+        if ($LASTEXITCODE -ne 0) { throw "Gradle setup failed (exit $LASTEXITCODE)." }
+    } else {
+        $gradleBin = Join-Path $project "gradlew.bat"
+    }
+    if (-not $gradleBin -or -not (Test-Path -LiteralPath $gradleBin)) { throw "Gradle wrapper not found. Build the plugin in your IDE or provide -PluginZip." }
+    Set-Location -LiteralPath $project
+    & $gradleBin buildPlugin | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Gradle buildPlugin failed (exit $LASTEXITCODE). Existing plugin was preserved." }
+    $zip = Get-ChildItem -Path (Join-Path $project "build\distributions\*.zip") |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $zip) { throw "Plugin zip not found in build\distributions." }
+    return $zip
+}
+
+function Assert-InstallChild([string]$Path, [string]$Parent) {
+    $parentPath = [IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'
+    if (-not [IO.Path]::GetFullPath($Path).StartsWith($parentPath, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Installer path is outside its target directory: $Path"
+    }
+}
+
+function Install-JetBrainsPlugin {
+    $pluginRoot = Resolve-IdeDirectory
+    $zip = Resolve-PluginArchive
     $pluginsDir = Join-Path $pluginRoot "plugins"
-    if (-not (Test-Path $pluginsDir)) {
-        New-Item -ItemType Directory -Path $pluginsDir | Out-Null
-    }
-
+    New-Item -ItemType Directory -Path $pluginsDir -Force | Out-Null
     $destDir = Join-Path $pluginsDir "moe-jetbrains"
-    if (Test-Path $destDir) {
-        Remove-Item -Recurse -Force $destDir
-    }
-
-    $tmp = Join-Path $env:TEMP "moe-jetbrains-install"
-    if (Test-Path $tmp) {
-        Remove-Item -Recurse -Force $tmp
-    }
+    $backup = Join-Path $pluginsDir ("moe-jetbrains-backup-" + [guid]::NewGuid().ToString('N'))
+    $tmp = Join-Path $env:TEMP ("moe-jetbrains-install-" + [guid]::NewGuid().ToString('N'))
+    Assert-InstallChild $destDir $pluginsDir
+    Assert-InstallChild $backup $pluginsDir
+    Assert-InstallChild $tmp $env:TEMP
     New-Item -ItemType Directory -Path $tmp | Out-Null
-    Expand-Archive -Path $zip.FullName -DestinationPath $tmp -Force
-
-    if (Test-Path (Join-Path $tmp "lib")) {
-        Move-Item -Path $tmp -Destination $destDir
-    } else {
-        $inner = Get-ChildItem -Path $tmp -Directory |
-            Where-Object { Test-Path (Join-Path $_.FullName "lib") } |
-            Select-Object -First 1
-        if (-not $inner) {
-            throw "Plugin zip layout unexpected. Expected lib/ at root."
+    try {
+        Expand-Archive -LiteralPath $zip.FullName -DestinationPath $tmp
+        $payload = if (Test-Path -LiteralPath (Join-Path $tmp 'lib') -PathType Container) { $tmp } else {
+            (Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'lib') -PathType Container } | Select-Object -First 1).FullName
         }
-        Move-Item -Path $inner.FullName -Destination $destDir
-        Remove-Item -Recurse -Force $tmp
+        if (-not $payload) { throw "Plugin zip layout unexpected. Expected lib/ at root or within the plugin folder. Existing plugin was preserved." }
+        if ($payload -ne $tmp) { Assert-InstallChild $payload $tmp }
+        if (Test-Path -LiteralPath $destDir) { Move-Item -LiteralPath $destDir -Destination $backup }
+        try { Move-Item -LiteralPath $payload -Destination $destDir } catch {
+            if (Test-Path -LiteralPath $backup) {
+                if (Test-Path -LiteralPath $destDir) { Remove-Item -LiteralPath $destDir -Recurse -Force }
+                Move-Item -LiteralPath $backup -Destination $destDir
+            }
+            throw
+        }
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    }
+    Write-Host "Installed plugin to $destDir"
+    Write-Host "Restart your JetBrains IDE to load the plugin."
+}
+
+Push-Location
+try {
+    $buildsPlugin = ($InstallPlugin -or $BuildPlugin) -and -not $PluginZip -and -not (Test-Path -LiteralPath (Join-Path $root 'installer\assets\moe-jetbrains.zip'))
+    & (Join-Path $PSScriptRoot 'install-dependencies.ps1') -AgentCommand $AgentCommand -WithPlugin:$buildsPlugin
+    Install-NodePackage 'moe-daemon'
+    Install-NodePackage 'moe-proxy'
+    if ($InstallPlugin) { Install-JetBrainsPlugin }
+    elseif ($BuildPlugin) {
+        $builtArchive = Resolve-PluginArchive
+        Write-Host "Plugin archive: $($builtArchive.FullName)"
+        Write-Host 'In your JetBrains IDE: Settings > Plugins > Install Plugin from Disk, then select that archive.'
     }
 
-    Write-Host "Installed plugin to $destDir"
-    Write-Host "Restart PyCharm to load the plugin."
+    $moeHome = Join-Path $env:USERPROFILE '.moe'
+    New-Item -ItemType Directory -Path $moeHome -Force | Out-Null
+    $daemonPkg = Get-Content -LiteralPath (Join-Path $root 'packages\moe-daemon\package.json') -Raw | ConvertFrom-Json
+    $configJson = @{
+        installPath = $root
+        version = $daemonPkg.version
+        updatedAt = (Get-Date -Format 'o')
+    } | ConvertTo-Json
+    [IO.File]::WriteAllText((Join-Path $moeHome 'config.json'), $configJson, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Wrote global config to $moeHome\config.json"
+} finally {
+    Pop-Location
 }
 
-# Write global install config (~/.moe/config.json)
-$moeHome = Join-Path $env:USERPROFILE ".moe"
-if (-not (Test-Path $moeHome)) {
-    New-Item -ItemType Directory -Path $moeHome | Out-Null
+Write-Host 'Done. Next steps:'
+Write-Host '1) Initialize your project: moe-daemon init --project <path>'
+if ($AgentCommand -ne 'none') {
+    Write-Host "2) Launch an architect in another terminal: powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\moe-agent.ps1`" -Role architect -Command $AgentCommand -Project <path>"
 }
-$daemonPkg = Get-Content (Join-Path $root "packages\moe-daemon\package.json") -Raw | ConvertFrom-Json
-$globalConfig = @{
-    installPath = $root
-    version = $daemonPkg.version
-    updatedAt = (Get-Date -Format "o")
-}
-$globalConfig | ConvertTo-Json | Set-Content -Path (Join-Path $moeHome "config.json") -Encoding UTF8
-Write-Host "Wrote global config to $moeHome\config.json"
-
-Write-Host "Done."
-Write-Host "Next steps:"
-Write-Host "1) Start daemon: node packages/moe-daemon/dist/index.js start --project <path>"
-Write-Host "2) Configure Claude to use moe-proxy (see docs/MCP_SERVER.md)"
-Write-Host "3) Plugin auto-starts the daemon when PyCharm opens a project (if installed)."
+Write-Host '3) Optional JetBrains plugin: re-run with -BuildPlugin to build its ZIP (JDK 17 is installed automatically), then install it through your IDE.'

@@ -7,6 +7,26 @@ on:
     branches: [main]
 
 jobs:
+  fresh-linux-install:
+    name: Fresh Linux installation
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Deliberately omit setup-node: the public installer must supply its dependencies.
+      - name: Install dependencies and build Moe
+        run: bash scripts/install-mac.sh --global --skip-mcp --agent claude
+
+      - name: Verify installed commands and first project
+        shell: bash
+        run: |
+          . "$HOME/.local/share/moe/env.sh"
+          command -v moe-daemon
+          command -v moe-proxy
+          claude --version
+          node scripts/tests/onboarding.mjs
+
   build-typescript:
     name: Build TypeScript
     runs-on: ubuntu-latest
@@ -16,7 +36,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
@@ -55,7 +75,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
@@ -108,7 +128,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
@@ -146,6 +166,11 @@ jobs:
         run: ./gradlew test
         working-directory: moe-jetbrains
 
+      - name: Verify packaged JetBrains onboarding
+        run: |
+          unzip -q moe-jetbrains/build/distributions/*.zip -d "$RUNNER_TEMP/moe-plugin-smoke"
+          node scripts/tests/onboarding.mjs "$RUNNER_TEMP/moe-plugin-smoke/moe-jetbrains"
+
       - name: Upload plugin zip
         uses: actions/upload-artifact@v7
         with:
@@ -165,7 +190,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Build daemon
         run: |
@@ -178,3 +203,21 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
         working-directory: packages/moe-proxy
+
+      - name: Verify fresh project onboarding
+        run: node scripts/tests/onboarding.mjs
+
+      - name: Test release version guard
+        run: node --test scripts/tests/release-version.mjs
+
+      - name: Test installers with isolated profiles
+        run: node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs
+
+      - name: Test agent runtime discovery
+        run: node --test scripts/tests/agent-runtime.test.mjs
+
+      - name: Test VS Code daemon startup
+        run: |
+          npm ci
+          npm test
+        working-directory: moe-vscode

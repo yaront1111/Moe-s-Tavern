@@ -35,6 +35,17 @@ class CreateTaskDialog(
     private val service: MoeProjectService
 ) : DialogWrapper(ideaProject), Disposable {
 
+    companion object {
+        internal fun <T> epicSelectionModel(epics: List<T>, createNew: T): DefaultComboBoxModel<T> =
+            DefaultComboBoxModel<T>().apply {
+                epics.forEach { addElement(it) }
+                addElement(createNew)
+                // An action preselected as the sole option emits no SELECTED event
+                // when clicked, so a fresh project could never create its first epic.
+                if (epics.isEmpty()) selectedItem = null
+            }
+    }
+
     private val epicCombo = ComboBox<EpicOption>()
     private val priorityCombo = ComboBox(arrayOf("CRITICAL", "HIGH", "MEDIUM", "LOW"))
     private val titleField = JBTextField()
@@ -102,9 +113,7 @@ class CreateTaskDialog(
                         ?: (epicCombo.model as? DefaultComboBoxModel<EpicOption>)?.let { model ->
                             if (model.size > 1) model.getElementAt(0) else null
                         }
-                    if (revertTo != null) {
-                        epicCombo.selectedItem = revertTo
-                    }
+                    epicCombo.selectedItem = revertTo
 
                     // Show create epic dialog
                     val dialog = CreateEpicDialog(ideaProject, service)
@@ -114,6 +123,7 @@ class CreateTaskDialog(
                 } else if (selected?.epic != null) {
                     lastSelectedEpic = selected.epic
                 }
+                validateFields()
             }
         }
         epicCombo.addItemListener(epicComboListener)
@@ -156,8 +166,8 @@ class CreateTaskDialog(
     }
 
     private fun refreshEpicCombo(selectEpic: Epic?) {
-        val items = epics.map { EpicOption(it) } + EpicOption.createNew()
-        epicCombo.model = DefaultComboBoxModel(items.toTypedArray())
+        val items = epics.map { EpicOption(it) }
+        epicCombo.model = epicSelectionModel(items, EpicOption.createNew())
         if (selectEpic != null) {
             val option = items.find { it.epic?.id == selectEpic.id }
             if (option != null) {
@@ -172,6 +182,7 @@ class CreateTaskDialog(
         } else if (epics.isNotEmpty()) {
             lastSelectedEpic = epics.first()
         }
+        validateFields()
     }
 
     private fun validateFields(): Boolean {
@@ -263,7 +274,7 @@ class CreateTaskDialog(
             isSelected: Boolean,
             cellHasFocus: Boolean
         ): java.awt.Component {
-            label.text = value?.displayText ?: ""
+            label.text = value?.displayText ?: MoeBundle.message("moe.message.selectOrCreateEpic")
             if (value?.isCreateNew == true) {
                 label.font = label.font.deriveFont(java.awt.Font.ITALIC)
             } else {

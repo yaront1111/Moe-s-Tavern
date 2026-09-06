@@ -10,7 +10,7 @@ import net from 'net';
 import http from 'http';
 import crypto from 'crypto';
 import { spawn, type ChildProcess } from 'child_process';
-import { pathToFileURL } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
@@ -18,13 +18,12 @@ import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
+import { VERSION } from './util/version.js';
 import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
-
-const VERSION = '0.1.0';
 
 // Configurable via environment variables with sensible defaults
 const DEFAULT_PORT = parseInt(process.env.MOE_DEFAULT_PORT || '9876', 10);
@@ -426,8 +425,8 @@ function consumeStopSentinel(projectPath: string): boolean {
 
 function writeGlobalConfig(): void {
   try {
-    // Derive installPath: __dirname is packages/moe-daemon/dist, go up 3 levels
-    const installPath = path.resolve(__dirname, '..', '..', '..');
+    // Source and compiled entrypoints sit three levels below the checkout root.
+    const installPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
     const canary = path.join(installPath, 'packages', 'moe-daemon', 'dist', 'index.js');
     if (!fs.existsSync(canary)) {
       // Not running from source tree (e.g. npm global install) — skip

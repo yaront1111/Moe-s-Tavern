@@ -28,6 +28,7 @@ val bundledProxyModules = repoRoot.resolve("packages/moe-proxy/node_modules")
 val bundledProxyMarker = bundledProxyModules.resolve("ws")
 val bundledAgentScript = repoRoot.resolve("scripts/moe-agent.ps1")
 val bundledAgentScriptSh = repoRoot.resolve("scripts/moe-agent.sh")
+val bundledCallScriptSh = repoRoot.resolve("scripts/moe-call.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
 val bundledSkillsDir = repoRoot.resolve("docs/skills")
@@ -74,6 +75,9 @@ fun requireBundledAssets() {
     }
     check(bundledAgentScriptSh.exists()) {
         "Bundled moe-agent.sh not found at ${bundledAgentScriptSh}."
+    }
+    check(bundledCallScriptSh.exists()) {
+        "Bundled moe-call.sh not found at ${bundledCallScriptSh}."
     }
 }
 
@@ -158,7 +162,7 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundledAgentScript) {
         into("$pluginContentRoot/scripts")
     }
-    from(bundledAgentScriptSh) {
+    from(listOf(bundledAgentScriptSh, bundledCallScriptSh)) {
         into("$pluginContentRoot/scripts")
         // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.
         filter(

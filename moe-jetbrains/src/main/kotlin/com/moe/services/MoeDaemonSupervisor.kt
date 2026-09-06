@@ -105,12 +105,8 @@ class MoeDaemonSupervisor(
                 }
             }
             pb.redirectErrorStream(true)
-            val nodeDir = direct?.firstOrNull()?.let { File(it).parentFile }
-            if (nodeDir != null) {
-                val env = pb.environment()
-                val current = env["PATH"] ?: ""
-                env["PATH"] = "${nodeDir.absolutePath}${File.pathSeparator}$current"
-            }
+            val env = pb.environment()
+            env["PATH"] = daemonPath(env["PATH"] ?: "", direct?.firstOrNull())
             val process = processStarter(pb)
             val oldProcess = spawnedDaemonProcess
             if (oldProcess != null) {
@@ -272,16 +268,43 @@ class MoeDaemonSupervisor(
         return null
     }
 
-    private fun resolveNodeExecutable(): String? {
-        val env = System.getenv("MOE_NODE_COMMAND")?.trim()
+    internal fun daemonPath(
+        current: String,
+        nodeCommand: String?,
+        home: String? = System.getProperty("user.home"),
+        windows: Boolean = isWindows()
+    ): String {
+        val nodeDir = nodeCommand?.let { File(it).parentFile }
+        val bootstrapDirs = if (!windows && home != null) listOf(
+            File(home, ".local/share/moe/node/current/bin"),
+            File(home, ".local/share/moe/npm/bin")
+        ).filter { it.isDirectory }.map { it.absolutePath } else emptyList()
+        return (listOfNotNull(nodeDir?.absolutePath) + current.split(File.pathSeparator) + bootstrapDirs)
+            .filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
+    }
+
+    internal fun resolveNodeExecutable(
+        environment: Map<String, String> = System.getenv(),
+        home: String? = System.getProperty("user.home"),
+        windows: Boolean = isWindows(),
+        nodeOnPath: () -> String? = { if (windows) findNodeFromWhere() else findNodeViaWhich() }
+    ): String? {
+        val env = environment["MOE_NODE_COMMAND"]?.trim()
         if (!env.isNullOrBlank()) {
             return env.trim('"')
         }
-        if (isWindows()) {
-            val programFiles = System.getenv("ProgramFiles")
-            val programFilesX86 = System.getenv("ProgramFiles(x86)")
-            val localAppData = System.getenv("LOCALAPPDATA")
-            val appData = System.getenv("APPDATA")
+        // The installer selects this runtime when the system Node is unsupported.
+        // GUI-launched IDEs do not load the shell profile that puts it on PATH.
+        if (!windows && home != null) {
+            val managed = File(home, ".local/share/moe/node/current/bin/node")
+            if (managed.isFile && managed.canExecute()) return managed.absolutePath
+        }
+        nodeOnPath()?.let { return it }
+        if (windows) {
+            val programFiles = environment["ProgramFiles"]
+            val programFilesX86 = environment["ProgramFiles(x86)"]
+            val localAppData = environment["LOCALAPPDATA"]
+            val appData = environment["APPDATA"]
             val candidates = listOfNotNull(
                 programFiles?.let { File(it, "nodejs\\node.exe") },
                 programFilesX86?.let { File(it, "nodejs\\node.exe") },
@@ -291,11 +314,10 @@ class MoeDaemonSupervisor(
             )
             val found = candidates.firstOrNull { it.exists() }?.absolutePath
             if (found != null) return found
-            return findNodeFromWhere()
+            return null
         }
         // macOS / Linux: check common node locations since ProcessBuilder
         // does not inherit the user's shell PATH when launched from the IDE
-        val home = System.getProperty("user.home")
         val macLinuxCandidates = listOfNotNull(
             File("/opt/homebrew/bin/node"),         // Homebrew ARM (Apple Silicon)
             File("/usr/local/bin/node"),             // Homebrew Intel / system
@@ -312,7 +334,7 @@ class MoeDaemonSupervisor(
             log.debug("Resolved node on macOS/Linux: $found")
             return found
         }
-        return findNodeViaWhich()
+        return null
     }
 
     private fun findNodeFromWhere(): String? {
@@ -329,7 +351,7 @@ class MoeDaemonSupervisor(
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val line = reader.readLine()?.trim()
             reader.close()
-            if (!line.isNullOrBlank()) line else null
+            if (process.exitValue() == 0 && !line.isNullOrBlank() && File(line).isFile) line else null
         } catch (ex: Exception) {
             log.debug("Failed to find node via 'where' command", ex)
             null
@@ -352,7 +374,7 @@ class MoeDaemonSupervisor(
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val line = reader.readLine()?.trim()
             reader.close()
-            if (!line.isNullOrBlank()) line else null
+            if (process.exitValue() == 0 && !line.isNullOrBlank() && File(line).isFile) line else null
         } catch (ex: Exception) {
             log.debug("Failed to find node via 'which' command", ex)
             null

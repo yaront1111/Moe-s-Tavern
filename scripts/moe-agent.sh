@@ -19,6 +19,15 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 PROXY_PATH_OVERRIDE="${MOE_PROXY_PATH:-}"
 DAEMON_PATH_OVERRIDE="${MOE_DAEMON_PATH:-}"
 
+# GUI terminals may not source the profile installed by the dependency helper.
+# Add its agent CLIs without changing the caller's existing command priority.
+if [ -d "$HOME/.local/share/moe/npm/bin" ]; then
+    case ":$PATH:" in
+        *":$HOME/.local/share/moe/npm/bin:"*) ;;
+        *) export PATH="${PATH:+$PATH:}$HOME/.local/share/moe/npm/bin" ;;
+    esac
+fi
+
 # Auto-detect node binary from common installation locations
 find_node() {
     # 1. Explicit override via env var
@@ -29,7 +38,13 @@ find_node() {
         fi
     fi
 
-    # 2. node on PATH
+    # 2. Moe's managed runtime replaces unsupported system Node installations.
+    if [ -x "$HOME/.local/share/moe/node/current/bin/node" ]; then
+        echo "$HOME/.local/share/moe/node/current/bin/node"
+        return 0
+    fi
+
+    # 3. node on PATH
     if command -v node &> /dev/null; then
         echo "node"
         return 0
@@ -68,6 +83,11 @@ find_node() {
 }
 
 NODE_CMD=$(find_node)
+# Agent CLI shebangs and their children must use the same selected Node.
+NODE_EXECUTABLE=$(command -v "$NODE_CMD" 2>/dev/null || true)
+if [ -n "$NODE_EXECUTABLE" ] && [ -f "$NODE_EXECUTABLE" ]; then
+    export PATH="$(dirname "$NODE_EXECUTABLE"):$PATH"
+fi
 NODE_VERSION=$("$NODE_CMD" --version 2>/dev/null || echo "unknown")
 if [ "$NODE_VERSION" = "unknown" ]; then
     echo -e "${RED}[ERROR]${NC} Could not find node. Set MOE_NODE_COMMAND=/path/to/node"
@@ -2605,7 +2625,7 @@ attr_summary_load() {
     [ -f "$1/summary" ] || return 1
     local k v
     while IFS='=' read -r k v; do
-        v="${v%$''}"
+        v="${v%$'\r'}"
         case "$k" in
             N_CANDIDATES) ATTR_N_CANDIDATES="$v" ;;
             N_INFERRED) ATTR_N_INFERRED="$v" ;;
