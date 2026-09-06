@@ -907,10 +907,9 @@ exit 0
 EOF
   chmod +x "$FILE_CLI"
   # STREAM_CLI emits a synthetic stream-json transcript: a streamed Write
-  # tool_use (content_block_start/delta/stop) on a RELATIVE path and a
-  # non-streamed assistant message carrying a full tool_use.input with an
-  # ABSOLUTE path under the project -- both must be harvested into the TOOL
-  # tier -- and writes both files.
+  # tool_use (content_block_start/delta/stop) on a RELATIVE path followed by
+  # its complete assistant block, plus an ABSOLUTE path under the project.
+  # Both real writes have matching successful tool results before entering TOOL.
   STREAM_CLI="$TMP_DIR/stream-cli"
   cat > "$STREAM_CLI" <<'EOF'
 #!/usr/bin/env bash
@@ -919,12 +918,15 @@ if command -v cygpath >/dev/null 2>&1; then abs_root="$(cygpath -m "$MOE_PROJECT
 echo tool > "$MOE_PROJECT_PATH/tool-written.txt"
 echo tool-abs > "$MOE_PROJECT_PATH/tool-written-abs.txt"
 printf '%s\n' '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"model":"fake"}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Write"}}}'
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"write-relative","name":"Write"}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"tool-wr"}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"itten.txt\",\"content\":\"tool\"}"}}}'
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_stop"}}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"write-relative","name":"Write","input":{"file_path":"tool-written.txt","content":"tool"}}]}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"write-relative","is_error":false,"content":"wrote fixture"}]}}'
 abs_json="$(printf '%s' "$abs_root/tool-written-abs.txt" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$abs_json\",\"content\":\"tool-abs\"}}]}}"
+printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"write-absolute\",\"name\":\"Write\",\"input\":{\"file_path\":\"$abs_json\",\"content\":\"tool-abs\"}}]}}"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"write-absolute","is_error":false,"content":"wrote fixture"}]}}'
 printf '%s\n' '{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"end_turn"}'
 exit 0
 EOF

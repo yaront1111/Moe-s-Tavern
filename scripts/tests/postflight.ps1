@@ -331,7 +331,9 @@ switch (tool) {
     # Stream-json emitter: a synthetic content_block_start/delta/stop sequence
     # for a Write tool_use on tool-written.txt (absolute path, as Claude Code
     # emits it) plus a non-streamed `assistant` message carrying a full Edit
-    # tool_use.input on tool-edited.txt — and it writes both files.
+    # tool_use.input on tool-edited.txt — and it writes both files. Complete
+    # assistant blocks plus successful matching results prove those writes;
+    # partial display events alone must never confer attribution.
     $streamJsonCmd = Join-Path $tempRoot 'stream-json.cmd'
     Set-Content -Path $streamJsonCmd -Encoding ASCII -Value ("@echo off`r`n" +
         "echo tool> `"%MOE_PROJECT_PATH%\tool-written.txt`"`r`n" +
@@ -339,7 +341,10 @@ switch (tool) {
         "echo {`"type`":`"stream_event`",`"event`":{`"type`":`"content_block_start`",`"content_block`":{`"type`":`"tool_use`",`"id`":`"t1`",`"name`":`"Write`"}}}`r`n" +
         "echo {`"type`":`"stream_event`",`"event`":{`"type`":`"content_block_delta`",`"delta`":{`"type`":`"input_json_delta`",`"partial_json`":`"{\`"file_path\`":\`"%MOE_PROJECT_PATH:\=/%/tool-written.txt\`",\`"content\`":\`"tool\`"}`"}}}`r`n" +
         "echo {`"type`":`"stream_event`",`"event`":{`"type`":`"content_block_stop`"}}`r`n" +
+        "echo {`"type`":`"assistant`",`"message`":{`"content`":[{`"type`":`"tool_use`",`"id`":`"t1`",`"name`":`"Write`",`"input`":{`"file_path`":`"%MOE_PROJECT_PATH:\=/%/tool-written.txt`"}}]}}`r`n" +
+        "echo {`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"t1`",`"is_error`":false,`"content`":`"ok`"}]}}`r`n" +
         "echo {`"type`":`"assistant`",`"message`":{`"content`":[{`"type`":`"tool_use`",`"id`":`"t2`",`"name`":`"Edit`",`"input`":{`"file_path`":`"%MOE_PROJECT_PATH:\=/%/tool-edited.txt`",`"old_string`":`"a`",`"new_string`":`"b`"}}]}}`r`n" +
+        "echo {`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"t2`",`"is_error`":false,`"content`":`"ok`"}]}}`r`n" +
         "exit /b 0`r`n")
     # CAS-contention hook (MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF): moves the
     # branch tip between commit-tree and update-ref by committing a peer file.

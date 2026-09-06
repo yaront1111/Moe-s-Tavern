@@ -127,16 +127,17 @@ interface ProjectSettings {
   // changed this session. Live peers' task records are never staged.
   commitBoardState?: boolean;    // default: true
 
-  // false: every wrapper commit is plumbing, so git hooks never run and
-  // qualityGate is the sanctioned gate. true: completion commits use
-  // porcelain `git commit -- <specs>` (hooks run) with a rescue-ref fallback
-  // when a hook rejects; checkpoints and rescues stay plumbing.
+  // false: plumbing commits skip pre-commit/commit-msg hooks; qualityGate
+  // is the sanctioned gate. true: completion hooks run with a private index
+  // and detached HEAD; the exact validated tree/parent is published by CAS.
+  // Hook failure, tree mutation, differing signing/author config, or unborn
+  // HEAD refuses landing with rescue; checkpoints and rescues stay plumbing.
   commitHooks?: boolean;         // default: false
 
   // Attribution policy for the post-flight (details in CONFIGURATION.md).
   attribution?: {
     undeclared?: 'solo' | 'never' | 'always'; // default 'solo': MEASURED paths only when no other worker is live; MOE_ATTRIBUTION=declared → 'never'
-    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched' (a contested path lands only when this session wrote it, else MOE_ATTR_CONTESTED_UNTOUCHED); 'commit' records Moe-Contested trailers; 'skip' → MOE_ATTR_CONTESTED
+    contested?: 'skip-untouched' | 'commit' | 'skip'; // default 'skip-untouched': requires a supported Claude editing call and matching successful tool_result from this session; otherwise MOE_ATTR_CONTESTED_UNTOUCHED. Reports remain ASSERTED. 'commit' records Moe-Contested trailers; 'skip' → MOE_ATTR_CONTESTED
     exclude?: string[];                       // extra DENY prefixes (project-relative, no absolute/..); default []
   };
 
@@ -620,7 +621,7 @@ interface TaskCommit {
   paths: string[];             // landed paths (≤500)
   pathsTruncated?: boolean;
   inferredPaths?: string[];    // MEASURED-tier subset of `paths`
-  contested?: { path: string; taskId: string }[];   // asserted here but also declared by a live peer
+  contested?: { path: string; taskId: string }[];   // in this task's ASSERTED/TOOL scope, also declared by a nonterminal peer task
   pushed?: boolean;
   recordedBy: string;          // workerId that reported it
   recordedAt: string;          // ISO 8601

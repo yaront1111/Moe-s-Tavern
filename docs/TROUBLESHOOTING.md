@@ -460,14 +460,31 @@ unattributed. The codes:
 | Code | Meaning | What to do |
 |---|---|---|
 | `MOE_ATTR_EXCLUDED` | On the DENY list: `.moe/**` (except board records), `.mcp.json`, `.codex/**`, `.gemini/**`, `.grok/**`, `.claude/agents/**`, `.claude/settings.local.json`, untracked `.serena/**`, `.worktrees/**`, `.moe-worktree*`, `settings.attribution.exclude` | Nothing — these never belong in a task commit. |
-| `MOE_ATTR_PEER_DECLARED(task-<peer>)` | Another live task declares this path and this task never asserted it | Nothing — the peer's own exit lands it. If it really is this task's edit, `moe.declare_files` onto this task (it then lands as contested). |
-| `MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` | Asserted by this task **and** declared by a live peer, and no editing tool of this session wrote it (default policy `skip-untouched`) | Nothing if the hunks are the peer's — its exit lands them. If they are this task's from an earlier session, edit the file in a session of this task (or set `attribution.contested: "commit"` on a single-seat project). |
-| `MOE_ATTR_CONTESTED` | Asserted by this task **and** declared by a live peer, with `settings.attribution.contested: "skip"` | Decide who owns it. With `"commit"` it lands here with a `Moe-Contested: <path> (task-<peer>)` trailer. |
-| `MOE_ATTR_IMPORTEE_MISSING(<specifier>)` | This source file imports a relative module that is neither in HEAD nor landing in the same commit — committing it would leave HEAD unable to resolve the import (every clean checkout breaks while every worktree looks fine) | Declare the importee onto this task (`moe.declare_files`) so both land together, or wait for the peer that owns it to land; the path is re-attempted at the next exit and is reported as `MOE_ATTRIBUTION_UNRESOLVED` meanwhile. |
+| `MOE_ATTR_PEER_DECLARED(task-<peer>)` | Another nonterminal task declares this path, with no ASSERTED or TOOL scope here | Resolve which task owns the changes. Declaring the path on this task makes it contested while the peer declaration still applies; the declaration alone does not supply a TOOL witness. |
+| `MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` | Asserted by this task **and** declared by another nonterminal task, without a supported TOOL witness from this session (default policy `skip-untouched`) | Keep the path held while the peer declaration applies. Coordinate the task ownership until that declaration no longer applies, or use an explicitly chosen project policy appropriate to the reviewed ownership arrangement. An extra edit does not prove ownership of existing hunks. |
+| `MOE_ATTR_CONTESTED` | In this task's ASSERTED or TOOL scope **and** declared by another nonterminal task, with `settings.attribution.contested: "skip"` | Resolve ownership before choosing an applicable policy. An explicit `"commit"` permits whole-path landing with a `Moe-Contested: <path> (task-<peer>)` trailer; it does not establish ownership of the file's changes. |
+| `MOE_ATTR_IMPORTEE_MISSING(<specifier>)` | A supported literal relative import has no matching path in the resulting commit. This checks path presence, including TypeScript source candidates for emitted module paths; it does not certify compiler or runtime validity | If this task owns the importee, declare it so both paths can pass attribution together; otherwise wait for its owner to land it; the path is re-attempted at the next exit and is reported as `MOE_ATTRIBUTION_UNRESOLVED` meanwhile. |
 | `MOE_ATTR_PREEXISTING` | Dirty before this task's first session and byte-identical now — the hard constraint: a path the task never asserted and never changed is never committed | Nothing for this task. Debris left by a DONE task → "Dirty paths owned only by DONE tasks" below. |
 | `MOE_ATTR_MISSING` | An asserted path exists neither on disk nor in HEAD (renamed / deleted / edited in a worktree), or is gitignored | Fix the path or the plan's `affectedFiles`. Deletions of tracked files stage naturally and never hit this. |
 | `MOE_ATTR_CONCURRENT` | The staged blob no longer matched the snapshot — a peer wrote the file between the snapshot and `add` | Nothing — retried at the next exit. |
 | `MOE_ATTRIBUTION_UNRESOLVED` | Changed since the baseline, not asserted, not planned, not tool-written, and `attribution.undeclared` forbade a MEASURED commit (default `solo` while another worker is live) | Persisted in `task.unattributedPaths` and shown to the resuming session. Claim it with `moe.declare_files { taskId, paths }` (governor or worker) so the next exit lands it — or set `attribution.undeclared: "always"` on a single-seat project. |
+
+With `commitHooks: true`, `hooked-commit-config-mismatch` means the private commit context
+resolved different signing or author settings. Landing is held as `MOE_COMMIT_FAILED` and
+parked on a rescue ref before any commit hook or signing attempt. Review conditional Git
+configuration so both contexts resolve the intended settings; do not disable required signing
+to clear the refusal. Hooked completion on an unborn branch is also held until HEAD exists.
+
+**Current witness limit:** only Claude one-shot `stream-json` editing events feed the wrapper's
+per-session TOOL set today, after an editing call receives its matching successful
+`tool_result`. Failed calls and calls without results supply no witness. Codex, Gemini, Grok
+and interactive Claude can perform real edits without producing that witness. A dirty tree,
+baseline difference, declaration,
+`complete_step.modifiedFiles`, or historical task touch record cannot substitute for it.
+Completed-step reports remain ASSERTED scope; they do not prove this session edited the path.
+The default therefore keeps their contested paths held, even after the peer becomes idle or
+its CLI exits, until its nonterminal task declaration no longer applies or an applicable
+explicit policy permits landing. See [Session touch evidence](CONFIGURATION.md#session-touch-evidence).
 
 Also printed once per landing: `[attribution] <K> pre-session dirty path(s) untouched` — the count of
 foreign / pre-existing dirt the wrapper deliberately left alone. It is informational, never an error
