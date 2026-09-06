@@ -18,15 +18,15 @@ test('success requires the exact engine-specific PASS line', () => {
 
 test('a PASS line cannot mask a nonzero child exit', () => {
     assert.deepEqual(summarizePostflight('bash', 42, 'PASS postflight.sh\n'), {
-        engine: 'bash', exit: 42, lastScenario: null, failureClass: 'HARNESS_FAILURE',
+        engine: 'bash', exit: 42, lastScenario: null, failureClass: 'HARNESS_FAILURE', failureLine: null,
     });
 });
 
 test('summary projects only fixed metadata and the last scenario letter', () => {
     const output = '[scenario Q] ok\n[scenario A] child detail\narbitrary unstructured child output\n';
     const result = summarizePostflight('bash', 1, output);
-    assert.deepEqual(result, { engine: 'bash', exit: 1, lastScenario: 'A', failureClass: 'HARNESS_FAILURE' });
-    assert.deepEqual(Object.keys(result).sort(), ['engine', 'exit', 'failureClass', 'lastScenario']);
+    assert.deepEqual(result, { engine: 'bash', exit: 1, lastScenario: 'A', failureClass: 'HARNESS_FAILURE', failureLine: null });
+    assert.deepEqual(Object.keys(result).sort(), ['engine', 'exit', 'failureClass', 'failureLine', 'lastScenario']);
     assert.equal(JSON.stringify(result).includes('child detail'), false);
     assert.equal(JSON.stringify(result).includes('unstructured'), false);
 });
@@ -39,7 +39,7 @@ test('SKIP fails even if the harness also prints PASS and exits zero', () => {
 
 test('ANSI-wrapped PASS and scenario markers are recognized without exposing formatting', () => {
     const result = summarizePostflight('pwsh', 0, '\u001b[32m[scenario Q] ok\u001b[0m\r\n\u001b[32mPASS postflight.ps1\u001b[0m\r\n');
-    assert.deepEqual(result, { engine: 'pwsh', exit: 0, lastScenario: 'Q', failureClass: 'NONE' });
+    assert.deepEqual(result, { engine: 'pwsh', exit: 0, lastScenario: 'Q', failureClass: 'NONE', failureLine: null });
 });
 
 test('ANSI-wrapped SKIP still fails despite an exact PASS marker', () => {
@@ -58,7 +58,7 @@ test('startup, timeout, and output-limit failures always remain nonzero', () => 
 
 test('invalid engines and unrecognized failure details are not emitted', () => {
     const result = summarizePostflight('unrecognized argument', null, '', 'unstructured error detail');
-    assert.deepEqual(result, { engine: 'invalid', exit: 1, lastScenario: null, failureClass: 'INVALID_ENGINE' });
+    assert.deepEqual(result, { engine: 'invalid', exit: 1, lastScenario: null, failureClass: 'INVALID_ENGINE', failureLine: null });
     assert.equal(summarizePostflight('bash', null, '', 'unstructured error detail').failureClass, 'PROCESS_FAILURE');
 });
 
@@ -70,6 +70,28 @@ test('the command entrypoint emits one safe summary and fails for an invalid eng
     assert.equal(child.stderr, '');
     assert.equal(child.stdout.trim().split('\n').length, 1);
     assert.deepEqual(JSON.parse(child.stdout), {
-        engine: 'invalid', exit: 1, lastScenario: null, failureClass: 'INVALID_ENGINE',
+        engine: 'invalid', exit: 1, lastScenario: null, failureClass: 'INVALID_ENGINE', failureLine: null,
     });
+});
+
+test('an exact failure marker exposes only a source-bounded line number', () => {
+    for (const engine of ['bash', 'powershell', 'pwsh']) {
+        const output = 'unstructured failure details\n\u001b[31mMOE_POSTFLIGHT_FAILURE_LINE=17\u001b[0m\r\n';
+        const result = summarizePostflight(engine, 1, output, null, 17);
+        assert.deepEqual(result, { engine, exit: 1, lastScenario: null, failureClass: 'HARNESS_FAILURE', failureLine: 17 });
+    }
+});
+
+test('malformed markers and lines outside the actual source bounds are discarded', () => {
+    for (const marker of ['0', '-1', '18', '1.5', 'Infinity', '9007199254740993', '17 extra', 'unstructured details']) {
+        assert.equal(summarizePostflight('powershell', 1, `MOE_POSTFLIGHT_FAILURE_LINE=${marker}\n`, null, 17).failureLine, null);
+    }
+    assert.equal(summarizePostflight('powershell', 1, 'prefix MOE_POSTFLIGHT_FAILURE_LINE=17\n', null, 17).failureLine, null);
+    assert.equal(summarizePostflight('powershell', 1, 'MOE_POSTFLIGHT_FAILURE_LINE=17\n').failureLine, null);
+});
+
+test('failure-line markers cannot change a successful outcome or fabricate a source for invalid engines', () => {
+    const marker = 'MOE_POSTFLIGHT_FAILURE_LINE=17\n';
+    assert.equal(summarizePostflight('bash', 0, `${marker}PASS postflight.sh\n`, null, 17).failureLine, null);
+    assert.equal(summarizePostflight('invalid', 1, marker, null, 17).failureLine, null);
 });

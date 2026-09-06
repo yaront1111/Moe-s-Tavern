@@ -1636,6 +1636,11 @@ switch (tool) {
 
     Write-Host 'PASS postflight.ps1'
 } catch {
+    # CI keeps raw fixture output private. Emit only a line in this harness so
+    # its safe runner can identify an assertion without exposing error values.
+    if ($_.InvocationInfo.ScriptName -eq $PSCommandPath -and $_.InvocationInfo.ScriptLineNumber -gt 0) {
+        [Console]::Error.WriteLine(('MOE_POSTFLIGHT_FAILURE_LINE=' + $_.InvocationInfo.ScriptLineNumber))
+    }
     Write-Error $_
     exit 1
 } finally {
