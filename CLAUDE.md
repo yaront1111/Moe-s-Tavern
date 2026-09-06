@@ -41,7 +41,7 @@ cd moe-vscode          && npm install && npm run package  # .vsix via vsce (comp
 
 Both IDE plugin builds hard-fail unless daemon AND proxy each have `dist/` **and** `node_modules/` — npm install + build both first. Role-doc/skill edits reach IDE users only through a plugin rebuild (they're bundled into the plugin, then force-synced into each project's `.moe/`).
 
-Windows full install (daemon + proxy + JetBrains plugin): `.\scripts\install-all.ps1`
+Windows full build (daemon + proxy + JetBrains plugin ZIP): `.\scripts\install-all.ps1 -BuildPlugin`
 
 ## Run
 
