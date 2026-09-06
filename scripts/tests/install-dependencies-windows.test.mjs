@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,15 +11,22 @@ const helper = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../in
 const options = { skip: process.platform !== 'win32' };
 const quote = value => `'${value.replaceAll("'", "''")}'`;
 
-function run(t, { tools = ['node', 'npm', 'git', 'claude', 'winget'], nodeVersion = 'v24.13.0', args = '', fail = '', jdk = false } = {}) {
+function run(t, { tools = ['node', 'npm', 'git', 'claude', 'winget'], nodeVersion = 'v24.13.0', args = '', fail = '', jdk = false, ambientJdk = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe deps test '));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const folder of ['profile', 'appdata', 'localappdata', 'programfiles', 'bin']) mkdirSync(path.join(dir, folder));
+  const ambientJava = path.join(dir, 'ambient-java');
+  if (ambientJdk) {
+    mkdirSync(path.join(ambientJava, 'bin'), { recursive: true });
+    writeFileSync(path.join(ambientJava, 'release'), 'JAVA_VERSION="17.0.99"\n');
+    for (const name of ['java.exe', 'javac.exe']) writeFileSync(path.join(ambientJava, 'bin', name), 'fixture');
+  }
   const runner = path.join(dir, 'runner.ps1');
   writeFileSync(runner, `
 $ErrorActionPreference = 'Stop'
 $env:ProgramFiles = ${quote(path.join(dir, 'programfiles'))}
 $env:JAVA_HOME = ''
+${ambientJdk ? `$env:Path = ${quote(path.join(ambientJava, 'bin'))} + ';' + $env:Path` : ''}
 $env:Path = ${quote(path.join(dir, 'version-manager'))} + ';' + $env:Path
 $global:availableTools = @(${tools.map(quote).join(', ')})
 $global:nodeVersion = ${quote(nodeVersion)}
@@ -28,7 +35,8 @@ $global:logFile = ${quote(path.join(dir, 'calls.txt'))}
 Set-Content -LiteralPath $global:logFile -Value ''
 function Get-Command {
     param([string]$Name, $ErrorAction)
-    if ($Name -in @('node', 'npm', 'git', 'claude', 'codex', 'gemini', 'grok', 'winget')) {
+    # Hosted runners can expose JDK17 through PATH even with JAVA_HOME cleared.
+    if ($Name -in @('node', 'npm', 'git', 'claude', 'codex', 'gemini', 'grok', 'winget', 'javac')) {
         if ($Name -in $global:availableTools) { return [pscustomobject]@{ Name = $Name; Source = $Name } }
         return $null
     }
@@ -87,6 +95,13 @@ $env:Path | Set-Content -LiteralPath ${quote(path.join(dir, 'runtime-path.txt'))
 }
 
 function pass(result) { assert.equal(result.status, 0, result.stdout + result.stderr); }
+
+function assertSelectedJdk(result) {
+  const selected = readFileSync(path.join(result.dir, 'java-home.txt'), 'utf8').trim();
+  const expected = path.join(result.dir, 'programfiles/Eclipse Adoptium/jdk-17.0.19');
+  // PowerShell may return a long path when the fixture's TEMP uses an 8.3 alias.
+  assert.equal(realpathSync.native(selected), realpathSync.native(expected));
+}
 
 test('Windows ready dependencies do not invoke package installation', options, t => {
   const result = run(t);
@@ -161,7 +176,7 @@ test('Windows plugin build installs and selects the JDK17 toolchain', options, t
   const result = run(t, { args: '-WithPlugin' });
   pass(result);
   assert.match(result.calls, /EclipseAdoptium.Temurin.17.JDK/);
-  assert.equal(readFileSync(path.join(result.dir, 'java-home.txt'), 'utf8').trim(), path.join(result.dir, 'programfiles/Eclipse Adoptium/jdk-17.0.19'));
+  assertSelectedJdk(result);
 });
 
 test('Windows existing JDK17 is reused and no-plugin mode does not install Java', options, t => {
@@ -169,4 +184,11 @@ test('Windows existing JDK17 is reused and no-plugin mode does not install Java'
   pass(result);
   assert.doesNotMatch(result.calls, /EclipseAdoptium/);
   assert.equal(existsSync(path.join(result.dir, 'java-home.txt')), true);
+});
+
+test('Windows dependency fixtures ignore an ambient JDK on the inherited PATH', options, t => {
+  const result = run(t, { args: '-WithPlugin', ambientJdk: true });
+  pass(result);
+  assert.match(result.calls, /EclipseAdoptium.Temurin.17.JDK/);
+  assertSelectedJdk(result);
 });

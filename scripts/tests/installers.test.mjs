@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,11 @@ function succeeded(result) {
   assert.equal(result.status, 0, result.stdout + result.stderr);
 }
 
+function samePath(actual, expected) {
+  // PowerShell expands Windows 8.3 aliases in Get-Location and FullName.
+  assert.equal(realpathSync.native(actual), realpathSync.native(expected));
+}
+
 test('Windows default installation succeeds without a JetBrains IDE', { skip: !isWindows }, t => {
   const dir = fixture(t);
   succeeded(runPowerShell(dir));
@@ -106,7 +111,9 @@ Compress-Archive -Path ${psQuote(path.join(dir, 'payload/moe-jetbrains'))} -Dest
   const result = runPowerShell(dir, '-BuildPlugin -AgentCommand none', setup);
   succeeded(result);
   assert.equal(readFileSync(path.join(dir, 'dependency-args.txt'), 'utf8').trim(), 'none|True');
-  assert.ok(result.stdout.includes(path.join(dir, 'moe-jetbrains/build/distributions/moe.zip')));
+  const archive = result.stdout.match(/^Plugin archive: (.+)$/m);
+  assert.ok(archive, result.stdout);
+  samePath(archive[1].trim(), path.join(dir, 'moe-jetbrains/build/distributions/moe.zip'));
   assert.equal(existsSync(path.join(dir, 'appdata/JetBrains')), false);
 });
 
@@ -115,13 +122,13 @@ test('Windows installation registers both CLI commands and restores caller direc
   succeeded(runPowerShell(dir, '-InstallPlugin:$false'));
   const calls = readFileSync(path.join(dir, 'npm.log'), 'utf8').trim().split(/\r?\n/);
   assert.equal(calls.filter(line => line.endsWith('|link')).length, 2, 'daemon and proxy must each be linked');
-  assert.equal(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
+  samePath(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
 });
 
 test('Windows installation restores caller directory', { skip: !isWindows }, t => {
   const dir = fixture(t);
   succeeded(runPowerShell(dir, '-InstallPlugin:$false'));
-  assert.equal(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
+  samePath(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
 });
 
 test('Windows global config is portable UTF-8 JSON without a BOM', { skip: !isWindows }, t => {
@@ -129,14 +136,14 @@ test('Windows global config is portable UTF-8 JSON without a BOM', { skip: !isWi
   succeeded(runPowerShell(dir));
   const configText = readFileSync(path.join(dir, 'profile/.moe/config.json'), 'utf8');
   assert.equal(configText.charCodeAt(0), '{'.charCodeAt(0), 'Node and Python JSON readers reject the PowerShell UTF-8 BOM');
-  assert.equal(JSON.parse(configText).installPath, dir);
+  samePath(JSON.parse(configText).installPath, dir);
 });
 
 test('Windows failed CLI registration aborts with caller directory restored', { skip: !isWindows }, t => {
   const dir = fixture(t);
   const result = runPowerShell(dir, '-InstallPlugin:$false', '', 'link');
   assert.notEqual(result.status, 0, 'npm link failure must fail installation');
-  assert.equal(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
+  samePath(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
   assert.equal(existsSync(path.join(dir, 'profile/.moe/config.json')), false);
 });
 
@@ -168,7 +175,7 @@ Copy-Item -LiteralPath ${psQuote(path.join(dir, 'plugin.zip'))} -Destination ${p
   const result = runPowerShell(dir, '-InstallPlugin', setup);
   assert.notEqual(result.status, 0, 'failed Gradle must abort even if an old distribution exists');
   assert.equal(existsSync(path.join(dir, 'appdata/JetBrains/PyCharm2025.2/plugins/moe-jetbrains/lib/existing.txt')), true);
-  assert.equal(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
+  samePath(readFileSync(path.join(dir, 'final-cwd.txt'), 'utf8').trim(), dir);
   assert.equal(readFileSync(path.join(dir, 'dependency-args.txt'), 'utf8').trim(), 'claude|True');
 });
 
