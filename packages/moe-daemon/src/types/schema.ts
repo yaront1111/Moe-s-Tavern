@@ -96,8 +96,8 @@ export interface AttributionSettings {
    * projects). Env `MOE_ATTRIBUTION=declared` forces 'never' per run.
    */
   undeclared?: 'solo' | 'never' | 'always';
-  /** A path both this task asserted and a peer declared: 'commit' (default) or 'skip'. */
-  contested?: 'commit' | 'skip';
+  /** A path both this task asserted and a peer declared: require this session's edit by default. */
+  contested?: 'skip-untouched' | 'commit' | 'skip';
   /** Extra project-relative prefixes the wrapper never stages (added to the built-in DENY list). */
   exclude?: string[];
 }

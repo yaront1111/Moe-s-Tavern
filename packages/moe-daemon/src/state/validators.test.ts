@@ -68,6 +68,12 @@ describe('validateSettingsUpdate — wrapper landing settings', () => {
     expect(cleared.attribution?.exclude).toEqual([]);
   });
 
+  it('accepts skip-untouched without discarding other attribution settings', () => {
+    const stored = project({ attribution: { undeclared: 'never', exclude: ['vendor'] } });
+    const next = validateSettingsUpdate(stored, { attribution: { contested: 'skip-untouched' } });
+    expect(next.attribution).toEqual({ undeclared: 'never', exclude: ['vendor'], contested: 'skip-untouched' });
+  });
+
   it('rejects bad attribution values before anything is returned', () => {
     expect(() => validateSettingsUpdate(project(), { attribution: { undeclared: 'sometimes' } as never })).toThrow('attribution.undeclared');
     expect(() => validateSettingsUpdate(project(), { attribution: { contested: 'merge' } as never })).toThrow('attribution.contested');
