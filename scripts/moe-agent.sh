@@ -1817,20 +1817,27 @@ sys.exit(1)
 # then yanks the task out from under a live session. This sidecar pings
 # moe.heartbeat on a timer from a background subshell (inherits moe_rpc and
 # every resolved proxy/project variable, so no separate resolution needed) so
-# a genuinely-alive-but-quiet session keeps its task. Bounded by
-# MOE_HEARTBEAT_MAX_DURATION_SEC so a truly-hung CLI still eventually goes
-# stale — this extends the self-heal's patience window, it does not defeat it.
+# a genuinely-alive-but-quiet session keeps its task. Runs for the whole CLI
+# lifetime (24h default via MOE_HEARTBEAT_MAX_DURATION_SEC, and it stops when
+# this wrapper process is gone). The old 2h ceiling silently ended the
+# heartbeat under every long LIVE session; measured 2026-09-06, architects'
+# lastActivityAt froze at exactly launch+2h and a governor seat was deleted by
+# the stale sweep while its CLI was running. The daemon never auto-releases
+# WORKING/PLANNING on idle, so a longer heartbeat defeats nothing.
 HEARTBEAT_PID=""
 start_heartbeat_sidecar() {
     local worker_id="$1"
     if [ "${MOE_DISABLE_HEARTBEAT:-}" = "1" ]; then return; fi
     local interval_sec="${MOE_HEARTBEAT_INTERVAL_SEC:-60}"
-    local max_duration_sec="${MOE_HEARTBEAT_MAX_DURATION_SEC:-7200}"
+    local max_duration_sec="${MOE_HEARTBEAT_MAX_DURATION_SEC:-86400}"
+    local wrapper_pid=$$
     (
         set +e
         end_time=$(( $(date +%s) + max_duration_sec ))
         while [ "$(date +%s)" -lt "$end_time" ]; do
             sleep "$interval_sec"
+            # The wrapper that owns this job is gone: stop heartbeating for a dead seat.
+            kill -0 "$wrapper_pid" 2>/dev/null || break
             moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" >/dev/null 2>&1
         done
     ) &
@@ -3741,6 +3748,23 @@ case "$RESUME_MAX_ATTEMPTS" in
     ''|*[!0-9]*) RESUME_MAX_ATTEMPTS=5 ;;
 esac
 
+# Launch-failure tracking (PS twin parity). A CLI that exits non-zero within
+# MOE_LAUNCH_FAIL_SEC of starting never did any work: provider usage limit,
+# expired credential, a crash at launch. Measured 2026-09-06: an account usage
+# limit made every claude seat exit 1 at launch; each wrapper burned its resume
+# budget in about three minutes, posted "pausing auto-resume" and idled for
+# hours after the limit had reset. Such exits are NOT counted against the
+# resume budget; the relaunch backs off exponentially instead.
+LAUNCH_FAIL_STREAK=0
+LAUNCH_FAIL_BACKOFF_SEC=0
+CLI_LAUNCHED_AT=""
+LAUNCH_FAIL_SEC="${MOE_LAUNCH_FAIL_SEC:-120}"
+case "$LAUNCH_FAIL_SEC" in ''|*[!0-9]*) LAUNCH_FAIL_SEC=120 ;; esac
+LAUNCH_BACKOFF_BASE_SEC="${MOE_LAUNCH_BACKOFF_BASE_SEC:-60}"
+case "$LAUNCH_BACKOFF_BASE_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_BASE_SEC=60 ;; esac
+LAUNCH_BACKOFF_MAX_SEC="${MOE_LAUNCH_BACKOFF_MAX_SEC:-900}"
+case "$LAUNCH_BACKOFF_MAX_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_MAX_SEC=900 ;; esac
+
 # --- Self-restart when this script's own bytes change on disk -----------------
 # The shell reads this file incrementally, so an edit to a running script can
 # even corrupt the current execution; either way a long-lived loop keeps serving
@@ -3764,10 +3788,15 @@ MOE_WRAPPER_ARGV=("$@")
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
-        echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
-        # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
-        # full CLI relaunch every 2s on an idle worker.
-        sleep "$POLL_INTERVAL"
+        if [ "${LAUNCH_FAIL_BACKOFF_SEC:-0}" -gt 0 ]; then
+            echo -e "${YELLOW}[launch-failure]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before relaunching (streak $LAUNCH_FAIL_STREAK); the held task stays held. (Ctrl+C to stop)"
+            sleep "$LAUNCH_FAIL_BACKOFF_SEC"
+        else
+            echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
+            # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
+            # full CLI relaunch every 2s on an idle worker.
+            sleep "$POLL_INTERVAL"
+        fi
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
 
@@ -4679,6 +4708,7 @@ $PROMPT_BODY"
         PROMPT=""
     fi
 
+    CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
 
     if [ "$CLI_TYPE" = "codex" ]; then
@@ -5194,6 +5224,36 @@ PYEOF
     fi
 
     stop_heartbeat_sidecar
+
+    # Launch-failure classification (tracker declared above the main loop).
+    CLI_ELAPSED_SEC=-1
+    if [ -n "$CLI_LAUNCHED_AT" ]; then CLI_ELAPSED_SEC=$(( $(date +%s) - CLI_LAUNCHED_AT )); fi
+    CLI_EXIT_FOR_LAUNCH="${CLI_EXIT_CODE:-0}"
+    if [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
+        LAUNCH_FAIL_STREAK=$((LAUNCH_FAIL_STREAK + 1))
+        # Not a mid-task death: give the resume attempt back.
+        if [ "$RESUME_ATTEMPTS" -gt 0 ]; then RESUME_ATTEMPTS=$((RESUME_ATTEMPTS - 1)); fi
+        LAUNCH_BACKOFF_POW=$((LAUNCH_FAIL_STREAK - 1))
+        if [ "$LAUNCH_BACKOFF_POW" -gt 10 ]; then LAUNCH_BACKOFF_POW=10; fi
+        LAUNCH_FAIL_BACKOFF_SEC=$(( LAUNCH_BACKOFF_BASE_SEC * (1 << LAUNCH_BACKOFF_POW) ))
+        if [ "$LAUNCH_FAIL_BACKOFF_SEC" -gt "$LAUNCH_BACKOFF_MAX_SEC" ]; then LAUNCH_FAIL_BACKOFF_SEC="$LAUNCH_BACKOFF_MAX_SEC"; fi
+        echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, or a crash at launch. Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
+        if [ "$LAUNCH_FAIL_STREAK" -eq 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+            LAUNCH_FAIL_MSG="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit or credential problem, not a task problem. Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
+            moe_rpc chat_send \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null)" \
+                > /dev/null 2>&1 || true
+        fi
+    else
+        if [ "$LAUNCH_FAIL_STREAK" -ge 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+            LAUNCH_OK_MSG="$WORKER_ID: CLI launches again (ran ${CLI_ELAPSED_SEC}s, exit $CLI_EXIT_FOR_LAUNCH) after $LAUNCH_FAIL_STREAK launch failures."
+            moe_rpc chat_send \
+                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_OK_MSG" 2>/dev/null)" \
+                > /dev/null 2>&1 || true
+        fi
+        LAUNCH_FAIL_STREAK=0
+        LAUNCH_FAIL_BACKOFF_SEC=0
+    fi
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
     # Dirty snapshot FIRST: after the CLI exits and before any daemon RPC, so

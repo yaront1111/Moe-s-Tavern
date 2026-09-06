@@ -33,6 +33,28 @@ describe('moe.set_task_status', () => {
     ).rejects.toThrow('status transition not allowed');
   });
 
+  it('PLANNING → ARCHIVED shelves a row that turned out to need no plan', async () => {
+    await h.state.updateTask('task-1', { status: 'PLANNING', assignedWorkerId: 'architect-1' });
+    const tool = setTaskStatusTool(h.state);
+    const result = await tool.handler({ taskId: 'task-1', status: 'ARCHIVED', reason: 'DoD met by a sibling' }, h.state) as { status: string };
+    expect(result.status).toBe('ARCHIVED');
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+  });
+
+  it('BLOCKED (from WORKING) → ARCHIVED shelves a dead park and clears its block bookkeeping', async () => {
+    await h.state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-1' });
+    const tool = setTaskStatusTool(h.state);
+    await tool.handler({ taskId: 'task-1', status: 'BLOCKED', reason: 'needs PostgreSQL' }, h.state);
+    const result = await tool.handler({ taskId: 'task-1', status: 'ARCHIVED' }, h.state) as { status: string };
+    expect(result.status).toBe('ARCHIVED');
+    const task = h.state.getTask('task-1')!;
+    expect(task.blockedFromStatus).toBeNull();
+    expect(task.blockedAt).toBeNull();
+    expect(task.blockedReason).toBeNull();
+    expect(task.priorBlockedReason).toBe('needs PostgreSQL');
+    expect(task.assignedWorkerId).toBeNull();
+  });
+
   it('rejects invalid status values', async () => {
     const tool = setTaskStatusTool(h.state);
     await expect(
