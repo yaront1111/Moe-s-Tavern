@@ -45,10 +45,14 @@ for (const mode of ['success', 'reject', 'mutate', 'cas-race', 'conditional-hook
             const setting = mode === 'conditional-hooks' ? 'core.hooksPath' : mode === 'conditional-signing' ? 'commit.gpgSign'
                 : mode === 'conditional-default-key' ? 'gpg.ssh.defaultKeyCommand' : 'user.name';
             if (mode === 'conditional-default-key') git(['config', 'gpg.format', 'ssh']);
-            git(['config', '--file', conditional, setting,
-                mode === 'conditional-hooks' ? hooks.replaceAll('\\', '/') : mode === 'conditional-signing' ? 'true'
-                    : mode === 'conditional-default-key' ? 'false' : 'Conditional Fixture Author']);
-            git(['config', `includeIf.gitdir:${root.replaceAll('\\', '/')}/.git.path`, conditional.replaceAll('\\', '/')]);
+            const settingValue = mode === 'conditional-hooks' ? hooks.replaceAll('\\', '/') : mode === 'conditional-signing' ? 'true'
+                : mode === 'conditional-default-key' ? 'false' : 'Conditional Fixture Author';
+            git(['config', '--file', conditional, setting, settingValue]);
+            // Git resolves temp-directory aliases (macOS /var and Windows short paths).
+            const gitDir = git(['rev-parse', '--absolute-git-dir']).replaceAll('\\', '/');
+            git(['config', `includeIf.gitdir:${gitDir}.path`, conditional.replaceAll('\\', '/')]);
+            assert.equal(git(['config', '--get', setting]) === settingValue, true,
+                'conditional fixture setting must apply before invoking the hook helper');
         }
         const hook = ['#!/bin/sh', ': > "$MOE_HOOK_MARKER"'];
         if (mode === 'reject') hook.push('exit 1');
