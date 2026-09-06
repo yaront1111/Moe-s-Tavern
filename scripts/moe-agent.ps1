@@ -1517,6 +1517,9 @@ if ($PSVersionTable.PSVersion.Major -ge 6) {
 $script:MoeLastLanding = $null
 $script:MoeTeardownDone = $false
 $script:MoeToolWritten = @{}
+$script:MoeToolPending = [hashtable]::new([StringComparer]::Ordinal)
+$script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
+$script:MoeToolHarvestSaturated = $false
 
 function Get-MoePathKey([string]$Path) {
     if ($script:MoeCaseFoldPaths) { return $Path.ToLowerInvariant() }
@@ -2063,6 +2066,184 @@ function Test-MoeImporteePresent([string]$Target, [hashtable]$Head, [hashtable]$
     return $false
 }
 
+# Lex only literal module edges, without executing source or needing a project
+# compiler. Strings/comments/regex/template text are opaque; ${...} is code.
+# This is not a type checker: computed specifiers remain runtime expressions.
+function Read-MoeJsxImportTokens([string]$Text, [ref]$Offset) {
+    $items = New-Object 'System.Collections.Generic.List[object]'
+    $depth = 0
+    do {
+        if ($Offset.Value -ge $Text.Length) { throw 'unparseable-source' }
+        $ch = $Text[$Offset.Value]
+        if ($ch -eq '{') {
+            $Offset.Value++; $items.Add(@{ Kind='punct'; Value='(' })
+            foreach ($token in @(Read-MoeImportTokens $Text $Offset $true $true)) { $items.Add($token) }
+            $items.Add(@{ Kind='punct'; Value=')' }); continue
+        }
+        if ($ch -ne '<') { $Offset.Value++; continue }
+        $Offset.Value++
+        $closing = $Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -eq '/'
+        if ($closing) { $Offset.Value++ }
+        $last = ''; $ended = $false
+        while ($Offset.Value -lt $Text.Length) {
+            $ch = $Text[$Offset.Value]; $Offset.Value++
+            if ($ch -eq '"' -or $ch -eq "'") {
+                $quote = $ch; $quoteClosed = $false
+                while ($Offset.Value -lt $Text.Length) {
+                    $ch = $Text[$Offset.Value]; $Offset.Value++
+                    if ($ch -eq $quote) { $quoteClosed = $true; break }
+                }
+                if (-not $quoteClosed) { throw 'unparseable-source' }
+            } elseif ($ch -eq '{') {
+                $items.Add(@{ Kind='punct'; Value='(' })
+                foreach ($token in @(Read-MoeImportTokens $Text $Offset $true $true)) { $items.Add($token) }
+                $items.Add(@{ Kind='punct'; Value=')' })
+            } elseif ($ch -eq '>') {
+                if ($closing) { $depth-- } elseif ($last -ne '/') { $depth++ }
+                $ended = $true; break
+            }
+            if (-not [char]::IsWhiteSpace($ch)) { $last = [string]$ch }
+        }
+        if (-not $ended) { throw 'unparseable-source' }
+    } while ($depth -gt 0)
+    $items.Add(@{ Kind='opaque'; Value='jsx' })
+    return $items.ToArray()
+}
+
+function Read-MoeImportTokens([string]$Text, [ref]$Offset, [bool]$TemplateExpression = $false, [bool]$Jsx = $false) {
+    $items = New-Object 'System.Collections.Generic.List[object]'
+    $depth = 0
+    while ($Offset.Value -lt $Text.Length) {
+        $i = $Offset.Value; $ch = $Text[$i]
+        if ([char]::IsWhiteSpace($ch)) { $Offset.Value++; continue }
+        if ($TemplateExpression -and $ch -eq '}' -and $depth -eq 0) { $Offset.Value++; return $items.ToArray() }
+        if ($ch -eq '/' -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -eq '/') {
+            while ($Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -notin @("`r", "`n")) { $Offset.Value++ }
+            continue
+        }
+        if ($ch -eq '/' -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -eq '*') {
+            $end = $Text.IndexOf('*/', $i + 2, [StringComparison]::Ordinal)
+            if ($end -lt 0) { throw 'unparseable-source' }
+            $Offset.Value = $end + 2; continue
+        }
+        if ($ch -eq '"' -or $ch -eq "'") {
+            $quote = $ch; $value = New-Object Text.StringBuilder; $closed = $false; $Offset.Value++
+            while ($Offset.Value -lt $Text.Length) {
+                $ch = $Text[$Offset.Value]; $Offset.Value++
+                if ($ch -eq $quote) { $closed = $true; break }
+                if ($ch -eq "`r" -or $ch -eq "`n") { throw 'unparseable-source' }
+                if ($ch -eq '\') {
+                    if ($Offset.Value -ge $Text.Length) { throw 'unparseable-source' }
+                    $ch = $Text[$Offset.Value]; $Offset.Value++
+                    if ($ch -eq "`r" -or $ch -eq "`n") {
+                        if ($ch -eq "`r" -and $Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -eq "`n") { $Offset.Value++ }
+                        continue
+                    }
+                    if ($ch -ceq 'x' -or $ch -ceq 'u') {
+                        $count = if ($ch -ceq 'x') { 2 } else { 4 }
+                        $start = $Offset.Value
+                        if ($ch -ceq 'u' -and $start -lt $Text.Length -and $Text[$start] -eq '{') {
+                            $start++; $end = $Text.IndexOf('}', $start); $count = $end - $start
+                            if ($count -lt 1 -or $count -gt 6) { throw 'unparseable-source' }
+                            $Offset.Value = $end + 1
+                        } else { $Offset.Value += $count }
+                        if ($start + $count -gt $Text.Length) { throw 'unparseable-source' }
+                        $hex = $Text.Substring($start, $count)
+                        if ($hex -notmatch '^[0-9a-fA-F]+$') { throw 'unparseable-source' }
+                        $codepoint = [Convert]::ToInt32($hex, 16)
+                        if ($codepoint -le 65535) { [void]$value.Append([char]$codepoint) }
+                        else { [void]$value.Append([char]::ConvertFromUtf32($codepoint)) }
+                        continue
+                    }
+                    $escaped = switch -CaseSensitive ([string]$ch) {
+                        'n' { "`n" }; 'r' { "`r" }; 't' { "`t" }; 'b' { [string][char]8 }
+                        'f' { [string][char]12 }; 'v' { [string][char]11 }; '0' { [string][char]0 }; default { [string]$ch }
+                    }
+                    [void]$value.Append($escaped); continue
+                }
+                [void]$value.Append($ch)
+            }
+            if (-not $closed) { throw 'unparseable-source' }
+            $items.Add(@{ Kind='string'; Value=$value.ToString() }); continue
+        }
+        if ($ch -eq '`') {
+            $Offset.Value++; $closed = $false
+            while ($Offset.Value -lt $Text.Length) {
+                $ch = $Text[$Offset.Value]; $Offset.Value++
+                if ($ch -eq '\') { $Offset.Value++; continue }
+                if ($ch -eq '`') { $closed = $true; break }
+                if ($ch -eq '$' -and $Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -eq '{') {
+                    $Offset.Value++; $items.Add(@{ Kind='punct'; Value='(' })
+                    foreach ($token in @(Read-MoeImportTokens $Text $Offset $true $Jsx)) { $items.Add($token) }
+                    $items.Add(@{ Kind='punct'; Value=')' })
+                }
+            }
+            if (-not $closed) { throw 'unparseable-source' }
+            $items.Add(@{ Kind='opaque'; Value='template' }); continue
+        }
+        $prior = if ($items.Count) { $items[$items.Count - 1].Value } else { '' }
+        if ($Jsx -and $ch -eq '<') {
+            $remaining = $Text.Substring($i)
+            $tag = [regex]::Match($remaining, '^<([A-Za-z][A-Za-z0-9_.:-]*)(?=[\s/>])')
+            $isElement = $remaining.StartsWith('<>')
+            if ($tag.Success) {
+                $name = [regex]::Escape($tag.Groups[1].Value)
+                $isElement = [regex]::IsMatch($remaining, ('</' + $name + '\s*>')) -or [regex]::IsMatch($remaining, '^<[^<>]*?/\s*>')
+            }
+            if ($isElement) {
+                foreach ($token in @(Read-MoeJsxImportTokens $Text $Offset)) { $items.Add($token) }
+                continue
+            }
+        }
+        if ($ch -eq '/' -and ($prior -eq '' -or $prior -cin @('(', '[', '{', '=', ',', ':', ';', '!', '?', '&', '|', '+', '-', '*', 'return', 'throw', 'case', 'yield', 'await', 'void', 'typeof', 'delete', 'else', 'do'))) {
+            $Offset.Value++; $inClass = $false; $closed = $false
+            while ($Offset.Value -lt $Text.Length) {
+                $ch = $Text[$Offset.Value]; $Offset.Value++
+                if ($ch -eq '\') { $Offset.Value++; continue }
+                if ($ch -eq "`r" -or $ch -eq "`n") { throw 'unparseable-source' }
+                if ($ch -eq '[') { $inClass = $true }
+                if ($ch -eq ']') { $inClass = $false }
+                if ($ch -eq '/' -and -not $inClass) { $closed = $true; break }
+            }
+            if (-not $closed) { throw 'unparseable-source' }
+            while ($Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -match '[A-Za-z]') { $Offset.Value++ }
+            $items.Add(@{ Kind='opaque'; Value='regex' }); continue
+        }
+        if ($ch -match '[A-Za-z_$]') {
+            $Offset.Value++
+            while ($Offset.Value -lt $Text.Length -and $Text[$Offset.Value] -match '[A-Za-z0-9_$]') { $Offset.Value++ }
+            $items.Add(@{ Kind='id'; Value=$Text.Substring($i, $Offset.Value - $i) }); continue
+        }
+        if ($ch -eq '{') { $depth++ }
+        if ($ch -eq '}') { $depth-- }
+        $items.Add(@{ Kind='punct'; Value=[string]$ch }); $Offset.Value++
+    }
+    if ($TemplateExpression) { throw 'unparseable-source' }
+    return $items.ToArray()
+}
+
+function Get-MoeRelativeImports([string]$Text, [bool]$Jsx = $false) {
+    $offset = 0; $tokens = @(Read-MoeImportTokens $Text ([ref]$offset) $false $Jsx)
+    for ($i = 0; $i -lt $tokens.Count; $i++) {
+        $token = $tokens[$i]; $kind = $token.Value; $specifier = $null
+        if ($token.Kind -ne 'id' -or $kind -cnotin @('import', 'export', 'require')) { continue }
+        if ($i -gt 0 -and $tokens[$i - 1].Value -eq '.') { continue }
+        if ($i + 1 -ge $tokens.Count) { continue }
+        $next = $tokens[$i + 1]
+        if ($kind -ceq 'import' -and $next.Kind -eq 'string') { $specifier = $next.Value }
+        elseif ($kind -cin @('import', 'require') -and $next.Value -eq '(') {
+            if ($i + 3 -lt $tokens.Count -and $tokens[$i + 2].Kind -eq 'string' -and $tokens[$i + 3].Value -in @(')', ',')) { $specifier = $tokens[$i + 2].Value }
+        } elseif ($kind -cne 'require' -and ($kind -ceq 'import' -or $next.Value -cin @('{', '*', 'type'))) {
+            for ($j = $i + 1; $j + 1 -lt $tokens.Count; $j++) {
+                $current = $tokens[$j]
+                if ($current.Value -cin @(';', '=', 'const', 'let', 'var', 'function', 'class', 'return', 'import', 'export')) { break }
+                if ($current.Kind -eq 'id' -and $current.Value -ceq 'from' -and $tokens[$j + 1].Kind -eq 'string') { $specifier = $tokens[$j + 1].Value; break }
+            }
+        }
+        if ($null -ne $specifier -and ($specifier.StartsWith('./') -or $specifier.StartsWith('../'))) { Write-Output $specifier }
+    }
+}
+
 # IMPORTEE GUARD. For every landing source file, every relative `from "./x"`,
 # `import("./x")` and `require("./x")` must resolve against HEAD plus the
 # files landing in this same commit. Returns @{ <pathKey> = <first unresolved
@@ -2070,7 +2251,7 @@ function Test-MoeImporteePresent([string]$Target, [hashtable]$Head, [hashtable]$
 # committed an importer whose importee was still untracked (a peer's in-flight
 # module, or the task's own file left off the declaration), so HEAD stopped
 # resolving for every clean checkout while every worktree looked fine.
-function Get-MoeMissingImportees([hashtable]$Git, [array]$Candidates) {
+function Get-MoeMissingImportees([hashtable]$Git, [array]$Candidates, [string]$BaseRef = 'HEAD', [string]$IndexFile = '') {
     $out = @{}
     $srcExt = @('.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx')
     $src = @()
@@ -2083,25 +2264,64 @@ function Get-MoeMissingImportees([hashtable]$Git, [array]$Candidates) {
         if ($srcExt -contains $e) { $src += $c }
     }
     if ($src.Count -eq 0) { return $out }
-    $ls = Invoke-MoeGit -Top $Git.Top -GitArgs @('ls-tree', '-r', '--name-only', '-z', 'HEAD')
-    if ($ls.Rc -ne 0) { return $out }
     $head = @{}
-    foreach ($n in @(($ls.Out -join '').Split([char]0))) { if ($n) { $head[(Get-MoePathKey $n)] = $true } }
-    $rx = [regex]'(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["''](\.\.?/[^"''\r\n]+)["'']'
-    foreach ($c in $src) {
-        $full = Join-Path $Git.Top $c.Path
-        $text = ''
-        try { $text = [System.IO.File]::ReadAllText($full) } catch { continue }
-        $dir = ([System.IO.Path]::GetDirectoryName($c.Path) -replace '\\', '/')
-        foreach ($m in $rx.Matches($text)) {
-            $spec = $m.Groups[1].Value
-            $target = Resolve-MoeRelativeSpecifier $dir $spec
-            if (-not $target) { continue }
-            if (Test-MoeImporteePresent $target $head $landing) { continue }
-            $out[(Get-MoePathKey $c.Path)] = $spec
-            break
+    if ($BaseRef) {
+        $ls = Invoke-MoeGit -Top $Git.Top -GitArgs @('ls-tree', '-r', '--name-only', '-z', $BaseRef)
+        if ($ls.Rc -ne 0) {
+            # A proven unborn branch has an empty base; other read failures
+            # cannot establish which imports the prospective tree will contain.
+            $unborn = $false
+            if ($BaseRef -eq 'HEAD') {
+                $symbolic = Invoke-MoeGit -Top $Git.Top -GitArgs @('symbolic-ref', '--quiet', 'HEAD')
+                if ($symbolic.Rc -eq 0 -and $symbolic.Out.Count -eq 1) {
+                    $ref = Invoke-MoeGit -Top $Git.Top -GitArgs @('show-ref', '--verify', '--quiet', $symbolic.Out[0])
+                    $unborn = $ref.Rc -eq 1
+                }
+            }
+            if (-not $unborn) {
+                foreach ($c in $src) { $out[(Get-MoePathKey $c.Path)] = '<head-unavailable>' }
+                return $out
+            }
+        } else {
+            foreach ($n in @(($ls.Out -join '').Split([char]0))) { if ($n) { $head[(Get-MoePathKey $n)] = $true } }
         }
     }
+    foreach ($c in @($Candidates)) { if ($c -and $c.Blob -eq 'D') { $head.Remove((Get-MoePathKey $c.Path)) } }
+    $imports = @{}
+    foreach ($c in $src) {
+        $full = Join-Path $Git.Top $c.Path
+        $key = Get-MoePathKey $c.Path
+        $jsx = [System.IO.Path]::GetExtension($c.Path).ToLowerInvariant() -in @('.tsx', '.jsx')
+        try {
+            if ($IndexFile) {
+                $encoding = [Console]::OutputEncoding
+                try {
+                    [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+                    $blob = Invoke-MoeGit -Top $Git.Top -IndexFile $IndexFile -GitArgs @('show', ":0:$($c.Path)")
+                } finally { [Console]::OutputEncoding = $encoding }
+                if ($blob.Rc -ne 0) { throw 'unparseable-source' }
+                $text = $blob.Out -join "`n"
+            } else { $text = [System.IO.File]::ReadAllText($full) }
+            $imports[$key] = @(Get-MoeRelativeImports $text $jsx)
+        }
+        catch { $out[$key] = '<unparseable-source>'; $landing.Remove($key) }
+    }
+    # Removing an untracked dependency can invalidate earlier importers. Repeat
+    # until stable; valid cycles remain intact, and a held tracked edit may fall
+    # back to the version already in HEAD. Selected deletions never count.
+    do {
+        $removed = $false
+        foreach ($c in $src) {
+            $key = Get-MoePathKey $c.Path
+            if ($out.ContainsKey($key)) { continue }
+            $dir = ([System.IO.Path]::GetDirectoryName($c.Path) -replace '\\', '/')
+            foreach ($spec in $imports[$key]) {
+                $target = Resolve-MoeRelativeSpecifier $dir $spec
+                if ($target -and (Test-MoeImporteePresent $target $head $landing)) { continue }
+                $out[$key] = $spec; $landing.Remove($key); $removed = $true; break
+            }
+        }
+    } while ($removed)
     return $out
 }
 
@@ -2355,6 +2575,22 @@ function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSh
         }
         $landed += $c
     }
+    # Staging may drop a dependency for concurrent edits. Validate the actual
+    # private index, not mutable worktree text or the earlier candidate list.
+    $missing = Get-MoeMissingImportees -Git @{ Top=$Top } -Candidates $landed -BaseRef $OldSha -IndexFile $IndexFile
+    if ($missing.Count) {
+        $keep = @()
+        foreach ($c in $landed) {
+            $key = Get-MoePathKey $c.Path
+            if (-not $missing.ContainsKey($key)) { $keep += $c; continue }
+            $spec = ":(literal)$($c.Path)"
+            $resetArgs = if ($OldSha) { @('reset', '-q', $OldSha, '--', $spec) } else { @('rm', '--cached', '-q', '--force', '--', $spec) }
+            $reset = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs $resetArgs
+            if ($reset.Rc -ne 0) { return $res }
+            $dropped += @{ Path=$c.Path; Code="MOE_ATTR_IMPORTEE_MISSING($($missing[$key]))" }
+        }
+        $landed = $keep
+    }
     $res.Landed = @($landed)
     $res.Dropped = @($dropped)
     $res.Ok = $true
@@ -2371,6 +2607,75 @@ function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSh
     if ($w.Rc -ne 0 -or $w.Out.Count -eq 0) { $res.Ok = $false; return $res }
     $res.Tree = ($w.Out -join '').Trim()
     return $res
+}
+
+# Hooks run against a detached private HEAD and the already validated index.
+# Ordinary commit (no pathspec) does not re-add later worktree bytes. Only a
+# commit with the exact expected tree/parent can reach the caller's branch CAS.
+function New-MoeHookedCommit([string]$Top, [string]$GitDir, [string]$OldSha, [string]$Tree, [string]$IndexFile, [string]$MessageFile) {
+    $result = @{ Rc=1; Out=@('hooked-commit-failed') }
+    if (-not $OldSha) { $result.Out = @('hooked-commit-unborn-unsupported'); return $result }
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $scratch = Join-Path $temporaryRoot ('moe-hook-commit-' + [guid]::NewGuid().ToString('N'))
+    $added = $false
+    try {
+        $add = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'add', '--detach', '--no-checkout', $scratch, $OldSha)
+        if ($add.Rc -ne 0) { throw 'hooked-commit-worktree-failed' }
+        $added = $true
+        $dir = Invoke-MoeGit -Top $scratch -GitArgs @('rev-parse', '--absolute-git-dir')
+        if ($dir.Rc -ne 0 -or $dir.Out.Count -ne 1) { throw 'hooked-commit-worktree-failed' }
+        $privateArgs = @('--git-dir', $dir.Out[0], '--work-tree', $Top)
+        $worktreeConfig = Join-Path $GitDir 'config.worktree'
+        if (Test-Path -LiteralPath $worktreeConfig -PathType Leaf) { $privateArgs += @('-c', "include.path=$worktreeConfig") }
+        $hooks = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--path-format=absolute', '--git-path', 'hooks')
+        if ($hooks.Rc -ne 0 -or $hooks.Out.Count -ne 1) { throw 'hooked-commit-hooks-unavailable' }
+        $privateArgs += @('-c', "core.hooksPath=$($hooks.Out[0])")
+        # includeIf (gitdir/onbranch) can select different signing or identity
+        # policy in a detached worktree. Never silently change it or copy config
+        # values into logs/argv: refuse a mismatch before any hook or signer.
+        foreach ($key in @('commit.gpgSign', 'user.signingKey', 'gpg.format', 'gpg.program', 'gpg.openpgp.program', 'gpg.ssh.program', 'gpg.ssh.defaultKeyCommand', 'gpg.x509.program', 'user.name', 'user.email')) {
+            $query = @('config')
+            if ($key -eq 'commit.gpgSign') { $query += @('--type=bool') }
+            $query += @('--get', $key)
+            $original = Invoke-MoeGit -Top $Top -GitArgs $query
+            $private = Invoke-MoeGit -Top $Top -GitArgs ($privateArgs + $query)
+            if ($original.Rc -notin @(0, 1) -or $private.Rc -notin @(0, 1)) { throw 'hooked-commit-signing-config-unavailable' }
+            $default = if ($key -eq 'commit.gpgSign') { 'false' } elseif ($key -eq 'gpg.format') { 'openpgp' } else { $null }
+            $originalValue = if ($original.Rc -eq 1) { $default } else { $original.Out -join "`n" }
+            $privateValue = if ($private.Rc -eq 1) { $default } else { $private.Out -join "`n" }
+            if ($originalValue -cne $privateValue) { throw 'hooked-commit-config-mismatch' }
+        }
+        $commit = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs ($privateArgs + @('commit', '-F', $MessageFile))
+        if ($commit.Rc -ne 0) { throw 'hooked-commit-hook-failed' }
+        $head = Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs ($privateArgs + @('rev-parse', '--verify', 'HEAD'))
+        if ($head.Rc -ne 0 -or $head.Out.Count -ne 1) { throw 'hooked-commit-head-unavailable' }
+        $sha = $head.Out[0].Trim()
+        $parent = Invoke-MoeGit -Top $Top -GitArgs @('rev-list', '--parents', '-n1', $sha)
+        $treeResult = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', "$sha^{tree}")
+        $parents = @(($parent.Out -join '').Trim() -split '\s+')
+        if ($parent.Rc -ne 0 -or $parents.Count -ne 2 -or $parents[1] -cne $OldSha -or $treeResult.Rc -ne 0 -or ($treeResult.Out -join '').Trim() -cne $Tree) {
+            throw 'hooked-commit-snapshot-mismatch'
+        }
+        $result.Rc = 0; $result.Out = @($sha)
+    } catch {
+        $reason = $_.Exception.Message
+        $known = @('hooked-commit-worktree-failed', 'hooked-commit-hook-failed', 'hooked-commit-head-unavailable', 'hooked-commit-snapshot-mismatch',
+            'hooked-commit-hooks-unavailable', 'hooked-commit-signing-config-unavailable', 'hooked-commit-config-mismatch')
+        $result.Out = if ($reason -cin $known) { @($reason) } else { @('hooked-commit-refused') }
+    }
+    finally {
+        if ($added) {
+            $resolved = [IO.Path]::GetFullPath($scratch)
+            $prefix = $temporaryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+            if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or (Split-Path $resolved -Leaf) -notlike 'moe-hook-commit-*') {
+                $result.Rc = 1; $result.Out = @('hooked-commit-cleanup-refused')
+            } else {
+                $removed = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', $resolved)
+                if ($removed.Rc -ne 0) { $result.Rc = 1; $result.Out = @('hooked-commit-cleanup-failed') }
+            }
+        }
+    }
+    return $result
 }
 
 function Get-MoeCommitTitle([string]$Title, [string]$Fallback) {
@@ -2858,146 +3163,82 @@ function Invoke-MoeLanding {
         $usePorcelain = ($Settings.commitHooks -and $Kind -eq 'completion')
         $dropped = @()
 
-        if ($usePorcelain) {
-            # 7.3 Hooks requested: today's porcelain path against the shared
-            # index, with the same staged-blob check; rc != 0 -> rescue ref.
-            $specs = @()
-            $staged = @()
-            foreach ($c in $candidates) {
-                $spec = ":(literal)$($c.Path)"
-                $a = $null
-                for ($attempt = 1; $attempt -le 5; $attempt++) {
-                    $a = Invoke-MoeGit -Top $Git.Top -GitArgs @('add', '--', $spec) -MergeStderr
-                    if ($a.Rc -eq 0 -or (($a.Out -join ' ') -notlike '*index.lock*')) { break }
-                    Start-Sleep -Seconds 2
-                }
-                if ($a.Rc -ne 0) { $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_MISSING' }; continue }
-                $ls = Invoke-MoeGit -Top $Git.Top -GitArgs @('ls-files', '-s', '-z', '--', $spec)
-                $stagedBlob = ''
-                $lsLine = ($ls.Out -join '').Split([char]0)[0]
-                if ($lsLine) { $f = @($lsLine -split '\s+'); if ($f.Count -ge 2) { $stagedBlob = $f[1] } }
-                $ok = if ($c.Blob -eq 'D') { -not $stagedBlob } else { $stagedBlob -eq $c.Blob }
-                if (-not $ok) {
-                    Invoke-MoeGit -Top $Git.Top -GitArgs @('reset', '-q', '--', $spec) | Out-Null
-                    $dropped += @{ Path = $c.Path; Code = 'MOE_ATTR_CONCURRENT' }
-                    continue
-                }
-                $specs += $spec
-                $staged += $c
+        # One validated private index + exact commit + update-ref CAS, 3 attempts.
+        # Hooked completions create the commit on a private detached HEAD.
+        $new = ''
+        $landed = @()
+        $casOk = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $old = ''
+            $o = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$branch")
+            if ($o.Rc -eq 0 -and $o.Out.Count -gt 0) { $old = ($o.Out -join '').Trim() }
+            $built = Build-MoeTempIndexTree -Top $Git.Top -IndexFile $idx -OldSha $old -Candidates $candidates
+            if (-not $built.Ok) {
+                Write-Host "[WARN] temp-index build failed for task $TaskId; nothing committed, baseline kept." -ForegroundColor Yellow
+                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
+                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
+                return $res
             }
-            foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
-            # Every staged candidate matching HEAD is honest NOTHING, not a
-            # commit failure: `git commit -- <specs>` exits non-zero with
-            # "nothing to commit" there — check first, as the sh twin does.
-            $stagedMatchesHead = $false
-            if ($specs.Count -gt 0) {
-                $dc = Invoke-MoeGit -Top $Git.Top -GitArgs (@('diff', '--cached', '--quiet', '--') + $specs)
-                $stagedMatchesHead = ($dc.Rc -eq 0)
-            }
-            if ($specs.Count -eq 0 -or $stagedMatchesHead) {
-                Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — every candidate was dropped at staging time or already matches HEAD." -ForegroundColor Cyan
+            $dropped = @($built.Dropped)
+            $landed = @($built.Landed)
+            if (-not $built.Changed) {
+                foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
+                Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — the attributable paths already match $branch." -ForegroundColor Cyan
                 $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
                 if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
-                $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId
+                if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
                 Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
                 return $res
             }
-            $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $staged.Count -InferredCount $inferredCount -Contested $attr.Contested -Reason ''
+            $landedInferred = @($landed | Where-Object { $_.Inferred }).Count
+            $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $landed.Count -InferredCount $landedInferred -Contested $attr.Contested -Reason ''
+            if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
             $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
-            $cm = $null
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-                # -- <specs> is load-bearing: a BARE commit commits the SHARED
-                # INDEX and sweeps a peer's pre-staged file into this task.
-                $cm = Invoke-MoeGit -Top $Git.Top -GitArgs (@('commit', '-F', $msgFile, '--') + $specs) -MergeStderr
-                if ($cm.Rc -eq 0 -or (($cm.Out -join ' ') -notlike '*index.lock*')) { break }
-                Start-Sleep -Seconds 2
-            }
-            $cm.Out | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
-            if ($cm.Rc -ne 0) {
-                Write-Host "[WARN] git commit failed (pre-commit hook? identity?) — parking the edits on a rescue ref; baseline kept." -ForegroundColor Yellow
-                $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
-                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED'
-                if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
-                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($cm.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } | Out-Null
-                # Prior local commits still need the remote (today's behaviour).
-                $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId
-                return $res
-            }
-            $landedPaths = @($staged | ForEach-Object { $_.Path })
-            $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', 'HEAD')
-            if ($h.Rc -eq 0) { $sha = ($h.Out -join '').Trim() }
-        } else {
-            # 7.2 Plumbing: temp index + commit-tree + update-ref CAS, 3 attempts.
-            $new = ''
-            $landed = @()
-            $casOk = $false
-            for ($attempt = 1; $attempt -le 3; $attempt++) {
-                $old = ''
-                $o = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', "refs/heads/$branch")
-                if ($o.Rc -eq 0 -and $o.Out.Count -gt 0) { $old = ($o.Out -join '').Trim() }
-                $built = Build-MoeTempIndexTree -Top $Git.Top -IndexFile $idx -OldSha $old -Candidates $candidates
-                if (-not $built.Ok) {
-                    Write-Host "[WARN] temp-index build failed for task $TaskId; nothing committed, baseline kept." -ForegroundColor Yellow
-                    $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_ATTRIBUTION'
-                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
-                    return $res
-                }
-                $dropped = @($built.Dropped)
-                $landed = @($built.Landed)
-                if (-not $built.Changed) {
-                    foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
-                    Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — the attributable paths already match $branch." -ForegroundColor Cyan
-                    $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
-                    if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
-                    if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
-                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
-                    return $res
-                }
-                $landedInferred = @($landed | Where-Object { $_.Inferred }).Count
-                $msg = New-MoeCommitMessage -Kind $Kind -TaskId $TaskId -Title $Title -Status $Status -ReopenCount $ReopenCount -Role $Role -Sid $Sid -CliExit $CliExit -Recovered $recovered -PathCount $landed.Count -InferredCount $landedInferred -Contested $attr.Contested -Reason ''
-                if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
-                $msgFile = Write-MoeMessageFile $Git.GitDir $TaskId $msg
+            if ($usePorcelain) {
+                $ct = New-MoeHookedCommit -Top $Git.Top -GitDir $Git.GitDir -OldSha $old -Tree $built.Tree -IndexFile $idx -MessageFile $msgFile
+            } else {
                 $ctArgs = @('commit-tree', $built.Tree)
                 if ($old) { $ctArgs += @('-p', $old) }
                 $ctArgs += @('-F', $msgFile)
                 $ct = Invoke-MoeGit -Top $Git.Top -GitArgs $ctArgs -MergeStderr
-                if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
-                    ($ct.Out | Select-Object -Last 3) | ForEach-Object { Write-Host "  $_" }
-                    Write-Host "[WARN] git commit-tree failed (identity? signing?) — parking the edits on a rescue ref; baseline kept." -ForegroundColor Yellow
-                    $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED'
-                    $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
-                    if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
-                    Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($ct.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } | Out-Null
-                    if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
-                    return $res
-                }
-                $new = ($ct.Out -join '').Trim()
-                if ($attempt -eq 1 -and $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
-                    # Test seam: lets the harness move the branch tip between
-                    # commit-tree and update-ref to prove the CAS retry.
-                    Push-Location $Git.Top
-                    try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
-                }
-                $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
-                $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', "refs/heads/$branch", $new, $oldArg) -MergeStderr
-                if ($ur.Rc -eq 0) { $casOk = $true; break }
-                Write-Host "[branch] $branch moved under us (attempt $attempt/3); rebuilding the commit on the new tip." -ForegroundColor Yellow
             }
-            if (-not $casOk) {
-                Write-Host "[WARN] MOE_COMMIT_FAILED_REF_CONTENTION: $branch kept moving during 3 attempts; parking the built commit on a rescue ref, baseline kept." -ForegroundColor Yellow
-                $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'ref-contention' -Title $Title -Status $Status -Sid $Sid -Attr $attr -Sha $new
-                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
+            if ($ct.Rc -ne 0 -or $ct.Out.Count -eq 0) {
+                ($ct.Out | Select-Object -Last 3) | ForEach-Object { Write-Host "  $_" }
+                Write-Host "[WARN] commit creation failed (hooks, identity or signing) — parking the edits on a rescue ref; baseline kept." -ForegroundColor Yellow
+                $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED'
+                $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'commit-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
                 if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
-                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; ref = $res.Ref } | Out-Null
+                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED'; message = (($ct.Out | Select-Object -Last 3) -join ' '); ref = $res.Ref } | Out-Null
+                if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
                 return $res
             }
-            foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
-            $sha = $new
-            $landedPaths = @($landed | ForEach-Object { $_.Path })
-            $inferredCount = @($landed | Where-Object { $_.Inferred }).Count
-            $inferredPaths = @($landed | Where-Object { $_.Inferred } | ForEach-Object { $_.Path })
-            Update-MoeSharedIndex $Git.Top $landedPaths | Out-Null
+            $new = ($ct.Out -join '').Trim()
+            if ($attempt -eq 1 -and $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF) {
+                # Test seam: lets the harness move the branch tip between
+                # commit-tree and update-ref to prove the CAS retry.
+                Push-Location $Git.Top
+                try { & $env:ComSpec /d /s /c $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF 2>&1 | Out-Null } catch {} finally { Pop-Location }
+            }
+            $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
+            $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', "refs/heads/$branch", $new, $oldArg) -MergeStderr
+            if ($ur.Rc -eq 0) { $casOk = $true; break }
+            Write-Host "[branch] $branch moved under us (attempt $attempt/3); rebuilding the commit on the new tip." -ForegroundColor Yellow
         }
+        if (-not $casOk) {
+            Write-Host "[WARN] MOE_COMMIT_FAILED_REF_CONTENTION: $branch kept moving during 3 attempts; parking the built commit on a rescue ref, baseline kept." -ForegroundColor Yellow
+            $rescue = Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'ref-contention' -Title $Title -Status $Status -Sid $Sid -Attr $attr -Sha $new
+            $res.Outcome = 'failed'; $res.Code = 'MOE_COMMIT_FAILED_REF_CONTENTION'
+            if ($rescue) { $res.Ref = $rescue.Ref; $res.Sha = $rescue.Sha }
+            Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_REF_CONTENTION'; ref = $res.Ref } | Out-Null
+            return $res
+        }
+        foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
+        $sha = $new
+        $landedPaths = @($landed | ForEach-Object { $_.Path })
+        $inferredCount = @($landed | Where-Object { $_.Inferred }).Count
+        $inferredPaths = @($landed | Where-Object { $_.Inferred } | ForEach-Object { $_.Path })
+        Update-MoeSharedIndex $Git.Top $landedPaths | Out-Null
+
 
         # AFTER SUCCESS: prune landed paths from B, persist U, keep the baseline
         # until the task is DONE/ARCHIVED.
@@ -3211,7 +3452,7 @@ function Invoke-MoeTeardownRescue {
 }
 
 # Stream-json harvest (claude only): record the paths the CLI's tools wrote.
-function Add-MoeToolWrittenPath([string]$ToolName, $ToolInput) {
+function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
     if (-not $ToolName -or $null -eq $ToolInput) { return }
     if ($null -eq $moeGit) { return }
     $paths = @()
@@ -3222,9 +3463,6 @@ function Add-MoeToolWrittenPath([string]$ToolName, $ToolInput) {
     } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex)$') {
         $kind = 'serena'
         $v = Get-MoeProp $ToolInput 'relative_path'; if ($v -is [string] -and $v) { $paths += $v }
-    } elseif ($ToolName -match '(^|__)(moe_)?complete_step$') {
-        $kind = 'root'
-        $paths = @(Get-MoeStringList (Get-MoeProp $ToolInput 'modifiedFiles'))
     } else {
         return
     }
@@ -3232,8 +3470,6 @@ function Add-MoeToolWrittenPath([string]$ToolName, $ToolInput) {
         $tp = ''
         if (Test-MoeAbsolutePath $p) {
             $tp = ConvertTo-MoeTopPathFromAbsolute $p $moeGit.Top
-        } elseif ($kind -eq 'root') {
-            $tp = ConvertTo-MoeTopPath $p $moeGit.Rel
         } elseif ($kind -eq 'serena') {
             $tp = ConvertTo-MoeTopPathFromAbsolute (Join-Path $serenaProject $p) $moeGit.Top
         }
@@ -3241,8 +3477,38 @@ function Add-MoeToolWrittenPath([string]$ToolName, $ToolInput) {
             Write-Host "  [attribution] tool path outside the repo dropped: $p" -ForegroundColor DarkYellow
             continue
         }
-        $script:MoeToolWritten[(Get-MoePathKey $tp)] = $tp
+        Write-Output $tp
     }
+}
+
+# A tool invocation is an intention, not proof of an edit. Keep only normalized
+# paths (never tool input/result content), and publish them after its successful
+# matching result. Terminal IDs prevent duplicate streamed/full messages from
+# resurrecting a failed write. Overflow holds further evidence for this session.
+function Register-MoeToolWrite([string]$Id, [string]$ToolName, $ToolInput) {
+    if (-not $Id -or $Id.Length -gt 256 -or $script:MoeToolHarvestSaturated -or $script:MoeToolSettled.ContainsKey($Id)) { return }
+    $paths = @(Get-MoeToolWrittenPaths $ToolName $ToolInput | Select-Object -First 501)
+    if ($paths.Count -eq 0) { return }
+    if ($paths.Count -gt 500 -or $script:MoeToolPending.Count -ge 2048 -or $script:MoeToolSettled.Count -ge 8192) {
+        $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return
+    }
+    if ($script:MoeToolPending.ContainsKey($Id) -and (($script:MoeToolPending[$Id] -join "`n") -ne ($paths -join "`n"))) {
+        $script:MoeToolPending.Remove($Id); $script:MoeToolSettled[$Id] = $true; return
+    }
+    $script:MoeToolPending[$Id] = $paths
+}
+
+function Complete-MoeToolWrite($Result) {
+    $id = Get-MoeProp $Result 'tool_use_id'
+    if ($id -isnot [string] -or -not $id -or $id.Length -gt 256 -or $script:MoeToolHarvestSaturated -or $script:MoeToolSettled.ContainsKey($id)) { return }
+    if ($script:MoeToolSettled.Count -ge 8192) { $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return }
+    $script:MoeToolSettled[$id] = $true
+    if (-not $script:MoeToolPending.ContainsKey($id)) { return }
+    $paths = $script:MoeToolPending[$id]; $script:MoeToolPending.Remove($id)
+    $failed = Get-MoeProp $Result 'is_error'
+    $hasFlag = if ($Result -is [System.Collections.IDictionary]) { $Result.Contains('is_error') } else { $null -ne $Result.PSObject.Properties['is_error'] }
+    if ($hasFlag -and ($failed -isnot [bool] -or $failed)) { return }
+    foreach ($path in $paths) { $script:MoeToolWritten[(Get-MoePathKey $path)] = $path }
 }
 
 Write-Host "Launching $cliType CLI..."
@@ -3443,6 +3709,9 @@ do {
     $moeLandingDone = $false
     $moeStopLoop = $false
     $script:MoeToolWritten = @{}
+    $script:MoeToolPending = [hashtable]::new([StringComparer]::Ordinal)
+    $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
+    $script:MoeToolHarvestSaturated = $false
     $script:MoeLastLanding = $null
 
     if ($AutoClaim) {
@@ -4513,15 +4782,9 @@ $mentionsJson
                                     $j = $script:moeToolJson
                                     if ($j.Length -gt 140) { $j = $j.Substring(0, 140) + "..." }
                                     Write-Host " $j" -ForegroundColor DarkGray
-                                    # Tool-write harvest: the paths Edit/Write/
-                                    # MultiEdit/NotebookEdit, Serena's edit tools
-                                    # and complete_step.modifiedFiles named are
-                                    # positive evidence this session touched them
-                                    # (the TOOL tier of the attribution).
-                                    try {
-                                        $harvestInput = $script:moeToolJson | ConvertFrom-Json -ErrorAction Stop
-                                        Add-MoeToolWrittenPath $script:moeToolName $harvestInput
-                                    } catch {}
+                                    # Partial deltas are display-only: nested
+                                    # agent streams may interleave. Authority
+                                    # comes from complete assistant blocks.
                                     $script:moeToolJson = ""
                                     $script:moeToolName = $null
                                 } elseif ($script:moeInText) {
@@ -4532,13 +4795,22 @@ $mentionsJson
                         }
                     }
                     "assistant" {
+                        if ($evt.isReplay) { break }
                         # Non-streamed assistant messages carry the full
-                        # tool_use.input — harvest those too (same tier).
+                        # tool_use.input — queue those too (same IDs/tier).
                         try {
                             if ($evt.message -and $evt.message.content) {
                                 foreach ($blk in @($evt.message.content)) {
-                                    if ($blk -and $blk.type -eq "tool_use") { Add-MoeToolWrittenPath $blk.name $blk.input }
+                                    if ($blk -and $blk.type -eq "tool_use") { Register-MoeToolWrite $blk.id $blk.name $blk.input }
                                 }
+                            }
+                        } catch {}
+                    }
+                    "user" {
+                        if ($evt.isReplay) { break }
+                        try {
+                            foreach ($blk in @($evt.message.content)) {
+                                if ($blk -and $blk.type -eq 'tool_result') { Complete-MoeToolWrite $blk }
                             }
                         } catch {}
                     }

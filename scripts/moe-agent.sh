@@ -2373,11 +2373,11 @@ for f in sorted(glob.glob(os.path.join(tasks_dir, '*.json'))):
         peer.append({'path': p, 'taskId': t.get('id')})
 out.update(peerDeclared=peer, livePeerIds=live, activePeerIds=live, peersActive=True,
            alwaysInclude=always, excludePrefixes=[],
-           policy={'undeclared': 'never', 'contested': 'commit'})
+           policy={'undeclared': 'never', 'contested': 'skip-untouched'})
 print(json.dumps(out))
 PYEOF
     then
-        printf '{"taskId":"%s","notFound":true,"fallback":true,"asserted":[],"planned":[],"peerDeclared":[],"livePeerIds":[],"peersActive":true,"alwaysInclude":[],"excludePrefixes":[],"policy":{"undeclared":"never","contested":"commit"}}' "$task_id" > "$out"
+        printf '{"taskId":"%s","notFound":true,"fallback":true,"asserted":[],"planned":[],"peerDeclared":[],"livePeerIds":[],"peersActive":true,"alwaysInclude":[],"excludePrefixes":[],"policy":{"undeclared":"never","contested":"skip-untouched"}}' "$task_id" > "$out"
     fi
     return 0
 }
@@ -2402,6 +2402,7 @@ resolve_attribution() {
     mkdir -p "$outdir" 2>/dev/null || return 1
     MOE_LAND_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_LAND_CONTESTED="$CS_ATTR_CONTESTED" MOE_LAND_EXCLUDE="$CS_ATTR_EXCLUDE" \
     MOE_LAND_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_LAND_POLICY_OVERRIDE="$override" \
+    MOE_LAND_BASE="${10:-}" MOE_LAND_INDEX="${11:-}" \
     MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" \
     $PYTHON_CMD - "$mode" "$tid" "$snap" "$bfile" "$ufile" "$toolfile" "$scopefile" "$outdir" 2>"$outdir/attr.err" <<'PYEOF'
 import json, os, re, subprocess, sys
@@ -2453,7 +2454,7 @@ def read_rows(path):
         pass
     return rows
 S = {}
-for parts in read_rows(snap_f):
+for parts in ([] if mode == 'index' else read_rows(snap_f)):
     if len(parts) < 3:
         continue
     p = norm_top('\t'.join(parts[2:]))
@@ -2600,16 +2601,241 @@ for pk in sorted(S):
         n_inf += 1
         continue
     unattributed.append((blob, p))
+# Internal final-index validation reuses the same lexer/closure, but never
+# re-applies ownership policy to the builder's already-attributed staged set.
+if mode == 'index':
+    with open(snap_f, encoding='utf-8', errors='surrogateescape') as fh:
+        cands = [tuple(row.split('\t', 2)) for row in fh.read().split('\0') if row]
+    if any(len(c) != 3 for c in cands) or not env.get('MOE_LAND_INDEX'):
+        raise ValueError('MOE_IMPORTEE_INDEX_INPUT_INVALID')
 # IMPORTEE GUARD (ps1 twin: Get-MoeMissingImportees). A landing source file
 # must not import a relative module that is neither in HEAD nor landing in
 # this same commit; such a path stays dirty, is reported as unattributed and
 # lands at the next exit once its importee is in HEAD or declared.
 SRC_EXT = ('.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx')
-IMPORT_RX = re.compile(r"(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)[\"'](\.\.?/[^\"'\r\n]+)[\"']")
+def relative_imports(source, jsx_source=False):
+    # Lex first: comments, strings, regex bodies and template text are not code.
+    # Template interpolations ARE code and feed the same token stream recursively.
+    tokens, i, size = [], 0, len(source)
+    def escape():
+        nonlocal i
+        if i >= size:
+            raise ValueError('unterminated escape')
+        ch = source[i]
+        i += 1
+        if ch in '\r\n':
+            if ch == '\r' and i < size and source[i] == '\n':
+                i += 1
+            return ''
+        if ch in ('x', 'u'):
+            if ch == 'u' and i < size and source[i] == '{':
+                end = source.find('}', i + 1)
+                if end < 0:
+                    raise ValueError('unterminated unicode escape')
+                value = chr(int(source[i + 1:end], 16))
+                i = end + 1
+                return value
+            count = 2 if ch == 'x' else 4
+            digits = source[i:i + count]
+            if len(digits) != count or not re.fullmatch('[0-9a-fA-F]+', digits):
+                raise ValueError('invalid character escape')
+            i += count
+            return chr(int(digits, 16))
+        return {'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f', 'v': '\v', '0': '\0'}.get(ch, ch)
+    def quoted(quote):
+        nonlocal i
+        i += 1
+        value = ''
+        while i < size:
+            ch = source[i]
+            i += 1
+            if ch == quote:
+                return value
+            if ch in '\r\n':
+                raise ValueError('unterminated string')
+            value += escape() if ch == '\\' else ch
+        raise ValueError('unterminated string')
+    def template():
+        nonlocal i
+        i += 1
+        value, interpolated = '', False
+        while i < size:
+            ch = source[i]
+            i += 1
+            if ch == '`':
+                tokens.append(('literal' if interpolated else 'string', value))
+                return
+            if ch == '\\':
+                value += escape()
+            elif ch == '$' and i < size and source[i] == '{':
+                i += 1
+                interpolated = True
+                tokens.append(('punct', '('))
+                scan(True)
+                tokens.append(('punct', ')'))
+            else:
+                value += ch
+        raise ValueError('unterminated template')
+    def looks_like_jsx():
+        if not jsx_source:
+            return False
+        if source.startswith('<>', i):
+            return True
+        match = re.match(r'<([A-Za-z_$][\w.$:-]*)(?=[\s/>])', source[i:])
+        if not match:
+            return False
+        # TSX generic arrows (<T extends X>) are not tags. A tag either closes
+        # itself or has its matching close; plain .ts never enters JSX mode.
+        close = r'</' + re.escape(match.group(1)) + r'\s*>'
+        return bool(re.search(close, source[i:]) or re.match(r'<[^>]+/\s*>', source[i:]))
+    def jsx():
+        nonlocal i
+        depth = 0
+        while i < size:
+            if source[i] == '<':
+                i += 1
+                closing = i < size and source[i] == '/'
+                if closing:
+                    i += 1
+                self_closed = False
+                while i < size and source[i] != '>':
+                    ch = source[i]
+                    if ch in ('"', "'"):
+                        quoted(ch)
+                    elif ch == '{':
+                        i += 1
+                        tokens.append(('punct', '('))
+                        scan(True)
+                        tokens.append(('punct', ')'))
+                    elif source.startswith('/>', i):
+                        self_closed = True
+                        i += 1
+                    else:
+                        i += 1
+                if i >= size:
+                    raise ValueError('unterminated JSX tag')
+                i += 1
+                if closing:
+                    depth -= 1
+                elif not self_closed:
+                    depth += 1
+                if depth == 0:
+                    tokens.append(('literal', 'jsx'))
+                    return
+            elif source[i] == '{':
+                i += 1
+                tokens.append(('punct', '('))
+                scan(True)
+                tokens.append(('punct', ')'))
+            else:
+                i += 1
+        raise ValueError('unterminated JSX')
+    def scan(interpolation=False):
+        nonlocal i
+        depth = 0
+        while i < size:
+            ch = source[i]
+            if ch.isspace():
+                i += 1
+                continue
+            if source.startswith('//', i):
+                end = source.find('\n', i + 2)
+                i = size if end < 0 else end + 1
+                continue
+            if source.startswith('/*', i):
+                end = source.find('*/', i + 2)
+                if end < 0:
+                    raise ValueError('unterminated comment')
+                i = end + 2
+                continue
+            if ch in ('"', "'"):
+                tokens.append(('string', quoted(ch)))
+                continue
+            if ch == '`':
+                template()
+                continue
+            if ch == '<' and looks_like_jsx():
+                jsx()
+                continue
+            previous = tokens[-1][1] if tokens else ''
+            if ch == '/' and previous in ('', '=', '(', '[', '{', ',', ':', ';', '!', '?', '&', '|', '>', 'return', 'throw', 'yield', 'case', 'void', 'typeof', 'delete'):
+                i += 1
+                in_class, closed = False, False
+                while i < size:
+                    part = source[i]
+                    i += 1
+                    if part == '\\':
+                        i += 1
+                    elif part in '\r\n':
+                        break
+                    elif part == '[':
+                        in_class = True
+                    elif part == ']':
+                        in_class = False
+                    elif part == '/' and not in_class:
+                        closed = True
+                        break
+                if not closed:
+                    raise ValueError('unterminated regex')
+                while i < size and source[i].isalpha():
+                    i += 1
+                tokens.append(('literal', 'regex'))
+                continue
+            if ch.isalpha() or ch in '_$':
+                start = i
+                i += 1
+                while i < size and (source[i].isalnum() or source[i] in '_$'):
+                    i += 1
+                tokens.append(('name', source[start:i]))
+                continue
+            i += 1
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                if interpolation and depth == 0:
+                    return
+                depth -= 1
+            tokens.append(('punct', ch))
+        if interpolation:
+            raise ValueError('unterminated interpolation')
+    scan()
+    imports = []
+    for pos, token in enumerate(tokens):
+        if token[0] != 'name' or token[1] not in ('import', 'export', 'require'):
+            continue
+        if pos > 0 and tokens[pos - 1][1] == '.':
+            continue
+        rest = tokens[pos + 1:]
+        spec = None
+        if token[1] in ('import', 'require') and len(rest) >= 3 and rest[0][1] == '(' and rest[1][0] == 'string' and rest[2][1] in (')', ','):
+            spec = rest[1][1]
+        elif token[1] == 'import' and rest and rest[0][0] == 'string':
+            spec = rest[0][1]
+        elif token[1] in ('import', 'export'):
+            for j, part in enumerate(rest):
+                if part == ('name', 'from') and j + 1 < len(rest) and rest[j + 1][0] == 'string':
+                    spec = rest[j + 1][1]
+                    break
+                if part[0] != 'name' and part[1] not in ('{', '}', ',', '*'):
+                    break
+        if spec is not None and spec.startswith(('./', '../')):
+            imports.append(spec)
+    return imports
 def head_paths():
     try:
-        r = subprocess.run(['git', '-C', top, 'ls-tree', '-r', '--name-only', '-z', 'HEAD'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        target = env.get('MOE_LAND_BASE', '') if mode == 'index' else 'HEAD'
+        if not target:
+            return set()
+        r = subprocess.run(['git', '-C', top, 'ls-tree', '-r', '--name-only', '-z', target], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if r.returncode != 0:
+            # Prove an unborn symbolic HEAD; other read failures are not empty trees.
+            if mode != 'index':
+                sym = subprocess.run(['git', '-C', top, 'symbolic-ref', '-q', 'HEAD'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if sym.returncode == 0:
+                    ref = sym.stdout.decode('utf-8', 'strict').strip()
+                    absent = subprocess.run(['git', '-C', top, 'show-ref', '--verify', '--quiet', ref], stderr=subprocess.DEVNULL)
+                    if absent.returncode == 1:
+                        return set()
             return None
         return set(key(n) for n in r.stdout.decode('utf-8', 'surrogateescape').split('\0') if n)
     except Exception:
@@ -2641,26 +2867,54 @@ def importee_present(target, head, landing):
     elif ext == '':
         cands += [target + e for e in ('.ts', '.tsx', '.js', '.mjs', '.mts')] + [target + '/index' + e for e in ('.ts', '.tsx', '.js')]
     return any((key(c) in head) or (key(c) in landing) for c in cands)
-src_cands = [c for c in cands if c[0] != 'BOARD' and os.path.splitext(c[2])[1].lower() in SRC_EXT]
+src_cands = [c for c in cands if c[0] != 'BOARD' and c[1] != 'D' and os.path.splitext(c[2])[1].lower() in SRC_EXT]
 if src_cands:
     HEAD_SET = head_paths()
+    if HEAD_SET is None:
+        raise ValueError('MOE_IMPORTEE_BASE_UNREADABLE')
     if HEAD_SET is not None:
-        landing = set(key(c[2]) for c in cands)
+        # A deleted importee is absent from the resulting tree, even if HEAD owns it.
+        HEAD_SET -= set(key(c[2]) for c in cands if c[1] == 'D')
         drop = {}
+        references = {}
         for reason, blob, p in src_cands:
             full = (top + '/' + p) if top else p
+            if mode == 'index':
+                index_env = dict(env, GIT_INDEX_FILE=env['MOE_LAND_INDEX'])
+                actual = subprocess.run(['git', '-C', top, 'rev-parse', '--verify', ':0:' + p], env=index_env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if actual.returncode != 0 or actual.stdout.decode('ascii', 'strict').strip() != blob:
+                    raise ValueError('MOE_IMPORTEE_INDEX_BLOB_MISMATCH')
+                content = subprocess.run(['git', '-C', top, 'cat-file', 'blob', blob],
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if content.returncode != 0:
+                    raise ValueError('MOE_IMPORTEE_BLOB_UNREADABLE')
+                text = content.stdout.decode('utf-8', 'surrogateescape')
             try:
-                with open(full, encoding='utf-8', errors='surrogateescape') as fh:
-                    text = fh.read()
+                if mode != 'index':
+                    with open(full, encoding='utf-8', errors='surrogateescape') as fh:
+                        text = fh.read()
+                references[key(p)] = relative_imports(text, os.path.splitext(p)[1].lower() in ('.tsx', '.jsx'))
             except Exception:
-                continue
-            dirname = p.rsplit('/', 1)[0] if '/' in p else ''
-            for m in IMPORT_RX.finditer(text):
-                target = resolve_rel(dirname, m.group(1))
-                if target is None or importee_present(target, HEAD_SET, landing):
+                drop[key(p)] = '<unparseable-source>'
+        # Remove to a fixed point: a rejected new B cannot continue satisfying A.
+        # A closed cycle remains present because no member is rejected initially.
+        while True:
+            landing = set(key(c[2]) for c in cands if c[1] != 'D' and key(c[2]) not in drop)
+            newly_missing = {}
+            for reason, blob, p in src_cands:
+                if key(p) in drop:
                     continue
-                drop[key(p)] = m.group(1)
+                dirname = p.rsplit('/', 1)[0] if '/' in p else ''
+                for spec in references[key(p)]:
+                    target = resolve_rel(dirname, spec)
+                    if target is not None and importee_present(target, HEAD_SET, landing):
+                        continue
+                    newly_missing[key(p)] = spec
+                    break
+            if not newly_missing:
                 break
+            drop.update(newly_missing)
         if drop:
             kept = []
             for c in cands:
@@ -2804,6 +3058,29 @@ moe_temp_index_build() {
         TI_N_STAGED=$((TI_N_STAGED + 1))
         [ "$reason" = "MEASURED" ] && TI_N_INFERRED=$((TI_N_INFERRED + 1))
     done < "$cand"
+    # Staging may drop a dependency that changed since attribution. Validate the
+    # remaining immutable index blobs, then restore rejected importers to BASE.
+    local guard
+    guard="$(create_secure_temp)/index-importees-$$"
+    if ! resolve_attribution index "$LAND_TASK_ID" "$staged_out" "" "" "" "" "$guard" "" "$base" "$TI_INDEX"; then
+        return 1
+    fi
+    while IFS= read -r -d '' rec; do
+        p="${rec#*"$MOE_TAB"}"
+        if [ -n "$base" ]; then
+            GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" reset -q "$base" -- ":(literal)$p" >/dev/null 2>&1 || return 1
+        else
+            GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" rm -q --cached -- ":(literal)$p" >/dev/null 2>&1 || return 1
+        fi
+        printf '%s\0' "$rec" >> "$dropped_out"
+    done < "$guard/skipped"
+    cp "$guard/candidates" "$staged_out" || return 1
+    TI_N_STAGED=0
+    TI_N_INFERRED=0
+    while IFS= read -r -d '' rec; do
+        TI_N_STAGED=$((TI_N_STAGED + 1))
+        [ "${rec%%"$MOE_TAB"*}" = "MEASURED" ] && TI_N_INFERRED=$((TI_N_INFERRED + 1))
+    done < "$staged_out"
     return 0
 }
 
@@ -2937,10 +3214,79 @@ write_rescue_message() { # $1 reason, $2 out
 }
 
 # ---- landing -----------------------------------------------------------------
+# Run hooks against the validated private index. The detached helper worktree
+# owns HEAD; GIT_WORK_TREE preserves hooks' project cwd without re-reading paths.
+moe_commit_with_hooks() {
+    local base="$1" tree="$2" index="$3" msgfile="$4" err="$5" work scratch private_git sha="" actual_tree="" parents="" rc=1
+    local hook_directory setting source_value private_value source_rc private_rc signing_matches=true
+    local -a configuration=()
+    local -a query=()
+    HOOK_COMMIT_SHA=""
+    if [ -z "$base" ]; then
+        printf '%s\n' 'Hook-enabled completion requires an existing commit; snapshot retained for rescue.' > "$err"
+        return 1
+    fi
+    hook_directory=$(git -C "$MOE_TOP" rev-parse --path-format=absolute --git-path hooks 2>/dev/null) || return 1
+    work="$(create_secure_temp)"
+    scratch="$work/hook-worktree"
+    if ! git -C "$MOE_TOP" worktree add --detach --no-checkout "$scratch" "$base" > "$err" 2>&1; then
+        return 1
+    fi
+    private_git=$(git -C "$scratch" rev-parse --absolute-git-dir 2>/dev/null) || private_git=""
+    if [ -f "$MOE_GITDIR/config.worktree" ]; then
+        configuration=(-c "include.path=$MOE_GITDIR/config.worktree")
+    fi
+    configuration+=(-c "core.hooksPath=$hook_directory")
+    # Conditional includes can differ in the detached gitdir. Never silently
+    # weaken signing or change author identity; compare only these effective
+    # settings, without logging their values.
+    for setting in commit.gpgSign user.signingKey gpg.format gpg.program gpg.openpgp.program gpg.ssh.program gpg.ssh.defaultKeyCommand gpg.x509.program user.name user.email; do
+        query=(config --get "$setting")
+        [ "$setting" = commit.gpgSign ] && query=(config --bool --get "$setting")
+        if source_value=$(git -C "$MOE_TOP" "${query[@]}" 2>/dev/null); then source_rc=0; else source_rc=$?; fi
+        if private_value=$(GIT_DIR="$private_git" GIT_WORK_TREE="$MOE_TOP" git -C "$MOE_TOP" "${configuration[@]}" "${query[@]}" 2>/dev/null); then private_rc=0; else private_rc=$?; fi
+        if [ "$source_rc" -gt 1 ] || [ "$private_rc" -gt 1 ]; then signing_matches=false; break; fi
+        case "$setting" in
+            commit.gpgSign)
+                [ "$source_rc" -eq 1 ] && source_value=false
+                [ "$private_rc" -eq 1 ] && private_value=false
+                source_rc=0; private_rc=0 ;;
+            gpg.format)
+                [ "$source_rc" -eq 1 ] && source_value=openpgp
+                [ "$private_rc" -eq 1 ] && private_value=openpgp
+                source_rc=0; private_rc=0 ;;
+        esac
+        if [ "$source_rc" -ne "$private_rc" ] || [ "$source_value" != "$private_value" ]; then signing_matches=false; break; fi
+    done
+    if [ "$signing_matches" != true ]; then
+        printf '%s\n' 'hooked-commit-config-mismatch' > "$err"
+    elif [ -n "$private_git" ] && GIT_DIR="$private_git" GIT_WORK_TREE="$MOE_TOP" GIT_INDEX_FILE="$index" \
+        git -C "$MOE_TOP" "${configuration[@]}" commit -F "$msgfile" > "$err" 2>&1; then
+        sha=$(git -C "$scratch" rev-parse HEAD 2>/dev/null) || sha=""
+        if [ -n "$sha" ]; then
+            actual_tree=$(git -C "$MOE_TOP" rev-parse "$sha^{tree}" 2>/dev/null) || actual_tree=""
+            parents=$(git -C "$MOE_TOP" show -s --format=%P "$sha" 2>/dev/null) || parents=""
+            if [ "$actual_tree" = "$tree" ] && [ "$parents" = "$base" ]; then
+                HOOK_COMMIT_SHA="$sha"
+                rc=0
+            else
+                printf '%s\n' 'Hook commit changed the validated tree or parent; refusing publication.' > "$err"
+            fi
+        fi
+    fi
+    # SCRATCH was created only by this invocation beneath its fresh secure temp.
+    if ! git -C "$MOE_TOP" worktree remove --force "$scratch" >/dev/null 2>&1; then
+        printf '%s\n' 'Could not remove the private hook worktree; refusing publication.' > "$err"
+        HOOK_COMMIT_SHA=""
+        return 1
+    fi
+    return "$rc"
+}
+
 # land_commit KIND -- §7: branch (peel), then plumbing (temp index +
-# commit-tree + update-ref CAS, 3 attempts) or, for a completion with
-# settings.commitHooks=true, the porcelain `git commit -- <specs>` so hooks
-# run. Returns 0 committed, 2 nothing, 1 failed (rescue attempted),
+# commit-tree + update-ref CAS, 3 attempts). With commitHooks=true, a private
+# ordinary commit runs hooks against the validated index before the same CAS.
+# Returns 0 committed, 2 nothing, 1 failed (rescue attempted),
 # 3 peel-failed (rescue attempted; caller must stop the loop).
 land_commit() {
     local kind="$1" work
@@ -2961,10 +3307,6 @@ land_commit() {
         return 3
     fi
     LAND_BRANCH="$MOE_SHARED_BRANCH"
-    if [ "$kind" = "completion" ] && [ "$CS_COMMIT_HOOKS" = "true" ]; then
-        land_porcelain "$work/land-msg-$$.txt"
-        return $?
-    fi
     land_plumbing "$work/land-msg-$$.txt"
     return $?
 }
@@ -2989,7 +3331,13 @@ land_plumbing() {
         write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
         tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
         if [ -n "$tree" ]; then
-            if [ -n "$old" ]; then
+            if [ "$LAND_KIND" = "completion" ] && [ "$CS_COMMIT_HOOKS" = "true" ]; then
+                if moe_commit_with_hooks "$old" "$tree" "$TI_INDEX" "$msgfile" "$err"; then
+                    new="$HOOK_COMMIT_SHA"
+                else
+                    new=""
+                fi
+            elif [ -n "$old" ]; then
                 new=$(git -C "$MOE_TOP" commit-tree "$tree" -p "$old" -F "$msgfile" 2>"$err") || new=""
             else
                 new=$(git -C "$MOE_TOP" commit-tree "$tree" -F "$msgfile" 2>"$err") || new=""
@@ -3034,63 +3382,6 @@ land_plumbing() {
     RESCUE_STAGED_FILE="${LAND_STAGED_FILE:-}"
     rescue_ref_from_commit "$new" "ref-contention" || true
     return 1
-}
-
-# land_porcelain MSGFILE -- settings.commitHooks=true completion path: today's
-# `git add -- :(literal)p` into the shared index + `git commit -- <specs>`
-# (hooks run). rc != 0 -> rescue [commit-failed].
-land_porcelain() {
-    local msgfile="$1" rec reason rest blob p actual out="" rc=1 i
-    local -a specs=()
-    while IFS= read -r -d '' rec; do
-        reason="${rec%%"$MOE_TAB"*}"
-        rest="${rec#*"$MOE_TAB"}"
-        blob="${rest%%"$MOE_TAB"*}"
-        p="${rest#*"$MOE_TAB"}"
-        [ -n "$p" ] || continue
-        if ! git -C "$MOE_TOP" add -- ":(literal)$p" >/dev/null 2>&1; then
-            printf 'MOE_ATTR_MISSING\t%s\0' "$p" >> "$LAND_DROPPED_FILE"
-            continue
-        fi
-        actual=$(git -C "$MOE_TOP" ls-files -s -- ":(literal)$p" 2>/dev/null | head -n1 | awk '{print $2}') || actual=""
-        if { [ "$blob" = "D" ] && [ -n "$actual" ]; } || { [ "$blob" != "D" ] && [ "$actual" != "$blob" ]; }; then
-            git -C "$MOE_TOP" reset -q -- ":(literal)$p" >/dev/null 2>&1 || true
-            printf 'MOE_ATTR_CONCURRENT\t%s\0' "$p" >> "$LAND_DROPPED_FILE"
-            continue
-        fi
-        printf '%s\t%s\t%s\0' "$reason" "$blob" "$p" >> "$LAND_STAGED_FILE"
-        specs+=(":(literal)$p")
-        TI_N_STAGED=$((${TI_N_STAGED:-0} + 1))
-        [ "$reason" = "MEASURED" ] && TI_N_INFERRED=$((${TI_N_INFERRED:-0} + 1))
-    done < "$ATTR_DIR/candidates"
-    if [ "${#specs[@]}" -eq 0 ] || git -C "$MOE_TOP" diff --cached --quiet -- "${specs[@]}" >/dev/null 2>&1; then
-        LAND_OUTCOME="nothing"
-        return 2
-    fi
-    write_commit_message "$LAND_KIND" "$msgfile" "${#specs[@]}" "${TI_N_INFERRED:-0}"
-    for i in 1 2 3 4 5; do
-        if out=$(git -C "$MOE_TOP" commit -F "$msgfile" -- "${specs[@]}" 2>&1); then rc=0; else rc=$?; fi
-        [ "$rc" -ne 0 ] || break
-        case "$out" in
-            *index.lock*) sleep 2 ;;
-            *) break ;;
-        esac
-    done
-    printf '%s\n' "$out" | tail -3
-    if [ "$rc" -ne 0 ]; then
-        LAND_OUTCOME="failed"
-        LAND_CODE="MOE_COMMIT_FAILED"
-        LAND_MESSAGE="$(printf '%s' "$out" | tail -n3 | tr '\n' ' ')"
-        echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: git commit failed (pre-commit hook? identity?) for task $LAND_TASK_ID; keeping the snapshot on a rescue ref."
-        rescue_ref "commit-failed" "$ATTR_DIR/candidates" || true
-        return 1
-    fi
-    LAND_SHA=$(git -C "$MOE_TOP" rev-parse HEAD 2>/dev/null) || LAND_SHA=""
-    LAND_TREE=$(git -C "$MOE_TOP" rev-parse 'HEAD^{tree}' 2>/dev/null) || LAND_TREE=""
-    LAND_OUTCOME="committed"
-    LAND_N_PATHS="${#specs[@]}"
-    LAND_N_INFERRED="${TI_N_INFERRED:-0}"
-    return 0
 }
 
 # ---- rescue refs -------------------------------------------------------------
@@ -5122,17 +5413,22 @@ $PROMPT_BODY"
         # tool_use / text / rate-limit / result; non-JSON lines pass through.
         # It ALSO harvests the paths the model's editing tools wrote (Edit /
         # Write / MultiEdit / NotebookEdit file_path|notebook_path, the Serena
-        # edit tools' relative_path, complete_step.modifiedFiles) into
+        # edit tools' relative_path) into
         # $MOE_TOOL_WRITES_FILE, TOP-relative -- the TOOL tier of the
         # post-flight attribution: a path this session's tools wrote is the
         # session's own even when a peer's plan also names it and even with
-        # other workers active. Absolute paths outside the repo are dropped
+        # other workers active. Only complete assistant tool_use blocks can
+        # supply an editing call, followed by its matching successful tool_result.
+        # Partial stream events are display only; calls alone are not writes.
+        # Absolute paths outside the repo are dropped
         # with a WARN. Codex/gemini/grok have no such stream: their TOOL set is
         # empty (documented).
         STREAM_JSON_PARSER=$(cat <<'PYEOF'
 import json, os, re, sys
 tool_json = ''
 tool_name = ''
+pending_edits = {}
+finished_edits = set()
 in_text = False
 harvest_path = os.environ.get('MOE_TOOL_WRITES_FILE') or ''
 top = (os.environ.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
@@ -5186,10 +5482,9 @@ def harvest(name, inp):
                 if not (p0.startswith('/') or re.match(r'^[A-Za-z]:/', p0)):
                     raw0 = serena_root + '/' + p0
             raws.append(raw0)
-    elif n in ('moe_complete_step', 'complete_step'):
-        mf = inp.get('modifiedFiles')
-        raws = mf if isinstance(mf, list) else []
     else:
+        # complete_step.modifiedFiles is a declaration, already in ASSERTED;
+        # it is not evidence that this session's editing tools wrote the path.
         return
     for raw in raws:
         if not isinstance(raw, str) or not raw.strip():
@@ -5203,6 +5498,27 @@ def harvest(name, inp):
                 fh.write(r + '\n')
         except Exception:
             pass
+def queue_edit(identifier, name, inp):
+    if not isinstance(identifier, str) or not identifier or identifier in finished_edits:
+        return
+    name = base_name(name)
+    if name not in WRITE_TOOLS + SERENA_TOOLS or not isinstance(inp, dict):
+        return
+    value = (name, inp)
+    # Stream and full assistant events may repeat one call. Conflicting repeats
+    # cannot replace its identity and authorize another path.
+    if identifier in pending_edits and pending_edits[identifier] != value:
+        pending_edits[identifier] = None
+    else:
+        pending_edits[identifier] = value
+def finish_edit(block):
+    identifier = block.get('tool_use_id')
+    if not isinstance(identifier, str) or identifier not in pending_edits:
+        return
+    value = pending_edits.pop(identifier)
+    finished_edits.add(identifier)
+    if value is not None and block.get('is_error', False) is False:
+        harvest(*value)
 for line in sys.stdin:
     line = line.rstrip('\n')
     if not line.strip():
@@ -5239,23 +5555,24 @@ for line in sys.stdin:
             if tool_json:
                 j = tool_json if len(tool_json) <= 140 else tool_json[:140] + '...'
                 w(' %s\n' % j)
-                try:
-                    harvest(tool_name, json.loads(tool_json))
-                except Exception:
-                    pass
                 tool_json = ''
             elif in_text:
                 w('\n')
                 in_text = False
-    elif t == 'assistant':
+    elif t == 'assistant' and evt.get('isReplay', False) is False:
         # Non-streamed assistant turns carry the full tool_use.input.
         msg = evt.get('message') or {}
         for blk in (msg.get('content') or []):
             if isinstance(blk, dict) and blk.get('type') == 'tool_use':
                 try:
-                    harvest(blk.get('name'), blk.get('input'))
+                    queue_edit(blk.get('id'), blk.get('name'), blk.get('input'))
                 except Exception:
                     pass
+    elif t == 'user' and evt.get('isReplay', False) is False:
+        msg = evt.get('message') or {}
+        for blk in (msg.get('content') or []):
+            if isinstance(blk, dict) and blk.get('type') == 'tool_result':
+                finish_edit(blk)
     elif t == 'rate_limit_event':
         rl = evt.get('rate_limit_info') or {}
         tag = 'OVERAGE' if rl.get('isUsingOverage') else rl.get('status')

@@ -96,7 +96,7 @@ export interface AttributionSettings {
    * projects). Env `MOE_ATTRIBUTION=declared` forces 'never' per run.
    */
   undeclared?: 'solo' | 'never' | 'always';
-  /** A path both this task asserted and a peer declared: require this session's edit by default. */
+  /** A path in this task's ASSERTED/TOOL scope and a nonterminal peer's declaration: default requires a supported Claude editing call with its matching successful tool_result from this session. */
   contested?: 'skip-untouched' | 'commit' | 'skip';
   /** Extra project-relative prefixes the wrapper never stages (added to the built-in DENY list). */
   exclude?: string[];
@@ -171,10 +171,11 @@ export interface ProjectSettings {
    */
   commitBoardState?: boolean;
   /**
-   * `true` → completion commits use porcelain `git commit -- <specs>` so
-   * pre-commit/commit-msg hooks run (rescue-ref fallback on rejection);
-   * checkpoints always use plumbing. default: false (plumbing everywhere —
-   * `settings.qualityGate` is the sanctioned gate).
+   * `true` → completion hooks run with a private index and detached HEAD;
+   * only the validated tree/parent is published by branch CAS. Hook failure,
+   * tree mutation, signing/author config mismatch, or unborn HEAD refuses
+   * landing with rescue. Checkpoints and rescues always use plumbing.
+   * Default false: plumbing everywhere; qualityGate is the sanctioned gate.
    */
   commitHooks?: boolean;
   /** Attribution policy for paths the task never declared; see AttributionSettings. */
