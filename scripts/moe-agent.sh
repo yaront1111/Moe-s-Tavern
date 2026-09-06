@@ -1996,7 +1996,7 @@ read_commit_settings() {
     CS_COMMIT_BOARD_STATE="true"
     CS_COMMIT_HOOKS="false"
     CS_ATTR_UNDECLARED="solo"
-    CS_ATTR_CONTESTED="commit"
+    CS_ATTR_CONTESTED="skip-untouched"
     CS_ATTR_EXCLUDE=""
     CS_CONSOLIDATION_BRANCH=""
     local parsed
@@ -2023,7 +2023,7 @@ def flag(key, default):
 und = attr.get('undeclared')
 und = und if und in ('solo', 'never', 'always') else 'solo'
 con = attr.get('contested')
-con = con if con in ('commit', 'skip') else 'commit'
+con = con if con in ('commit', 'skip', 'skip-untouched') else 'skip-untouched'
 exc = attr.get('exclude')
 exc = [clean(e.strip()) for e in exc if isinstance(e, str) and e.strip()] if isinstance(exc, list) else []
 cb = s.get('consolidationBranch')
@@ -2050,7 +2050,7 @@ sys.stdout.write('\x1f'.join(fields) + '\x1f')
     CS_COMMIT_BOARD_STATE="${CS_COMMIT_BOARD_STATE:-true}"
     CS_COMMIT_HOOKS="${CS_COMMIT_HOOKS:-false}"
     CS_ATTR_UNDECLARED="${CS_ATTR_UNDECLARED:-solo}"
-    CS_ATTR_CONTESTED="${CS_ATTR_CONTESTED:-commit}"
+    CS_ATTR_CONTESTED="${CS_ATTR_CONTESTED:-skip-untouched}"
     # MOE_ATTRIBUTION=declared: declared-only attribution for this run.
     if [ "${MOE_ATTRIBUTION:-}" = "declared" ]; then
         CS_ATTR_UNDECLARED="never"
@@ -2410,7 +2410,7 @@ env = os.environ
 top = (env.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
 rel = env.get('MOE_GIT_REL') or ''
 undeclared = env.get('MOE_LAND_UNDECLARED') or 'solo'
-contested_policy = env.get('MOE_LAND_CONTESTED') or 'commit'
+contested_policy = env.get('MOE_LAND_CONTESTED') or 'skip-untouched'
 board_state = (env.get('MOE_LAND_BOARD_STATE') or 'true') == 'true'
 override = env.get('MOE_LAND_POLICY_OVERRIDE') or ''
 if override == 'never':
@@ -2577,6 +2577,12 @@ for pk in sorted(S):
             if contested_policy == 'skip':
                 skipped.append(('MOE_ATTR_CONTESTED', p))
                 continue
+            # 'skip-untouched' (default since 2026-09-06): a contested path
+            # lands only when THIS session's editing tools wrote it -- an
+            # untouched one carries the PEER's unlanded hunks (ps1 twin).
+            if contested_policy == 'skip-untouched' and pk not in TOOL:
+                skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % PEER[pk], p))
+                continue
         cands.append(('ASSERTED', blob, p))
         continue
     if pk in PEER:
@@ -2594,6 +2600,76 @@ for pk in sorted(S):
         n_inf += 1
         continue
     unattributed.append((blob, p))
+# IMPORTEE GUARD (ps1 twin: Get-MoeMissingImportees). A landing source file
+# must not import a relative module that is neither in HEAD nor landing in
+# this same commit; such a path stays dirty, is reported as unattributed and
+# lands at the next exit once its importee is in HEAD or declared.
+SRC_EXT = ('.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs', '.jsx')
+IMPORT_RX = re.compile(r"(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)[\"'](\.\.?/[^\"'\r\n]+)[\"']")
+def head_paths():
+    try:
+        r = subprocess.run(['git', '-C', top, 'ls-tree', '-r', '--name-only', '-z', 'HEAD'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return None
+        return set(key(n) for n in r.stdout.decode('utf-8', 'surrogateescape').split('\0') if n)
+    except Exception:
+        return None
+def resolve_rel(dirname, spec):
+    parts = [s for s in dirname.split('/') if s]
+    for seg in spec.split('/'):
+        if seg in ('', '.'):
+            continue
+        if seg == '..':
+            if not parts:
+                return None
+            parts.pop()
+            continue
+        parts.append(seg)
+    return '/'.join(parts)
+def importee_present(target, head, landing):
+    stem, ext = os.path.splitext(target)
+    ext = ext.lower()
+    cands = [target]
+    if ext == '.js':
+        cands += [stem + e for e in ('.ts', '.tsx', '.mts', '.cts')]
+    elif ext == '.mjs':
+        cands.append(stem + '.mts')
+    elif ext == '.cjs':
+        cands.append(stem + '.cts')
+    elif ext == '.jsx':
+        cands.append(stem + '.tsx')
+    elif ext == '':
+        cands += [target + e for e in ('.ts', '.tsx', '.js', '.mjs', '.mts')] + [target + '/index' + e for e in ('.ts', '.tsx', '.js')]
+    return any((key(c) in head) or (key(c) in landing) for c in cands)
+src_cands = [c for c in cands if c[0] != 'BOARD' and os.path.splitext(c[2])[1].lower() in SRC_EXT]
+if src_cands:
+    HEAD_SET = head_paths()
+    if HEAD_SET is not None:
+        landing = set(key(c[2]) for c in cands)
+        drop = {}
+        for reason, blob, p in src_cands:
+            full = (top + '/' + p) if top else p
+            try:
+                with open(full, encoding='utf-8', errors='surrogateescape') as fh:
+                    text = fh.read()
+            except Exception:
+                continue
+            dirname = p.rsplit('/', 1)[0] if '/' in p else ''
+            for m in IMPORT_RX.finditer(text):
+                target = resolve_rel(dirname, m.group(1))
+                if target is None or importee_present(target, HEAD_SET, landing):
+                    continue
+                drop[key(p)] = m.group(1)
+                break
+        if drop:
+            kept = []
+            for c in cands:
+                if key(c[2]) in drop:
+                    skipped.append(('MOE_ATTR_IMPORTEE_MISSING(%s)' % drop[key(c[2])], c[2]))
+                    unattributed.append((c[1], c[2]))
+                else:
+                    kept.append(c)
+            cands = kept
 all_missing = 1 if ASSERTED else 0
 for ak, ap in ASSERTED.items():
     if ak in S:

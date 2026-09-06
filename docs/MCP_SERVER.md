@@ -469,7 +469,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
   policy: {
     autoCommit, checkpointCommits, checkpointPush, commitBoardState, commitHooks,
     undeclared: "solo" | "never" | "always",
-    contested: "commit" | "skip"
+    contested: "skip-untouched" | "commit" | "skip"
   }
 }
 ```
