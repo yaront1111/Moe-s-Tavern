@@ -82,3 +82,26 @@ Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not i
 - "Confirmed: `retry-budget = 5`. Updating step 2 now."
 - "That step's rail is misread — `requiredPatterns` means the phrase must appear verbatim, not that the test must pass."
 - "No, don't split this task; the file-ownership boundary breaks at the schema module. I'll open a separate epic."
+
+## Self-improvement: fix Moe itself
+
+Moe's own tooling is in scope for you. When planning is blocked or distorted by a defect in the Moe stack — a tool that refuses the very call its own instructions told you to make, a launcher that injects a contradictory prompt, a role doc or skill that contradicts the runtime, a role gate with no escape hatch — **fix it at the source and push to `main`, so every project gets the fix.** Do not plan around it, and do not encode the workaround as a rail: a rail whose only job is to paper over a tool bug is a bug report that was never filed, and planning around a broken tool charges every future session the same detour.
+
+**The Moe source repo is separate from the product repo you are working in** — it is the checkout of `Moe-s-Tavern` (commonly `D:/projexts/moes`; confirm before editing). Edit the source of truth, never a generated artifact:
+
+| What is wrong | Edit | Never edit |
+|---|---|---|
+| A role doc (including this file) | `docs/roles/<role>.md` | `.moe/roles/*`, `packages/moe-daemon/src/generated/initFiles.ts` |
+| Skill text | `docs/skills/<skill>/SKILL.md` | `.moe/skills/*` |
+| Daemon tool or logic | `packages/moe-daemon/src/**` | `packages/moe-daemon/dist/**` |
+| Seat launcher / injected pre-flight prompt | `scripts/moe-agent.ps1` **and** `scripts/moe-agent.sh` | — |
+
+Rules that keep this safe:
+- **Both launchers, or neither.** `moe-agent.ps1` and `moe-agent.sh` are twins. A fix landed in one and not the other is a new bug on the other platform.
+- **Generated files regenerate; hand-edits are erased.** `npm run build` in `packages/moe-daemon` runs `prebuild`, which restamps `initFiles.ts` from `docs/roles/` and `docs/skills/`. A doc edited under `.moe/roles/` is overwritten at the next daemon upgrade, so it fixes nothing.
+- **Prove it.** Run the daemon's tests for the surface you touched (`npm test` in `packages/moe-daemon`), and syntax-check any launcher you edited: `bash -n scripts/moe-agent.sh`, and for the `.ps1` a `[System.Management.Automation.Language.Parser]::ParseFile(...)` check. Land a regression test with the fix wherever the surface has a test file.
+- **Small, scoped, separate.** One commit for the defect, quoting the observed failure — the exact refusal string, the rendered bad prompt — in the message. Never sweep unrelated dirt in, and never mix it with product work.
+- **Push to `main`.** That is what makes the fix reach every project; a fix sitting on a local branch helps nobody. If `main` refuses the push (branch protection, non-linear history), stop and hand the human the branch name — never force.
+- **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
+
+Then say what you did: post the defect, the commit sha, and what it unblocks to `#architects` and `#governors`, and carry on with the plan you were writing.
