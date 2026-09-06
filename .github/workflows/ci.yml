@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Lint role documentation
+        run: bash scripts/lint-role-docs.sh
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -216,6 +219,40 @@ jobs:
 
       - name: Test agent runtime discovery
         run: node --test scripts/tests/agent-runtime.test.mjs
+
+      - name: Test Bash landing and postflight runner
+        run: node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs
+
+      - name: Test Windows PowerShell landing guard
+        if: runner.os == 'Windows'
+        run: |
+          powershell -NoProfile -File scripts/tests/importee-guard.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell -NoProfile -File scripts/tests/hooked-commit.ps1
+
+      - name: Test PowerShell 7 landing guard
+        if: runner.os == 'Windows'
+        run: |
+          pwsh -NoProfile -File scripts/tests/importee-guard.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/tests/hooked-commit.ps1
+
+      - name: Test Bash wrapper postflight and parity
+        if: runner.os == 'Linux'
+        run: |
+          node scripts/tests/postflight-safe.mjs bash
+          bash scripts/tests/parity-check.sh
+
+      - name: Test Windows PowerShell wrapper postflight
+        if: runner.os == 'Windows'
+        run: node scripts/tests/postflight-safe.mjs powershell
+
+      - name: Test PowerShell 7 wrapper postflight and parity
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/tests/postflight-safe.mjs pwsh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/tests/parity-check.ps1
 
       - name: Test VS Code daemon startup
         run: |
