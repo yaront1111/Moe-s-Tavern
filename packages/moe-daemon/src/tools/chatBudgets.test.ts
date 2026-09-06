@@ -196,25 +196,28 @@ describe('chat token budgets', () => {
     // even though it's actively blocked in a moe call — unlike wait_for_task,
     // which touches on entry. Bring chat_wait to parity.
     const channel = await setupChat();
-    const before = h.state.getWorker('worker-chat')!.lastActivityAt;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const before = new Date(Date.now() - 1000).toISOString();
+    await h.state.updateWorker('worker-chat', { lastActivityAt: before });
 
     const tool = chatWaitTool(h.state);
     const waitPromise = tool.handler({
       workerId: 'worker-chat',
       channels: [channel],
-      timeoutMs: 1000,
+      timeoutMs: 30000,
     }, h.state) as Promise<{ hasMessage: boolean }>;
 
     // The heartbeat touch is fire-and-forget (must not delay subscribing —
-    // see the comment in chatWait.ts), so give it a tick to land before
-    // asserting, independent of the wake/timeout timing below.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(new Date(h.state.getWorker('worker-chat')!.lastActivityAt).getTime())
-      .toBeGreaterThan(new Date(before).getTime());
-
-    await h.state.sendMessage({ channel, sender: 'system', content: 'wake up' });
-    await waitPromise;
+    // see chatWait.ts). Wait for persistence instead of racing a fixed sleep.
+    // Observe entry well before the timeout heartbeat could mask a regression.
+    try {
+      await vi.waitFor(() => {
+        expect(new Date(h.state.getWorker('worker-chat')!.lastActivityAt).getTime())
+          .toBeGreaterThan(new Date(before).getTime());
+      }, { timeout: 2000, interval: 10 });
+    } finally {
+      await h.state.sendMessage({ channel, sender: 'system', content: 'wake up' });
+      await waitPromise;
+    }
   });
 
   it('rejects chat_send posting as the reserved "system" sender', async () => {

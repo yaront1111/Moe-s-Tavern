@@ -28,10 +28,14 @@ const profile = path.join(scratch, 'profile');
 fs.mkdirSync(project);
 fs.mkdirSync(profile);
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MOE_')));
-Object.assign(env, { HOME: profile, USERPROFILE: profile, NODE_ENV: 'production', LOG_LEVEL: 'silent' });
+Object.assign(env, { HOME: profile, USERPROFILE: profile, NODE_ENV: 'production', LOG_LEVEL: 'warn' });
 let daemon;
 let proxy;
 let board;
+let diagnostics = '';
+function capture(stream, label) {
+  stream.on('data', chunk => { diagnostics = `${diagnostics}\n${label}: ${chunk}`.slice(-16000); });
+}
 
 async function until(check, label) {
   const deadline = Date.now() + 20_000;
@@ -50,7 +54,9 @@ async function start() {
   const port = listener.address().port;
   await new Promise(resolve => listener.close(resolve));
   daemon = spawn(process.execPath, [daemonEntry, 'init', '--project', project, '--port', String(port)],
-    { env, windowsHide: true, stdio: 'ignore' });
+    { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  capture(daemon.stdout, 'daemon');
+  capture(daemon.stderr, 'daemon stderr');
   let spawnError;
   daemon.once('error', error => { spawnError = error; });
   return until(async () => {
@@ -73,8 +79,9 @@ async function start() {
 
 function connectProxy() {
   proxy = spawn(process.execPath, [proxyEntry], {
-    env: { ...env, MOE_PROJECT_PATH: project }, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
+    env: { ...env, MOE_PROJECT_PATH: project }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
+  capture(proxy.stderr, 'proxy stderr');
   let sequence = 0;
   let proxyFailure;
   const pending = new Map();
@@ -85,7 +92,7 @@ function connectProxy() {
     if (!request) return;
     pending.delete(message.id);
     clearTimeout(request.timer);
-    if (message.error) request.reject(new Error(JSON.stringify(message.error)));
+    if (message.error) request.reject(new Error(`${request.label}: ${JSON.stringify(message.error)}`));
     else request.resolve(message.result);
   });
   const fail = error => {
@@ -105,7 +112,7 @@ function connectProxy() {
       pending.delete(id);
       reject(new Error(`MCP timeout: ${method}`));
     }, 15_000);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { resolve, reject, timer, label: params.name || method });
     proxy.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
 }
@@ -186,6 +193,9 @@ try {
   assert.equal(persisted.task.id, task.id);
   assert.equal(persisted.task.status, 'WORKING');
   console.log('PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence');
+} catch (error) {
+  console.error('Fixture daemon/proxy diagnostics:', diagnostics || '(none)');
+  throw error;
 } finally {
   await stop();
   assert.equal(path.dirname(scratch), path.resolve(os.tmpdir()));
