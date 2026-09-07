@@ -1871,9 +1871,9 @@ EOF
   # '--full-auto' found`, exit 2 before any work -- which the launch-failure
   # backoff then relaunches forever); `codex exec` already runs with
   # approval_policy=never, so the wrapper passes only
-  # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins: a worker defaults to
+  # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins: --codex-exec launches
   # headless `exec -C <project>` with the seat's MOE_WORKER_ID override and
-  # never --full-auto; --sandbox follows the exec subcommand; MOE_CODEX_SANDBOX
+  # never --full-auto; a worker or architect without the flag gets the TUI; --sandbox follows the exec subcommand; MOE_CODEX_SANDBOX
   # reaches argv verbatim; `inherit` drops the flag; an unknown value warns and
   # falls back; a fast non-zero exit propagates and prints the argv hint; the
   # project .codex/config.toml carries the moe table + top-level codex keys and
@@ -1906,7 +1906,7 @@ EOF
   (
     unset MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC MOE_DAEMON_HOST
     MOE_SERENA_PATH="$FAKE_SERENA" FAKE_CODEX_EXIT=5 FAKE_TASK_STATUS=WORKING \
-      run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z.out" "$CODEX_CLI" worker worker-scope-z
+      run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
   )
   scope_z_code=$?
   set -e
@@ -2028,6 +2028,19 @@ EOF
   if ! grep -Fqx -- '-C' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "the codex TUI launch must still carry -C <project>" "$TMP_DIR/scope-z5.out"
+  fi
+  # -- polarity: a worker without --codex-exec gets the TUI too (codex is
+  # interactive for every role since 2026-09-07; headless is opt-in) --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z5b.out" "$CODEX_CLI" worker worker-scope-z
+  scope_z5b_code=$?
+  set -e
+  [ "$scope_z5b_code" -eq 0 ] || scope_fail Z "worker TUI wrapper run exited with $scope_z5b_code" "$TMP_DIR/scope-z5b.out"
+  if grep -Fqx -- 'exec' "$CODEX_ARGS_FILE" || grep -Fqx -- '--sandbox' "$CODEX_ARGS_FILE" || grep -Fqx -- 'approvals_reviewer=user' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "a worker without --codex-exec must get the interactive codex TUI (no exec / --sandbox / reviewer pin)" "$TMP_DIR/scope-z5b.out"
   fi
   # -- argv probe: a CLI that rejects the launch argv (the --full-auto class of
   # break) must stop the seat with MOE_CLI_ARGV_REJECTED + a #general

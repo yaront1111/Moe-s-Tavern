@@ -339,7 +339,8 @@ model call; `codex sandbox -- cmd /c exit` (and System32 `powershell.exe`, `node
 and `serena` servers in `<project>/.codex/config.toml`. Interim, with an older wrapper: launch with
 `MOE_CODEX_SANDBOX=danger-full-access` (or `inherit`), or use the interactive TUI (`-Interactive` / `--interactive`).
 To keep a real sandbox on Windows, install the MSI PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`)
-so codex finds `C:\Program Files\PowerShell\7\pwsh.exe`, then set `MOE_CODEX_SANDBOX=workspace-write`.
+so codex finds `C:\Program Files\PowerShell\7\pwsh.exe`, then set `MOE_CODEX_SANDBOX=workspace-write`. Codex seats are interactive (TUI) by default again since 0.8.0; headless
+stays opt-in via `-CodexExec` / `--codex-exec`.
 
 ---
 

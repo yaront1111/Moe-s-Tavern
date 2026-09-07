@@ -702,16 +702,14 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
-# Codex follows the same role polarity as claude and grok: architect/governor
-# get the TUI, worker/qa run one-shot `codex exec` unless -Interactive is
-# passed explicitly, and -CodexExec forces exec for any role. The one-shot
-# default is load-bearing, not cosmetic: the codex TUI never exits on its own
-# and this wrapper blocks inside the CLI call for its whole lifetime, so an
-# interactive worker never reaches the post-flight -- no checkpoint or
-# completion commit, no record_commit, no session-end line. Measured
-# 2026-09-06: six codex worker seats launched without -CodexExec had been
-# alive 3-18 h with commits:[] on every row they delivered.
-if ($cliType -eq "codex" -and -not $CodexExec -and -not $Interactive) { $CodexExec = $true }
+# Codex is interactive (TUI) for every role unless -CodexExec opts the seat
+# into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
+# default to exec because the codex TUI never exits on its own and this wrapper
+# blocks inside the CLI call for its whole lifetime, so an interactive worker
+# reaches the post-flight (checkpoint/completion commit, record_commit,
+# session-end line) only when the operator closes the TUI. Reverted 2026-09-07
+# at the operator's request; pass -CodexExec when per-task landing matters.
+# The sh twin resolves --codex-exec the same way.
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
 # Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
 $geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)

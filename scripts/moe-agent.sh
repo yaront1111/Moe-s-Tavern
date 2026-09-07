@@ -381,18 +381,13 @@ elif [ "$CMD_BASE" = "gemini" ]; then
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
 fi
-# Codex follows the same role polarity as claude and grok (see INTERACTIVE
-# below): architect/governor keep the TUI, worker/qa run one-shot `codex exec`
-# unless --interactive is passed explicitly, and --codex-exec forces exec for
-# any role. Load-bearing: the codex TUI never exits on its own, so an
-# interactive worker never reaches the post-flight -- no checkpoint or
-# completion commit, no record_commit. Measured 2026-09-06 on six codex
-# worker seats launched without --codex-exec (PS twin has the same default).
-if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ]; then
-    if [ "$INTERACTIVE_REQUESTED" = false ] || { [ -z "$INTERACTIVE_REQUESTED" ] && [ "$ROLE" != "architect" ] && [ "$ROLE" != "governor" ]; }; then
-        CODEX_EXEC=true
-    fi
-fi
+# Codex is interactive (TUI) for every role unless --codex-exec opts the seat
+# into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
+# default to exec because the codex TUI never exits on its own, so an
+# interactive worker reaches the post-flight (checkpoint/completion commit,
+# record_commit) only when the operator closes the TUI. Reverted 2026-09-07 at
+# the operator's request; pass --codex-exec when per-task landing matters.
+# The ps1 twin resolves -CodexExec the same way.
 CODEX_INTERACTIVE=false
 if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ]; then
     CODEX_INTERACTIVE=true

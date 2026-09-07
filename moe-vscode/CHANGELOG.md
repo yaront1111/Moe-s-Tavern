@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Task dependencies with automatic unblock when prerequisites finish; shared resources (daemon-managed exclusive leases).
 
 ### Changed
+- Codex seats are interactive (TUI) by default for every role; `-CodexExec`/`--codex-exec` opts a seat into one-shot headless `codex exec`, which lands a commit per task.
 - Marketplace name is now "Moe's Tavern"; the extension id stays `yaront1111.moe-vscode`.
 - Launchers land a task-linked commit on every exit (completion or `wip` checkpoint) with rescue refs when landing fails.
 

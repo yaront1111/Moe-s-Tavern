@@ -1469,9 +1469,10 @@ switch (tool) {
                 # before any work — which the launch-failure backoff then
                 # relaunches forever); `codex exec` already runs with
                 # approval_policy = never, so the wrapper passes only
-                # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins: a
-                # worker defaults to headless `exec -C <project>` with the
-                # per-seat -c overrides and never --full-auto; --sandbox
+                # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins:
+                # -CodexExec launches headless `exec -C <project>` with the
+                # per-seat -c overrides and never --full-auto; a worker or
+                # architect without the switch gets the TUI; --sandbox
                 # follows `exec`; MOE_CODEX_SANDBOX reaches argv verbatim;
                 # `inherit` drops the flag; an unknown value warns and falls
                 # back; a fast non-zero exit propagates and prints the argv
@@ -1501,11 +1502,11 @@ switch (tool) {
                 $env:FAKE_CODEX_ARGV_FILE = $scopeZArgv
                 $env:MOE_SERENA_PATH = $trueCmd
                 try {
-                    # Run 1: worker default polarity = headless exec, fake exit 5.
+                    # Run 1: -CodexExec = headless exec, fake exit 5.
                     $env:FAKE_CODEX_EXIT = '5'
                     $scopeZOut = Join-Path $tempRoot 'scope-z.out'
                     try {
-                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut) $scopeZOut
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut 'worker' @('-CodexExec')) $scopeZOut
                     } finally { Remove-Item Env:FAKE_CODEX_EXIT -ErrorAction SilentlyContinue }
                     $scopeZText = Get-Content -Raw -Path $scopeZOut
                     $scopeZArgs = Get-CodexArgv
@@ -1572,6 +1573,13 @@ switch (tool) {
                     $scopeZArgs5 = Get-CodexArgv
                     if ($scopeZArgs5 -contains 'exec' -or $scopeZArgs5 -contains '--sandbox' -or $scopeZArgs5 -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
                     if ($scopeZArgs5 -cnotcontains '-C') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: the codex TUI launch must still carry -C <project>' }
+
+                    # Run 5b: a worker without -CodexExec gets the TUI too (codex is
+                    # interactive for every role since 2026-09-07; headless is opt-in).
+                    $scopeZOut5b = Join-Path $tempRoot 'scope-z-5b.out'
+                    Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut5b 'worker') $scopeZOut5b
+                    $scopeZArgs5b = Get-CodexArgv
+                    if ($scopeZArgs5b -contains 'exec' -or $scopeZArgs5b -contains '--sandbox' -or $scopeZArgs5b -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5b -join ' '); throw 'SCENARIO Z FAILED: a worker without -CodexExec must get the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
 
                     # Run 6: argv probe. A CLI that rejects the launch argv (the
                     # --full-auto class of break) must stop the seat with
