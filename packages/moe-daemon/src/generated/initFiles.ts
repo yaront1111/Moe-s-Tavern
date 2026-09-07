@@ -448,7 +448,7 @@ Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=b3d6ccf701eb -->
+  'worker.md': `<!-- moe-generated: sha=5840723dccb6 -->
 
 # Worker
 
@@ -462,6 +462,7 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` — run the plan's named verification command fresh and submit its result; exit code must be 0 or the daemon rejects completion. Never claim success without that fresh output.
 - If \`settings.qualityGate\` is set, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before \`complete_task\`.
 - Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), so work only in the project root (never a \`.worktrees/\` checkout), never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout — read its \`verification\`/\`completionSummary\` from that same \`epicSiblings\` entry, never via HEAD greps.
+- Found a bug outside your step's scope? Do not fix it in-line: file it with \`moe.create_task\` (same \`epicId\`, \`title\` starting \`bug:\`, a 1–3 line \`description\` with repro/evidence, \`dependsOn: [<your taskId>]\` only when the fix must land after yours; \`createdBy\` resolves to WORKER from your \`workerId\` and the \`warnings[]\` are advisory), note the new task id in your step note, and continue your step. If it blocks you, \`moe.report_blocked\` with \`blockedOnTaskIds: [<bug task id>]\` instead.
 
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. After your terminal call for the row (\`complete_task\`, \`report_blocked\`, \`submit_plan\`) END THE TURN — never \`claim_next_task\` inside the same session: the wrapper lands the row it launched you on when the process exits, so a session that hops rows strands every row but the last (measured 2026-09-06: one completion in three reached REVIEW with its bytes only in the dirty tree). The wrapper relaunches you in seconds. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
@@ -474,7 +475,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=eed9b381756d -->
+  'worker.reference.md': `<!-- moe-generated: sha=00d768586ec5 -->
 
 # Worker — Reference
 
@@ -520,6 +521,22 @@ moe.propose_rail {
 \`\`\`
 
 Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in \`.moe/proposals/\`; once approved, retry the step.
+
+## Filing a bug as a card
+
+A bug outside your step's scope is a new card, never an in-line fix — the plan's scope is what QA reviews and what the wrapper attributes. Example (\`workerId\` is proxy-injected, so \`createdBy\` resolves to \`WORKER\`; the row lands in BACKLOG, human-gated, and every \`warnings[]\` entry is advisory):
+
+\`\`\`
+moe.create_task {
+  epicId:           "<your task's epicId>",
+  title:            "bug: retry budget ignored when RETRY_MAX is unset",
+  description:      "Repro: unset RETRY_MAX, run \`npm test -- retry\` — expected 5 attempts, got 1 (src/retry.ts:41). Found from task-<yours> step 2.",
+  definitionOfDone: ["\`npm test -- retry\` green with RETRY_MAX unset"],
+  dependsOn:        ["<your taskId>"]
+}
+\`\`\`
+
+Include \`dependsOn\` only when the fix must land after your task; otherwise omit it. Two outcomes: it does not block you → note the new task id in \`complete_step.note\` and continue the step; it does → \`moe.report_blocked { taskId, reason, blockedOnTaskIds: ["<bug task id>"] }\` instead (your seat is freed, and your task auto-unblocks when the bug is DONE). Never both \`dependsOn: [<your taskId>]\` on the bug and \`blockedOnTaskIds\` on it from your task — that is a dependency cycle; the daemon drops the id with a \`DEPENDENCY_CYCLE\` warning.
 
 ## Commits, checkpoints and rescue refs
 
