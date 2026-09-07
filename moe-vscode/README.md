@@ -1,74 +1,75 @@
-# Moe - AI Workforce Command Center
+# Moe's Tavern
 
-Visual task board for AI agent orchestration with human oversight.
+An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, Gemini CLI and Grok Build through a shared Kanban board with human plan approval.
+
+JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary interface to the same daemon and `.moe/` project state. Full documentation lives in the [repository](https://github.com/yaront1111/Moe-s-Tavern).
 
 ## Features
 
-- **Kanban Board** - View and manage tasks across status columns
-- **Drag & Drop** - Change task status by dragging between columns
-- **Task Actions** - Approve, reject, or reopen tasks
-- **Real-time Updates** - Live sync via WebSocket connection
-- **Connection Status** - Status bar indicator for daemon connection
+- **Kanban board** — epics and tasks across Backlog, Planning, Approval, Working, Review and Done; blocked tasks stay in Working with a BLOCKED badge
+- **Plan approval** — review each implementation plan before code is written (CONTROL mode; SPEED and TURBO relax the gate)
+- **Agent launcher** — start architect, worker, QA and governor agents with your chosen CLI
+- **Chat and metrics** — agent chat channels with notifications, plus a metrics view
+- **Drag & drop** — change task status by dragging between columns
+- **Real-time updates** — live sync over WebSocket; the status bar shows the daemon connection
 
 ## Requirements
 
-- Node.js 18+
-- Project with `.moe/` folder initialized (or run `Moe: Connect to Daemon` to auto-init)
+- Node.js 18+ on PATH (the extension bundles the Moe daemon and MCP proxy and starts them for you)
+- One coding CLI installed and signed in: Claude Code, Codex, Gemini CLI or Grok Build
 
-## Getting Started
+## Getting started
 
-1. Install the extension from VS Code Marketplace
-2. Open a project with `.moe/` folder
-3. The extension auto-starts and connects to the daemon (if enabled)
-4. View the task board in the Moe sidebar
+1. Install the extension `yaront1111.moe-vscode` from the VS Code Marketplace or Open VSX.
+2. Open your project. If it contains `.moe/`, the extension connects automatically; otherwise run **Moe: Connect to Daemon** to create it.
+3. Open the **Moe** view in the activity bar: Task Board, Chat and Metrics.
+4. Create an epic and a task, drag the task to **Planning**, then run **Moe: Start Agent** (or **Moe: Start All Agents**).
 
-Tip: If the project is not initialized yet, run `Moe: Connect to Daemon` to auto-create `.moe/`.
-
-## Extension Settings
+## Extension settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `moe.daemon.host` | `127.0.0.1` | Daemon host address |
-| `moe.daemon.port` | `0` | Daemon port (0 = auto-detect) |
-| `moe.daemon.autoStart` | `true` | Auto-start the daemon when needed |
-| `moe.autoConnect` | `true` | Auto-connect when workspace has .moe |
+| `moe.daemon.port` | `0` | Daemon port (0 = auto-detect from `.moe/daemon.json`) |
+| `moe.daemon.autoStart` | `true` | Start the daemon when needed |
+| `moe.autoConnect` | `true` | Connect when the workspace contains `.moe` |
+| `moe.agentCommand` | `claude` | CLI used to launch agents: `claude`, `codex`, `gemini`, `grok`, or a custom CLI path |
+| `moe.chat.notifications.enabled` | `true` | Show notifications for agent chat messages |
+| `moe.chat.notifications.mutedChannels` | `[]` | Channel IDs to mute |
+| `moe.chat.notifications.soundEnabled` | `true` | Play a sound for new chat messages |
 
 ## Commands
 
-- `Moe: Connect to Daemon` - Connect to the Moe daemon
-- `Moe: Disconnect from Daemon` - Disconnect from daemon
-- `Moe: Refresh Board` - Refresh the task board
+`Moe: Connect to Daemon`, `Moe: Disconnect from Daemon`, `Moe: Reconnect to Daemon`, `Moe: Refresh Board`, `Moe: Create Task`, `Moe: Create Epic`, `Moe: Open Task Detail`, `Moe: Open Epic Detail`, `Moe: Review Plan`, `Moe: Archive Done Tasks`, `Moe: Start Agent`, `Moe: Start All Agents`, `Moe: Open Settings`, `Moe: Show Daemon Status`, `Moe: Show Activity Log`.
 
-## Status Columns
+The extension does not define default keyboard shortcuts.
 
-| Column | Description |
+## Status columns
+
+| Column | Task status |
 |--------|-------------|
-| **Backlog** | Tasks waiting to be planned |
-| **Planning** | Tasks being planned by architect agent |
-| **Approval** | Plans awaiting human approval |
-| **Working** | Tasks being implemented by worker agent |
-| **Review** | Tasks awaiting QA review |
-| **Done** | Completed tasks |
+| **Backlog** | `BACKLOG` — waiting for a human to move it to Planning |
+| **Planning** | `PLANNING` — an architect is writing the plan |
+| **Approval** | `AWAITING_APPROVAL` — plan waiting for human approval |
+| **Working** | `WORKING`, plus `BLOCKED` tasks shown with a badge |
+| **Review** | `REVIEW` — QA is checking the result |
+| **Done** | `DONE` — archive from the column header |
 
-## Keyboard Shortcuts
-
-The extension does not define default keyboard shortcuts. You can add your own in VS Code's Keyboard Shortcuts settings.
-
-## Known Issues
+## Known issues
 
 - Drag and drop may not work in remote workspaces
-- WebSocket connection requires daemon running on localhost
+- The daemon must be reachable at `moe.daemon.host` (localhost by default)
 
-## Release Notes
+## Release notes
 
-### 0.1.0
+### 0.8.0
 
-Initial release:
-- Kanban board with 6 status columns
-- Drag-and-drop task status changes
-- Task detail view with approve/reject/reopen
-- Status bar connection indicator
-- Auto-connect on workspace open
+- Headless Codex launch fixed for codex-cli 0.147 and later
+- Grok Build (xAI) supported as an agent CLI
+- Land on every exit: task-linked completion and checkpoint commits, with rescue refs when landing fails
+- Task dependencies with automatic unblock; daemon-managed shared resources
+
+Earlier versions: see [GitHub releases](https://github.com/yaront1111/Moe-s-Tavern/releases).
 
 ## Contributing
 

@@ -89,8 +89,14 @@ done
 
 # Env names.
 for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF \
-  MOE_DISABLE_QUALITY_GATE MOE_RESUME_MAX_ATTEMPTS; do
+  MOE_DISABLE_QUALITY_GATE MOE_RESUME_MAX_ATTEMPTS \
+  MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC; do
   require_both "env name" "$env_name"
+done
+
+# Launch-failure prose (the operator reads the same diagnosis from either wrapper).
+for prose in 'run the printed Command by hand' 'a CLI auto-update dropped a flag the wrapper passes'; do
+  require_both "launch-failure prose" "$prose"
 done
 
 # Agent-CLI vocabulary (claude / codex / gemini / grok): the per-CLI config
@@ -99,8 +105,32 @@ done
 for cfg_dir in '.codex/' '.gemini/' '.grok/'; do
   require_both "cli config dir" "$cfg_dir"
 done
-for cli_type in '"grok"'; do
+for cli_type in '"grok"' '"codex"'; do
   require_both "cli type" "$cli_type"
+done
+# Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX accepts
+# and the fallback warning, spelled identically.
+for codex_lit in 'read-only' 'workspace-write' 'danger-full-access' 'approvals_reviewer=user' MOE_CLI_ARGV_REJECTED MOE_DISABLE_ARGV_PROBE \
+  'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.' \
+  'rejects the wrapper'"'"'s launch argv'; do
+  require_both "codex vocabulary" "$codex_lit"
+done
+# Flags the installed CLIs no longer accept must not come back in either
+# wrapper (comment lines exempt): codex-cli 0.147+ rejects `--full-auto` with
+# exit 2 before any work, and the launch-failure backoff then relaunches forever.
+# Count instead of `grep -q`: under `pipefail` a -q reader exits on the first
+# match while the comment-stripping grep is still writing ~250 KB, the writer
+# dies with SIGPIPE (141), the pipeline status is 141 and the `if` is silently
+# false -- the guard would pass in exactly the case it exists for (measured
+# 0/40 detections for an injection at line 300 of either wrapper).
+count_code_hits() { # $1 = file, $2 = literal
+  grep -vE '^[[:space:]]*#' "$1" | grep -Fc -- "$2" || true
+}
+for gone in '--full-auto'; do
+  sh_hits="$(count_code_hits "$SH" "$gone")"
+  ps_hits="$(count_code_hits "$PS1" "$gone")"
+  [ "${sh_hits:-0}" -eq 0 ] || fail "removed codex flag '$gone' is still passed by moe-agent.sh ($sh_hits non-comment line(s))"
+  [ "${ps_hits:-0}" -eq 0 ] || fail "removed codex flag '$gone' is still passed by moe-agent.ps1 ($ps_hits non-comment line(s))"
 done
 for env_name in MOE_GROK_MODEL MOE_GROK_EFFORT MOE_GROK_MCP_STARTUP_TIMEOUT_SEC \
   GROK_CLAUDE_MCPS_ENABLED GROK_CURSOR_MCPS_ENABLED GROK_DISABLE_AUTOUPDATER MOE_TOOL_NAME_STYLE \

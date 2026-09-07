@@ -314,6 +314,30 @@ switch (tool) {
         "if defined FAKE_GROK_EXIT exit /b %FAKE_GROK_EXIT%`r`n" +
         "exit /b 0`r`n")
 
+    # Fake codex CLI, literally named codex.ps1: the wrapper strips the
+    # extension before matching the basename, and a .ps1 shim receives argv
+    # verbatim (no cmd.exe re-quoting of the prose prompt codex gets as a
+    # positional). Records argv one per line to FAKE_CODEX_ARGV_FILE and exits
+    # with FAKE_CODEX_EXIT (0 by default).
+    # Fake codex CLI, literally named codex.cmd (basename match). A native .cmd front
+    # that runs a child powershell -File codex-impl.ps1 with the same argv: the child
+    # is a real process, so its stderr and exit code reach the wrapper the way the real
+    # codex.exe's do (an in-process .ps1 shim's [Console]::Error bypasses 2>&1). The
+    # impl appends argv one token per line to FAKE_CODEX_ARGV_FILE (the wrapper may
+    # invoke codex several times per launch: the argv probe, --version, the launch;
+    # each run removes the file), answers --version, and with FAKE_CODEX_REJECT_ARGV=1
+    # fails every invocation the way clap does for a flag the CLI no longer accepts.
+    $codexImpl = Join-Path $tempRoot 'codex-impl.ps1'
+    Set-Content -Path $codexImpl -Encoding ASCII -Value ("`$args | Add-Content -Path `$env:FAKE_CODEX_ARGV_FILE`r`n" +
+        "if (`$env:FAKE_CODEX_REJECT_ARGV -eq '1') { [Console]::Error.WriteLine(`"error: unexpected argument '--sandbox' found`"); exit 2 }`r`n" +
+        "if (`$args -contains '--version') { 'codex-cli 0.0.0-fake'; exit 0 }`r`n" +
+        "if (`$env:FAKE_CODEX_EXIT) { exit [int]`$env:FAKE_CODEX_EXIT }`r`n" +
+        "exit 0`r`n")
+    $codexCmd = Join-Path $tempRoot 'codex.cmd'
+    Set-Content -Path $codexCmd -Encoding ASCII -Value ("@echo off`r`n" +
+        "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0codex-impl.ps1`" %*`r`n" +
+        "exit /b %ERRORLEVEL%`r`n")
+
     # File-creating fake CLIs. The ps1 claude launch does NOT cd into the
     # project (it binds via MOE_PROJECT_PATH), so every path is written via
     # %MOE_PROJECT_PATH% — a relative path would land in the harness cwd.
@@ -470,6 +494,18 @@ switch (tool) {
             }
             function Get-RescueRefs([string]$dir, [string]$taskId = 'task-postflight') {
                 return @(& git -C $dir for-each-ref --format='%(refname)' "refs/moe/rescue/$taskId/" 2>$null | Where-Object { $_ })
+            }
+            # SHA-256 over bytes the harness already reads. Get-FileHash threw on the GitHub
+            # windows-latest runner under Windows PowerShell 5.1 (Scenario Y, first CI run of
+            # this harness) while the same file had just been ReadAllText/ReadAllBytes'd.
+            function Get-Sha256Hex([string]$path) {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    for ($attempt = 1; ; $attempt++) {
+                        try { return ([System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($path))) -replace '-', '') }
+                        catch [System.IO.IOException] { if ($attempt -ge 5) { throw }; Start-Sleep -Milliseconds 300 }
+                    }
+                } finally { $sha.Dispose() }
             }
             function Get-HeadSubject([string]$dir, [string]$rev = 'HEAD') {
                 return ((& git -C $dir log -1 --format=%s $rev 2>$null) -join '')
@@ -1371,7 +1407,7 @@ switch (tool) {
                     if ($scopeYChat -notlike '*worker session ended: task=task-postflight (CLI exit=3)*') { Write-Host $scopeYChat; throw 'SCENARIO Y FAILED: the fake grok exit 3 must propagate into the session-ended line' }
                     if ((Get-HeadSubject $scopeYDir) -ne 'wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=3]') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: unexpected checkpoint subject [$(Get-HeadSubject $scopeYDir)]" }
                     if ((Get-CommittedPaths $scopeYDir) -ne 'owned-a.txt') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: only owned-a.txt may land; got [$(Get-CommittedPaths $scopeYDir)]" }
-                    $scopeYHash1 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+                    $scopeYHash1 = (Get-Sha256Hex $scopeYConfig)
 
                     # Run 2: byte-identical re-write; an explicit model + effort
                     # reach argv; nothing new to land.
@@ -1384,7 +1420,7 @@ switch (tool) {
                         Remove-Item Env:MOE_GROK_MODEL -ErrorAction SilentlyContinue
                         Remove-Item Env:MOE_GROK_EFFORT -ErrorAction SilentlyContinue
                     }
-                    $scopeYHash2 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+                    $scopeYHash2 = (Get-Sha256Hex $scopeYConfig)
                     if ($scopeYHash1 -ne $scopeYHash2) { Write-Host ([System.IO.File]::ReadAllText($scopeYConfig)); throw 'SCENARIO Y FAILED: a second run must leave .grok/config.toml byte-identical' }
                     $scopeYArgvText2 = Get-Content -Raw -Path $scopeYArgv
                     if (-not $scopeYArgvText2.Contains('-m grok-4-fast') -or -not $scopeYArgvText2.Contains('--effort high')) { Write-Host $scopeYArgvText2; throw 'SCENARIO Y FAILED: MOE_GROK_MODEL / MOE_GROK_EFFORT must reach argv as -m / --effort' }
@@ -1427,11 +1463,165 @@ switch (tool) {
                 $scopeScenariosRun++
                 Write-Host '[scenario Y] ok'
 
+                # Scenario Z — codex CLI headless launch. A fake codex.ps1
+                # records its argv. codex-cli 0.147+ rejects `--full-auto`
+                # (`error: unexpected argument '--full-auto' found`, exit 2
+                # before any work — which the launch-failure backoff then
+                # relaunches forever); `codex exec` already runs with
+                # approval_policy = never, so the wrapper passes only
+                # `--sandbox <MOE_CODEX_SANDBOX|workspace-write>`. Pins: a
+                # worker defaults to headless `exec -C <project>` with the
+                # per-seat -c overrides and never --full-auto; --sandbox
+                # follows `exec`; MOE_CODEX_SANDBOX reaches argv verbatim;
+                # `inherit` drops the flag; an unknown value warns and falls
+                # back; a fast non-zero exit propagates and prints the argv
+                # hint; .codex/config.toml never lands (DENY tier); an
+                # architect gets the TUI (no exec) unless -CodexExec.
+                Write-Host '[scenario Z] codex: headless exec argv without --full-auto, MOE_CODEX_SANDBOX, exit propagated, config never landed, polarity'
+                $scopeZDir = Join-Path $tempRoot 'scope-z'
+                New-ScopeProject $scopeZDir @('owned-a.txt') -Status 'WORKING'
+                Set-Content -Path (Join-Path $scopeZDir 'owned-a.txt') -Value 'owned-a'
+                $scopeZConfig = Join-Path $scopeZDir '.codex\config.toml'
+                $scopeZArgv = Join-Path $tempRoot 'scope-z-argv.txt'
+                function Invoke-CodexWrapper([string]$outFile, [string]$role = 'worker', [string[]]$extra = @()) {
+                    Remove-Item -LiteralPath $scopeZArgv -Force -ErrorAction SilentlyContinue
+                    return (Invoke-WrapperProcess (@('-Project', $scopeZDir, '-WorkerId', "$role-scope-z", '-Role', $role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $codexCmd, '-NoLoop', '-PollInterval', '0') + $extra) $outFile)
+                }
+                function Get-CodexArgv() {
+                    if (-not (Test-Path -LiteralPath $scopeZArgv)) { throw 'SCENARIO Z FAILED: the fake codex was never launched (no argv file)' }
+                    return @(Get-Content -Path $scopeZArgv)
+                }
+                $scopeZPrevSerena = $env:MOE_SERENA_PATH
+                $scopeZPrevOperatorEnv = @{}
+                foreach ($name in @('MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC', 'MOE_DAEMON_HOST')) {
+                    $scopeZPrevOperatorEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+                    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+                }
+                $env:FAKE_TASK_STATUS = 'WORKING'
+                $env:FAKE_CODEX_ARGV_FILE = $scopeZArgv
+                $env:MOE_SERENA_PATH = $trueCmd
+                try {
+                    # Run 1: worker default polarity = headless exec, fake exit 5.
+                    $env:FAKE_CODEX_EXIT = '5'
+                    $scopeZOut = Join-Path $tempRoot 'scope-z.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut) $scopeZOut
+                    } finally { Remove-Item Env:FAKE_CODEX_EXIT -ErrorAction SilentlyContinue }
+                    $scopeZText = Get-Content -Raw -Path $scopeZOut
+                    $scopeZArgs = Get-CodexArgv
+                    if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
+                    # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
+                    # satisfied by the `-c` seat overrides that precede every codex launch.
+                    foreach ($flag in @('exec', '-C', '--sandbox', 'workspace-write', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                        if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
+                    }
+                    if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
+                    $scopeZSeatFile = @($scopeZArgs | Where-Object { $_ -like 'model_instructions_file=*' })
+                    # The fake appends argv per invocation (probe, then launch), so the override
+                    # appears once per invocation; every occurrence must point under $env:TEMP.
+                    $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
+                    if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
+                    if (-not $scopeZText.Contains('--sandbox workspace-write') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox workspace-write' }
+                    if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
+                    if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
+                    $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'startup_timeout_sec = 120', 'model_instructions_file = "agent-instructions.md"', 'model_reasoning_effort = "xhigh"')) {
+                        if (-not $scopeZToml.Contains($needle)) { Write-Host $scopeZToml; throw "SCENARIO Z FAILED: .codex/config.toml must contain [$needle]" }
+                    }
+                    if (-not (Test-Path -LiteralPath (Join-Path $scopeZDir '.codex\agent-instructions.md'))) { throw 'SCENARIO Z FAILED: .codex/agent-instructions.md was not written' }
+                    $scopeZChat = Get-Content -Raw -Path (Join-Path $scopeZDir '.moe\messages\chan-general.jsonl')
+                    if ($scopeZChat -notlike '*worker session ended: task=task-postflight (CLI exit=5)*') { Write-Host $scopeZChat; throw 'SCENARIO Z FAILED: the fake codex exit 5 must propagate into the session-ended line' }
+                    if ((Get-HeadSubject $scopeZDir) -ne 'wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=5]') { Write-Host $scopeZText; throw "SCENARIO Z FAILED: unexpected checkpoint subject [$(Get-HeadSubject $scopeZDir)]" }
+                    & git -C $scopeZDir cat-file -e HEAD:.codex/config.toml 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { throw 'SCENARIO Z FAILED: .codex/config.toml reached HEAD' }
+
+                    # Run 2: MOE_CODEX_SANDBOX reaches argv verbatim.
+                    $env:MOE_CODEX_SANDBOX = 'danger-full-access'
+                    $scopeZOut2 = Join-Path $tempRoot 'scope-z-2.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut2 'worker' @('-CodexExec')) $scopeZOut2
+                    } finally { Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue }
+                    $scopeZArgs2 = Get-CodexArgv
+                    if ($scopeZArgs2 -notcontains 'danger-full-access' -or $scopeZArgs2 -contains 'workspace-write') { Write-Host ($scopeZArgs2 -join ' '); throw 'SCENARIO Z FAILED: MOE_CODEX_SANDBOX=danger-full-access must reach argv as --sandbox danger-full-access' }
+
+                    # Run 3: inherit drops the flag.
+                    $env:MOE_CODEX_SANDBOX = 'inherit'
+                    $scopeZOut3 = Join-Path $tempRoot 'scope-z-3.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut3 'worker' @('-CodexExec')) $scopeZOut3
+                    } finally { Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue }
+                    $scopeZArgs3 = Get-CodexArgv
+                    if ($scopeZArgs3 -contains '--sandbox' -or $scopeZArgs3 -contains '--full-auto' -or $scopeZArgs3 -notcontains 'exec') { Write-Host ($scopeZArgs3 -join ' '); throw 'SCENARIO Z FAILED: MOE_CODEX_SANDBOX=inherit must launch exec with no --sandbox flag' }
+
+                    # Run 4: an unknown value warns and falls back.
+                    $env:MOE_CODEX_SANDBOX = 'yolo'
+                    $scopeZOut4 = Join-Path $tempRoot 'scope-z-4.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut4 'worker' @('-CodexExec')) $scopeZOut4
+                    } finally { Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue }
+                    $scopeZText4 = Get-Content -Raw -Path $scopeZOut4
+                    if (-not $scopeZText4.Contains("MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.")) { Write-Host $scopeZText4; throw 'SCENARIO Z FAILED: an unknown MOE_CODEX_SANDBOX must warn and fall back' }
+                    if ((Get-CodexArgv) -notcontains 'workspace-write') { throw 'SCENARIO Z FAILED: the fallback sandbox must be workspace-write' }
+
+                    # Run 5: an architect defaults to the TUI (no exec / --sandbox).
+                    $scopeZOut5 = Join-Path $tempRoot 'scope-z-5.out'
+                    Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut5 'architect') $scopeZOut5
+                    $scopeZArgs5 = Get-CodexArgv
+                    if ($scopeZArgs5 -contains 'exec' -or $scopeZArgs5 -contains '--sandbox' -or $scopeZArgs5 -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
+                    if ($scopeZArgs5 -cnotcontains '-C') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: the codex TUI launch must still carry -C <project>' }
+
+                    # Run 6: argv probe. A CLI that rejects the launch argv (the
+                    # --full-auto class of break) must stop the seat with
+                    # MOE_CLI_ARGV_REJECTED + a #general escalation and never
+                    # launch the prompt, instead of relaunch-looping.
+                    $env:FAKE_CODEX_REJECT_ARGV = '1'
+                    $scopeZOut6 = Join-Path $tempRoot 'scope-z-6.out'
+                    try {
+                        $scopeZCode6 = Invoke-CodexWrapper $scopeZOut6 'worker' @('-CodexExec')
+                    } finally { Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue }
+                    $scopeZText6 = Get-Content -Raw -Path $scopeZOut6
+                    if ($scopeZCode6 -eq 0) { Write-Host $scopeZText6; throw 'SCENARIO Z FAILED: a rejected argv must make the wrapper exit non-zero' }
+                    if (-not $scopeZText6.Contains('MOE_CLI_ARGV_REJECTED') -or -not $scopeZText6.Contains("unexpected argument '--sandbox' found")) { Write-Host $scopeZText6; throw "SCENARIO Z FAILED: expected MOE_CLI_ARGV_REJECTED with the CLI's own error line" }
+                    if ($scopeZText6.Contains('[launch-failure]')) { Write-Host $scopeZText6; throw 'SCENARIO Z FAILED: a rejected argv must not reach the launch-failure backoff' }
+                    $scopeZArgs6 = Get-CodexArgv
+                    if ($scopeZArgs6 -cnotcontains '--help' -or ($scopeZArgs6 | Where-Object { $_ -like '*Task task-postflight is claimed*' })) { Write-Host ($scopeZArgs6 -join ' '); throw 'SCENARIO Z FAILED: the probe must run the real argv plus --help and the prompt must never be launched' }
+                    if ((Get-Content -Raw -Path (Join-Path $scopeZDir '.moe\messages\chan-general.jsonl')) -notlike '*MOE_CLI_ARGV_REJECTED*') { throw 'SCENARIO Z FAILED: a rejected argv must be escalated to #general' }
+
+                    # Run 7: MOE_DISABLE_ARGV_PROBE=1 skips the probe; the rejection
+                    # then surfaces through the ordinary launch-failure path.
+                    $env:FAKE_CODEX_REJECT_ARGV = '1'
+                    $env:MOE_DISABLE_ARGV_PROBE = '1'
+                    $scopeZOut7 = Join-Path $tempRoot 'scope-z-7.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut7 'worker' @('-CodexExec')) $scopeZOut7
+                    } finally {
+                        Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue
+                        Remove-Item Env:MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue
+                    }
+                    $scopeZText7 = Get-Content -Raw -Path $scopeZOut7
+                    if ($scopeZText7.Contains('MOE_CLI_ARGV_REJECTED') -or -not $scopeZText7.Contains('[launch-failure]')) { Write-Host $scopeZText7; throw 'SCENARIO Z FAILED: MOE_DISABLE_ARGV_PROBE=1 must skip the probe and fall through to the launch-failure path' }
+                    $scopeZArgs7 = Get-CodexArgv
+                    if ($scopeZArgs7 -ccontains '--help' -or -not ($scopeZArgs7 | Where-Object { $_ -like '*Task task-postflight is claimed*' })) { Write-Host ($scopeZArgs7 -join ' '); throw 'SCENARIO Z FAILED: with the probe disabled the real prompt must be launched and no --help probe issued' }
+                } finally {
+                    Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_CODEX_ARGV_FILE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_CODEX_EXIT -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue
+                    if ($null -ne $scopeZPrevSerena) { $env:MOE_SERENA_PATH = $scopeZPrevSerena } else { Remove-Item Env:MOE_SERENA_PATH -ErrorAction SilentlyContinue }
+                    foreach ($name in $scopeZPrevOperatorEnv.Keys) {
+                        if ($null -ne $scopeZPrevOperatorEnv[$name]) { [Environment]::SetEnvironmentVariable($name, $scopeZPrevOperatorEnv[$name]) } else { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+                    }
+                    $env:FAKE_TASK_STATUS = 'REVIEW'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario Z] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 24) {
-                    throw "Expected 24 commit-scope scenarios (A-V, X, Y); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 25) {
+                    throw "Expected 25 commit-scope scenarios (A-V, X-Z); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

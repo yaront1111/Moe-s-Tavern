@@ -1,12 +1,13 @@
 # Moe's Tavern
 
-**Turn your coding agents into a team you can steer.**
+**An AI agent task board. Turn your coding agents into a team you can steer.**
 
 Run Claude Code, Codex, Gemini CLI, and Grok Build through a shared task board in your IDE. Give agents clear roles, review their plans, and follow the work through implementation and QA.
 
 [![CI](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
+![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Grok%20Build-6f42c1.svg)
 
 **[Get started](#get-started) · [See the workflow](#how-it-works) · [Features](#what-you-get) · [Documentation](#documentation)**
 
@@ -62,7 +63,17 @@ For a first task, ask Moe to document your project's setup and test commands. Re
 
 The first-run path below uses **JetBrains and one small task**. The [full walkthrough](docs/GETTING_STARTED.md) includes platform details and troubleshooting.
 
-### 1. Download and install
+### Install from a marketplace (v0.8.0 and later)
+
+- **JetBrains** — **Settings / Preferences → Plugins → Marketplace**, search for **Moe's Tavern**, install, and restart the IDE.
+- **VS Code / Antigravity** — install the extension `yaront1111.moe-vscode` (VS Code Marketplace or Open VSX).
+- **Daemon and proxy only** — `npm install -g moe-daemon moe-proxy`, then `moe-daemon init --project .` inside your project (creates `.moe/` and keeps the daemon running in that terminal).
+
+The IDE plugins bundle their own daemon and proxy; the npm packages are for terminal-only use. You still need one coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build) installed and signed in, and Node.js on PATH. After a marketplace install, continue at step 2 below.
+
+> These listings go live with the **v0.8.0** release. Until that tag ships, use **Build from source** below.
+
+### 1. Build from source
 
 Download the [source ZIP](https://github.com/yaront1111/Moe-s-Tavern/archive/refs/heads/main.zip), extract it, and open a terminal in the extracted Moe folder. You can also clone this repository.
 
@@ -96,11 +107,11 @@ Keep the Moe folder after installation. Open a **new terminal**, go to your targ
 
 ### 2. Open the board
 
-1. In JetBrains, open **Settings / Preferences → Plugins → gear icon → Install Plugin from Disk**.
-2. Select the ZIP in `moe-jetbrains/build/distributions/` and restart the IDE.
+1. If you built from source: in JetBrains, open **Settings / Preferences → Plugins → gear icon → Install Plugin from Disk**.
+2. Select the ZIP in `moe-jetbrains/build/distributions/` and restart the IDE. (Marketplace installs skip 1–2.)
 3. Open **your target Git project**, then open the **Moe** tool window. The plugin initializes `.moe/` and starts the daemon. Wait for **Connected**.
 
-Use the freshly built plugin so it matches your checkout. Published release downloads may contain an older implementation.
+Marketplace builds and the ZIP / `.vsix` attached to each [GitHub Release](https://github.com/yaront1111/Moe-s-Tavern/releases) are built from the release tag. If you built from source, install the plugin you built so it matches your checkout.
 
 ### 3. Run your first task
 
@@ -138,7 +149,7 @@ These examples use Claude Code. For Codex, add `-Command codex` on Windows or `-
 <details>
 <summary>Use VS Code / Antigravity</summary>
 
-After running the installer above, open a new terminal in the Moe folder and build the [VS Code / Antigravity extension](moe-vscode/README.md):
+From v0.8.0, install `yaront1111.moe-vscode` from the VS Code Marketplace or Open VSX. To build the [VS Code / Antigravity extension](moe-vscode/README.md) from source instead, run the installer above, then open a new terminal in the Moe folder:
 
 **Windows:**
 
@@ -186,6 +197,7 @@ Customize [role guidance](docs/roles/) and [agent skills](docs/skills/) for your
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | [MCP tools](docs/MCP_SERVER.md) |
 | [Configuration](docs/CONFIGURATION.md) | [Data schema](docs/SCHEMA.md) |
 | [Memory and Serena](docs/MEMORY.md) | [Development guide](docs/DEVELOPMENT.md) |
+| [Contributing](CONTRIBUTING.md) | [Releasing](docs/RELEASING.md) · [JetBrains Marketplace](docs/MARKETPLACE.md) |
 
 Role guides: [Architect](docs/roles/architect.md) · [Worker](docs/roles/worker.md) · [QA](docs/roles/qa.md) · [Governor](docs/roles/governor.md).
 

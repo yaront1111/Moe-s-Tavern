@@ -56,7 +56,9 @@ $required = [ordered]@{
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')
     'settings keys' = @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState', 'commitHooks', 'attribution', 'undeclared', 'contested', 'exclude', 'qualityGate', 'qualityGateScope', 'consolidationBranch')
     'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS',
-        'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC')
+        'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
+        'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC')
+    'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
     'RPC tools' = @('get_commit_scope', 'record_commit')
     'context fields' = @('isEpicFinal')
@@ -65,7 +67,10 @@ $required = [ordered]@{
     # both wrappers - its config dir is a DENY-tier attribution prefix, its
     # cliType literal exists, and its mode/config banners are grep-stable.
     'cli config dirs' = @('.codex/', '.gemini/', '.grok/')
-    'cli types' = @('"grok"')
+    'cli types' = @('"grok"', '"codex"')
+    # Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX
+    # accepts and the fallback warning, spelled identically.
+    'codex vocabulary' = @('read-only', 'workspace-write', 'danger-full-access', 'approvals_reviewer=user', 'MOE_CLI_ARGV_REJECTED', 'MOE_DISABLE_ARGV_PROBE', 'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.', "rejects the wrapper's launch argv")
     'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive', 'Grok folder trust granted:', 'trusted_folders.toml', 'moe__moe_<name>', 'tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }')
 }
 foreach ($group in $required.Keys) {
@@ -82,6 +87,17 @@ foreach ($group in $required.Keys) {
 foreach ($deferred in @('recoverOrphanBaselines', 'parkUnassignedBlocked')) {
     if ($ps1.IndexOf($deferred, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("deferred setting '$deferred' is referenced by moe-agent.ps1") }
     if ($sh.IndexOf($deferred, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("deferred setting '$deferred' is referenced by moe-agent.sh") }
+}
+
+# 4. Flags the installed CLIs no longer accept must not come back in either
+#    wrapper (comment lines exempt): codex-cli 0.147+ rejects `--full-auto`
+#    with exit 2 before any work, and the launch-failure backoff then
+#    relaunches forever.
+$ps1Code = @(Get-Content -LiteralPath $ps1Path | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+$shCode = @(Get-Content -LiteralPath $shPath | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+foreach ($gone in @('--full-auto')) {
+    if ($ps1Code.IndexOf($gone, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("removed codex flag '$gone' is still passed by moe-agent.ps1") }
+    if ($shCode.IndexOf($gone, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("removed codex flag '$gone' is still passed by moe-agent.sh") }
 }
 
 if ($failures.Count -gt 0) {

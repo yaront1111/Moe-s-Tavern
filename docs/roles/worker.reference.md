@@ -43,6 +43,22 @@ moe.propose_rail {
 
 Don't use this to dodge inconvenient rails — adversarial-self-review and receiving-code-review will catch it, and QA will reject. The proposal lands in `.moe/proposals/`; once approved, retry the step.
 
+## Filing a bug as a card
+
+A bug outside your step's scope is a new card, never an in-line fix — the plan's scope is what QA reviews and what the wrapper attributes. Example (`workerId` is proxy-injected, so `createdBy` resolves to `WORKER`; the row lands in BACKLOG, human-gated, and every `warnings[]` entry is advisory):
+
+```
+moe.create_task {
+  epicId:           "<your task's epicId>",
+  title:            "bug: retry budget ignored when RETRY_MAX is unset",
+  description:      "Repro: unset RETRY_MAX, run `npm test -- retry` — expected 5 attempts, got 1 (src/retry.ts:41). Found from task-<yours> step 2.",
+  definitionOfDone: ["`npm test -- retry` green with RETRY_MAX unset"],
+  dependsOn:        ["<your taskId>"]
+}
+```
+
+Include `dependsOn` only when the fix must land after your task; otherwise omit it. Two outcomes: it does not block you → note the new task id in `complete_step.note` and continue the step; it does → `moe.report_blocked { taskId, reason, blockedOnTaskIds: ["<bug task id>"] }` instead (your seat is freed, and your task auto-unblocks when the bug is DONE). Never both `dependsOn: [<your taskId>]` on the bug and `blockedOnTaskIds` on it from your task — that is a dependency cycle; the daemon drops the id with a `DEPENDENCY_CYCLE` warning.
+
 ## Commits, checkpoints and rescue refs
 
 You never run `git commit` for a task. The wrapper lands your work after the CLI exits — on **every** exit, not only on success:

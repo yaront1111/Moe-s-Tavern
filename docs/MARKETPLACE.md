@@ -1,40 +1,34 @@
 # JetBrains Marketplace Submission Guide
 
-This guide documents how to publish the Moe plugin to the JetBrains Marketplace.
+How the Moe's Tavern plugin (`com.moe.jetbrains`) is published to the JetBrains Marketplace. The end-to-end release procedure and the CI secrets for every channel (npm, VS Code Marketplace, Open VSX, JetBrains) are in [RELEASING.md](RELEASING.md).
 
 ## Prerequisites
 
-- JetBrains Marketplace vendor account
+- JetBrains Marketplace vendor account (https://plugins.jetbrains.com/)
 - Plugin built and tested locally
 - Screenshots of key features
 
-## Building the Plugin
+## Building the plugin
 
-Use the Gradle wrapper (cross-platform):
+The plugin build hard-fails unless the daemon **and** proxy each have `dist/` and `node_modules/`:
 
 ```bash
 # Mac/Linux
-cd packages/moe-daemon
-npm install
-npm run build
-
-cd moe-jetbrains
-./gradlew buildPlugin
+(cd packages/moe-daemon && npm install && npm run build)
+(cd packages/moe-proxy  && npm install && npm run build)
+cd moe-jetbrains && ./gradlew buildPlugin
 
 # Windows
-cd packages\\moe-daemon
-npm install
-npm run build
-
-cd moe-jetbrains
-.\gradlew.bat buildPlugin
+cd packages\moe-daemon && npm install && npm run build && cd ..\..
+cd packages\moe-proxy  && npm install && npm run build && cd ..\..
+cd moe-jetbrains && .\gradlew.bat buildPlugin
 ```
 
-The plugin zip will be created at `build/distributions/moe-jetbrains-0.1.0.zip`.
+The ZIP is written to `moe-jetbrains/build/distributions/moe-jetbrains-<version>.zip` (for example `moe-jetbrains-0.8.0.zip`; the version comes from `moe-jetbrains/build.gradle.kts`).
 
-## Required Assets
+## Required assets
 
-### Plugin Icon
+### Plugin icon
 
 Located at `src/main/resources/META-INF/`:
 - `pluginIcon.svg` - 40x40 SVG for light theme
@@ -56,84 +50,66 @@ Screenshot requirements:
 
 ### Description
 
-The plugin description is in `plugin.xml` using CDATA HTML format. Keep it:
-- Under 700 characters for the short description
-- Include feature list, compatibility info, and links
+The listing name, description and change notes come from `plugin.xml` (`<name>`, `<description>`, `<change-notes>`, CDATA HTML). Keep the description accurate to the current product and include the feature list, compatibility info, and links.
 
-## Submission Process
+## Manual submission (first upload)
 
-1. **Create Vendor Account**
-   - Go to https://plugins.jetbrains.com/
-   - Sign in with JetBrains account
-   - Create vendor profile
+1. **Create vendor account** - sign in at https://plugins.jetbrains.com/ and create a vendor profile
+2. **Upload plugin** - "Upload Plugin", select the ZIP from `build/distributions/`, fill in metadata
+3. **Add screenshots** - 2-4 screenshots with captions
+4. **Submit for review** - the first version of a new plugin goes through JetBrains moderation (typically 1-3 business days)
 
-2. **Upload Plugin**
-   - Click "Upload Plugin"
-   - Select the zip file from `build/distributions/`
-   - Fill in additional metadata
+`./gradlew publishPlugin` can also create the listing on the first upload; it is still moderated the same way. Later versions publish without moderation.
 
-3. **Add Screenshots**
-   - Upload 2-4 screenshots
-   - Add captions describing each feature
+## Automated publishing
 
-4. **Submit for Review**
-   - Review all information
-   - Submit for JetBrains review
-   - Wait for approval (typically 1-3 business days)
+The release workflow publishes when the `JETBRAINS_MARKETPLACE_TOKEN` secret is configured:
 
-## Automated Publishing
+1. Generate a token at https://plugins.jetbrains.com/author/me/tokens
+2. Add it as the GitHub secret `JETBRAINS_MARKETPLACE_TOKEN`
+3. Push a release tag (e.g. `v0.8.0`) - see [RELEASING.md](RELEASING.md)
 
-The release workflow can publish automatically when `JETBRAINS_MARKETPLACE_TOKEN` is configured:
+The workflow exports the secret as `PUBLISH_TOKEN`, which the IntelliJ Platform Gradle Plugin reads by default, and runs:
 
-1. Generate token at https://plugins.jetbrains.com/author/me/tokens
-2. Add as GitHub secret: `JETBRAINS_MARKETPLACE_TOKEN`
-3. Create a new git tag (e.g., `v0.1.0`) to trigger release
-
-The workflow runs:
 ```bash
 ./gradlew publishPlugin
 ```
 
-## Version Updates
+## Version updates
 
-When releasing a new version:
-
-1. Update version in `build.gradle.kts`
-2. Update `<change-notes>` in `plugin.xml`
-3. Create git tag
-4. Release workflow handles the rest
+Follow [RELEASING.md](RELEASING.md): bump every package version (including `version` in `build.gradle.kts`), update `<change-notes>` in `plugin.xml`, run `node scripts/verify-release-version.mjs v<version>`, then push the tag.
 
 ## Compatibility
 
-Current compatibility range:
 - **Since Build**: 231 (IntelliJ 2023.1+)
-- **Until Build**: Not specified (compatible with future versions)
-
-Tested on:
-- IntelliJ IDEA Community/Ultimate
-- PyCharm Community/Professional
-- WebStorm
-- All 2023.1+ versions
+- **Until Build**: not set (no upper bound)
+- Depends only on `com.intellij.modules.platform` (plus the optional terminal plugin), so it loads in any IntelliJ-based IDE
 
 ## Troubleshooting
 
-### Build Fails
+### Build fails
 
 ```bash
-# Clean and rebuild
 ./gradlew clean buildPlugin
 ```
 
-### Plugin Not Loading
+If the error says the bundled daemon or proxy dist is missing or stale, rebuild them first (see above).
 
-Check IDE version compatibility in `build.gradle.kts`:
+### Plugin not loading
+
+Check the compatibility range in `build.gradle.kts`:
+
 ```kotlin
-patchPluginXml {
-    sinceBuild.set("231")
-    untilBuild.set("")
+intellijPlatform {
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = "231"
+            untilBuild = provider { null }
+        }
+    }
 }
 ```
 
-### Token Not Working
+### Token not working
 
-Ensure token has "Plugin Upload" permission and is not expired.
+Ensure the token has the "Plugin Upload" permission and is not expired.

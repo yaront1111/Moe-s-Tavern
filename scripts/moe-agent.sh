@@ -5151,16 +5151,82 @@ $PROMPT_BODY"
         fi
 
         if [ "$CODEX_EXEC" = true ]; then
-            # Non-interactive exec mode
+            # Non-interactive exec mode: codex -c <seat overrides> -c approvals_reviewer=user exec -C <project> [--sandbox <mode>] "<prompt>"
+            # Never pass --full-auto here: codex-cli 0.147+ rejects it (`error: unexpected
+            # argument '--full-auto' found`, exit 2 before any work -- a relaunch loop the
+            # launch-failure backoff misreads as a provider/credential problem). openai/codex
+            # #20133 (2026-04-29) deprecated it in `exec` and dropped it from the TUI; #36054
+            # hard-removed it in 0.147.0 (0.130-0.146 accepted it with a warning), and the
+            # standalone codex installer auto-updates. The fleet only hit it on 2026-09-07
+            # because 8b632b5 (2026-09-06) made worker/qa seats default to `codex exec`; before
+            # that this branch never ran. `codex exec` already runs with approval_policy = never
+            # in headless mode (kept by the reviewer pin below), so the sandbox flag alone carries
+            # what --full-auto meant. MOE_CODEX_SANDBOX picks the sandbox (read-only |
+            # workspace-write | danger-full-access; default workspace-write); `inherit` omits the
+            # flag so the merged ~/.codex + <project>/.codex config decides -- read-only when
+            # neither sets sandbox_mode. On Windows codex enforces workspace-write only with
+            # `[windows] sandbox = "unelevated"|"elevated"` in ~/.codex/config.toml; without it
+            # exec silently runs read-only and a headless worker cannot write files. Measured
+            # 2026-09-07: 0.146.0 accepts, 0.147.0+ rejects, 0.153.4 installed.
+            # The ps1 twin resolves the same env the same way; parity-check pins the vocabulary.
+            CODEX_SANDBOX_MODE="$(printf '%s' "${MOE_CODEX_SANDBOX:-workspace-write}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            CODEX_SANDBOX_ARGS=()
+            case "$CODEX_SANDBOX_MODE" in
+                inherit) CODEX_SANDBOX_ARGS=() ;;
+                read-only|workspace-write|danger-full-access) CODEX_SANDBOX_ARGS=(--sandbox "$CODEX_SANDBOX_MODE") ;;
+                *)
+                    echo -e "${YELLOW}[WARN]${NC} MOE_CODEX_SANDBOX='${MOE_CODEX_SANDBOX:-}' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write."
+                    CODEX_SANDBOX_ARGS=(--sandbox workspace-write) ;;
+            esac
+            CODEX_SANDBOX_BANNER=""
+            if [ "${#CODEX_SANDBOX_ARGS[@]}" -gt 0 ]; then CODEX_SANDBOX_BANNER=" ${CODEX_SANDBOX_ARGS[*]}"; fi
+            # --full-auto also kept approval_policy = never when the operator's config resolves
+            # approvals_reviewer = "auto_review" (codex 0.130-0.146 set
+            # preserve_headless_approval_policy for it; 0.147+ does so only for
+            # --dangerously-bypass-approvals-and-sandbox). Pin the reviewer to `user` for the
+            # headless seat so exec keeps its never override: under auto_review escalations go
+            # to the guardian reviewer, approved commands run outside the sandbox, and any
+            # approval that reaches the exec client is rejected (exit 1). `user` is not valid
+            # TOML, so codex keeps the literal string; pre-0.130 ignores the unknown key.
+            CODEX_EXEC_OVERRIDES=(-c approvals_reviewer=user)
+            # Argv pre-flight, once per wrapper process. The standalone codex installer
+            # auto-updates, and a flag it stops accepting fails at parse with exit 2 before
+            # any work -- the launch-failure backoff would then relaunch forever (measured
+            # 2026-09-07 with --full-auto, removed in codex-cli 0.147). `--help` makes clap
+            # short-circuit before any model call, so the real argv plus --help proves the
+            # flags parse for free. A parse error is permanent for this install: escalate
+            # once and exit (the EXIT trap deregisters the seat and returns the task to the
+            # queue) instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips the probe.
+            if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
+                CODEX_ARGV_PROBED=true
+                PROBE_EXIT=0
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
+                    PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
+                    [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
+                    CODEX_VERSION="$("$COMMAND_BIN" --version 2>&1 | head -n1)"
+                    echo -e "${RED}[ERROR]${NC} MOE_CLI_ARGV_REJECTED: the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+                    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+                        ARGV_MSG="@governors $WORKER_ID: MOE_CLI_ARGV_REJECTED - the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv ($PROBE_LINE). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
+                        moe_rpc chat_send \
+                            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ARGV_MSG" 2>/dev/null)" \
+                            > /dev/null 2>&1 || true
+                    fi
+                    stop_heartbeat_sidecar
+                    exit 1
+                fi
+            fi
             echo -e "Starting Codex (exec, headless)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
+            # The banner is the line the launch-failure hint tells the operator to re-run by
+            # hand, so it carries every argv token the real launch does (ps1 twin parity).
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID ${CODEX_EXEC_OVERRIDES[*]} exec -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             set +e
 
             # Per-seat workerId on argv (PS twin parity): codex does not forward the
             # wrapper's environment to MCP servers, and the shared .codex/config.toml
             # cannot carry a per-seat value without sibling seats clobbering it.
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -5665,9 +5731,9 @@ PYEOF
         if [ "$LAUNCH_BACKOFF_POW" -gt 10 ]; then LAUNCH_BACKOFF_POW=10; fi
         LAUNCH_FAIL_BACKOFF_SEC=$(( LAUNCH_BACKOFF_BASE_SEC * (1 << LAUNCH_BACKOFF_POW) ))
         if [ "$LAUNCH_FAIL_BACKOFF_SEC" -gt "$LAUNCH_BACKOFF_MAX_SEC" ]; then LAUNCH_FAIL_BACKOFF_SEC="$LAUNCH_BACKOFF_MAX_SEC"; fi
-        echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, or a crash at launch. Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
+        echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
         if [ "$LAUNCH_FAIL_STREAK" -eq 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-            LAUNCH_FAIL_MSG="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit or credential problem, not a task problem. Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
+            LAUNCH_FAIL_MSG="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem. Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
             moe_rpc chat_send \
                 "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null)" \
                 > /dev/null 2>&1 || true
