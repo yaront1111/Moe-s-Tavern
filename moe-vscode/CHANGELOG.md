@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Headless Codex launch for codex-cli 0.147 and later (`--full-auto` removed upstream); the launcher now probes its argv before launching instead of relaunch-looping.
+- Headless Codex seats default to `--sandbox danger-full-access` and the launcher pins `default_tools_approval_mode = "approve"` on the `moe` and `serena` MCP servers: codex 0.148 and later rejected every Moe tool call under `approval_policy = never` with a sandbox, and the Windows unelevated sandbox could not start a Store-installed PowerShell 7 (`CreateProcessAsUserW failed: 5`). `MOE_CODEX_SANDBOX` still selects a sandbox explicitly.
+- Bash Codex seats get a private per-seat instructions file (`model_instructions_file`) like the PowerShell launcher, so concurrent seats no longer overwrite each other's context.
 
 ## [0.6.0] - 2026-04-21
 
