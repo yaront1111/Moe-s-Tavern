@@ -4381,9 +4381,46 @@ $mentionsJson
             }
             $codexSeatArgs += @('-c', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")
             if ($CodexExec) {
-                # Non-interactive exec mode: codex -c <seat overrides> exec -C <project> --full-auto --sandbox workspace-write "<prompt>"
-                Write-Host "Command: $Command $($codexSeatArgs -join ' ') exec -C `"$projectPath`" --full-auto --sandbox workspace-write `"<prompt>`""
-                & $Command @CommandArgs @codexSeatArgs exec -C "$projectPath" --full-auto --sandbox workspace-write "$shortPrompt"
+                # Non-interactive exec mode: codex -c <seat overrides> -c approvals_reviewer=user exec -C <project> [--sandbox <mode>] "<prompt>"
+                # Never pass --full-auto here: codex-cli 0.147+ rejects it (`error: unexpected
+                # argument '--full-auto' found`, exit 2 before any work -- a relaunch loop the
+                # launch-failure backoff misreads as a provider/credential problem). openai/codex
+                # #20133 (2026-04-29) deprecated it in `exec` and dropped it from the TUI; #36054
+                # hard-removed it in 0.147.0 (0.130-0.146 accepted it with a warning), and the
+                # standalone codex installer auto-updates. The fleet only hit it on 2026-09-07
+                # because 8b632b5 (2026-09-06) made worker/qa seats default to `codex exec`; before
+                # that this branch never ran. `codex exec` already runs with approval_policy = never
+                # in headless mode (kept by the reviewer pin below), so the sandbox flag alone carries
+                # what --full-auto meant. MOE_CODEX_SANDBOX picks the sandbox (read-only |
+                # workspace-write | danger-full-access; default workspace-write); `inherit` omits the
+                # flag so the merged ~/.codex + <project>/.codex config decides -- read-only when
+                # neither sets sandbox_mode. On Windows codex enforces workspace-write only with
+                # `[windows] sandbox = "unelevated"|"elevated"` in ~/.codex/config.toml; without it
+                # exec silently runs read-only and a headless worker cannot write files. Measured
+                # 2026-09-07: 0.146.0 accepts, 0.147.0+ rejects, 0.153.4 installed.
+                # The sh twin resolves the same env the same way; parity-check pins the vocabulary.
+                $codexSandboxMode = if ($env:MOE_CODEX_SANDBOX) { $env:MOE_CODEX_SANDBOX.Trim().ToLowerInvariant() } else { 'workspace-write' }
+                $codexSandboxArgs = @()
+                if ($codexSandboxMode -eq 'inherit') {
+                    $codexSandboxArgs = @()
+                } elseif (@('read-only', 'workspace-write', 'danger-full-access') -contains $codexSandboxMode) {
+                    $codexSandboxArgs = @('--sandbox', $codexSandboxMode)
+                } else {
+                    Write-Host "[WARN] MOE_CODEX_SANDBOX='$($env:MOE_CODEX_SANDBOX)' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write." -ForegroundColor Yellow
+                    $codexSandboxArgs = @('--sandbox', 'workspace-write')
+                }
+                $codexSandboxBanner = if ($codexSandboxArgs.Count -gt 0) { ' ' + ($codexSandboxArgs -join ' ') } else { '' }
+                # --full-auto also kept approval_policy = never when the operator's config resolves
+                # approvals_reviewer = "auto_review" (codex 0.130-0.146 set
+                # preserve_headless_approval_policy for it; 0.147+ does so only for
+                # --dangerously-bypass-approvals-and-sandbox). Pin the reviewer to `user` for the
+                # headless seat so exec keeps its never override: under auto_review escalations go
+                # to the guardian reviewer, approved commands run outside the sandbox, and any
+                # approval that reaches the exec client is rejected (exit 1). `user` is not valid
+                # TOML, so codex keeps the literal string; pre-0.130 ignores the unknown key.
+                $codexExecOverrides = @('-c', 'approvals_reviewer=user')
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
+                & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
@@ -4873,9 +4910,9 @@ $mentionsJson
         if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
         $launchBackoffPow = [math]::Min($script:LaunchFailStreak - 1, 10)
         $script:LaunchFailBackoffSec = [int][math]::Min($launchBackoffMaxSec, $launchBackoffBaseSec * [math]::Pow(2, $launchBackoffPow))
-        Write-Host "[launch-failure] CLI exited $cliExitForLaunch after ${cliElapsedSec}s, before doing any work (streak $($script:LaunchFailStreak)): provider usage limit, credential, or a crash at launch. Not counted against the resume budget; next relaunch in $($script:LaunchFailBackoffSec)s." -ForegroundColor Yellow
+        Write-Host "[launch-failure] CLI exited $cliExitForLaunch after ${cliElapsedSec}s, before doing any work (streak $($script:LaunchFailStreak)): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in $($script:LaunchFailBackoffSec)s." -ForegroundColor Yellow
         if ($script:LaunchFailStreak -eq 3 -and $generalChannelId) {
-            $launchFailMsg = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit or credential problem, not a task problem. Wrapper is backing off up to ${launchBackoffMaxSec}s between relaunches and keeps its task; no release needed."
+            $launchFailMsg = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem. Wrapper is backing off up to ${launchBackoffMaxSec}s between relaunches and keeps its task; no release needed."
             try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchFailMsg } | Out-Null } catch {}
         }
     } else {
