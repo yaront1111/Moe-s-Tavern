@@ -1860,12 +1860,120 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario Y] ok"
 
+  # Scenario Z -- the bash Codex launcher must mirror the PowerShell twin's
+  # per-seat instructions file. The fake binary captures the model override
+  # and copies the file while it is still alive; the wrapper must then remove
+  # the file after both headless and interactive launches. TMPDIR is explicit
+  # so this also proves the file is not written into the project or a shared
+  # role-document path.
+  echo "[scenario Z] bash Codex CLI: per-seat instructions for headless and TUI"
+  CODEX_CLI="$TMP_DIR/codex"
+  CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
+  CODEX_PATH_FILE="$TMP_DIR/codex-instructions-path.txt"
+  CODEX_INSTRUCTIONS_COPY="$TMP_DIR/codex-instructions-copy.md"
+  CODEX_TMP_DIR="$TMP_DIR/codex-tmp"
+  mkdir -p "$CODEX_TMP_DIR"
+  cat > "$CODEX_CLI" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$CODEX_ARGS_FILE"
+prev=""
+for arg in "\$@"; do
+  if [[ "\$arg" == model_instructions_file=* ]]; then
+    path="\${arg#model_instructions_file=}"
+    printf '%s\n' "\$path" > "$CODEX_PATH_FILE"
+    if [ -f "\$path" ]; then cp "\$path" "$CODEX_INSTRUCTIONS_COPY"; fi
+  fi
+  prev="\$arg"
+done
+exit 0
+EOF
+  chmod +x "$CODEX_CLI"
+  rm -f "$CODEX_ARGS_FILE" "$CODEX_PATH_FILE" "$CODEX_INSTRUCTIONS_COPY"
+  set +e
+  (
+    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+      "$WRAPPER" \
+      --project "$PROJECT_DIR" \
+      --worker-id codex-headless \
+      --role worker \
+      --team Smoke \
+      --no-start-daemon \
+      --command "$CODEX_CLI" \
+      --codex-exec \
+      --no-loop \
+      --poll-interval 0 \
+      >"$TMP_DIR/wrapper-codex-headless.out" 2>&1
+  )
+  codex_headless_code=$?
+  set -e
+  [ "$codex_headless_code" -eq 0 ] || scope_fail Z "headless Codex wrapper exited with $codex_headless_code" "$TMP_DIR/wrapper-codex-headless.out"
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the fake headless Codex CLI was never launched" "$TMP_DIR/wrapper-codex-headless.out"
+  if ! grep -Fq 'model_instructions_file=' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "headless Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-headless.out"
+  fi
+  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z "headless Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-headless.out"
+  CODEX_HEADLESS_PATH="$(cat "$CODEX_PATH_FILE")"
+  case "$CODEX_HEADLESS_PATH" in
+    "$CODEX_TMP_DIR"/*) : ;;
+    *) echo "received path: $CODEX_HEADLESS_PATH" >&2; scope_fail Z "headless instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-headless.out" ;;
+  esac
+  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z "headless Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-headless.out"
+  for needle in 'Role: worker' '# Session Context (per-iteration)' 'Claimed task id: task-resume'; do
+    if ! grep -Fq -- "$needle" "$CODEX_INSTRUCTIONS_COPY"; then
+      scope_fail Z "headless instructions file is missing [$needle]" "$TMP_DIR/wrapper-codex-headless.out"
+    fi
+  done
+  if [ -e "$CODEX_HEADLESS_PATH" ]; then
+    scope_fail Z "headless per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-headless.out"
+  fi
+
+  rm -f "$CODEX_ARGS_FILE" "$CODEX_PATH_FILE" "$CODEX_INSTRUCTIONS_COPY"
+  set +e
+  (
+    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+      "$WRAPPER" \
+      --project "$PROJECT_DIR" \
+      --worker-id codex-tui \
+      --role worker \
+      --team Smoke \
+      --no-start-daemon \
+      --command "$CODEX_CLI" \
+      --interactive \
+      --no-loop \
+      --poll-interval 0 \
+      >"$TMP_DIR/wrapper-codex-tui.out" 2>&1
+  )
+  codex_tui_code=$?
+  set -e
+  [ "$codex_tui_code" -eq 0 ] || scope_fail Z "interactive Codex wrapper exited with $codex_tui_code" "$TMP_DIR/wrapper-codex-tui.out"
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the fake interactive Codex CLI was never launched" "$TMP_DIR/wrapper-codex-tui.out"
+  if ! grep -Fq 'model_instructions_file=' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "interactive Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-tui.out"
+  fi
+  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z "interactive Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-tui.out"
+  CODEX_TUI_PATH="$(cat "$CODEX_PATH_FILE")"
+  case "$CODEX_TUI_PATH" in
+    "$CODEX_TMP_DIR"/*) : ;;
+    *) echo "received path: $CODEX_TUI_PATH" >&2; scope_fail Z "interactive instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-tui.out" ;;
+  esac
+  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z "interactive Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-tui.out"
+  if ! grep -Fq -- '# Session Context (per-iteration)' "$CODEX_INSTRUCTIONS_COPY"; then
+    scope_fail Z "interactive instructions file is missing per-iteration context" "$TMP_DIR/wrapper-codex-tui.out"
+  fi
+  if [ -e "$CODEX_TUI_PATH" ]; then
+    scope_fail Z "interactive per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-tui.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario Z] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 23 ]; then
-    echo "Expected 23 commit-scope scenarios (A-P, R-U, W-Y); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 24 ]; then
+    echo "Expected 24 commit-scope scenarios (A-P, R-U, W-Z); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

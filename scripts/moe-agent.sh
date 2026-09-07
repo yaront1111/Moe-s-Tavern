@@ -5117,12 +5117,26 @@ $PROMPT_BODY"
             exit 1
         fi
 
-        # Write system/role context to instructions file (codex reads it via model_instructions_file)
-        # This avoids passing the long multi-line prompt as a CLI argument, which breaks codex's arg parser
+        # Keep the identity-free role document in the project for Codex's
+        # project-doc fallback, but never use it for per-seat context. Two
+        # concurrent seats can overwrite this shared file between launch and
+        # Codex's read, so each process also gets a private instructions file
+        # passed through model_instructions_file below.
         AGENT_INSTRUCTIONS_PATH="$PROJECT/.codex/agent-instructions.md"
         mkdir -p "$(dirname "$AGENT_INSTRUCTIONS_PATH")"
         printf '%s' "$SYSTEM_APPEND" > "$AGENT_INSTRUCTIONS_PATH"
-        echo -e "${GREEN}[OK]${NC} Agent instructions written to: $AGENT_INSTRUCTIONS_PATH"
+        CODEX_SEAT_INSTRUCTIONS_FILE="$(create_secure_temp)/moe-codex-instructions-${ROLE}-$$.md"
+        CODEX_FILE_BODY="$SYSTEM_APPEND"
+        CODEX_USES_FILE_CONTEXT=false
+        if [ -n "$DYNAMIC_CONTEXT" ]; then
+            CODEX_FILE_BODY="$CODEX_FILE_BODY
+
+# Session Context (per-iteration)
+$DYNAMIC_CONTEXT"
+            CODEX_USES_FILE_CONTEXT=true
+        fi
+        printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
+        echo -e "${GREEN}[OK]${NC} Agent instructions written to: $CODEX_SEAT_INSTRUCTIONS_FILE (shared role doc: $AGENT_INSTRUCTIONS_PATH)"
 
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
@@ -5150,17 +5164,33 @@ $PROMPT_BODY"
             fi
         fi
 
+        # When pre-flight produced per-task context, keep arbitrary task JSON
+        # and routed-message text out of native argv. The private file is the
+        # Codex system-instructions source; the user prompt only carries the
+        # role directive (or a pointer when there is no role body).
+        if [ "$CODEX_USES_FILE_CONTEXT" = true ]; then
+            if [ -n "$PROMPT_BODY" ]; then
+                SHORT_PROMPT="$PROMPT_BODY"
+            else
+                SHORT_PROMPT="Session context (routed mentions, pre-flight data) is in $CODEX_SEAT_INSTRUCTIONS_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
+            fi
+        fi
+
         if [ "$CODEX_EXEC" = true ]; then
             # Non-interactive exec mode
             echo -e "Starting Codex (exec, headless)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=<per-seat-file> -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID exec -C \"$PROJECT\" --full-auto --sandbox workspace-write \"<prompt>\""
             set +e
 
-            # Per-seat workerId on argv (PS twin parity): codex does not forward the
-            # wrapper's environment to MCP servers, and the shared .codex/config.toml
-            # cannot carry a per-seat value without sibling seats clobbering it.
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
+            # Per-seat overrides on argv (PS twin parity): codex does not
+            # forward the wrapper's environment to MCP servers, and the shared
+            # .codex/config.toml cannot carry per-seat values without sibling
+            # seats clobbering them.
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+                -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
+                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                exec -C "$PROJECT" --full-auto --sandbox workspace-write "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
@@ -5169,15 +5199,22 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=<per-seat-file> -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID -C \"$PROJECT\" \"<prompt>\""
             set +e
 
-            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" -C "$PROJECT" "$SHORT_PROMPT"
+            "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
+                -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
+                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                -C "$PROJECT" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
 
             set -e
         fi
+        # Avoid retaining a prior iteration's seat context in a long-running
+        # wrapper. The EXIT trap also removes the secure temp directory on
+        # signals and other process exits.
+        rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE" 2>/dev/null || true
     elif [ "$CLI_TYPE" = "gemini" ]; then
         # Check gemini is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
