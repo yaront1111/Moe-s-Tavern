@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}
+      HAS_OVSX_PAT: ${{ secrets.OVSX_PAT != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -99,6 +101,20 @@ jobs:
             moe-vscode/*.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the packaged .vsix to the VS Code Marketplace (when VSCE_PAT is configured)
+      - name: Publish VS Code extension to Marketplace
+        if: env.HAS_VSCE_PAT == 'true'
+        run: npx --yes @vscode/vsce@latest publish --packagePath "$(ls moe-vscode/*.vsix)"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Publish the same .vsix to Open VSX (when OVSX_PAT is configured)
+      - name: Publish to Open VSX
+        if: env.HAS_OVSX_PAT == 'true'
+        run: npx --yes ovsx publish "$(ls moe-vscode/*.vsix)"
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
   # Publish to JetBrains Marketplace (when configured)
   publish-plugin:

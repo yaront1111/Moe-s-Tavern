@@ -5,6 +5,19 @@ All notable changes to the Moe VS Code extension will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-07
+
+### Added
+- Grok Build (xAI) as an agent CLI, alongside Claude Code, Codex and Gemini CLI.
+- Task dependencies with automatic unblock when prerequisites finish; shared resources (daemon-managed exclusive leases).
+
+### Changed
+- Marketplace name is now "Moe's Tavern"; the extension id stays `yaront1111.moe-vscode`.
+- Launchers land a task-linked commit on every exit (completion or `wip` checkpoint) with rescue refs when landing fails.
+
+### Fixed
+- Headless Codex launch for codex-cli 0.147 and later (`--full-auto` removed upstream); the launcher now probes its argv before launching instead of relaunch-looping.
+
 ## [0.6.0] - 2026-04-21
 
 ### Added
