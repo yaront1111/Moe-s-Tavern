@@ -1871,7 +1871,7 @@ EOF
   # '--full-auto' found`, exit 2 before any work -- which the launch-failure
   # backoff then relaunches forever); `codex exec` already runs with
   # approval_policy=never, so the wrapper passes only
-  # `--sandbox <MOE_CODEX_SANDBOX|workspace-write>`. Pins: a worker defaults to
+  # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins: a worker defaults to
   # headless `exec -C <project>` with the seat's MOE_WORKER_ID override and
   # never --full-auto; --sandbox follows the exec subcommand; MOE_CODEX_SANDBOX
   # reaches argv verbatim; `inherit` drops the flag; an unknown value warns and
@@ -1917,7 +1917,7 @@ EOF
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "codex 0.147+ rejects --full-auto; it must never be on argv" "$TMP_DIR/scope-z.out"
   fi
-  for flag in 'exec' '-C' '--sandbox' 'workspace-write' '-c' 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' 'approvals_reviewer=user'; do
+  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' 'approvals_reviewer=user'; do
     if ! grep -Fqx -- "$flag" "$CODEX_ARGS_FILE"; then
       cat "$CODEX_ARGS_FILE" >&2 || true
       scope_fail Z "expected [$flag] on the headless codex argv" "$TMP_DIR/scope-z.out"
@@ -1933,21 +1933,27 @@ EOF
   fi
   # The banner is what the launch-failure hint tells the operator to re-run by
   # hand, so it must carry the seat override and the reviewer pin too.
-  if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox workspace-write' "$TMP_DIR/scope-z.out" \
+  if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox danger-full-access' "$TMP_DIR/scope-z.out" \
      || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec -C' "$TMP_DIR/scope-z.out"; then
-    scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox workspace-write" "$TMP_DIR/scope-z.out"
+    scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox danger-full-access" "$TMP_DIR/scope-z.out"
   fi
   if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then
     scope_fail Z "a fast non-zero exit must print the launch-failure argv hint" "$TMP_DIR/scope-z.out"
   fi
   # -- config writer --
   [ -f "$SCOPE_Z_CFG" ] || scope_fail Z "expected .codex/config.toml to be written at pre-flight" "$TMP_DIR/scope-z.out"
-  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'model_instructions_file = "agent-instructions.md"' 'model_reasoning_effort = "xhigh"'; do
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'model_instructions_file = "agent-instructions.md"' 'model_reasoning_effort = "xhigh"' 'default_tools_approval_mode = "approve"'; do
     if ! grep -Fq -- "$needle" "$SCOPE_Z_CFG"; then
       cat "$SCOPE_Z_CFG" >&2 || true
       scope_fail Z "expected [$needle] in .codex/config.toml" "$TMP_DIR/scope-z.out"
     fi
   done
+  # codex 0.148+ rejects un-annotated MCP tools under approval never + a sandbox;
+  # the pre-approval must be pinned on BOTH servers (moe and serena).
+  if [ "$(grep -Fc -- 'default_tools_approval_mode = "approve"' "$SCOPE_Z_CFG")" -ne 2 ]; then
+    cat "$SCOPE_Z_CFG" >&2 || true
+    scope_fail Z "default_tools_approval_mode = \"approve\" must be pinned on both the moe and serena servers in .codex/config.toml" "$TMP_DIR/scope-z.out"
+  fi
   [ -f "$SCOPE_Z_DIR/.codex/agent-instructions.md" ] || scope_fail Z "expected .codex/agent-instructions.md to be written" "$TMP_DIR/scope-z.out"
   # -- exit propagation + DENY tier --
   if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=5)' "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl"; then
@@ -1971,14 +1977,14 @@ EOF
   # -- MOE_CODEX_SANDBOX reaches argv verbatim --
   rm -f "$CODEX_ARGS_FILE"
   set +e
-  MOE_CODEX_SANDBOX=danger-full-access MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+  MOE_CODEX_SANDBOX=workspace-write MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
     run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z2.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
   scope_z2_code=$?
   set -e
   [ "$scope_z2_code" -eq 0 ] || scope_fail Z "second wrapper run exited with $scope_z2_code" "$TMP_DIR/scope-z2.out"
-  if ! grep -Fqx -- 'danger-full-access' "$CODEX_ARGS_FILE" || grep -Fqx -- 'workspace-write' "$CODEX_ARGS_FILE"; then
+  if ! grep -Fqx -- 'workspace-write' "$CODEX_ARGS_FILE" || grep -Fqx -- 'danger-full-access' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
-    scope_fail Z "MOE_CODEX_SANDBOX=danger-full-access must reach argv as --sandbox danger-full-access" "$TMP_DIR/scope-z2.out"
+    scope_fail Z "MOE_CODEX_SANDBOX=workspace-write must reach argv as --sandbox workspace-write" "$TMP_DIR/scope-z2.out"
   fi
   # -- inherit drops the flag --
   rm -f "$CODEX_ARGS_FILE"
@@ -2000,12 +2006,12 @@ EOF
   scope_z4_code=$?
   set -e
   [ "$scope_z4_code" -eq 0 ] || scope_fail Z "unknown-sandbox wrapper run exited with $scope_z4_code" "$TMP_DIR/scope-z4.out"
-  if ! grep -Fq "MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write." "$TMP_DIR/scope-z4.out"; then
+  if ! grep -Fq "MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access." "$TMP_DIR/scope-z4.out"; then
     scope_fail Z "an unknown MOE_CODEX_SANDBOX must warn and fall back" "$TMP_DIR/scope-z4.out"
   fi
-  if ! grep -Fqx -- 'workspace-write' "$CODEX_ARGS_FILE"; then
+  if ! grep -Fqx -- 'danger-full-access' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
-    scope_fail Z "the fallback sandbox must be workspace-write" "$TMP_DIR/scope-z4.out"
+    scope_fail Z "the fallback sandbox must be danger-full-access" "$TMP_DIR/scope-z4.out"
   fi
   # -- polarity: an architect gets the TUI (no exec subcommand, no --sandbox) --
   rm -f "$CODEX_ARGS_FILE"

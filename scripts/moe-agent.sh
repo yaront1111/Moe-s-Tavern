@@ -884,6 +884,13 @@ moe_block_lines = [
 if proxy_args:
     moe_block_lines.append('args = ' + json.dumps([proxy_args]))
 moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)
+# codex 0.148+ refuses every MCP tool it deems approval-worthy (no readOnlyHint
+# annotation -- every moe.* tool) whenever approval_policy = never meets a
+# sandbox: "MCP tool call requires approval, but approval policy is never".
+# `approve` pre-approves the server's tools (enum auto | prompt | writes |
+# approve, codex 0.147+; older versions ignore the key), so headless seats can
+# call start_step under any MOE_CODEX_SANDBOX and TUI seats never see a prompt.
+moe_block_lines.append('default_tools_approval_mode = "approve"')
 moe_block_lines.extend([
     "",
     "[mcp_servers.moe.env]",
@@ -906,6 +913,7 @@ if serena_cmd:
         'command = ' + json.dumps(serena_cmd),
         'args = ' + json.dumps(["start-mcp-server", "--context", "codex", "--project", serena_project,
                                  "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]),
+        'default_tools_approval_mode = "approve"',
     ])
 
 if os.path.exists(config_file):
@@ -5188,21 +5196,32 @@ $DYNAMIC_CONTEXT"
             # that this branch never ran. `codex exec` already runs with approval_policy = never
             # in headless mode (kept by the reviewer pin below), so the sandbox flag alone carries
             # what --full-auto meant. MOE_CODEX_SANDBOX picks the sandbox (read-only |
-            # workspace-write | danger-full-access; default workspace-write); `inherit` omits the
-            # flag so the merged ~/.codex + <project>/.codex config decides -- read-only when
-            # neither sets sandbox_mode. On Windows codex enforces workspace-write only with
-            # `[windows] sandbox = "unelevated"|"elevated"` in ~/.codex/config.toml; without it
-            # exec silently runs read-only and a headless worker cannot write files. Measured
-            # 2026-09-07: 0.146.0 accepts, 0.147.0+ rejects, 0.153.4 installed.
+            # workspace-write | danger-full-access; default danger-full-access); `inherit` omits
+            # the flag so the merged ~/.codex + <project>/.codex config decides -- read-only when
+            # neither sets sandbox_mode. The default is full access, not workspace-write, because
+            # of two codex behaviors measured 2026-09-07 on 0.153.4 (both absent under full
+            # access, which codex treats as bypass-everything): (1) since 0.148 `approval_policy =
+            # never` plus any sandbox makes codex refuse every MCP tool it deems approval-worthy
+            # -- every moe.* tool, none carry a readOnlyHint -- with `MCP tool call requires
+            # approval, but approval policy is never`, so a headless worker cannot even
+            # start_step (the config writer also pins default_tools_approval_mode = "approve" on
+            # the moe and serena servers, so an explicit workspace-write keeps MCP working);
+            # (2) on Windows the unelevated sandbox (`[windows] sandbox = "unelevated"` in
+            # ~/.codex/config.toml) spawns commands under a restricted token that cannot execute
+            # a Microsoft Store pwsh.exe (the WindowsApps alias codex picks from PATH): every
+            # command fails `CreateProcessAsUserW failed: 5 (Access is denied.)`. `codex sandbox
+            # -- pwsh -NoProfile -Command exit` reproduces that offline; an MSI PowerShell 7 or
+            # MOE_CODEX_SANDBOX=danger-full-access avoids it. Without `[windows] sandbox` at all,
+            # workspace-write silently runs read-only on Windows.
             # The ps1 twin resolves the same env the same way; parity-check pins the vocabulary.
-            CODEX_SANDBOX_MODE="$(printf '%s' "${MOE_CODEX_SANDBOX:-workspace-write}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            CODEX_SANDBOX_MODE="$(printf '%s' "${MOE_CODEX_SANDBOX:-danger-full-access}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
             CODEX_SANDBOX_ARGS=()
             case "$CODEX_SANDBOX_MODE" in
                 inherit) CODEX_SANDBOX_ARGS=() ;;
                 read-only|workspace-write|danger-full-access) CODEX_SANDBOX_ARGS=(--sandbox "$CODEX_SANDBOX_MODE") ;;
                 *)
-                    echo -e "${YELLOW}[WARN]${NC} MOE_CODEX_SANDBOX='${MOE_CODEX_SANDBOX:-}' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write."
-                    CODEX_SANDBOX_ARGS=(--sandbox workspace-write) ;;
+                    echo -e "${YELLOW}[WARN]${NC} MOE_CODEX_SANDBOX='${MOE_CODEX_SANDBOX:-}' is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access."
+                    CODEX_SANDBOX_ARGS=(--sandbox danger-full-access) ;;
             esac
             CODEX_SANDBOX_BANNER=""
             if [ "${#CODEX_SANDBOX_ARGS[@]}" -gt 0 ]; then CODEX_SANDBOX_BANNER=" ${CODEX_SANDBOX_ARGS[*]}"; fi
@@ -5226,7 +5245,7 @@ $DYNAMIC_CONTEXT"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
@@ -5265,7 +5284,7 @@ $DYNAMIC_CONTEXT"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=<per-seat-file> -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID -C \"$PROJECT\" \"<prompt>\""
             set +e
 
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
