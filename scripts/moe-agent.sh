@@ -5189,6 +5189,33 @@ $PROMPT_BODY"
             # approval that reaches the exec client is rejected (exit 1). `user` is not valid
             # TOML, so codex keeps the literal string; pre-0.130 ignores the unknown key.
             CODEX_EXEC_OVERRIDES=(-c approvals_reviewer=user)
+            # Argv pre-flight, once per wrapper process. The standalone codex installer
+            # auto-updates, and a flag it stops accepting fails at parse with exit 2 before
+            # any work -- the launch-failure backoff would then relaunch forever (measured
+            # 2026-09-07 with --full-auto, removed in codex-cli 0.147). `--help` makes clap
+            # short-circuit before any model call, so the real argv plus --help proves the
+            # flags parse for free. A parse error is permanent for this install: escalate
+            # once and exit (the EXIT trap deregisters the seat and returns the task to the
+            # queue) instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips the probe.
+            if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
+                CODEX_ARGV_PROBED=true
+                PROBE_EXIT=0
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
+                    PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
+                    [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
+                    CODEX_VERSION="$("$COMMAND_BIN" --version 2>&1 | head -n1)"
+                    echo -e "${RED}[ERROR]${NC} MOE_CLI_ARGV_REJECTED: the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+                    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+                        ARGV_MSG="@governors $WORKER_ID: MOE_CLI_ARGV_REJECTED - the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv ($PROBE_LINE). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
+                        moe_rpc chat_send \
+                            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ARGV_MSG" 2>/dev/null)" \
+                            > /dev/null 2>&1 || true
+                    fi
+                    stop_heartbeat_sidecar
+                    exit 1
+                fi
+            fi
             echo -e "Starting Codex (exec, headless)..."
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by

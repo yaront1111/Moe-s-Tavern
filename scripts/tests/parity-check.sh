@@ -110,8 +110,9 @@ for cli_type in '"grok"' '"codex"'; do
 done
 # Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX accepts
 # and the fallback warning, spelled identically.
-for codex_lit in 'read-only' 'workspace-write' 'danger-full-access' 'approvals_reviewer=user' \
-  'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.'; do
+for codex_lit in 'read-only' 'workspace-write' 'danger-full-access' 'approvals_reviewer=user' MOE_CLI_ARGV_REJECTED MOE_DISABLE_ARGV_PROBE \
+  'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.' \
+  'rejects the wrapper'"'"'s launch argv'; do
   require_both "codex vocabulary" "$codex_lit"
 done
 # Flags the installed CLIs no longer accept must not come back in either

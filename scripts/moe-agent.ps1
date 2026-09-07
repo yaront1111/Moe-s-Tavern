@@ -4419,6 +4419,42 @@ $mentionsJson
                 # approval that reaches the exec client is rejected (exit 1). `user` is not valid
                 # TOML, so codex keeps the literal string; pre-0.130 ignores the unknown key.
                 $codexExecOverrides = @('-c', 'approvals_reviewer=user')
+                # Argv pre-flight, once per wrapper process. The standalone codex installer
+                # auto-updates, and a flag it stops accepting fails at parse with exit 2 before
+                # any work -- the launch-failure backoff would then relaunch forever (measured
+                # 2026-09-07 with --full-auto, removed in codex-cli 0.147). `--help` makes clap
+                # short-circuit before any model call, so the real argv plus --help proves the
+                # flags parse for free. A parse error is permanent for this install: escalate
+                # once and exit (the exit path deregisters the seat and returns the task to the
+                # queue) instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips the probe.
+                if (-not $script:CodexArgvProbed -and $env:MOE_DISABLE_ARGV_PROBE -ne '1') {
+                    $script:CodexArgvProbed = $true
+                    # PS 5.1 turns a native command's redirected stderr into ErrorRecords and,
+                    # under $ErrorActionPreference = 'Stop', throws on the first one before the
+                    # exit code is observable -- probe under 'Continue' and restore.
+                    $probeOut = ''
+                    $probeExit = 0
+                    $probePrevEap = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    try {
+                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
+                        $probeExit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+                    } catch { $probeOut = "$_"; if ($probeExit -eq 0) { $probeExit = 1 } } finally { $ErrorActionPreference = $probePrevEap }
+                    if ($probeExit -ne 0 -and $probeOut -match 'unexpected argument|unrecognized subcommand|unexpected value') {
+                        $probeLine = @(($probeOut -split "`r?`n") | Where-Object { $_ -match 'error' } | Select-Object -First 1)
+                        $probeLine = if ($probeLine.Count -gt 0) { $probeLine[0].Trim() } else { "exit $probeExit" }
+                        $codexVersion = 'unknown'
+                        $ErrorActionPreference = 'Continue'
+                        try { $codexVersion = (& $Command --version 2>&1 | Out-String).Trim() } catch {} finally { $ErrorActionPreference = $probePrevEap }
+                        Write-Host "[ERROR] MOE_CLI_ARGV_REJECTED: the installed codex ($codexVersion) rejects the wrapper's launch argv -- $probeLine. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check." -ForegroundColor Red
+                        if ($generalChannelId) {
+                            $argvMsg = "@governors ${WorkerId}: MOE_CLI_ARGV_REJECTED - the installed codex ($codexVersion) rejects the wrapper's launch argv ($probeLine). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
+                            try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $argvMsg } | Out-Null } catch {}
+                        }
+                        Stop-HeartbeatSidecar
+                        exit 1
+                    }
+                }
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
                 & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE

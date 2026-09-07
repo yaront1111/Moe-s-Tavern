@@ -305,7 +305,10 @@ CONFIGURATION.md). `codex exec` already runs with `approval_policy = never`, and
 that override even when the operator's config says `approvals_reviewer = "auto_review"` — together they
 carry what `--full-auto` meant. The launch-failure line now names this case
 (`… or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand)`),
-and `scripts/tests/parity-check.{sh,ps1}` fail if `--full-auto` ever comes back.
+and `scripts/tests/parity-check.{sh,ps1}` fail if `--full-auto` ever comes back. The wrapper also probes its own
+argv once per process (`… --help`) before the first headless launch: a codex that rejects a flag now stops the
+seat with `[ERROR] MOE_CLI_ARGV_REJECTED: the installed codex (<version>) rejects the wrapper's launch argv -- <codex's
+error line>` plus a `@governors` line in `#general`, instead of relaunch-looping (`MOE_DISABLE_ARGV_PROBE=1` skips it).
 
 ---
 

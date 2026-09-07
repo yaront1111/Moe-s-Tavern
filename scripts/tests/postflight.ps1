@@ -319,10 +319,24 @@ switch (tool) {
     # verbatim (no cmd.exe re-quoting of the prose prompt codex gets as a
     # positional). Records argv one per line to FAKE_CODEX_ARGV_FILE and exits
     # with FAKE_CODEX_EXIT (0 by default).
-    $codexPs1 = Join-Path $tempRoot 'codex.ps1'
-    Set-Content -Path $codexPs1 -Encoding ASCII -Value ("`$args | Set-Content -Path `$env:FAKE_CODEX_ARGV_FILE`r`n" +
+    # Fake codex CLI, literally named codex.cmd (basename match). A native .cmd front
+    # that runs a child powershell -File codex-impl.ps1 with the same argv: the child
+    # is a real process, so its stderr and exit code reach the wrapper the way the real
+    # codex.exe's do (an in-process .ps1 shim's [Console]::Error bypasses 2>&1). The
+    # impl appends argv one token per line to FAKE_CODEX_ARGV_FILE (the wrapper may
+    # invoke codex several times per launch: the argv probe, --version, the launch;
+    # each run removes the file), answers --version, and with FAKE_CODEX_REJECT_ARGV=1
+    # fails every invocation the way clap does for a flag the CLI no longer accepts.
+    $codexImpl = Join-Path $tempRoot 'codex-impl.ps1'
+    Set-Content -Path $codexImpl -Encoding ASCII -Value ("`$args | Add-Content -Path `$env:FAKE_CODEX_ARGV_FILE`r`n" +
+        "if (`$env:FAKE_CODEX_REJECT_ARGV -eq '1') { [Console]::Error.WriteLine(`"error: unexpected argument '--sandbox' found`"); exit 2 }`r`n" +
+        "if (`$args -contains '--version') { 'codex-cli 0.0.0-fake'; exit 0 }`r`n" +
         "if (`$env:FAKE_CODEX_EXIT) { exit [int]`$env:FAKE_CODEX_EXIT }`r`n" +
         "exit 0`r`n")
+    $codexCmd = Join-Path $tempRoot 'codex.cmd'
+    Set-Content -Path $codexCmd -Encoding ASCII -Value ("@echo off`r`n" +
+        "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0codex-impl.ps1`" %*`r`n" +
+        "exit /b %ERRORLEVEL%`r`n")
 
     # File-creating fake CLIs. The ps1 claude launch does NOT cd into the
     # project (it binds via MOE_PROJECT_PATH), so every path is written via
@@ -480,6 +494,18 @@ switch (tool) {
             }
             function Get-RescueRefs([string]$dir, [string]$taskId = 'task-postflight') {
                 return @(& git -C $dir for-each-ref --format='%(refname)' "refs/moe/rescue/$taskId/" 2>$null | Where-Object { $_ })
+            }
+            # SHA-256 over bytes the harness already reads. Get-FileHash threw on the GitHub
+            # windows-latest runner under Windows PowerShell 5.1 (Scenario Y, first CI run of
+            # this harness) while the same file had just been ReadAllText/ReadAllBytes'd.
+            function Get-Sha256Hex([string]$path) {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    for ($attempt = 1; ; $attempt++) {
+                        try { return ([System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($path))) -replace '-', '') }
+                        catch [System.IO.IOException] { if ($attempt -ge 5) { throw }; Start-Sleep -Milliseconds 300 }
+                    }
+                } finally { $sha.Dispose() }
             }
             function Get-HeadSubject([string]$dir, [string]$rev = 'HEAD') {
                 return ((& git -C $dir log -1 --format=%s $rev 2>$null) -join '')
@@ -1381,7 +1407,7 @@ switch (tool) {
                     if ($scopeYChat -notlike '*worker session ended: task=task-postflight (CLI exit=3)*') { Write-Host $scopeYChat; throw 'SCENARIO Y FAILED: the fake grok exit 3 must propagate into the session-ended line' }
                     if ((Get-HeadSubject $scopeYDir) -ne 'wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=3]') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: unexpected checkpoint subject [$(Get-HeadSubject $scopeYDir)]" }
                     if ((Get-CommittedPaths $scopeYDir) -ne 'owned-a.txt') { Write-Host $scopeYText; throw "SCENARIO Y FAILED: only owned-a.txt may land; got [$(Get-CommittedPaths $scopeYDir)]" }
-                    $scopeYHash1 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+                    $scopeYHash1 = (Get-Sha256Hex $scopeYConfig)
 
                     # Run 2: byte-identical re-write; an explicit model + effort
                     # reach argv; nothing new to land.
@@ -1394,7 +1420,7 @@ switch (tool) {
                         Remove-Item Env:MOE_GROK_MODEL -ErrorAction SilentlyContinue
                         Remove-Item Env:MOE_GROK_EFFORT -ErrorAction SilentlyContinue
                     }
-                    $scopeYHash2 = (Get-FileHash -Algorithm SHA256 -LiteralPath $scopeYConfig).Hash
+                    $scopeYHash2 = (Get-Sha256Hex $scopeYConfig)
                     if ($scopeYHash1 -ne $scopeYHash2) { Write-Host ([System.IO.File]::ReadAllText($scopeYConfig)); throw 'SCENARIO Y FAILED: a second run must leave .grok/config.toml byte-identical' }
                     $scopeYArgvText2 = Get-Content -Raw -Path $scopeYArgv
                     if (-not $scopeYArgvText2.Contains('-m grok-4-fast') -or -not $scopeYArgvText2.Contains('--effort high')) { Write-Host $scopeYArgvText2; throw 'SCENARIO Y FAILED: MOE_GROK_MODEL / MOE_GROK_EFFORT must reach argv as -m / --effort' }
@@ -1459,7 +1485,7 @@ switch (tool) {
                 $scopeZArgv = Join-Path $tempRoot 'scope-z-argv.txt'
                 function Invoke-CodexWrapper([string]$outFile, [string]$role = 'worker', [string[]]$extra = @()) {
                     Remove-Item -LiteralPath $scopeZArgv -Force -ErrorAction SilentlyContinue
-                    return (Invoke-WrapperProcess (@('-Project', $scopeZDir, '-WorkerId', "$role-scope-z", '-Role', $role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $codexPs1, '-NoLoop', '-PollInterval', '0') + $extra) $outFile)
+                    return (Invoke-WrapperProcess (@('-Project', $scopeZDir, '-WorkerId', "$role-scope-z", '-Role', $role, '-Team', 'Smoke', '-NoStartDaemon', '-Command', $codexCmd, '-NoLoop', '-PollInterval', '0') + $extra) $outFile)
                 }
                 function Get-CodexArgv() {
                     if (-not (Test-Path -LiteralPath $scopeZArgv)) { throw 'SCENARIO Z FAILED: the fake codex was never launched (no argv file)' }
@@ -1491,7 +1517,10 @@ switch (tool) {
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
                     $scopeZSeatFile = @($scopeZArgs | Where-Object { $_ -like 'model_instructions_file=*' })
-                    if ($scopeZSeatFile.Count -ne 1 -or $scopeZSeatFile[0].IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
+                    # The fake appends argv per invocation (probe, then launch), so the override
+                    # appears once per invocation; every occurrence must point under $env:TEMP.
+                    $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
+                    if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
                     if (-not $scopeZText.Contains('--sandbox workspace-write') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox workspace-write' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
@@ -1540,7 +1569,42 @@ switch (tool) {
                     $scopeZArgs5 = Get-CodexArgv
                     if ($scopeZArgs5 -contains 'exec' -or $scopeZArgs5 -contains '--sandbox' -or $scopeZArgs5 -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
                     if ($scopeZArgs5 -cnotcontains '-C') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: the codex TUI launch must still carry -C <project>' }
+
+                    # Run 6: argv probe. A CLI that rejects the launch argv (the
+                    # --full-auto class of break) must stop the seat with
+                    # MOE_CLI_ARGV_REJECTED + a #general escalation and never
+                    # launch the prompt, instead of relaunch-looping.
+                    $env:FAKE_CODEX_REJECT_ARGV = '1'
+                    $scopeZOut6 = Join-Path $tempRoot 'scope-z-6.out'
+                    try {
+                        $scopeZCode6 = Invoke-CodexWrapper $scopeZOut6 'worker' @('-CodexExec')
+                    } finally { Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue }
+                    $scopeZText6 = Get-Content -Raw -Path $scopeZOut6
+                    if ($scopeZCode6 -eq 0) { Write-Host $scopeZText6; throw 'SCENARIO Z FAILED: a rejected argv must make the wrapper exit non-zero' }
+                    if (-not $scopeZText6.Contains('MOE_CLI_ARGV_REJECTED') -or -not $scopeZText6.Contains("unexpected argument '--sandbox' found")) { Write-Host $scopeZText6; throw "SCENARIO Z FAILED: expected MOE_CLI_ARGV_REJECTED with the CLI's own error line" }
+                    if ($scopeZText6.Contains('[launch-failure]')) { Write-Host $scopeZText6; throw 'SCENARIO Z FAILED: a rejected argv must not reach the launch-failure backoff' }
+                    $scopeZArgs6 = Get-CodexArgv
+                    if ($scopeZArgs6 -cnotcontains '--help' -or ($scopeZArgs6 | Where-Object { $_ -like '*Task task-postflight is claimed*' })) { Write-Host ($scopeZArgs6 -join ' '); throw 'SCENARIO Z FAILED: the probe must run the real argv plus --help and the prompt must never be launched' }
+                    if ((Get-Content -Raw -Path (Join-Path $scopeZDir '.moe\messages\chan-general.jsonl')) -notlike '*MOE_CLI_ARGV_REJECTED*') { throw 'SCENARIO Z FAILED: a rejected argv must be escalated to #general' }
+
+                    # Run 7: MOE_DISABLE_ARGV_PROBE=1 skips the probe; the rejection
+                    # then surfaces through the ordinary launch-failure path.
+                    $env:FAKE_CODEX_REJECT_ARGV = '1'
+                    $env:MOE_DISABLE_ARGV_PROBE = '1'
+                    $scopeZOut7 = Join-Path $tempRoot 'scope-z-7.out'
+                    try {
+                        Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut7 'worker' @('-CodexExec')) $scopeZOut7
+                    } finally {
+                        Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue
+                        Remove-Item Env:MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue
+                    }
+                    $scopeZText7 = Get-Content -Raw -Path $scopeZOut7
+                    if ($scopeZText7.Contains('MOE_CLI_ARGV_REJECTED') -or -not $scopeZText7.Contains('[launch-failure]')) { Write-Host $scopeZText7; throw 'SCENARIO Z FAILED: MOE_DISABLE_ARGV_PROBE=1 must skip the probe and fall through to the launch-failure path' }
+                    $scopeZArgs7 = Get-CodexArgv
+                    if ($scopeZArgs7 -ccontains '--help' -or -not ($scopeZArgs7 | Where-Object { $_ -like '*Task task-postflight is claimed*' })) { Write-Host ($scopeZArgs7 -join ' '); throw 'SCENARIO Z FAILED: with the probe disabled the real prompt must be launched and no --help probe issued' }
                 } finally {
+                    Remove-Item Env:FAKE_CODEX_REJECT_ARGV -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue
                     Remove-Item Env:FAKE_CODEX_ARGV_FILE -ErrorAction SilentlyContinue
                     Remove-Item Env:FAKE_CODEX_EXIT -ErrorAction SilentlyContinue
                     Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue

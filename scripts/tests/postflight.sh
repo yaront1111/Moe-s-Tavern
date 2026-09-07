@@ -1881,9 +1881,17 @@ EOF
   echo "[scenario Z] codex CLI: headless exec argv without --full-auto, MOE_CODEX_SANDBOX, exit propagation, DENY tier, polarity"
   CODEX_CLI="$TMP_DIR/codex"
   CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
+  # Appends (the wrapper may invoke codex more than once per launch: the argv
+  # probe, then --version, then the real launch); each run rm -f's the file.
+  # FAKE_CODEX_REJECT_ARGV=1 makes every invocation fail the way clap does for
+  # a flag the installed CLI no longer accepts.
   cat > "$CODEX_CLI" <<EOF
 #!/usr/bin/env bash
-printf '%s\n' "\$@" > "$CODEX_ARGS_FILE"
+printf '%s\n' "\$@" >> "$CODEX_ARGS_FILE"
+if [ "\${FAKE_CODEX_REJECT_ARGV:-}" = "1" ]; then
+  echo "error: unexpected argument '--sandbox' found" >&2
+  exit 2
+fi
 exit "\${FAKE_CODEX_EXIT:-0}"
 EOF
   chmod +x "$CODEX_CLI"
@@ -2014,6 +2022,47 @@ EOF
   if ! grep -Fqx -- '-C' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "the codex TUI launch must still carry -C <project>" "$TMP_DIR/scope-z5.out"
+  fi
+  # -- argv probe: a CLI that rejects the launch argv (the --full-auto class of
+  # break) must stop the seat with MOE_CLI_ARGV_REJECTED + a #general
+  # escalation and never launch the prompt, instead of relaunch-looping --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  FAKE_CODEX_REJECT_ARGV=1 MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z6.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z6_code=$?
+  set -e
+  [ "$scope_z6_code" -ne 0 ] || scope_fail Z "a rejected argv must make the wrapper exit non-zero (got 0)" "$TMP_DIR/scope-z6.out"
+  if ! grep -Fq 'MOE_CLI_ARGV_REJECTED' "$TMP_DIR/scope-z6.out" || ! grep -Fq -- "unexpected argument '--sandbox' found" "$TMP_DIR/scope-z6.out"; then
+    scope_fail Z "expected MOE_CLI_ARGV_REJECTED with the CLI's own error line" "$TMP_DIR/scope-z6.out"
+  fi
+  if grep -Fq '[launch-failure]' "$TMP_DIR/scope-z6.out"; then
+    scope_fail Z "a rejected argv must not reach the launch-failure backoff" "$TMP_DIR/scope-z6.out"
+  fi
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the argv probe never ran" "$TMP_DIR/scope-z6.out"
+  if ! grep -Fqx -- '--help' "$CODEX_ARGS_FILE" || grep -Fq 'Task task-postflight is claimed' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "the probe must run the real argv plus --help and the prompt must never be launched" "$TMP_DIR/scope-z6.out"
+  fi
+  if ! grep -Fq 'MOE_CLI_ARGV_REJECTED' "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    scope_fail Z "a rejected argv must be escalated to #general" "$TMP_DIR/scope-z6.out"
+  fi
+  # -- MOE_DISABLE_ARGV_PROBE=1 skips the probe: the launch proceeds and the
+  # rejection surfaces through the ordinary launch-failure path --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  FAKE_CODEX_REJECT_ARGV=1 MOE_DISABLE_ARGV_PROBE=1 MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z7.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z7_code=$?
+  set -e
+  [ "$scope_z7_code" -eq 0 ] || scope_fail Z "with the probe disabled the wrapper run exited with $scope_z7_code" "$TMP_DIR/scope-z7.out"
+  if grep -Fq 'MOE_CLI_ARGV_REJECTED' "$TMP_DIR/scope-z7.out" || ! grep -Fq '[launch-failure]' "$TMP_DIR/scope-z7.out"; then
+    scope_fail Z "MOE_DISABLE_ARGV_PROBE=1 must skip the probe and fall through to the launch-failure path" "$TMP_DIR/scope-z7.out"
+  fi
+  if grep -Fqx -- '--help' "$CODEX_ARGS_FILE" || ! grep -Fq 'Task task-postflight is claimed' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "with the probe disabled the real prompt must be launched and no --help probe issued" "$TMP_DIR/scope-z7.out"
   fi
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario Z] ok"

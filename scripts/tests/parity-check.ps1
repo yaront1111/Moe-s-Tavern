@@ -70,7 +70,7 @@ $required = [ordered]@{
     'cli types' = @('"grok"', '"codex"')
     # Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX
     # accepts and the fallback warning, spelled identically.
-    'codex vocabulary' = @('read-only', 'workspace-write', 'danger-full-access', 'approvals_reviewer=user', 'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.')
+    'codex vocabulary' = @('read-only', 'workspace-write', 'danger-full-access', 'approvals_reviewer=user', 'MOE_CLI_ARGV_REJECTED', 'MOE_DISABLE_ARGV_PROBE', 'is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.', "rejects the wrapper's launch argv")
     'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive', 'Grok folder trust granted:', 'trusted_folders.toml', 'moe__moe_<name>', 'tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }')
 }
 foreach ($group in $required.Keys) {
