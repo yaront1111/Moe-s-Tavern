@@ -1469,7 +1469,7 @@ switch (tool) {
                 # before any work — which the launch-failure backoff then
                 # relaunches forever); `codex exec` already runs with
                 # approval_policy = never, so the wrapper passes only
-                # `--sandbox <MOE_CODEX_SANDBOX|workspace-write>`. Pins: a
+                # `--sandbox <MOE_CODEX_SANDBOX|danger-full-access>`. Pins: a
                 # worker defaults to headless `exec -C <project>` with the
                 # per-seat -c overrides and never --full-auto; --sandbox
                 # follows `exec`; MOE_CODEX_SANDBOX reaches argv verbatim;
@@ -1512,7 +1512,7 @@ switch (tool) {
                     if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
                     # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
                     # satisfied by the `-c` seat overrides that precede every codex launch.
-                    foreach ($flag in @('exec', '-C', '--sandbox', 'workspace-write', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                    foreach ($flag in @('exec', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
@@ -1521,13 +1521,16 @@ switch (tool) {
                     # appears once per invocation; every occurrence must point under $env:TEMP.
                     $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
                     if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
-                    if (-not $scopeZText.Contains('--sandbox workspace-write') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox workspace-write' }
+                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox danger-full-access' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)
-                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'startup_timeout_sec = 120', 'model_instructions_file = "agent-instructions.md"', 'model_reasoning_effort = "xhigh"')) {
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'startup_timeout_sec = 120', 'model_instructions_file = "agent-instructions.md"', 'model_reasoning_effort = "xhigh"', 'default_tools_approval_mode = "approve"')) {
                         if (-not $scopeZToml.Contains($needle)) { Write-Host $scopeZToml; throw "SCENARIO Z FAILED: .codex/config.toml must contain [$needle]" }
                     }
+                    # codex 0.148+ rejects un-annotated MCP tools under approval never + a sandbox;
+                    # the pre-approval must be pinned on BOTH servers (moe and serena).
+                    if (([regex]::Matches($scopeZToml, [regex]::Escape('default_tools_approval_mode = "approve"'))).Count -ne 2) { Write-Host $scopeZToml; throw 'SCENARIO Z FAILED: default_tools_approval_mode = "approve" must be pinned on both the moe and serena servers in .codex/config.toml' }
                     if (-not (Test-Path -LiteralPath (Join-Path $scopeZDir '.codex\agent-instructions.md'))) { throw 'SCENARIO Z FAILED: .codex/agent-instructions.md was not written' }
                     $scopeZChat = Get-Content -Raw -Path (Join-Path $scopeZDir '.moe\messages\chan-general.jsonl')
                     if ($scopeZChat -notlike '*worker session ended: task=task-postflight (CLI exit=5)*') { Write-Host $scopeZChat; throw 'SCENARIO Z FAILED: the fake codex exit 5 must propagate into the session-ended line' }
@@ -1536,13 +1539,13 @@ switch (tool) {
                     if ($LASTEXITCODE -eq 0) { throw 'SCENARIO Z FAILED: .codex/config.toml reached HEAD' }
 
                     # Run 2: MOE_CODEX_SANDBOX reaches argv verbatim.
-                    $env:MOE_CODEX_SANDBOX = 'danger-full-access'
+                    $env:MOE_CODEX_SANDBOX = 'workspace-write'
                     $scopeZOut2 = Join-Path $tempRoot 'scope-z-2.out'
                     try {
                         Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut2 'worker' @('-CodexExec')) $scopeZOut2
                     } finally { Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue }
                     $scopeZArgs2 = Get-CodexArgv
-                    if ($scopeZArgs2 -notcontains 'danger-full-access' -or $scopeZArgs2 -contains 'workspace-write') { Write-Host ($scopeZArgs2 -join ' '); throw 'SCENARIO Z FAILED: MOE_CODEX_SANDBOX=danger-full-access must reach argv as --sandbox danger-full-access' }
+                    if ($scopeZArgs2 -notcontains 'workspace-write' -or $scopeZArgs2 -contains 'danger-full-access') { Write-Host ($scopeZArgs2 -join ' '); throw 'SCENARIO Z FAILED: MOE_CODEX_SANDBOX=workspace-write must reach argv as --sandbox workspace-write' }
 
                     # Run 3: inherit drops the flag.
                     $env:MOE_CODEX_SANDBOX = 'inherit'
@@ -1560,8 +1563,8 @@ switch (tool) {
                         Assert-ScopeRun 'Z' (Invoke-CodexWrapper $scopeZOut4 'worker' @('-CodexExec')) $scopeZOut4
                     } finally { Remove-Item Env:MOE_CODEX_SANDBOX -ErrorAction SilentlyContinue }
                     $scopeZText4 = Get-Content -Raw -Path $scopeZOut4
-                    if (-not $scopeZText4.Contains("MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write.")) { Write-Host $scopeZText4; throw 'SCENARIO Z FAILED: an unknown MOE_CODEX_SANDBOX must warn and fall back' }
-                    if ((Get-CodexArgv) -notcontains 'workspace-write') { throw 'SCENARIO Z FAILED: the fallback sandbox must be workspace-write' }
+                    if (-not $scopeZText4.Contains("MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access.")) { Write-Host $scopeZText4; throw 'SCENARIO Z FAILED: an unknown MOE_CODEX_SANDBOX must warn and fall back' }
+                    if ((Get-CodexArgv) -notcontains 'danger-full-access') { throw 'SCENARIO Z FAILED: the fallback sandbox must be danger-full-access' }
 
                     # Run 5: an architect defaults to the TUI (no exec / --sandbox).
                     $scopeZOut5 = Join-Path $tempRoot 'scope-z-5.out'

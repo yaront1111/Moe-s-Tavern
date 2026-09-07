@@ -298,7 +298,7 @@ JetBrains on macOS/Linux `scripts/install-mac.sh --with-plugin`; VS Code/Antigra
 (re-bundles `scripts/`) and reinstall the `.vsix`. Then restart the affected agent terminals (a running
 wrapper keeps the argv it parsed at start). Since 2026-09-07 the headless launch is
 `codex -c <seat overrides> -c approvals_reviewer=user exec -C <project> --sandbox <mode>` with `mode` from
-`MOE_CODEX_SANDBOX` (default `workspace-write`; `inherit` drops the flag so the merged `~/.codex` +
+`MOE_CODEX_SANDBOX` (default `danger-full-access` since the fix below; `inherit` drops the flag so the merged `~/.codex` +
 `<project>/.codex` `sandbox_mode` decides — read-only when neither sets it; on Windows `workspace-write`
 needs `[windows] sandbox = "unelevated"` in `~/.codex/config.toml`, see `MOE_CODEX_SANDBOX` in
 CONFIGURATION.md). `codex exec` already runs with `approval_policy = never`, and the reviewer pin keeps
@@ -309,6 +309,37 @@ and `scripts/tests/parity-check.{sh,ps1}` fail if `--full-auto` ever comes back.
 argv once per process (`… --help`) before the first headless launch: a codex that rejects a flag now stops the
 seat with `[ERROR] MOE_CLI_ARGV_REJECTED: the installed codex (<version>) rejects the wrapper's launch argv -- <codex's
 error line>` plus a `@governors` line in `#general`, instead of relaunch-looping (`MOE_DISABLE_ARGV_PROBE=1` skips it).
+
+### Codex worker stalls: `CreateProcessAsUserW failed: 5 (Access is denied.)` and `MCP tool call requires approval, but approval policy is never`
+
+**Symptom:** a headless codex seat (`codex … exec … --sandbox workspace-write`, the wrapper default between the
+`--full-auto` fix and this one) launches fine, then every shell command fails with
+
+```
+ERROR codex_core::tools::router: error=exec_command failed: CreateProcess { message: "Rejected(\"Failed to create unified exec process: CreateProcessAsUserW failed: 5 (Access is denied.) | cwd=… | cmd=C:\\Users\\<you>\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe …
+```
+
+and every `moe.*` / `serena.write_memory` call fails with `MCP tool call requires approval, but approval policy is
+never` (`moe.start_step`, `moe.report_blocked` …). The model gives up ("Unable to proceed: runtime permissions
+deny process execution and Moe/Serena writes"), the wrapper lands a checkpoint and idles. Interactive TUI seats
+on the same box keep working.
+
+**Cause:** two codex 0.148+ behaviors, both tied to running under a sandbox with `approval_policy = never`
+(`codex exec` forces `never`; measured on 0.153.4, 2026-09-07): (1) codex refuses any MCP tool it deems
+approval-worthy — every tool without a `readOnlyHint` annotation, i.e. all of Moe's — instead of asking, unless
+the server is configured with `default_tools_approval_mode = "approve"`; under `danger-full-access` codex bypasses
+approvals entirely, which is why TUI seats (the operator's global `sandbox_mode = "danger-full-access"`) never
+saw it. (2) On Windows, `[windows] sandbox = "unelevated"` runs commands under a restricted token, and that token
+cannot execute a Microsoft Store (MSIX) PowerShell 7 — the `WindowsApps\pwsh.exe` alias codex picks from PATH.
+`codex sandbox -- "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe" -NoProfile -Command exit` reproduces it with no
+model call; `codex sandbox -- cmd /c exit` (and System32 `powershell.exe`, `node`, `git`) succeeds.
+
+**Fix:** rebuild and reinstall the plugin (see above). Since this fix the headless default is
+`--sandbox danger-full-access` and the config writer pins `default_tools_approval_mode = "approve"` on the `moe`
+and `serena` servers in `<project>/.codex/config.toml`. Interim, with an older wrapper: launch with
+`MOE_CODEX_SANDBOX=danger-full-access` (or `inherit`), or use the interactive TUI (`-Interactive` / `--interactive`).
+To keep a real sandbox on Windows, install the MSI PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`)
+so codex finds `C:\Program Files\PowerShell\7\pwsh.exe`, then set `MOE_CODEX_SANDBOX=workspace-write`.
 
 ---
 
