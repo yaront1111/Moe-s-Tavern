@@ -1077,6 +1077,8 @@ Create a new task in an epic. **Guardrails are ALL ADVISORY — creation never h
 
 `workerId` (auto-injected by the proxy) resolves the caller's role so agent-created tasks are attributed — `createdBy` records who actually filed the row, not just a `HUMAN`/`WORKER` binary.
 
+Workers file bugs they find outside their step's scope as cards this way instead of fixing them in-line (same `epicId`, `title` prefixed `bug:`, `dependsOn: [<their taskId>]` only when the fix must land after theirs — see `docs/roles/worker.md`): `createdBy` resolves to `WORKER` from the injected `workerId`, and the guardrails above stay advisory, so a full column or a wide epic never blocks the filing.
+
 ---
 
 ### moe.create_epic

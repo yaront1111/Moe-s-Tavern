@@ -269,6 +269,47 @@ instead. `.grok/config.toml` is on the attribution DENY list (`.grok/**`), so th
 in a task commit; this repo also gitignores it — add it to your own project's `.gitignore` (it holds
 machine-local absolute paths).
 
+### Codex agent relaunch-loops at launch: `unexpected argument '--full-auto' found`
+
+**Symptom:** A `--command codex` worker or QA prints `Command: codex -c … exec -C "<project>" …`, codex
+exits at once with
+
+```
+error: unexpected argument '--full-auto' found
+```
+
+and the wrapper reports `[launch-failure] CLI exited 2 after 0s, before doing any work (streak N)`, backs
+off (60 s, 120 s, … up to 15 min) and relaunches forever. The held task stays WORKING (correct — nothing
+was lost, the checkpoint landed), but no code gets written.
+
+**Cause:** codex-cli 0.147.0 (August 2026) hard-removed `--full-auto`
+([openai/codex#36054](https://github.com/openai/codex/pull/36054), after the
+[#20133](https://github.com/openai/codex/pull/20133) deprecation of 2026-04-29; 0.130–0.146 still accepted
+it with a warning). The standalone codex installer auto-updates (`~/.codex/packages/standalone/releases/<version>/`),
+so any box on 0.147+ hits this the first time a seat runs headless. On the Moe side that moment came with
+8b632b5 (2026-09-06): worker/QA codex seats default to one-shot `codex exec` — before it the JetBrains
+launcher never passed `-CodexExec`, so the `exec … --full-auto` branch never ran and the removal stayed
+invisible for a month. A wrapper built before 2026-09-07 still passes the flag. `codex exec --help` lists
+what the installed version accepts.
+
+**Fix:** rebuild and reinstall the plugin — the live wrapper is the installed plugin's copy, not the repo's:
+JetBrains on Windows `.\scripts\install-all.ps1 -BuildPlugin -InstallPlugin -IdeVersion <IDE folder, e.g. PyCharm2026.1>`;
+JetBrains on macOS/Linux `scripts/install-mac.sh --with-plugin`; VS Code/Antigravity `cd moe-vscode && npm run package`
+(re-bundles `scripts/`) and reinstall the `.vsix`. Then restart the affected agent terminals (a running
+wrapper keeps the argv it parsed at start). Since 2026-09-07 the headless launch is
+`codex -c <seat overrides> -c approvals_reviewer=user exec -C <project> --sandbox <mode>` with `mode` from
+`MOE_CODEX_SANDBOX` (default `workspace-write`; `inherit` drops the flag so the merged `~/.codex` +
+`<project>/.codex` `sandbox_mode` decides — read-only when neither sets it; on Windows `workspace-write`
+needs `[windows] sandbox = "unelevated"` in `~/.codex/config.toml`, see `MOE_CODEX_SANDBOX` in
+CONFIGURATION.md). `codex exec` already runs with `approval_policy = never`, and the reviewer pin keeps
+that override even when the operator's config says `approvals_reviewer = "auto_review"` — together they
+carry what `--full-auto` meant. The launch-failure line now names this case
+(`… or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand)`),
+and `scripts/tests/parity-check.{sh,ps1}` fail if `--full-auto` ever comes back. The wrapper also probes its own
+argv once per process (`… --help`) before the first headless launch: a codex that rejects a flag now stops the
+seat with `[ERROR] MOE_CLI_ARGV_REJECTED: the installed codex (<version>) rejects the wrapper's launch argv -- <codex's
+error line>` plus a `@governors` line in `#general`, instead of relaunch-looping (`MOE_DISABLE_ARGV_PROBE=1` skips it).
+
 ---
 
 ## Task Sync Issues

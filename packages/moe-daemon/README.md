@@ -1,6 +1,6 @@
 # moe-daemon
 
-Moe daemon - MCP + WebSocket state manager for AI task orchestration.
+Part of [Moe's Tavern](https://github.com/yaront1111/Moe-s-Tavern), an AI agent task board for Claude Code, Codex, Gemini CLI and Grok Build. This package is the daemon: the MCP + WebSocket state manager that owns `.moe/` and serves the IDE boards and agent proxies.
 
 ## Installation
 

@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Per-wrapper-run timeout (seconds). 60s is enough on a warm developer box; the
+# ps1 twin reads the same MOE_POSTFLIGHT_TIMEOUT_SEC so a slow-spawn machine (or a
+# box also running the other harness) can widen both without editing either file.
+POSTFLIGHT_TIMEOUT_SEC=60
+case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WRAPPER="$ROOT_DIR/scripts/moe-agent.sh"
@@ -298,7 +303,7 @@ switch (tool) {
 JS
 
 set +e
-PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" timeout 60s \
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
   "$WRAPPER" \
   --project "$PROJECT_DIR" \
   --worker-id worker-postflight \
@@ -349,7 +354,7 @@ EOF
 chmod +x "$FAKE_CLI"
 
 set +e
-PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
   "$WRAPPER" \
   --project "$PROJECT_DIR" \
   --worker-id qa-postflight \
@@ -398,7 +403,7 @@ fi
 # --interactive forces the TUI: no --print in argv.
 : > "$CLI_ARGS_FILE"
 set +e
-PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
   "$WRAPPER" \
   --project "$PROJECT_DIR" \
   --worker-id qa-postflight \
@@ -441,7 +446,7 @@ HEARTBEAT_LOG="$PROJECT_DIR/.moe/heartbeat.log"
 
 set +e
 PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
-  MOE_HEARTBEAT_INTERVAL_SEC=1 MOE_HEARTBEAT_MAX_DURATION_SEC=30 timeout 60s \
+  MOE_HEARTBEAT_INTERVAL_SEC=1 MOE_HEARTBEAT_MAX_DURATION_SEC=30 timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
   "$WRAPPER" \
   --project "$PROJECT_DIR" \
   --worker-id qa-heartbeat \
@@ -507,7 +512,7 @@ if command -v git >/dev/null 2>&1; then
 
   run_gate_wrapper() {
     # $1 = project dir, $2 = output file, extra env via caller
-    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS=REVIEW timeout 60s \
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS=REVIEW timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
       "$WRAPPER" \
       --project "$1" \
       --worker-id worker-gate \
@@ -877,7 +882,7 @@ if command -v git >/dev/null 2>&1; then
     # FAKE_TASK_STATUS models the status the task reaches AFTER the CLI ran;
     # callers override it with an env prefix (the old hard-coded REVIEW
     # silently overrode a caller's BLOCKED).
-    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS="${FAKE_TASK_STATUS:-REVIEW}" timeout 60s \
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_TASK_STATUS="${FAKE_TASK_STATUS:-REVIEW}" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
       "$WRAPPER" \
       --project "$dir" \
       --worker-id "$wid" \
@@ -1860,13 +1865,215 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario Y] ok"
 
-  # Scenario Z -- the bash Codex launcher must mirror the PowerShell twin's
+  # Scenario Z -- the codex CLI headless launch. A fake CLI literally named
+  # `codex` (detection keys on the command basename) records its argv.
+  # codex-cli 0.147+ rejects `--full-auto` (`error: unexpected argument
+  # '--full-auto' found`, exit 2 before any work -- which the launch-failure
+  # backoff then relaunches forever); `codex exec` already runs with
+  # approval_policy=never, so the wrapper passes only
+  # `--sandbox <MOE_CODEX_SANDBOX|workspace-write>`. Pins: a worker defaults to
+  # headless `exec -C <project>` with the seat's MOE_WORKER_ID override and
+  # never --full-auto; --sandbox follows the exec subcommand; MOE_CODEX_SANDBOX
+  # reaches argv verbatim; `inherit` drops the flag; an unknown value warns and
+  # falls back; a fast non-zero exit propagates and prints the argv hint; the
+  # project .codex/config.toml carries the moe table + top-level codex keys and
+  # never lands (DENY tier); an architect gets the TUI (no exec).
+  echo "[scenario Z] codex CLI: headless exec argv without --full-auto, MOE_CODEX_SANDBOX, exit propagation, DENY tier, polarity"
+  CODEX_CLI="$TMP_DIR/codex"
+  CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
+  # Appends (the wrapper may invoke codex more than once per launch: the argv
+  # probe, then --version, then the real launch); each run rm -f's the file.
+  # FAKE_CODEX_REJECT_ARGV=1 makes every invocation fail the way clap does for
+  # a flag the installed CLI no longer accepts.
+  cat > "$CODEX_CLI" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$CODEX_ARGS_FILE"
+if [ "\${FAKE_CODEX_REJECT_ARGV:-}" = "1" ]; then
+  echo "error: unexpected argument '--sandbox' found" >&2
+  exit 2
+fi
+exit "\${FAKE_CODEX_EXIT:-0}"
+EOF
+  chmod +x "$CODEX_CLI"
+  SCOPE_Z_DIR="$TMP_DIR/scope-z"
+  make_scope_project "$SCOPE_Z_DIR" '["owned-a.txt"]'
+  echo owned-a > "$SCOPE_Z_DIR/owned-a.txt"
+  SCOPE_Z_CFG="$SCOPE_Z_DIR/.codex/config.toml"
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  # Operator env that would change the argv/TOML the needles below assert is
+  # scrubbed for the run.
+  (
+    unset MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC MOE_DAEMON_HOST
+    MOE_SERENA_PATH="$FAKE_SERENA" FAKE_CODEX_EXIT=5 FAKE_TASK_STATUS=WORKING \
+      run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z.out" "$CODEX_CLI" worker worker-scope-z
+  )
+  scope_z_code=$?
+  set -e
+  [ "$scope_z_code" -eq 0 ] || scope_fail Z "wrapper exited with $scope_z_code" "$TMP_DIR/scope-z.out"
+  # -- headless argv --
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the fake codex CLI was never launched" "$TMP_DIR/scope-z.out"
+  if grep -Fqx -- '--full-auto' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "codex 0.147+ rejects --full-auto; it must never be on argv" "$TMP_DIR/scope-z.out"
+  fi
+  for flag in 'exec' '-C' '--sandbox' 'workspace-write' '-c' 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' 'approvals_reviewer=user'; do
+    if ! grep -Fqx -- "$flag" "$CODEX_ARGS_FILE"; then
+      cat "$CODEX_ARGS_FILE" >&2 || true
+      scope_fail Z "expected [$flag] on the headless codex argv" "$TMP_DIR/scope-z.out"
+    fi
+  done
+  # --sandbox is an `exec` option: it must follow the subcommand on argv (a
+  # top-level --sandbox before `exec` parses differently).
+  scope_z_exec_ln="$(grep -Fnx -- 'exec' "$CODEX_ARGS_FILE" | head -n1 | cut -d: -f1)"
+  scope_z_sandbox_ln="$(grep -Fnx -- '--sandbox' "$CODEX_ARGS_FILE" | head -n1 | cut -d: -f1)"
+  if [ -z "$scope_z_exec_ln" ] || [ -z "$scope_z_sandbox_ln" ] || [ "$scope_z_sandbox_ln" -le "$scope_z_exec_ln" ]; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "--sandbox must follow the exec subcommand on argv" "$TMP_DIR/scope-z.out"
+  fi
+  # The banner is what the launch-failure hint tells the operator to re-run by
+  # hand, so it must carry the seat override and the reviewer pin too.
+  if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox workspace-write' "$TMP_DIR/scope-z.out" \
+     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec -C' "$TMP_DIR/scope-z.out"; then
+    scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox workspace-write" "$TMP_DIR/scope-z.out"
+  fi
+  if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then
+    scope_fail Z "a fast non-zero exit must print the launch-failure argv hint" "$TMP_DIR/scope-z.out"
+  fi
+  # -- config writer --
+  [ -f "$SCOPE_Z_CFG" ] || scope_fail Z "expected .codex/config.toml to be written at pre-flight" "$TMP_DIR/scope-z.out"
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'model_instructions_file = "agent-instructions.md"' 'model_reasoning_effort = "xhigh"'; do
+    if ! grep -Fq -- "$needle" "$SCOPE_Z_CFG"; then
+      cat "$SCOPE_Z_CFG" >&2 || true
+      scope_fail Z "expected [$needle] in .codex/config.toml" "$TMP_DIR/scope-z.out"
+    fi
+  done
+  [ -f "$SCOPE_Z_DIR/.codex/agent-instructions.md" ] || scope_fail Z "expected .codex/agent-instructions.md to be written" "$TMP_DIR/scope-z.out"
+  # -- exit propagation + DENY tier --
+  if ! grep -Fq 'worker session ended: task=task-postflight (CLI exit=5)' "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    scope_fail Z "a non-zero codex exit must propagate into the session-ended line (CLI exit=5)" "$TMP_DIR/scope-z.out"
+  fi
+  # Pin the checkpoint itself first (ps1 twin parity): without it a landing that
+  # silently produced nothing would leave HEAD at the seed commit and the DENY
+  # check below would pass for the wrong reason.
+  scope_z_subject="$(git -C "$SCOPE_Z_DIR" log -1 --pretty=%s)"
+  if [ "$scope_z_subject" != "wip(task-postflight): Postflight smoke [status=WORKING role=worker cli-exit=5]" ]; then
+    scope_fail Z "unexpected checkpoint subject [$scope_z_subject]" "$TMP_DIR/scope-z.out"
+  fi
+  scope_z_files="$(committed_paths "$SCOPE_Z_DIR")"
+  if [ "$scope_z_files" != "owned-a.txt " ]; then
+    scope_fail Z "the checkpoint must contain ONLY the owned path; got [$scope_z_files]" "$TMP_DIR/scope-z.out"
+  fi
+  if git -C "$SCOPE_Z_DIR" cat-file -e HEAD:.codex/config.toml 2>/dev/null; then
+    scope_fail Z ".codex/config.toml reached HEAD -- it must be DENY-tier excluded" "$TMP_DIR/scope-z.out"
+  fi
+  # -- MOE_CODEX_SANDBOX reaches argv verbatim --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  MOE_CODEX_SANDBOX=danger-full-access MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z2.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z2_code=$?
+  set -e
+  [ "$scope_z2_code" -eq 0 ] || scope_fail Z "second wrapper run exited with $scope_z2_code" "$TMP_DIR/scope-z2.out"
+  if ! grep -Fqx -- 'danger-full-access' "$CODEX_ARGS_FILE" || grep -Fqx -- 'workspace-write' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "MOE_CODEX_SANDBOX=danger-full-access must reach argv as --sandbox danger-full-access" "$TMP_DIR/scope-z2.out"
+  fi
+  # -- inherit drops the flag --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  MOE_CODEX_SANDBOX=inherit MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z3.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z3_code=$?
+  set -e
+  [ "$scope_z3_code" -eq 0 ] || scope_fail Z "inherit wrapper run exited with $scope_z3_code" "$TMP_DIR/scope-z3.out"
+  if grep -Fqx -- '--sandbox' "$CODEX_ARGS_FILE" || grep -Fqx -- '--full-auto' "$CODEX_ARGS_FILE" || ! grep -Fqx -- 'exec' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "MOE_CODEX_SANDBOX=inherit must launch exec with no --sandbox flag" "$TMP_DIR/scope-z3.out"
+  fi
+  # -- an unknown value warns and falls back --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  MOE_CODEX_SANDBOX=yolo MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z4.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z4_code=$?
+  set -e
+  [ "$scope_z4_code" -eq 0 ] || scope_fail Z "unknown-sandbox wrapper run exited with $scope_z4_code" "$TMP_DIR/scope-z4.out"
+  if ! grep -Fq "MOE_CODEX_SANDBOX='yolo' is not one of read-only | workspace-write | danger-full-access | inherit; using workspace-write." "$TMP_DIR/scope-z4.out"; then
+    scope_fail Z "an unknown MOE_CODEX_SANDBOX must warn and fall back" "$TMP_DIR/scope-z4.out"
+  fi
+  if ! grep -Fqx -- 'workspace-write' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "the fallback sandbox must be workspace-write" "$TMP_DIR/scope-z4.out"
+  fi
+  # -- polarity: an architect gets the TUI (no exec subcommand, no --sandbox) --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z5.out" "$CODEX_CLI" architect architect-scope-z
+  scope_z5_code=$?
+  set -e
+  [ "$scope_z5_code" -eq 0 ] || scope_fail Z "architect wrapper run exited with $scope_z5_code" "$TMP_DIR/scope-z5.out"
+  if grep -Fqx -- 'exec' "$CODEX_ARGS_FILE" || grep -Fqx -- '--sandbox' "$CODEX_ARGS_FILE" || grep -Fqx -- 'approvals_reviewer=user' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)" "$TMP_DIR/scope-z5.out"
+  fi
+  if ! grep -Fqx -- '-C' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "the codex TUI launch must still carry -C <project>" "$TMP_DIR/scope-z5.out"
+  fi
+  # -- argv probe: a CLI that rejects the launch argv (the --full-auto class of
+  # break) must stop the seat with MOE_CLI_ARGV_REJECTED + a #general
+  # escalation and never launch the prompt, instead of relaunch-looping --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  FAKE_CODEX_REJECT_ARGV=1 MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z6.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z6_code=$?
+  set -e
+  [ "$scope_z6_code" -ne 0 ] || scope_fail Z "a rejected argv must make the wrapper exit non-zero (got 0)" "$TMP_DIR/scope-z6.out"
+  if ! grep -Fq 'MOE_CLI_ARGV_REJECTED' "$TMP_DIR/scope-z6.out" || ! grep -Fq -- "unexpected argument '--sandbox' found" "$TMP_DIR/scope-z6.out"; then
+    scope_fail Z "expected MOE_CLI_ARGV_REJECTED with the CLI's own error line" "$TMP_DIR/scope-z6.out"
+  fi
+  if grep -Fq '[launch-failure]' "$TMP_DIR/scope-z6.out"; then
+    scope_fail Z "a rejected argv must not reach the launch-failure backoff" "$TMP_DIR/scope-z6.out"
+  fi
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the argv probe never ran" "$TMP_DIR/scope-z6.out"
+  if ! grep -Fqx -- '--help' "$CODEX_ARGS_FILE" || grep -Fq 'Task task-postflight is claimed' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "the probe must run the real argv plus --help and the prompt must never be launched" "$TMP_DIR/scope-z6.out"
+  fi
+  if ! grep -Fq 'MOE_CLI_ARGV_REJECTED' "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl"; then
+    cat "$SCOPE_Z_DIR/.moe/messages/chan-general.jsonl" >&2 || true
+    scope_fail Z "a rejected argv must be escalated to #general" "$TMP_DIR/scope-z6.out"
+  fi
+  # -- MOE_DISABLE_ARGV_PROBE=1 skips the probe: the launch proceeds and the
+  # rejection surfaces through the ordinary launch-failure path --
+  rm -f "$CODEX_ARGS_FILE"
+  set +e
+  FAKE_CODEX_REJECT_ARGV=1 MOE_DISABLE_ARGV_PROBE=1 MOE_SERENA_PATH="$FAKE_SERENA" FAKE_TASK_STATUS=WORKING \
+    run_scope_wrapper "$SCOPE_Z_DIR" "$TMP_DIR/scope-z7.out" "$CODEX_CLI" worker worker-scope-z --codex-exec
+  scope_z7_code=$?
+  set -e
+  [ "$scope_z7_code" -eq 0 ] || scope_fail Z "with the probe disabled the wrapper run exited with $scope_z7_code" "$TMP_DIR/scope-z7.out"
+  if grep -Fq 'MOE_CLI_ARGV_REJECTED' "$TMP_DIR/scope-z7.out" || ! grep -Fq '[launch-failure]' "$TMP_DIR/scope-z7.out"; then
+    scope_fail Z "MOE_DISABLE_ARGV_PROBE=1 must skip the probe and fall through to the launch-failure path" "$TMP_DIR/scope-z7.out"
+  fi
+  if grep -Fqx -- '--help' "$CODEX_ARGS_FILE" || ! grep -Fq 'Task task-postflight is claimed' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "with the probe disabled the real prompt must be launched and no --help probe issued" "$TMP_DIR/scope-z7.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario Z] ok"
+
+  # Scenario Z2 -- the bash Codex launcher must mirror the PowerShell twin's
   # per-seat instructions file. The fake binary captures the model override
   # and copies the file while it is still alive; the wrapper must then remove
   # the file after both headless and interactive launches. TMPDIR is explicit
   # so this also proves the file is not written into the project or a shared
   # role-document path.
-  echo "[scenario Z] bash Codex CLI: per-seat instructions for headless and TUI"
+  echo "[scenario Z2] bash Codex CLI: per-seat instructions for headless and TUI"
   CODEX_CLI="$TMP_DIR/codex"
   CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
   CODEX_PATH_FILE="$TMP_DIR/codex-instructions-path.txt"
@@ -1891,7 +2098,7 @@ EOF
   rm -f "$CODEX_ARGS_FILE" "$CODEX_PATH_FILE" "$CODEX_INSTRUCTIONS_COPY"
   set +e
   (
-    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
       "$WRAPPER" \
       --project "$PROJECT_DIR" \
       --worker-id codex-headless \
@@ -1906,32 +2113,32 @@ EOF
   )
   codex_headless_code=$?
   set -e
-  [ "$codex_headless_code" -eq 0 ] || scope_fail Z "headless Codex wrapper exited with $codex_headless_code" "$TMP_DIR/wrapper-codex-headless.out"
-  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the fake headless Codex CLI was never launched" "$TMP_DIR/wrapper-codex-headless.out"
+  [ "$codex_headless_code" -eq 0 ] || scope_fail Z2 "headless Codex wrapper exited with $codex_headless_code" "$TMP_DIR/wrapper-codex-headless.out"
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z2 "the fake headless Codex CLI was never launched" "$TMP_DIR/wrapper-codex-headless.out"
   if ! grep -Fq 'model_instructions_file=' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
-    scope_fail Z "headless Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-headless.out"
+    scope_fail Z2 "headless Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-headless.out"
   fi
-  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z "headless Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-headless.out"
+  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z2 "headless Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-headless.out"
   CODEX_HEADLESS_PATH="$(cat "$CODEX_PATH_FILE")"
   case "$CODEX_HEADLESS_PATH" in
     "$CODEX_TMP_DIR"/*) : ;;
-    *) echo "received path: $CODEX_HEADLESS_PATH" >&2; scope_fail Z "headless instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-headless.out" ;;
+    *) echo "received path: $CODEX_HEADLESS_PATH" >&2; scope_fail Z2 "headless instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-headless.out" ;;
   esac
-  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z "headless Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-headless.out"
+  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "headless Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-headless.out"
   for needle in 'Role: worker' '# Session Context (per-iteration)' 'Claimed task id: task-resume'; do
     if ! grep -Fq -- "$needle" "$CODEX_INSTRUCTIONS_COPY"; then
-      scope_fail Z "headless instructions file is missing [$needle]" "$TMP_DIR/wrapper-codex-headless.out"
+      scope_fail Z2 "headless instructions file is missing [$needle]" "$TMP_DIR/wrapper-codex-headless.out"
     fi
   done
   if [ -e "$CODEX_HEADLESS_PATH" ]; then
-    scope_fail Z "headless per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-headless.out"
+    scope_fail Z2 "headless per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-headless.out"
   fi
 
   rm -f "$CODEX_ARGS_FILE" "$CODEX_PATH_FILE" "$CODEX_INSTRUCTIONS_COPY"
   set +e
   (
-    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout 60s \
+    TMPDIR="$CODEX_TMP_DIR" PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
       "$WRAPPER" \
       --project "$PROJECT_DIR" \
       --worker-id codex-tui \
@@ -1946,34 +2153,34 @@ EOF
   )
   codex_tui_code=$?
   set -e
-  [ "$codex_tui_code" -eq 0 ] || scope_fail Z "interactive Codex wrapper exited with $codex_tui_code" "$TMP_DIR/wrapper-codex-tui.out"
-  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z "the fake interactive Codex CLI was never launched" "$TMP_DIR/wrapper-codex-tui.out"
+  [ "$codex_tui_code" -eq 0 ] || scope_fail Z2 "interactive Codex wrapper exited with $codex_tui_code" "$TMP_DIR/wrapper-codex-tui.out"
+  [ -f "$CODEX_ARGS_FILE" ] || scope_fail Z2 "the fake interactive Codex CLI was never launched" "$TMP_DIR/wrapper-codex-tui.out"
   if ! grep -Fq 'model_instructions_file=' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
-    scope_fail Z "interactive Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-tui.out"
+    scope_fail Z2 "interactive Codex argv is missing model_instructions_file" "$TMP_DIR/wrapper-codex-tui.out"
   fi
-  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z "interactive Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-tui.out"
+  [ -f "$CODEX_PATH_FILE" ] || scope_fail Z2 "interactive Codex did not receive an instructions path" "$TMP_DIR/wrapper-codex-tui.out"
   CODEX_TUI_PATH="$(cat "$CODEX_PATH_FILE")"
   case "$CODEX_TUI_PATH" in
     "$CODEX_TMP_DIR"/*) : ;;
-    *) echo "received path: $CODEX_TUI_PATH" >&2; scope_fail Z "interactive instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-tui.out" ;;
+    *) echo "received path: $CODEX_TUI_PATH" >&2; scope_fail Z2 "interactive instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-tui.out" ;;
   esac
-  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z "interactive Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-tui.out"
+  [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "interactive Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-tui.out"
   if ! grep -Fq -- '# Session Context (per-iteration)' "$CODEX_INSTRUCTIONS_COPY"; then
-    scope_fail Z "interactive instructions file is missing per-iteration context" "$TMP_DIR/wrapper-codex-tui.out"
+    scope_fail Z2 "interactive instructions file is missing per-iteration context" "$TMP_DIR/wrapper-codex-tui.out"
   fi
   if [ -e "$CODEX_TUI_PATH" ]; then
-    scope_fail Z "interactive per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-tui.out"
+    scope_fail Z2 "interactive per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-tui.out"
   fi
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
-  echo "[scenario Z] ok"
+  echo "[scenario Z2] ok"
 
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 24 ]; then
-    echo "Expected 24 commit-scope scenarios (A-P, R-U, W-Z); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 25 ]; then
+    echo "Expected 25 commit-scope scenarios (A-P, R-U, W-Z, Z2); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else
