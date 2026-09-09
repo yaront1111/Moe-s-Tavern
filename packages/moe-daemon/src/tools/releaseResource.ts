@@ -20,7 +20,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         workerId: { type: 'string' },
         taskId: { type: 'string', description: 'Limit the release to this task\'s lease/queue entry. Default: everything held by workerId. NOTE: taskId scopes a TASK, not a lease generation — the same task\'s lease may since have passed to a different worker. Use ifHolderWorkerId to pin the generation.' },
         force: { type: 'boolean', description: 'Release regardless of ownership (governor/human intervention). With taskId: that lease; without: ALL leases and queue entries.' },
-        ifHolderWorkerId: { type: 'string', description: 'Precondition: proceed only if every lease this call would release is still held by this worker. Otherwise nothing is released and the error names the current holder. Use it whenever time passed between reading list_resources and calling this — a human-in-the-loop pause is the common case.' },
+        ifHolderWorkerId: { type: 'string', description: 'Precondition: proceed only if EVERY lease this call would release is still held by this worker — including, under force with no taskId, peer leases the call would also strip. Otherwise nothing is released and the error names the current holder. Guards leases, not queue entries. Use it whenever time passed between reading list_resources and calling this — a human-in-the-loop pause is the common case.' },
         ifAcquiredAt: { type: 'string', description: 'Precondition: proceed only if the targeted lease was acquired at exactly this ISO timestamp (as reported by list_resources). Pins the exact lease generation.' }
       },
       required: ['resourceId', 'workerId'],
@@ -38,16 +38,13 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       }
       await state.touchWorker(params.workerId);
 
-      // ATOMICITY. This check and the release below run in ONE uninterrupted
-      // synchronous turn of the event loop, so no other handler can move the
-      // lease between them: `state.getResource` is synchronous, the loop below
-      // is synchronous, and `releaseResource` mutates `resource.holders`
-      // synchronously BEFORE its first `await` (persistResource). `await f()`
-      // runs f's synchronous prefix before yielding, so the window is empty.
-      // This is a property of the current implementation, not an enforced
-      // invariant: introducing an `await` ahead of the holders mutation in
-      // resourceStore.releaseResource would silently reopen a TOCTOU window
-      // here. Keep that mutation in the synchronous prefix.
+      // ATOMICITY. Nothing can move the lease between this check and the
+      // release below, because McpAdapter dispatches every tool without
+      // `blocking: true` through `state.runExclusive(invoke)` — and
+      // moe.release_resource does not set it. The whole handler, check and
+      // release together, runs inside that mutex. That serialization is what
+      // makes the precondition sound; do NOT mark this tool `blocking`
+      // without replacing the guarantee.
       //
       // Compare-and-swap preconditions. A release is otherwise a blind write:
       // `taskId` bounds the blast radius to one row but asserts nothing about
@@ -57,9 +54,19 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       if (params.ifHolderWorkerId !== undefined || params.ifAcquiredAt !== undefined) {
         const resource = state.getResource(params.resourceId);
         const holders = resource?.holders ?? [];
-        const targeted = params.taskId
-          ? holders.filter((l) => l.taskId === params.taskId)
-          : holders.filter((l) => l.workerId === params.workerId);
+        // MUST mirror resourceStore.releaseResource's own `matchesCaller`, or
+        // the precondition silently under-covers what the release will strip.
+        // The dangerous case is force with NO taskId: the store releases EVERY
+        // holder, so filtering to the caller's own leases would validate lease
+        // A and let a peer's lease B be torn off unchecked.
+        const callerOwns = (l: ResourceLease): boolean =>
+          l.workerId === params.workerId ||
+          state.getTask(l.taskId)?.assignedWorkerId === params.workerId;
+        const targeted = params.force
+          ? (params.taskId ? holders.filter((l) => l.taskId === params.taskId) : holders)
+          : (params.taskId
+              ? holders.filter((l) => l.taskId === params.taskId && callerOwns(l))
+              : holders.filter(callerOwns));
 
         if (targeted.length === 0) {
           const held = holders.length === 0

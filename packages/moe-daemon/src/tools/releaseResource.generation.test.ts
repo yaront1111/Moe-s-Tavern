@@ -19,6 +19,7 @@ describe('moe.release_resource generation preconditions', () => {
     h.setupMoeFolder();
     h.createEpic();
     h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+    h.createTask({ id: 'task-2', status: 'WORKING', assignedWorkerId: 'worker-2' });
     h.createWorker({ id: 'worker-1' });
     h.createWorker({ id: 'worker-2' });
     h.createWorker({ id: 'governor-1' });
@@ -110,6 +111,35 @@ describe('moe.release_resource generation preconditions', () => {
       { resourceId: 'gate', workerId: 'governor-1', taskId: 'task-1', force: true, ifHolderWorkerId: 'worker-1' },
       h.state
     )).rejects.toThrow(/no holders/i);
+  });
+
+  // Raised in review by governor-608c8a78: force with NO taskId releases EVERY
+  // holder, so a precondition that only inspected the caller's own leases would
+  // validate lease A while a peer's lease B was stripped unchecked - a guard
+  // that reads as safe and is not.
+  it('checks PEER leases too under force with no taskId, where the store strips them all', async () => {
+    const acquire = acquireResourceTool(h.state);
+    const release = releaseResourceTool(h.state);
+
+    // capacity 2 so two holders coexist, as the incident's gate could not.
+    h.state.project!.settings = {
+      ...(h.state.project!.settings ?? {}),
+      resources: { pool: { capacity: 2, maxLeaseMs: 86_400_000 } },
+    };
+
+    await acquire.handler({ resourceId: 'pool', taskId: 'task-1', workerId: 'worker-1' }, h.state);
+    const peer = await acquire.handler({ resourceId: 'pool', taskId: 'task-2', workerId: 'worker-2' }, h.state) as Record<string, unknown>;
+    expect(peer.granted).toBe(true);
+    expect(h.state.getResource('pool')!.holders).toHaveLength(2);
+
+    // worker-1 asserts only its OWN holding, but force+no-taskId would strip both.
+    await expect(release.handler(
+      { resourceId: 'pool', workerId: 'worker-1', force: true, ifHolderWorkerId: 'worker-1' },
+      h.state
+    )).rejects.toThrow(/worker-2/);
+
+    // Neither lease moved.
+    expect(h.state.getResource('pool')!.holders.map((l) => l.workerId).sort()).toEqual(['worker-1', 'worker-2']);
   });
 
   it('leaves the unconditional path idempotent for exit traps', async () => {
