@@ -29,7 +29,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned, you go IDLE and claim other work (a third-party/workerId-less block on an assigned task keeps the hold). Declare the tasks you wait on via blockedOnTaskIds (ids in the reason text are auto-parsed too) — the daemon auto-unblocks the task when they are all DONE/ARCHIVED. If EVERY task you name is already DONE/ARCHIVED the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat writes nothing, pages nobody, and answers reasonUpdated:false.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold). Declare the tasks you wait on via blockedOnTaskIds (ids in the reason text are auto-parsed too) — the daemon auto-unblocks the task when they are all DONE/ARCHIVED. If EVERY task you name is already DONE/ARCHIVED the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat writes nothing, pages nobody, and answers reasonUpdated:false.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -258,9 +258,9 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       //   - NON-RESOURCE block reported BY THE ASSIGNEE (or on an unassigned
       //     task): the seat is FREED (assignment cleared, worker → IDLE) so
       //     the worker claims other work instead of idling a whole fleet seat
-      //     against a wall — safe because the wrapper checkpoints the work at
-      //     block time (bf3f8fa), so any worker can resume from the landed
-      //     bytes; on auto-unblock the task returns unassigned.
+      //     against a wall. The wrapper checkpoints only after the current CLI
+      //     exits, NOT at block time; the response must end this session before
+      //     another claim. On auto-unblock the task returns unassigned.
       //   - THIRD-PARTY (workerId-less human/plugin) report on an ASSIGNED
       //     task: keeps the old hold semantics (assignment kept, worker marked
       //     BLOCKED). assertWorkerOwns permits the missing-workerId call, but
@@ -422,40 +422,37 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       const allStepsComplete = plan.length > 0 && plan.every((s) => s.status === 'COMPLETED');
       const deliveredButBlocked = !params.resourceId && allStepsComplete && statusForWait === 'WORKING';
       const warning = deliveredButBlocked
-        ? 'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'
+        ? 'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — resolve the blocker and obtain valid task ownership before moe.complete_task with verification'
         : undefined;
 
-      // Seat-freed blocks point the (now IDLE) worker straight at other work;
-      // a repeat on a legacy still-assigned hold keeps the wait-for-own-unblock
-      // guidance; resource blocks keep no nextAction (the wrapper idles and the
-      // grant path auto-unblocks).
+      // A claim hint here contradicts the one-task-per-wrapper contract: the
+      // successful claim changes board ownership, not the launcher's baseline.
+      // Return terminal handoff guidance, never an executable next-task hint.
+      // A dangling old assignment must not end a different task's live session.
       const seatWorker = prevAssignee || params.workerId;
-      const nextAction = deliveredButBlocked
+      const currentTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;
+      const sessionHandoff = freeSeat && seatWorker && !currentTaskId
+        ? {
+            action: 'END_SESSION', taskId: task.id, workerId: seatWorker,
+            reason: 'End this session so the wrapper can checkpoint the task it launched. ' +
+              'Do not call moe.claim_next_task or moe.wait_for_task inside this session. ' +
+              'A new conversation turn is not a fresh preflight; the next task needs a new wrapper session and baseline. ' +
+              'If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
+          }
+        : undefined;
+      const blockResolution = freeSeat
+        ? recordedBlockedOnIds.length > 0
+          ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED.`
+          : 'No unmet blockedOnTaskIds were recorded. A human/governor must clear the real blocker via moe.set_task_status; unblock_worker cannot reach an unassigned task. Re-file actual task dependencies if applicable.'
+        : undefined;
+      const nextAction = freeSeat ? undefined : deliveredButBlocked
         ? {
             tool: 'moe.complete_task',
             args: { taskId: task.id, workerId: prevAssignee ?? params.workerId },
             reason: `${warning} (the task is BLOCKED; complete_task needs it back in WORKING first — moe.set_task_status, or unblock_worker { resolveBlocks: true } while a worker still holds it, if you cannot clear the block yourself). Otherwise ${waitHintTail}`,
             recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
           }
-        : freeSeat && seatWorker
-          ? {
-              tool: 'moe.claim_next_task',
-              args: { workerId: seatWorker, statuses: waitStatuses },
-              reason:
-                'Block recorded and your seat was FREED: the task is parked BLOCKED and unassigned, you are IDLE. ' +
-                (recordedBlockedOnIds.length > 0
-                  ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED. `
-                  : satisfiedBlockedOnIds.length > 0
-                    ? `The task id(s) you named (${satisfiedBlockedOnIds.join(', ')}) are ALREADY DONE/ARCHIVED, so they were NOT recorded as blockers — if they were your only blocker the block is stale (a human/governor clears it via moe.set_task_status); if something else blocks you, re-file with the real blocker ids. `
-                    // unblock_worker is deliberately NOT named here: it only
-                    // reaches tasks still ASSIGNED to a worker, and the seat
-                    // was just freed — set_task_status is the working escape
-                    // for an unassigned BLOCKED row.
-                    : 'No blockedOnTaskIds were recorded, so a human/governor must clear it via moe.set_task_status (unblock_worker cannot reach an unassigned task) — if it actually waits on other tasks, re-file with blockedOnTaskIds. ') +
-                'Claim other work now.',
-              recommendedSkill: recommendSkillFor('worker', 'task_blocked')
-            }
-          : task.assignedWorkerId && !params.resourceId
+        : task.assignedWorkerId && !params.resourceId
             ? {
                 tool: 'moe.wait_for_task',
                 args: { workerId: task.assignedWorkerId, statuses: waitStatuses },
@@ -507,11 +504,13 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
                 : 'Block reason updated. No live architect — escalated to @governors.')
             : freeSeat
               ? (architect
-                  ? `Task blocked; seat freed — claim other work. Pinged ${architect.id} (freshest live architect).`
-                  : 'Task blocked; seat freed — claim other work. No live architect — escalated to @governors.')
+                  ? `Task blocked; seat freed — this response does not start another task session. Pinged ${architect.id} (freshest live architect).`
+                  : 'Task blocked; seat freed — this response does not start another task session. No live architect — escalated to @governors.')
               : architect
                 ? `Worker marked as blocked. Pinged ${architect.id} (freshest live architect).`
                 : 'Worker marked as blocked. No live architect — escalated to @governors.',
+        ...(sessionHandoff ? { sessionHandoff } : {}),
+        ...(blockResolution ? { blockResolution } : {}),
         ...(nextAction ? { nextAction } : {})
       };
     }

@@ -115,13 +115,52 @@ describe('moe.report_blocked', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
+  it('ends a freed-seat session instead of directing an in-CLI cross-task claim', async () => {
+    const result = await report();
+
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({
+      action: 'END_SESSION', taskId: 'task-1', workerId: 'worker-1',
+    });
+    const handoff = result.sessionHandoff as { reason: string };
+    expect(handoff.reason).toContain('wrapper');
+    expect(handoff.reason).toContain('fresh preflight');
+    expect(handoff.reason).toContain('Do not call moe.claim_next_task or moe.wait_for_task inside this session');
+    expect(result.message).not.toContain('claim other work.');
+    expect(state.getTask('task-1')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null });
+    expect(state.getWorker('worker-1')).toMatchObject({ status: 'IDLE', currentTaskId: null });
+  });
+
+  it('preserves dependency-resolution guidance without an executable next-task hint', async () => {
+    const prerequisite = await state.createTask({ epicId: 'epic-1', title: 'Producer', status: 'WORKING' });
+    const result = await report({ blockedOnTaskIds: [prerequisite.id] });
+
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-1' });
+    expect(result.blockResolution).toContain(prerequisite.id);
+    expect(result.blockResolution).toContain('DONE/ARCHIVED');
+    expect(state.getTask('task-1')?.blockedOnTaskIds).toEqual([prerequisite.id]);
+  });
+
+  it.each(['PLANNING', 'REVIEW'] as const)('keeps %s block restoration while ending the freed session', async (status) => {
+    await state.updateTask('task-1', { status, assignedWorkerId: 'worker-1' });
+    const result = await report();
+
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-1' });
+    expect(state.getTask('task-1')).toMatchObject({
+      status: 'BLOCKED', blockedFromStatus: status, assignedWorkerId: null,
+    });
+    expect(reportBlockedTool(state).description).toContain('End the current session');
+  });
+
   it('direct-mentions the single live architect in #general and #architects', async () => {
     await addWorker('architect-a', 'architect', 5);
 
     const result = await report();
 
     expect(result.notified).toEqual({ target: 'architect-a', via: 'freshest-live-architect' });
-    expect(result.message).toBe('Task blocked; seat freed — claim other work. Pinged architect-a (freshest live architect).');
+    expect(result.message).toBe('Task blocked; seat freed — this response does not start another task session. Pinged architect-a (freshest live architect).');
 
     // Exactly one general copy is prefixed — postSystemMessage forwards to the
     // same channel, so a second prefixed copy would page architect-a twice.
@@ -155,7 +194,7 @@ describe('moe.report_blocked', () => {
     const result = await report();
 
     expect(result.notified).toEqual({ target: '@governors', via: 'governors-fallback' });
-    expect(result.message).toBe('Task blocked; seat freed — claim other work. No live architect — escalated to @governors.');
+    expect(result.message).toBe('Task blocked; seat freed — this response does not start another task session. No live architect — escalated to @governors.');
     expect(mentionedGeneralPosts()[0]).toMatch(/^@governors /);
     // Nobody to page in #architects — the escalation carries the mention instead.
     expect(rolePosts.map(([role]) => role)).not.toContain('architects');
@@ -239,11 +278,9 @@ describe('moe.report_blocked', () => {
     expect(task.blockedReason).toBe('npm install fails behind the proxy');
     expect(task.blockedResourceId).toBeNull();
     expect(task.blockedAt).toEqual(expect.any(String));
-    // The freed worker is pointed at OTHER work, not at waiting on this task.
-    expect(result.nextAction).toMatchObject({
-      tool: 'moe.claim_next_task',
-      args: { workerId: 'worker-1', statuses: ['WORKING'] },
-    });
+    // Board ownership is free; wrapper provenance still requires a real exit.
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-1' });
   });
 
   it('resourceId: grants a free resource instead of blocking', async () => {
@@ -511,6 +548,8 @@ describe('moe.report_blocked', () => {
     const worker = state.getWorker('worker-1')!;
     expect(worker.status).toBe('CODING');
     expect(worker.currentTaskId).toBe(other.id);
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toBeUndefined();
   });
 
   // ---- repeat report_blocked on an already-BLOCKED task ----
@@ -608,7 +647,7 @@ describe('moe.report_blocked', () => {
     expect(result.unblockedTaskIds).toBeUndefined();
   });
 
-  it('warns ALL_STEPS_COMPLETE and points at complete_task when every step is done', async () => {
+  it('warns ALL_STEPS_COMPLETE without directing the freed owner to an invalid completion call', async () => {
     await state.updateTask('task-1', {
       implementationPlan: [
         { stepId: 'step-1', description: 'a', status: 'COMPLETED', affectedFiles: [] },
@@ -619,6 +658,7 @@ describe('moe.report_blocked', () => {
     const result = await report({ reason: 'not sure how to hand off' }) as {
       success: boolean; taskStatus: string; warning?: string;
       nextAction?: { tool: string; args: Record<string, unknown> };
+      sessionHandoff?: { action: string; taskId: string };
     };
 
     // Still blocks — warn-only.
@@ -626,10 +666,10 @@ describe('moe.report_blocked', () => {
     expect(result.taskStatus).toBe('BLOCKED');
     expect(state.getTask('task-1')!.status).toBe('BLOCKED');
     expect(result.warning).toBe(
-      'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — if the work is delivered call moe.complete_task with verification'
+      'ALL_STEPS_COMPLETE: BLOCKED is a wait state, not a terminal — resolve the blocker and obtain valid task ownership before moe.complete_task with verification'
     );
-    expect(result.nextAction?.tool).toBe('moe.complete_task');
-    expect(result.nextAction?.args).toMatchObject({ taskId: 'task-1', workerId: 'worker-1' });
+    expect(result.nextAction).toBeUndefined();
+    expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-1' });
   });
 
   it('does not warn ALL_STEPS_COMPLETE while steps remain or when waiting on a resource', async () => {
@@ -641,8 +681,8 @@ describe('moe.report_blocked', () => {
     });
     const partial = await report({ reason: 'stuck on step 2' }) as { warning?: string; nextAction?: { tool: string } };
     expect(partial.warning).toBeUndefined();
-    // Seat freed on a non-resource block: the worker is pointed at other work.
-    expect(partial.nextAction?.tool).toBe('moe.claim_next_task');
+    // Seat freed on a non-resource block: never point into another task here.
+    expect(partial.nextAction).toBeUndefined();
 
     // Resource waits are auto-unblocked on grant; no complete_task nudge.
     await state.updateTask('task-1', {
