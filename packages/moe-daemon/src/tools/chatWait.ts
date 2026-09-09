@@ -1,4 +1,4 @@
-import type { ToolDefinition } from './index.js';
+import type { ToolCallContext, ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
 import { invalidInput, missingRequired } from '../util/errors.js';
@@ -60,6 +60,7 @@ interface ChatWaitContext {
   sinceId?: string;
   timeoutMs: number;
   maxContentChars: number;
+  onWaiterRegistered?: ToolCallContext['onWaiterRegistered'];
 }
 
 /**
@@ -97,6 +98,7 @@ class ChatWaitSession {
       timer: this.timer,
       channels: this.ctx.channelSet
     });
+    this.ctx.onWaiterRegistered?.(this.ctx.workerId);
     void this.drainOnEntry();
   }
 
@@ -321,7 +323,7 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       required: ['workerId'],
       additionalProperties: false
     },
-    handler: async (args, state) => {
+    handler: async (args, state, context) => {
       const params = (args || {}) as ChatWaitParams;
       validateChatWaitParams(params, state);
 
@@ -362,7 +364,8 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
           channelSet: params.channels ? new Set(params.channels) : null,
           sinceId: params.sinceId,
           timeoutMs,
-          maxContentChars
+          maxContentChars,
+          onWaiterRegistered: context?.onWaiterRegistered,
         }, resolve).start();
       });
     }

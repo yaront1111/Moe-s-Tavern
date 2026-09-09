@@ -485,7 +485,16 @@ function connect(projectPath: string): void {
     const MAX_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB max buffer
     const MAX_LINE_SIZE = 1024 * 1024; // 1MB per-line limit
     let buffer = '';
-    process.stdin.on('data', (chunk) => {
+    let discardingOversizedLine = false;
+    process.stdin.on('data', (chunk: string) => {
+      if (discardingOversizedLine) {
+        // Overflow rejects the entire frame, including future chunks up to
+        // its newline. Its tail must never become a separate tool request.
+        const newline = chunk.indexOf('\n');
+        if (newline < 0) return;
+        chunk = chunk.slice(newline + 1);
+        discardingOversizedLine = false;
+      }
       buffer += chunk;
 
       let index: number;
@@ -496,10 +505,11 @@ function connect(projectPath: string): void {
 
         // Enforce per-line size limit. Emit an id-aware JSON-RPC error so the
         // client isn't left hanging on a request that will never be answered.
-        if (line.length > MAX_LINE_SIZE) {
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        if (lineBytes > MAX_LINE_SIZE) {
           const oversizedId = extractRequestId(line);
-          writeErrorWithId(oversizedId, `Request too large (${line.length} bytes, max ${MAX_LINE_SIZE})`);
-          writeLog(`Skipping oversized line (${line.length} bytes, max ${MAX_LINE_SIZE})`);
+          writeErrorWithId(oversizedId, `Request too large (${lineBytes} bytes, max ${MAX_LINE_SIZE})`);
+          writeLog(`Skipping oversized line (${lineBytes} bytes, max ${MAX_LINE_SIZE})`);
           continue;
         }
 
@@ -548,11 +558,13 @@ function connect(projectPath: string): void {
       // lines have been drained above, so `buffer` is a single newline-free
       // partial. Only that partial is discarded — already-complete requests that
       // were queued ahead of it are never destroyed.
-      if (buffer.length > MAX_BUFFER_SIZE) {
+      const bufferBytes = Buffer.byteLength(buffer, 'utf8');
+      if (bufferBytes > MAX_BUFFER_SIZE) {
         const overflowId = extractRequestId(buffer);
         writeErrorWithId(overflowId, `Input buffer overflow: partial line exceeds ${MAX_BUFFER_SIZE} bytes`);
-        writeLog(`Input buffer overflow, discarding ${buffer.length}-byte partial line`);
+        writeLog(`Input buffer overflow, discarding ${bufferBytes}-byte partial line`);
         buffer = '';
+        discardingOversizedLine = true;
       }
     });
 

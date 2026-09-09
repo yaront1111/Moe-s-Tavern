@@ -140,8 +140,8 @@ export class MoeWebSocketServer {
   // short-lived second /mcp connection that reuses a parked id must NOT cancel
   // the live waiter the FIRST connection registered. We record which ws issued
   // the call that (re)registered each waiter and only cancel on disconnect when
-  // the closing ws still owns it. Overwritten whenever a new wait/chat_wait call
-  // re-registers the waiter (the tool itself cancels+replaces the prior entry).
+  // the closing ws still owns it. Ownership changes only after registration:
+  // rejected calls and undispatched batch entries never own a prior waiter.
   private waiterOwners = new Map<string, WebSocket>();
   private chatWaiterOwners = new Map<string, WebSocket>();
   private resourceWaiterOwners = new Map<string, WebSocket>();
@@ -195,6 +195,10 @@ export class MoeWebSocketServer {
   }
 
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
+    if (this.isClosed) {
+      ws.close(1001, 'Server shutting down');
+      return;
+    }
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
       this.mcpClients.add(ws);
@@ -258,7 +262,13 @@ export class MoeWebSocketServer {
   private async handlePluginMessage(ws: WebSocket, raw: string): Promise<void> {
     let message: PluginMessage;
     try {
-      message = JSON.parse(raw) as PluginMessage;
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || typeof (parsed as { type?: unknown }).type !== 'string') {
+        this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Invalid message envelope' }));
+        return;
+      }
+      message = parsed as PluginMessage;
     } catch {
       this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Invalid JSON' }));
       return;
@@ -959,7 +969,8 @@ export class MoeWebSocketServer {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
       const response = await this.mcpAdapter.handle(request, {
-        shouldContinue: () => this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
+        shouldContinue: () => !this.isClosed && this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
+        onWaiterRegistered: (toolName, workerId) => this.registerMcpWaiter(ws, toolName, workerId),
       });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));
@@ -1005,13 +1016,10 @@ export class MoeWebSocketServer {
       this.mcpWorkerMap.set(ws, workerIds);
     }
     workerIds.add(workerId);
+  }
 
-    // Record which ws owns the (about to be re-registered) waiter for this
-    // workerId. wait_for_task / chat_wait cancel + replace any prior waiter for
-    // the same id, so the issuing ws becomes the sole owner. cleanupMcpWorkers
-    // uses this to avoid cancelling a live waiter that a different connection
-    // owns when a short-lived ws reuses the same workerId.
-    const toolName = (params as { name?: unknown }).name;
+  /** Transfer ownership only when a tool actually publishes its new waiter. */
+  private registerMcpWaiter(ws: WebSocket, toolName: string, workerId: string): void {
     if (toolName === 'moe.wait_for_task') {
       this.waiterOwners.set(workerId, ws);
     } else if (toolName === 'moe.chat_wait') {
@@ -1153,6 +1161,14 @@ export class MoeWebSocketServer {
         }
       }
       for (const client of this.mcpClients) {
+        // Stop queued batch calls before resolving waiters. Preserve connection
+        // ownership until cleanup has cancelled every parked RPC on this socket.
+        this.mcpClients.delete(client);
+        try {
+          await this.cleanupMcpWorkers(client);
+        } catch (error) {
+          logger.warn({ error }, 'Error cancelling MCP waiters during shutdown');
+        }
         try {
           client.close(1000, 'Server shutting down');
         } catch (error) {
@@ -1168,6 +1184,7 @@ export class MoeWebSocketServer {
       this.mcpWorkerMap.clear();
       this.waiterOwners.clear();
       this.chatWaiterOwners.clear();
+      this.resourceWaiterOwners.clear();
 
       await new Promise<void>((resolve, reject) => {
         this.wss.close((err) => {

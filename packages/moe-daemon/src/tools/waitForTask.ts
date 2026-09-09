@@ -226,7 +226,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       required: ['statuses', 'workerId'],
       additionalProperties: false
     },
-    handler: async (args, state) => {
+    handler: async (args, state, context) => {
       const params = (args || {}) as { statuses?: string[]; workerId?: string; epicId?: string; timeoutMs?: number };
       const statuses = params.statuses || [];
       if (statuses.length === 0) {
@@ -240,6 +240,9 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
         throw missingRequired('workerId');
       }
       await state.touchWorker(workerId);
+      // Disconnect cleanup may run while the heartbeat write is in flight,
+      // before this call has registered a waiter for it to cancel.
+      if (context?.shouldContinue?.() === false) return { hasNext: false, cancelled: true };
 
       // Cancel any existing waiter for this worker
       const existing = activeWaiters.get(workerId);
@@ -437,6 +440,7 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
           unsubscribe: () => cleanup(),
           timer: timer!
         });
+        context?.onWaiterRegistered?.(workerId);
       });
     }
   };

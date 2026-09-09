@@ -788,6 +788,7 @@ describe('MoeWebSocketServer Integration', () => {
       const fakeWs = {} as WebSocket;
       const internals = wsServer as unknown as {
         trackMcpWorker(ws: WebSocket, request: unknown): void;
+        registerMcpWaiter(ws: WebSocket, toolName: string, workerId: string): void;
         cleanupMcpWorkers(ws: WebSocket): Promise<void>;
         mcpWorkerMap: Map<WebSocket, Set<string>>;
       };
@@ -809,6 +810,9 @@ describe('MoeWebSocketServer Integration', () => {
       ]);
 
       expect(internals.mcpWorkerMap.get(fakeWs)).toEqual(new Set(['worker-batch-wait', 'worker-batch-chat']));
+      // Publishing the waiters, rather than merely parsing the batch, owns them.
+      internals.registerMcpWaiter(fakeWs, 'moe.wait_for_task', 'worker-batch-wait');
+      internals.registerMcpWaiter(fakeWs, 'moe.chat_wait', 'worker-batch-chat');
 
       await internals.cleanupMcpWorkers(fakeWs);
 

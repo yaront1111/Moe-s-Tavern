@@ -239,23 +239,30 @@ class MoeProjectService @JvmOverloads constructor(
             newClient = object : WebSocketClient(uri) {
                 override fun onOpen(handshakedata: ServerHandshake?) {
                     wsLock.withLock {
+                        if (disposed.get() || wsClient !== this) {
+                            log.debug("Ignoring onOpen from retired WebSocket client")
+                            closeQuietly(this)
+                            return
+                        }
                         connecting = false
                         connected = true
                         reconnectAttempts = 0
                         daemonSupervisor.resetSpawnAttempts()
                         isManualDisconnect = false
                         daemonRegistration.register(daemonInfo.pid)
-                    }
-                    publishStatus(true, "Connected")
-                    // Drain any messages queued during reconnect
-                    while (true) {
-                        val queued = messageQueue.poll() ?: break
-                        try { handleMessage(queued) } catch (ex: Exception) {
-                            log.warn("Failed to process queued message", ex)
+                        // Keep status dispatch and refresh setup in the same transition:
+                        // disconnect must not finish before these open effects run.
+                        publishStatus(true, "Connected")
+                        // Drain any messages queued during reconnect
+                        while (true) {
+                            val queued = messageQueue.poll() ?: break
+                            try { handleMessage(queued) } catch (ex: Exception) {
+                                log.warn("Failed to process queued message", ex)
+                            }
                         }
+                        sendMessage("GET_STATE", JsonObject())
+                        startAutoRefresh()
                     }
-                    sendMessage("GET_STATE", JsonObject())
-                    startAutoRefresh()
                 }
 
                 override fun onMessage(message: String?) {
@@ -300,6 +307,7 @@ class MoeProjectService @JvmOverloads constructor(
                             return
                         }
                     }
+                    closeQuietly(this)
                     publishStatus(false, ex?.message ?: "WebSocket error")
                     scheduleReconnect()
                 }
@@ -327,11 +335,11 @@ class MoeProjectService @JvmOverloads constructor(
     }
 
     private fun disconnect(notifyStatus: Boolean) {
-        isManualDisconnect = true
-        reconnectAttempts = 0
-        stopAutoRefresh()
-        cancelConnectionTimers()
         val currentClient = wsLock.withLock {
+            isManualDisconnect = true
+            reconnectAttempts = 0
+            stopAutoRefresh()
+            cancelConnectionTimers()
             val client = wsClient
             wsClient = null
             connected = false

@@ -53,7 +53,7 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
       required: ['resourceId', 'taskId', 'workerId'],
       additionalProperties: false
     },
-    handler: async (args, state) => {
+    handler: async (args, state, context) => {
       const params = (args || {}) as { resourceId?: string; taskId?: string; workerId?: string; timeoutMs?: number };
       const { resourceId, taskId, workerId } = params;
       if (!resourceId) throw missingRequired('resourceId');
@@ -66,6 +66,7 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
       if (!task) throw notFound('Task', taskId);
       assertWorkerOwns(task, workerId, 'moe.wait_for_resource');
       await state.touchWorker(workerId);
+      if (context?.shouldContinue?.() === false) return { granted: false, cancelled: true };
 
       // Cancel any existing waiter for this worker (re-entry replaces).
       const existing = activeResourceWaiters.get(workerId);
@@ -78,9 +79,14 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
 
       // Blocking tools are dispatched WITHOUT the state mutex — take it for the
       // mutation (grant-or-enqueue), then subscribe lock-free for the park.
-      const immediate = await state.runExclusive(() => state.acquireResource({
-        resourceId, taskId, workerId,
-      }));
+      const immediate = await state.runExclusive(async () => {
+        // A disconnected caller must not take a lease after waiting for the lock.
+        if (context?.shouldContinue?.() === false) return null;
+        return state.acquireResource({ resourceId, taskId, workerId });
+      });
+      // Persistence can also outlive the socket. Keep task-keyed queue/lease
+      // state already written, but never park an RPC cleanup can no longer see.
+      if (!immediate || context?.shouldContinue?.() === false) return { granted: false, cancelled: true };
       if (immediate.granted) {
         return {
           granted: true,
@@ -164,6 +170,7 @@ export function waitForResourceTool(_state: StateManager): ToolDefinition {
           unsubscribe: () => cleanup(),
           timer: timer!,
         });
+        context?.onWaiterRegistered?.(workerId);
       });
     }
   };

@@ -56,6 +56,25 @@ moe_package_install() {
     hash -r
 }
 
+# curl --retry covers only transport errors and 5xx. nodejs.org can answer 404 for a
+# just-published release while its CDN edges catch up (2026-09-09: v24.21.0 under
+# latest-v24.x failed three main runs in a row), so retry HTTP failures here and try
+# the immutable versioned path before the floating alias.
+moe_download() {
+    local output=$1 attempt url
+    shift
+    for attempt in 1 2 3 4; do
+        for url in "$@"; do
+            if curl --fail --location --retry 3 --connect-timeout 20 --max-time 300 --output "$output" "$url"; then
+                return 0
+            fi
+        done
+        [ "$attempt" -lt 4 ] || break
+        sleep "${MOE_DOWNLOAD_RETRY_DELAY_SEC:-5}"
+    done
+    moe_dependency_error "Download failed after $attempt attempts: $*"
+}
+
 moe_install_node() (
     set -e
     local node_os=$1 node_arch=$2 node_root download_dir line_hash line_file archive='' expected=''
@@ -65,7 +84,7 @@ moe_install_node() (
     trap 'rm -rf "$download_dir"' EXIT
     local base_url='https://nodejs.org/dist/latest-v24.x'
     printf 'Installing Node.js 24 from %s\n' "$base_url"
-    curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 --output "$download_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || exit
+    moe_download "$download_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || exit
     while read -r line_hash line_file; do
         if [[ "$line_file" =~ ^node-v24\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz$ ]]; then
             archive=$line_file
@@ -77,7 +96,9 @@ moe_install_node() (
         moe_dependency_error "Official Node.js checksum manifest has no supported $node_os/$node_arch archive."
         exit 1
     fi
-    curl --fail --location --retry 3 --connect-timeout 20 --max-time 300 --output "$download_dir/$archive" "$base_url/$archive" || exit
+    local version=${archive#node-}
+    version=${version%%-*}
+    moe_download "$download_dir/$archive" "https://nodejs.org/dist/$version/$archive" "$base_url/$archive" || exit
     local actual
     if command -v sha256sum >/dev/null 2>&1; then
         actual=$(sha256sum "$download_dir/$archive") || exit

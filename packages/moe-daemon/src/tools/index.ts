@@ -65,7 +65,14 @@ import { recordCommitTool } from './recordCommit.js';
 import { declareFilesTool } from './declareFiles.js';
 import { setTaskDependenciesTool } from './setTaskDependencies.js';
 
-export type ToolHandler = (args: unknown, state: StateManager) => Promise<unknown>;
+export interface ToolCallContext {
+  /** Connection lifetime check for asynchronous setup before a long poll parks. */
+  shouldContinue?: () => boolean;
+  /** Called synchronously after a long poll publishes its active waiter. */
+  onWaiterRegistered?: (workerId: string) => void;
+}
+
+export type ToolHandler = (args: unknown, state: StateManager, context?: ToolCallContext) => Promise<unknown>;
 
 export interface ToolDefinition {
   name: string;

@@ -73,7 +73,15 @@ case "$tool" in
     done
     if [[ "$output" == *SHASUMS256.txt ]]; then
       printf '%064d  node-v24.99.0-%s-%s.tar.gz\\n' 0 "\${MOE_FIXTURE_NODE_OS:-linux}" "\${MOE_FIXTURE_NODE_ARCH:-x64}" > "$output"
-    else printf 'fixture archive' > "$output"; fi
+    else
+      served=$(cat "$MOE_FIXTURE/archive-404-served" 2>/dev/null || echo 0)
+      if [ "$served" -lt "\${MOE_FIXTURE_ARCHIVE_404_COUNT:-0}" ]; then
+        echo $((served + 1)) > "$MOE_FIXTURE/archive-404-served"
+        echo 'curl: (22) The requested URL returned error: 404' >&2
+        exit 22
+      fi
+      printf 'fixture archive' > "$output"
+    fi
     ;;
   tar)
     [ -f "$MOE_FIXTURE/ready/tar" ] || exit 127
@@ -164,6 +172,26 @@ test('old Node is upgraded and a checksum mismatch prevents extraction', t => {
   const result = run(dir, 'claude', false, { MOE_FIXTURE_NODE_VERSION: 'v18.20.0', MOE_FIXTURE_BAD_HASH: '1' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /checksum/i);
+  assert.doesNotMatch(log(dir), /tar -xzf/);
+});
+
+test('a transient 404 on the Node archive is retried from the versioned path before giving up', t => {
+  const dir = fixture(t, ['git', 'python3', 'curl', 'tar', 'claude']);
+  passed(run(dir, 'claude', false, { MOE_FIXTURE_ARCHIVE_404_COUNT: '2', MOE_DOWNLOAD_RETRY_DELAY_SEC: '0' }));
+  const calls = log(dir);
+  const versioned = calls.match(/https:\/\/nodejs\.org\/dist\/v24\.99\.0\/node-v24\.99\.0-linux-x64\.tar\.gz/g) ?? [];
+  assert.ok(versioned.length >= 2, `expected a retried versioned download, got:\n${calls}`);
+  assert.match(calls, /https:\/\/nodejs\.org\/dist\/latest-v24\.x\/node-v24\.99\.0-linux-x64\.tar\.gz/);
+  assert.ok(calls.indexOf('sha256sum ') < calls.indexOf('tar -xzf '));
+  assert.equal(fs.existsSync(path.join(dir, 'profile/.local/share/moe/node/current/bin/node')), true);
+});
+
+test('a persistent 404 on the Node archive fails actionably without extracting anything', t => {
+  const dir = fixture(t, ['git', 'python3', 'curl', 'tar', 'claude']);
+  const result = run(dir, 'claude', false, { MOE_FIXTURE_ARCHIVE_404_COUNT: '99', MOE_DOWNLOAD_RETRY_DELAY_SEC: '0' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Download failed after 4 attempts/);
+  assert.doesNotMatch(result.stdout, /BOOTSTRAP_OK/);
   assert.doesNotMatch(log(dir), /tar -xzf/);
 });
 
