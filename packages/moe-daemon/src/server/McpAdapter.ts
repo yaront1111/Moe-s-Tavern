@@ -120,6 +120,7 @@ export interface JsonRpcResponse {
 
 export interface McpHandleOptions {
   shouldContinue?: () => boolean;
+  onWaiterRegistered?: (toolName: string, workerId: string) => void;
 }
 
 export class McpAdapter {
@@ -169,17 +170,17 @@ export class McpAdapter {
           logger.info('Aborting remaining MCP batch requests because the client disconnected');
           break;
         }
-        const response = await this.handleSingleWithRateLimit(req);
+        const response = await this.handleSingleWithRateLimit(req, options);
         if (response !== null) {
           responses.push(response);
         }
       }
       return responses.length > 0 ? responses : null;
     }
-    return this.handleSingleWithRateLimit(request);
+    return this.handleSingleWithRateLimit(request, options);
   }
 
-  private async handleSingleWithRateLimit(request: unknown): Promise<JsonRpcResponse | null> {
+  private async handleSingleWithRateLimit(request: unknown, options: McpHandleOptions): Promise<JsonRpcResponse | null> {
     const id = this.getRequestId(request);
 
     // A JSON-RPC notification is a valid request with no `id` member; it produces
@@ -204,7 +205,7 @@ export class McpAdapter {
       return this.errorResponse(id, -32600, 'Invalid Request');
     }
 
-    return this.handleSingle(request);
+    return this.handleSingle(request, options);
   }
 
   // An MCP notification is a well-formed request whose method is in the
@@ -234,7 +235,7 @@ export class McpAdapter {
     return typeof id === 'string' || typeof id === 'number' || id === null ? id : null;
   }
 
-  private async handleSingle(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
+  private async handleSingle(request: JsonRpcRequest, options: McpHandleOptions): Promise<JsonRpcResponse | null> {
     const id: JsonRpcId = request.id ?? null;
 
     try {
@@ -293,7 +294,10 @@ export class McpAdapter {
           // Blocking tools opt out — they'd hold the lock for minutes. The
           // mutex is reentrant, so tools that already call runExclusive
           // internally (claim_next_task, submit_plan, …) are safe to wrap.
-          const invoke = () => tool.handler(params.arguments, this.state);
+          const invoke = () => tool.handler(params.arguments, this.state, {
+            shouldContinue: options.shouldContinue,
+            onWaiterRegistered: workerId => options.onWaiterRegistered?.(tool.name, workerId),
+          });
           const result = tool.blocking ? await invoke() : await this.state.runExclusive(invoke);
           return {
             jsonrpc: '2.0',

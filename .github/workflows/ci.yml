@@ -83,6 +83,14 @@ jobs:
           cache-dependency-path: |
             packages/moe-daemon/package-lock.json
             packages/moe-proxy/package-lock.json
+            packages/moe-claude-plugin/package-lock.json
+
+      - name: Build and test Claude plugin
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+        working-directory: packages/moe-claude-plugin
 
       - name: Install daemon dependencies
         run: npm install --no-audit --no-fund
@@ -257,5 +265,6 @@ jobs:
       - name: Test VS Code daemon startup
         run: |
           npm ci
+          npm run compile
           npm test
         working-directory: moe-vscode

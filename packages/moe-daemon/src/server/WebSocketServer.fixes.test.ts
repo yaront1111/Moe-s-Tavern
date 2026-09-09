@@ -75,6 +75,7 @@ describe('WebSocketServer M4 waiter ownership guard', () => {
 
   type Internals = {
     trackMcpWorker(ws: WebSocket, request: unknown): void;
+    registerMcpWaiter(ws: WebSocket, toolName: string, workerId: string): void;
     cleanupMcpWorkers(ws: WebSocket): Promise<void>;
   };
 
@@ -95,6 +96,7 @@ describe('WebSocketServer M4 waiter ownership guard', () => {
       method: 'tools/call',
       params: { name: 'moe.wait_for_task', arguments: { statuses: ['WORKING'], workerId } },
     });
+    internals.registerMcpWaiter(ws1, 'moe.wait_for_task', workerId);
 
     // ws2 is a short-lived connection that reuses the same workerId on a
     // NON-wait tool call (e.g. a one-shot list/touch). It must not own the waiter.
@@ -140,6 +142,7 @@ describe('WebSocketServer M4 waiter ownership guard', () => {
       method: 'tools/call',
       params: { name: 'moe.chat_wait', arguments: { workerId } },
     });
+    internals.registerMcpWaiter(ws1, 'moe.chat_wait', workerId);
 
     const ws2 = {} as WebSocket;
     internals.trackMcpWorker(ws2, {

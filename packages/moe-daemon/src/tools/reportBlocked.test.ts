@@ -258,6 +258,8 @@ describe('moe.report_blocked', () => {
   });
 
   it('resourceId: queues behind a holder, parks the task, and auto-unblocks on grant', async () => {
+    // A real claim records both ownership pointers before parking the worker.
+    await state.updateWorker('worker-1', { currentTaskId: 'task-1', status: 'CODING' });
     // Another task holds the box.
     const now = new Date().toISOString();
     const holderTask = {
@@ -857,6 +859,8 @@ describe('moe.report_blocked', () => {
         status: 'WORKING', assignedWorkerId: 'worker-1', blockedReason: null,
         blockedResourceId: null, blockedFromStatus: null, blockedAt: null,
       });
+      // Model the peer reclaim fully, including the worker side of ownership.
+      await state.updateWorker('worker-1', { currentTaskId: 'task-1', status: 'CODING' });
       return queued;
     });
 

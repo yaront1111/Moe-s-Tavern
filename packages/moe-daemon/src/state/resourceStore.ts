@@ -52,6 +52,11 @@ const RESOURCE_ELIGIBLE_STATUSES = new Set<TaskStatus>([
   'BLOCKED',
 ]);
 
+function isResourceTaskEligible(state: StateManager, taskId: string): boolean {
+  const task = state.tasks.get(taskId);
+  return !!task && RESOURCE_ELIGIBLE_STATUSES.has(task.status);
+}
+
 export interface ResourceConfig {
   capacity: number;
   maxLeaseMs: number;
@@ -78,13 +83,20 @@ export function getResource(state: StateManager, resourceId: string): ResourceSt
   return state.resources.get(resourceId) ?? null;
 }
 
+/** Mutations use private copies so failed writes cannot alter the published state. */
+function copyResource(resource: ResourceState): ResourceState {
+  return {
+    ...resource,
+    holders: resource.holders.map((lease) => ({ ...lease })),
+    queue: resource.queue.map((entry) => ({ ...entry })),
+  };
+}
+
 function getOrCreateResource(state: StateManager, resourceId: string): ResourceState {
   const existing = state.resources.get(resourceId);
-  if (existing) return existing;
+  if (existing) return copyResource(existing);
   const now = new Date().toISOString();
-  const fresh: ResourceState = { id: resourceId, holders: [], queue: [], createdAt: now, updatedAt: now };
-  state.resources.set(resourceId, fresh);
-  return fresh;
+  return { id: resourceId, holders: [], queue: [], createdAt: now, updatedAt: now };
 }
 
 async function persistResource(state: StateManager, resource: ResourceState): Promise<void> {
@@ -179,15 +191,18 @@ export async function acquireResource(state: StateManager, params: AcquireParams
   }
 
   let entry = resource.queue.find((q) => q.taskId === taskId);
+  const newlyQueued = !entry;
   if (entry) {
     entry.workerId = workerId;
     if (params.note !== undefined) entry.note = params.note;
   } else {
     entry = { taskId, workerId, note: params.note, requestedAt: nowIso };
     resource.queue.push(entry);
-    state.appendActivity('RESOURCE_QUEUED', { resourceId, taskId, workerId, note: params.note });
   }
   await persistResource(state, resource);
+  if (newlyQueued) {
+    state.appendActivity('RESOURCE_QUEUED', { resourceId, taskId, workerId, note: params.note });
+  }
   const position = sortedQueue(state, resource.queue).findIndex((q) => q.taskId === taskId) + 1;
   return {
     granted: false,
@@ -219,8 +234,9 @@ export interface ReleaseResourceResult {
  * no-op (idempotent), not an error — release paths run from exit traps.
  */
 export async function releaseResource(state: StateManager, params: ReleaseParams): Promise<ReleaseResourceResult> {
-  const resource = state.resources.get(params.resourceId);
-  if (!resource) return { released: [], removedFromQueue: [], granted: [] };
+  const persisted = state.resources.get(params.resourceId);
+  if (!persisted) return { released: [], removedFromQueue: [], granted: [] };
+  const resource = copyResource(persisted);
 
   // Leases are task-keyed so they survive CLI respawns and the restart worker
   // purge — which means the RELEASE path must too: the task's CURRENT assignee
@@ -266,10 +282,15 @@ export async function releaseResource(state: StateManager, params: ReleaseParams
  * (non-BLOCKED) held task and relaunches the CLI.
  */
 export async function grantNextLeases(state: StateManager, resourceId: string): Promise<ResourceLease[]> {
-  const resource = state.resources.get(resourceId);
-  if (!resource) return [];
+  const persisted = state.resources.get(resourceId);
+  if (!persisted) return [];
+  const resource = copyResource(persisted);
   const config = resolveResourceConfig(state, resourceId);
   const granted: ResourceLease[] = [];
+  // A queued task can finish, be parked, or be deleted before its turn.
+  // Every grant path must recheck eligibility, not just the periodic reaper.
+  resource.queue = resource.queue.filter((entry) => isResourceTaskEligible(state, entry.taskId));
+  const queueCleaned = resource.queue.length !== persisted.queue.length;
 
   while (resource.holders.length < config.capacity && resource.queue.length > 0) {
     const next = sortedQueue(state, resource.queue)[0];
@@ -284,44 +305,60 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
     };
     resource.holders.push(lease);
     granted.push(lease);
-    state.appendActivity('RESOURCE_GRANTED', { resourceId, taskId: lease.taskId, workerId: lease.workerId });
-
-    const task = state.tasks.get(lease.taskId);
-    if (task && task.status === 'BLOCKED' && task.blockedResourceId === resourceId) {
-      const restored: TaskStatus = task.blockedFromStatus ?? 'WORKING';
-      try {
-        // assignedWorkerId passed explicitly: updateTask would otherwise clear
-        // the assignment on the status change, and the un-blocked task must
-        // return to the SAME parked worker (or stay unassigned-and-claimable
-        // if the worker was purged meanwhile).
-        await state.updateTask(task.id, {
-          status: restored,
-          assignedWorkerId: task.assignedWorkerId,
-          blockedReason: null,
-          blockedResourceId: null,
-          blockedOnTaskIds: null,
-          blockedFromStatus: null,
-          blockedAt: null,
-        }, 'TASK_UNBLOCKED');
-        const msg = `🟢 Resource ${resourceId} granted to ${task.id} (${lease.workerId}); task un-blocked → ${restored}.`;
-        try { await state.postSystemMessage(task.id, msg); } catch { /* best-effort */ }
-        try { await state.postToGeneral(msg); } catch { /* best-effort */ }
-      } catch (err) {
-        logger.warn({ resourceId, taskId: task.id, error: err }, 'grantNextLeases: failed to un-block task');
-      }
-    } else {
-      // Lease granted while the task kept working elsewhere (queued early, no
-      // report_blocked yet) — tell the channel so the holder finds out even if
-      // it never re-polls acquire_resource.
-      const msg = `🟢 Resource ${resourceId} granted to ${lease.taskId} (${lease.workerId}).`;
-      try { await state.postToGeneral(msg); } catch { /* best-effort */ }
-    }
   }
 
-  if (granted.length > 0) {
+  // The lease is the authority to resume work. Persist it before publishing
+  // any grant or task transition, so a crash cannot resume an unleased task.
+  if (granted.length > 0 || queueCleaned) {
     await persistResource(state, resource);
   }
+  for (const lease of granted) {
+    state.appendActivity('RESOURCE_GRANTED', { resourceId, taskId: lease.taskId, workerId: lease.workerId });
+  }
+  // Reconcile existing holders too: a crash or failed task write can leave a
+  // durable lease with its task still BLOCKED. This retry survives reloads.
+  for (const lease of resource.holders) {
+    await resumeResourceHolder(state, resourceId, lease, granted.includes(lease));
+  }
   return granted;
+}
+
+async function resumeResourceHolder(
+  state: StateManager, resourceId: string, lease: ResourceLease, newlyGranted: boolean
+): Promise<void> {
+  // Direct grant retries can run before the expiry sweep. A persisted lease
+  // authorizes resumption only while its expiry is valid and still future.
+  const expiresMs = Date.parse(lease.expiresAt);
+  if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) return;
+  const task = state.tasks.get(lease.taskId);
+  if (task && task.status === 'BLOCKED' && task.blockedResourceId === resourceId) {
+    const restored: TaskStatus = task.blockedFromStatus ?? 'WORKING';
+    // Mirror dependency-unblock: a timed-out or repurposed worker no longer
+    // owns this hold. Restoring its stale assignment would strand the task.
+    const owner = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
+    const restoreTo = owner && owner.status !== 'DEAD' && owner.currentTaskId === task.id ? owner.id : null;
+    try {
+      // Preserve a valid parked owner explicitly; otherwise return the task
+      // unassigned so a successor can claim it and its task-keyed lease.
+      await state.updateTask(task.id, {
+        status: restored,
+        assignedWorkerId: restoreTo,
+        blockedReason: null,
+        blockedResourceId: null,
+        blockedOnTaskIds: null,
+        blockedFromStatus: null,
+        blockedAt: null,
+      }, 'TASK_UNBLOCKED');
+      const msg = `🟢 Resource ${resourceId} granted to ${task.id} (${lease.workerId}); task un-blocked → ${restored}.`;
+      try { await state.postSystemMessage(task.id, msg); } catch { /* best-effort */ }
+      try { await state.postToGeneral(msg); } catch { /* best-effort */ }
+    } catch (err) {
+      logger.warn({ resourceId, taskId: task.id, error: err }, 'grantNextLeases: failed to un-block task');
+    }
+  } else if (newlyGranted) {
+    const msg = `🟢 Resource ${resourceId} granted to ${lease.taskId} (${lease.workerId}).`;
+    try { await state.postToGeneral(msg); } catch { /* best-effort */ }
+  }
 }
 
 /**
@@ -335,12 +372,12 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
  */
 export async function reapResources(state: StateManager, nowMs: number = Date.now()): Promise<number> {
   let reaped = 0;
-  for (const resource of state.resources.values()) {
+  for (const persisted of state.resources.values()) {
+    const resource = copyResource(persisted);
     const expiredLeases: ResourceLease[] = [];
     const orphanedLeases: ResourceLease[] = [];
     for (const lease of resource.holders) {
-      const task = state.tasks.get(lease.taskId);
-      if (!task || !RESOURCE_ELIGIBLE_STATUSES.has(task.status)) {
+      if (!isResourceTaskEligible(state, lease.taskId)) {
         orphanedLeases.push(lease);
         continue;
       }
@@ -349,19 +386,17 @@ export async function reapResources(state: StateManager, nowMs: number = Date.no
         expiredLeases.push(lease);
       }
     }
-    const dropQueue = resource.queue.filter((q) => {
-      const task = state.tasks.get(q.taskId);
-      return !task || !RESOURCE_ELIGIBLE_STATUSES.has(task.status);
-    });
+    const dropQueue = resource.queue.filter((q) => !isResourceTaskEligible(state, q.taskId));
 
-    if (expiredLeases.length === 0 && orphanedLeases.length === 0 && dropQueue.length === 0) continue;
-
-    resource.holders = resource.holders.filter(
-      (h) => !expiredLeases.includes(h) && !orphanedLeases.includes(h)
-    );
-    resource.queue = resource.queue.filter((q) => !dropQueue.includes(q));
-    reaped += expiredLeases.length + orphanedLeases.length + dropQueue.length;
-    await persistResource(state, resource);
+    const removed = expiredLeases.length + orphanedLeases.length + dropQueue.length;
+    if (removed > 0) {
+      resource.holders = resource.holders.filter(
+        (h) => !expiredLeases.includes(h) && !orphanedLeases.includes(h)
+      );
+      resource.queue = resource.queue.filter((q) => !dropQueue.includes(q));
+      await persistResource(state, resource);
+      reaped += removed;
+    }
 
     for (const lease of expiredLeases) {
       state.appendActivity('RESOURCE_LEASE_EXPIRED', {
@@ -384,6 +419,7 @@ export async function reapResources(state: StateManager, nowMs: number = Date.no
       });
     }
 
+    // Also repair partial release/grant/unblock writes when nothing expired.
     try {
       await grantNextLeases(state, resource.id);
     } catch (err) {
