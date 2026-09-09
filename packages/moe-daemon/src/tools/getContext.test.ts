@@ -266,7 +266,7 @@ describe('moe.get_context', () => {
       });
       await h.state.load();
 
-      const result = await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as {
+      const result = await getContextTool(h.state).handler({ taskId: 'task-1', workerId: 'qa-ledger' }, h.state) as {
         task: ContextTask; nextAction: { tool: string; reason: string };
       };
       const t = result.task;

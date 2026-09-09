@@ -3,7 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskCommit } from '../types/schema.js';
 import { invalidState } from '../util/errors.js';
 import { logger } from '../util/logger.js';
-import { recommendSkillFor } from '../util/recommendSkill.js';
+import { contextNextAction } from '../util/contextNextAction.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
 
@@ -154,6 +154,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
 
       // Read planningNotes from task if present
       const planningNotes = task ? (task as unknown as Record<string, unknown>).planningNotes ?? null : null;
+      const nextAction = contextNextAction(state, task, callerWorkerId);
       const compactedComments = task
         ? compactTaskComments(task.comments || [], commentsLimit, commentsMaxChars)
         : null;
@@ -397,57 +398,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
             }
           : {}),
         planningNotes,
-        // Suggest the role-appropriate next action based on the task's current column.
-        ...(task
-          ? {
-              nextAction: (() => {
-                if (task.status === 'PLANNING') {
-                  return {
-                    tool: 'moe.submit_plan',
-                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Plan this task and submit for approval.',
-                    recommendedSkill: recommendSkillFor('architect', 'planning_entry')
-                  };
-                }
-                if (task.status === 'WORKING') {
-                  const nextStep = (task.implementationPlan || []).find(s => s.status === 'PENDING' || s.status === 'IN_PROGRESS');
-                  // If reopened, point the worker at receiving-code-review first.
-                  const reopenedSkill = (task.reopenCount || 0) > 0
-                    ? recommendSkillFor('worker', 'reopened')
-                    : undefined;
-                  if (nextStep) {
-                    const isFirstStep = (task.implementationPlan || []).every(
-                      s => s.status === 'PENDING' || s.stepId === nextStep.stepId
-                    );
-                    return {
-                      tool: 'moe.start_step',
-                      args: { taskId: task.id, stepId: nextStep.stepId, workerId: callerWorkerId || undefined },
-                      reason: `Begin step: ${nextStep.description.slice(0, 80)}`,
-                      recommendedSkill: reopenedSkill
-                        ?? (isFirstStep ? recommendSkillFor('worker', 'first_start_step') : undefined)
-                    };
-                  }
-                  return {
-                    tool: 'moe.complete_task',
-                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'All steps complete; hand task off to QA.',
-                    // Reopened tasks land here when QA rejected without resetting steps —
-                    // point the worker at the rejection-reading skill before they re-finish.
-                    recommendedSkill: reopenedSkill ?? recommendSkillFor('worker', 'before_complete_task')
-                  };
-                }
-                if (task.status === 'REVIEW') {
-                  return {
-                    tool: 'moe.qa_approve',
-                    args: { taskId: task.id, workerId: callerWorkerId || undefined },
-                    reason: 'Verify DoD + rails; re-run the verification command from task.verification yourself; confirm a completion commit is recorded in task.commits (`git show <sha>`) before approving; approve or moe.qa_reject with actionable issues.',
-                    recommendedSkill: recommendSkillFor('qa', 'review_entry')
-                  };
-                }
-                return undefined;
-              })()
-            }
-          : {}),
+        ...(nextAction ? { nextAction } : {}),
       };
     }
   };
