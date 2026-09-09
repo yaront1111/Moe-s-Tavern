@@ -38,6 +38,17 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       }
       await state.touchWorker(params.workerId);
 
+      // ATOMICITY. This check and the release below run in ONE uninterrupted
+      // synchronous turn of the event loop, so no other handler can move the
+      // lease between them: `state.getResource` is synchronous, the loop below
+      // is synchronous, and `releaseResource` mutates `resource.holders`
+      // synchronously BEFORE its first `await` (persistResource). `await f()`
+      // runs f's synchronous prefix before yielding, so the window is empty.
+      // This is a property of the current implementation, not an enforced
+      // invariant: introducing an `await` ahead of the holders mutation in
+      // resourceStore.releaseResource would silently reopen a TOCTOU window
+      // here. Keep that mutation in the synchronous prefix.
+      //
       // Compare-and-swap preconditions. A release is otherwise a blind write:
       // `taskId` bounds the blast radius to one row but asserts nothing about
       // WHICH holder or WHICH acquisition, so a caller acting on a stale
