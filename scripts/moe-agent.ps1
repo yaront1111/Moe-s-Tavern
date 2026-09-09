@@ -3973,6 +3973,13 @@ do {
     }
     $systemAppend += $systemAppendPost
     $dynamicContext = ""
+    # A headless loop may launch without a claim solely to answer routed
+    # mentions. Claiming later inside that CLI bypasses the task baseline and
+    # postflight, both keyed to the preflight task id. Return to the wrapper.
+    $notificationPrompt = $null
+    if ($AutoClaim -and $preflightNoTask -and -not $preflightOk -and $Role -ne 'governor' -and $cliType -eq 'claude' -and -not $Interactive -and $loopEnabled) {
+        $notificationPrompt = "This is a notification-only session for workerId=$WorkerId. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+    }
     if ($preflightOk) {
         # Curate the get_context payload before injection. The full JSON is
         # 5-30KB; agents only need a working subset. Comments are skipped
@@ -4128,6 +4135,8 @@ moe.enter_governance has already been called for you by the wrapper.
 Do NOT call moe.wait_for_task (it has no status filter for your role and will refuse) and do NOT call moe.claim_next_task.
 Your FIRST action is to read the backlog, then enter the moe.chat_wait loop with workerId=$WorkerId and a long timeout, exactly as the governance instructions below describe.
 "@
+    } elseif ($notificationPrompt) {
+        $dynamicContext += $notificationPrompt
     } elseif ($preflightNoTask) {
         $dynamicContext += @"
 # Pre-flight Complete: no claimable task
@@ -4279,6 +4288,8 @@ $mentionsJson
         # #governors. They never claim tasks. The wrapper has already called
         # moe.enter_governance; the agent now subscribes to channel signals.
         $claimPromptBody = "You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. On stale-worker alerts: quiet is not dead (long builds/tests are silent) — ping the worker first and NEVER call moe.release_task on idle time alone; release needs a confirmed crash plus the human's nod. Loop forever. Do NOT call moe.claim_next_task."
+    } elseif ($notificationPrompt) {
+        $claimPromptBody = $notificationPrompt
     } elseif ($AutoClaim -and $preflightNoTask) {
         # No-task case: wrapper's outer loop handles the poll/sleep cycle at the
         # PowerShell level, so we don't launch the CLI just to call wait_for_task.
@@ -4299,7 +4310,7 @@ $mentionsJson
     # -not $grokInteractive (an architect launched with -GrokExec is one-shot
     # too), matching the sh twin's GROK_INTERACTIVE gate.
     $oneShotSession = if ($cliType -eq 'grok') { -not $grokInteractive } else { -not $Interactive }
-    if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor') {
+    if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor' -and -not $notificationPrompt) {
         $claimPromptBody += " CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
     }
 

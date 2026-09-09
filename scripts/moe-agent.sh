@@ -4893,6 +4893,13 @@ Run: bash $moe_call --help for full list."
     # skill JIT) goes into DYNAMIC_CONTEXT and is prepended to the user
     # prompt -- NOT appended to SYSTEM_APPEND.
     DYNAMIC_CONTEXT=""
+    # A headless loop may launch without a claim solely to answer routed
+    # mentions. Claiming later inside that CLI bypasses the task baseline and
+    # postflight, both keyed to the preflight task id. Return to the wrapper.
+    NOTIFICATION_PROMPT=""
+    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != governor ] && [ "$CLI_TYPE" = claude ] && [ "$CLAUDE_INTERACTIVE" = false ] && [ "$LOOP_ENABLED" = true ]; then
+        NOTIFICATION_PROMPT="This is a notification-only session for workerId=$WORKER_ID. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+    fi
     if [ "$PREFLIGHT_OK" = true ]; then
         # Compute compact unread counts so we don't embed the full chat-read
         # responses (each one can be several KB of token-burning JSON).
@@ -4997,6 +5004,8 @@ The daemon reports no claimable task. For role governor that is the NORMAL state
 moe.enter_governance has already been called for you by the wrapper.
 Do NOT call moe.wait_for_task (it has no status filter for your role and will refuse) and do NOT call moe.claim_next_task.
 Your FIRST action is to read the backlog, then enter the moe.chat_wait loop with workerId=$WORKER_ID and a long timeout, exactly as the governance instructions below describe."
+    elif [ -n "$NOTIFICATION_PROMPT" ]; then
+        DYNAMIC_CONTEXT="$NOTIFICATION_PROMPT"
     elif [ "$PREFLIGHT_NO_TASK" = true ]; then
         DYNAMIC_CONTEXT="# Pre-flight Complete: no claimable task
 The daemon reports no claimable task for role $ROLE right now.
@@ -5051,6 +5060,8 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             # short-circuit. Now subscribe to #governors and #general via
             # chat_wait — never call claim_next_task.
             PROMPT_BODY="You are in governance mode. Read the backlog: moe.chat_channels, find #governors, moe.chat_read it (last 50 messages), then moe.chat_read #general. After catching up, enter the loop: moe.chat_wait with channels=['#governors','#general'] and a long timeout. When it wakes, triage per docs/roles/governor.md (the role doc is appended to your system prompt). Reply via moe.chat_send. Use moe.set_task_status, moe.release_task, moe.propose_rail, or moe.submit_plan_critique when the signal calls for action. On stale-worker alerts: quiet is not dead (long builds/tests are silent) — ping the worker first and NEVER call moe.release_task on idle time alone; release needs a confirmed crash plus the human's nod. Loop forever. Do NOT call moe.claim_next_task."
+        elif [ -n "$NOTIFICATION_PROMPT" ]; then
+            PROMPT_BODY="$NOTIFICATION_PROMPT"
         elif [ "$PREFLIGHT_NO_TASK" = true ]; then
             PROMPT_BODY="No claimable task right now. Call moe.wait_for_task with statuses=$STATUSES, workerId=\"$WORKER_ID\". When it wakes with hasNext:true, call moe.claim_next_task with the same args, then moe.get_context. If it wakes with hasChatMessage:true, your next calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. If it wakes with hasPendingQuestion:true, call moe.chat_read on that task's channel and answer the question. Do not claim a new task while a routed mention is unanswered."
         else
@@ -5070,7 +5081,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Governor is excluded: its prompt is a chat_wait loop, not a finish-and-
     # stop task (and governors default to interactive anyway). Headless grok
     # (--prompt-file --yolo) is the same one-shot shape and gets it too.
-    if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ]; then
+    if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
         PROMPT_BODY="$PROMPT_BODY CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Run verification in the foreground or poll it to completion. Do NOT call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
     fi
 
