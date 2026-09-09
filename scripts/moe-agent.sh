@@ -2761,6 +2761,8 @@ def relative_imports(source, jsx_source=False):
                 jsx()
                 continue
             previous = tokens[-1][1] if tokens else ''
+            # '>' includes the end of =>: arrow expression bodies may begin
+            # with regex literals. Keep this context in the PowerShell twin.
             if ch == '/' and previous in ('', '=', '(', '[', '{', ',', ':', ';', '!', '?', '&', '|', '>', 'return', 'throw', 'yield', 'case', 'void', 'typeof', 'delete'):
                 i += 1
                 in_class, closed = False, False

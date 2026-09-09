@@ -24,7 +24,7 @@ foreach ($variable in @(Get-ChildItem Env: | Where-Object { $_.Name -like 'GIT_*
 $env:GIT_CONFIG_NOSYSTEM = '1'
 $env:GIT_CONFIG_GLOBAL = Join-Path $fixtureRoot 'empty.gitconfig'
 [IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, '')
-function Assert-GuardCase([string]$Name, [hashtable]$Files, [string[]]$Expected, [hashtable]$HeadFiles = @{}, [string[]]$Deleted = @(), [string]$ConcurrentPath = '', [switch]$Unborn) {
+function Assert-GuardCase([string]$Name, [hashtable]$Files, [string[]]$Expected, [hashtable]$HeadFiles = @{}, [string[]]$Deleted = @(), [string]$ConcurrentPath = '', [switch]$Unborn, [string]$ExpectedSkipCode = '') {
     if ($Case -and $Name -notlike $Case) { return }
     $root = Join-Path $fixtureRoot $Name
     New-Item -ItemType Directory -Path $root | Out-Null
@@ -50,6 +50,11 @@ function Assert-GuardCase([string]$Name, [hashtable]$Files, [string[]]$Expected,
     $gitInfo = @{ Top=$root; Rel=''; GitDir=(Join-Path $root '.git') }
     $selection = Resolve-MoeAttribution -Git $gitInfo -S (Get-MoeDirtySnapshot $root) -B @{} -U @{} -Tool @{} -Scope $scope -Settings $settings -TaskId 'task-review'
     $actual = @($selection.Candidates | ForEach-Object { $_.Path } | Sort-Object)
+    if ($ExpectedSkipCode -and @($selection.Skipped | Where-Object { $_.Code -eq $ExpectedSkipCode }).Count -ne 1) {
+        $script:failures.Add($Name)
+        Write-Host "FAIL importee-guard: $Name (exact skip code)"
+        return
+    }
     if (($actual -join '|') -ne (($Expected | Sort-Object) -join '|')) {
         $script:failures.Add($Name)
         Write-Host "FAIL importee-guard: $Name (candidate selection)"
@@ -98,6 +103,9 @@ const from = './ordinary-string.mjs';
     Assert-GuardCase 'dynamic' @{'a.mjs'="await import(/* gap */ './missing.mjs');"} @()
     Assert-GuardCase 'require' @{'a.cjs'="require(/* gap */ './missing.cjs');"} @()
     Assert-GuardCase 'property-call' @{'a.mjs'="obj.require('./not-a-module'); obj.import('./not-a-module');"} @('a.mjs')
+    Assert-GuardCase 'arrow-regex' @{'a.mjs'='export const matches = () => /["]/.test("x");'} @('a.mjs')
+    Assert-GuardCase 'arrow-regex-quantified-group' @{'a.mjs'='export const matches = (line) => /^ {6}FIELD(?:_FILE)?:/.test(line);'} @('a.mjs')
+    Assert-GuardCase 'arrow-regex-real-import' @{'a.mjs'='const matches = () => /["]/.test("x"); import "./missing.mjs";'} @() -ExpectedSkipCode 'MOE_ATTR_IMPORTEE_MISSING(./missing.mjs)'
     Assert-GuardCase 'computed-import' @{'a.mjs'="import('./prefix-' + name);"} @('a.mjs')
     Assert-GuardCase 'template-expression' @{'a.mjs'='const result = `${await import("./missing.mjs")}`;'} @()
     Assert-GuardCase 'nested-template-expression' @{'a.mjs'='const result = `${{ value: `${await import("./missing.mjs")}` }.value}`;'} @()

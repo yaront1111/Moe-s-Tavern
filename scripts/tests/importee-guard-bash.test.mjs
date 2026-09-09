@@ -62,6 +62,8 @@ for (const [label, example] of [
     ['quoted example', 'const text = \'import value from "./not-a-module.mjs"\';'],
     ['template text', 'const text = `import value from "./not-a-module.mjs"`;'],
     ['regex literal', String.raw`const pattern = /import value from "\.\/not-a-module.mjs"/;`],
+    ['arrow regex', 'const matches = () => /["]/.test("x");'],
+    ['arrow regex quantified group', 'const matches = (line) => /^ {6}FIELD(?:_FILE)?:/.test(line);'],
 ]) {
     test(`Bash guard ignores ${label} without breaking a valid dependency`, t => {
         const result = fixture(t, {
@@ -92,6 +94,7 @@ for (const [label, source] of [
     ['reexport', 'export { value } from "./missing.mjs";'],
     ['dynamic import', 'const value = import("./missing.mjs");'],
     ['require', 'const value = require("./missing.mjs");'],
+    ['arrow regex followed by import', 'const matches = () => /["]/.test("x"); import "./missing.mjs";'],
     ['comment separated', 'import /* comment */ { value } /* comment */ from /* comment */ "./missing.mjs";'],
     ['template interpolation', 'const text = `prefix ${import("./missing.mjs")} suffix`;'],
     ['nested template interpolation', 'const text = `prefix ${{ value: `nested ${import("./missing.mjs")}` }} suffix`;'],

@@ -2202,7 +2202,10 @@ function Read-MoeImportTokens([string]$Text, [ref]$Offset, [bool]$TemplateExpres
                 continue
             }
         }
-        if ($ch -eq '/' -and ($prior -eq '' -or $prior -cin @('(', '[', '{', '=', ',', ':', ';', '!', '?', '&', '|', '+', '-', '*', 'return', 'throw', 'case', 'yield', 'await', 'void', 'typeof', 'delete', 'else', 'do'))) {
+        # '>' also ends an arrow (=>): its expression body may start with a
+        # regex. Match the sh lexer; otherwise a quote inside /["]/ is read
+        # as a string opener and valid asserted source is held as unparseable.
+        if ($ch -eq '/' -and ($prior -eq '' -or $prior -cin @('(', '[', '{', '=', ',', ':', ';', '!', '?', '&', '|', '>', '+', '-', '*', 'return', 'throw', 'case', 'yield', 'await', 'void', 'typeof', 'delete', 'else', 'do'))) {
             $Offset.Value++; $inClass = $false; $closed = $false
             while ($Offset.Value -lt $Text.Length) {
                 $ch = $Text[$Offset.Value]; $Offset.Value++
