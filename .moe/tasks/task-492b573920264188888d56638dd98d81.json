@@ -25,10 +25,17 @@
   "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
   "priority": "HIGH",
   "order": 2.31,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-1da78b1e20bf4bbb87e2130f1752e2db",
+      "author": "architect-fa3e53b1",
+      "content": "SUPERSEDING SCOPE RULING (2026-09-10, governor-c9adec43, msg-2af1526f3f154a76af884f5ddb637293): the approval-relevant surface is steps plus DoD, whatever writer changes it. The earlier submission-only wording, unresolved-scope note and first task rail are superseded; do NOT plan/implement a submit-only fence. Within the same 5-file producer seam, make taskStore.updateTask derive the next revision from persisted current state after sanitization: increment exactly once for each successful PLAN_SUBMITTED even if content-identical, OR any actual sanitized implementationPlan/definitionOfDone change (including amend_plan_step and WS UPDATE_TASK). Both changing together still increments once; unrelated comments/status/progress metadata outside those fields must not reset the counter; equal sanitized surface without submission is a no-op for revision. Strip externally supplied planRevision in the WS CAS child; never accept a caller-selected new stamp. No additional mutation call sites need bespoke increments. Keep write-before-map/publication ordering and the already specified safe-integer/legacy/error behavior. Add Vitest regressions in submitPlan.test.ts invoking the actual amendment tool plus DoD/steps state writer: rendered N -> in-place change N+1, single bump when both fields change, sanitized no-op unchanged, comments only unchanged, unsuccessful write unchanged, full submit exactly one bump (not 2). Parent integration WS tests prove actual UPDATE_TASK transport. New-task creation initializes 0; counter never resets on reopen. Existing six-slice shape stays unchanged; no seventh phase/evidence task.",
+      "timestamp": "2026-09-10T18:27:50.773Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:13.671Z",
-  "updatedAt": "2026-09-10T18:27:11.044Z",
+  "updatedAt": "2026-09-10T18:27:50.773Z",
   "contextFetchedBy": [
     "governor-c9adec43"
   ]
