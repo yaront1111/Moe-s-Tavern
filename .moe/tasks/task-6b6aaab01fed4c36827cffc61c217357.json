@@ -118,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:15.833Z",
-  "updatedAt": "2026-09-10T19:23:42.187Z",
+  "updatedAt": "2026-09-10T19:23:45.638Z",
   "declaredFiles": [
     "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh",
@@ -172,7 +172,37 @@
     "scripts/moe-agent.sh",
     "scripts/tests/mention-provenance.ps1",
     "scripts/tests/mention-provenance-proxy.js",
-    "scripts/tests/mention-provenance-seed.py"
+    "scripts/tests/mention-provenance-seed.py",
+    ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json"
   ],
-  "completionSummary": "Adopted the orphaned mention-timestamp provenance change and drove it through the normal wrapper path. Scope held to exactly the five declared paths; final diff +112/-17.\n\nINHERITED, ADOPTED VERBATIM (zero launcher bytes authored by me):\n- scripts/moe-agent.ps1 (+17/-1): Get-MoeStoredMentionRecord returns the stored timestamp, re-reading the ORIGINAL JSON token via Newtonsoft JsonTextReader with DateParseHandling None whenever ConvertFrom-Json coerced the value to [datetime], so offset and fractional precision survive. New-MoeVerifiedMention emits the stored string or explicit $null.\n- scripts/moe-agent.sh (+4/-2): the embedded-python verified_mention emits rec[\"timestamp\"] only when it is a str, else None, including the refusal branch.\n- scripts/tests/mention-provenance-proxy.js (+2/-1): substitute mode lies with a 2099-01-01 delivery timestamp.\n- Most of scripts/tests/mention-provenance-seed.py: whole-record store oracle, exact timestamp presence+value assertion, and the +03:00 / absent / null / numeric fixtures.\n\nMY EDITS (2 test files only):\n- mention-provenance-seed.py: added a seven-fractional-digit fixture, 2026-08-18T00:00:02.1234567Z, on the multiline case. With the existing +03:00 case these are the two shapes a parse-then-reserialise round trip cannot reproduce, so they pin that the stored TOKEN is carried rather than a re-rendered time. No case removed, no assertion weakened.\n- mention-provenance.ps1: added a probe of the SELECTED CHILD host (where the guard actually runs), printing a literally re-runnable [probe] command plus PROVENANCE_HOST and PROVENANCE_JSON_TYPES. It exits 1 on a failed launch, nonzero exit, missing probe lines, an unparseable child version, or a PS6+ host that resolves no raw-token reader; PS5 is explicitly not made to depend on the Core-only assembly.\n\nDoD item 2 answered by measurement: pwsh 7.6.6 (C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\\pwsh.exe) resolves BOTH [Newtonsoft.Json.JsonTextReader]"
+  "completionSummary": "Adopted the orphaned mention-timestamp provenance change and drove it through the normal wrapper path. Scope held to exactly the five declared paths; final diff +112/-17.\n\nINHERITED, ADOPTED VERBATIM (zero launcher bytes authored by me):\n- scripts/moe-agent.ps1 (+17/-1): Get-MoeStoredMentionRecord returns the stored timestamp, re-reading the ORIGINAL JSON token via Newtonsoft JsonTextReader with DateParseHandling None whenever ConvertFrom-Json coerced the value to [datetime], so offset and fractional precision survive. New-MoeVerifiedMention emits the stored string or explicit $null.\n- scripts/moe-agent.sh (+4/-2): the embedded-python verified_mention emits rec[\"timestamp\"] only when it is a str, else None, including the refusal branch.\n- scripts/tests/mention-provenance-proxy.js (+2/-1): substitute mode lies with a 2099-01-01 delivery timestamp.\n- Most of scripts/tests/mention-provenance-seed.py: whole-record store oracle, exact timestamp presence+value assertion, and the +03:00 / absent / null / numeric fixtures.\n\nMY EDITS (2 test files only):\n- mention-provenance-seed.py: added a seven-fractional-digit fixture, 2026-08-18T00:00:02.1234567Z, on the multiline case. With the existing +03:00 case these are the two shapes a parse-then-reserialise round trip cannot reproduce, so they pin that the stored TOKEN is carried rather than a re-rendered time. No case removed, no assertion weakened.\n- mention-provenance.ps1: added a probe of the SELECTED CHILD host (where the guard actually runs), printing a literally re-runnable [probe] command plus PROVENANCE_HOST and PROVENANCE_JSON_TYPES. It exits 1 on a failed launch, nonzero exit, missing probe lines, an unparseable child version, or a PS6+ host that resolves no raw-token reader; PS5 is explicitly not made to depend on the Core-only assembly.\n\nDoD item 2 answered by measurement: pwsh 7.6.6 (C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\\pwsh.exe) resolves BOTH [Newtonsoft.Json.JsonTextReader]",
+  "commits": [
+    {
+      "sha": "e53048f84a9a558545d4a4bf4e0f0abe8990cb40",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-10T19:23:42Z",
+      "paths": [
+        ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/mention-provenance-proxy.js",
+        "scripts/tests/mention-provenance-seed.py"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-10T19:23:45.638Z",
+      "treeId": "c7a0b109ca22bdfbd1ab8947a7ca41b6957e33eb",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-10T19:23:42Z",
+    "at": "2026-09-10T19:23:45.638Z"
+  }
 }
