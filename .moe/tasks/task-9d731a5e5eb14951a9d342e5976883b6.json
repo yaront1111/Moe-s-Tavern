@@ -1,0 +1,37 @@
+{
+  "id": "task-9d731a5e5eb14951a9d342e5976883b6",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Retire task time-cap presentation in VS Code",
+  "description": "Objective: remove deprecated task time-budget presentation and client fields, after JetBrains retirement lands. Deliverable: task details and board cards ignore legacy time-budget data, while existing uncapped elapsed wall-clock and other live metrics remain. Scope exactly five files: moe-vscode/src/panels/TaskDetailPanel.ts (remove task.budget, its visibility contribution, and remaining KPI from renderMetrics); moe-vscode/src/types/moe.ts (remove TaskBudget and Task.budget); moe-vscode/media/board.js (replace budgetSuffix/cap ratios/indicators with the existing elapsed-only presentation); moe-vscode/src/providers/BoardViewProvider.ts (rename matching inline badge class/style); new moe-vscode/tests/task-time-budget.test.cjs. Test the actual TaskDetailPanel-generated HTML and actual media/board.js renderTaskCard with node:test, TypeScript transpileModule and node:vm, following tests/daemon-start.test.cjs; do not duplicate renderer logic or add a dependency. Stub required IDE/DOM/transport hooks, fail loudly for unexpected dependencies, and dispose clients/timers in finally. Compare output for identical tasks with/without legacy caps; missing/null/malformed legacy data must be ignored without throws. Preserve existing uncapped timing gates/fallbacks, HTML escaping, steps/reopens/rejects/wall-clock, critiques, failed DoD and handoffs. Do not introduce a new recorded-duration-only badge where current uncapped behavior omits it. NOT in scope: taskDetail.js, other media styles with no budget usage, live chat/reopen limits, daemon schema/deprecation/data rewriting, percentage metrics fix, or additional time-tracking features. Exact gate from repo root on Windows: npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE. Unix: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Use npm.cmd if PowerShell policy blocks npm.ps1, and preserve foreign work.",
+  "definitionOfDone": [
+    "TaskDetailPanel no longer reads task.budget or renders remaining/cap values; a budget-only task has no empty Metrics section.",
+    "The board's actual renderTaskCard output has no legacy cap denominator, utilization warning/approval indicators or task-budget class, and retains the existing elapsed-only output and HTML escaping.",
+    "TaskBudget and Task.budget are removed from the VS Code client model; valid live TaskMetrics durations and counters remain supported.",
+    "Native node:test regressions cover actual detail and board renderers with absent, populated, null and malformed legacy budget values plus timestamp edge cases; populated-cap assertions fail on old rendered output.",
+    "Steps, reopens, rejects, wall-clock fallback, critique/failed-DoD/handoff data and live chat/reopen limits remain unchanged.",
+    "Full moe-vscode npm test and npm run compile pass with positive test counts and captured red-first regression evidence."
+  ],
+  "taskRails": [
+    "Keep the five-file scope; no runtime/test framework changes or taskDetail.js churn.",
+    "Preserve existing uncapped wall-clock behavior and error handling, rather than deleting useful elapsed timing along with the retired cap.",
+    "JetBrains prerequisites land first; do not weaken their tests."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0d11e05fd60945029385c80e28da9e1f",
+  "dependsOn": [
+    "task-435683c2df8f47e7b77a77dc51ba62e9"
+  ],
+  "priority": "MEDIUM",
+  "order": 3.53,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:41:38.049Z",
+  "updatedAt": "2026-09-10T17:41:38.049Z"
+}

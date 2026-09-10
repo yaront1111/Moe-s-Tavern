@@ -1,0 +1,55 @@
+{
+  "id": "task-0d11e05fd60945029385c80e28da9e1f",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Remove the deprecated task time-budget UI from both IDE clients",
+  "description": "packages/moe-daemon/src/types/schema.ts marks the task time-budget fields DEPRECATED and ignored (the 80%/100% warn feature was removed), but the clients still advertise it: moe-jetbrains MoeBundle.properties has 'moe.metrics.budgetRemaining=Budget remaining' (Metrics + Budget surface), and moe-vscode/src/panels/TaskDetailPanel.ts:726-770 renders task.budget.wallClockMs as 'remaining'. Users see a control that does nothing. Remove the budget rendering and strings from both clients (keep chat hop limits and reopen caps — those are separate and live), drop any dead budget fields from the plugin Task/Metrics models, and scrub docs/CONFIGURATION.md + docs/SCHEMA.md of budget as a live setting (leave the deprecation note in schema.ts). Source: roadmap 2026-09-10 §4 'Effective settings'.",
+  "definitionOfDone": [
+    "No 'budget' string remains in moe-jetbrains/src/main (grep), MetricsPanel compiles without the budget KPI",
+    "TaskDetailPanel.ts no longer reads task.budget; npm run compile green",
+    "docs/CONFIGURATION.md and docs/SCHEMA.md do not present time budgets as a live setting",
+    "./gradlew test green and moe-vscode npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "comments": [
+    {
+      "id": "comment-4e0da6f7b2d441d7b6cbd7796513ecb3",
+      "author": "architect-6f3113ee",
+      "content": "Architect SPIDR breakdown after live exploration (no source edits/tests): the original removal spans at least 7 JetBrains main files, 4 VS Code production files, docs and regressions, beyond the hard plan file cap. Created BACKLOG children in order: task-0471536723384823995c88fe0fb58e15 (JetBrains UI + production presentation regressions, 5 files) -> task-435683c2df8f47e7b77a77dc51ba62e9 (JetBrains model/both parser cleanup + JUnit, 4 files) -> task-9d731a5e5eb14951a9d342e5976883b6 (VS Code details/board/model + production-render regressions, 5 files). Dependencies enforce JetBrains first; all are parentTaskId-linked here. No child plan has been submitted or approved.\n\nThis parent retains ALL original DoD items as the final feature integration gate, not duplicate implementation: children cover DoD 1/2 and client regressions; parent owns docs/CONFIGURATION.md + docs/SCHEMA.md retirement of active budget/pacePerStepMs claims, a proposed packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts red-first doc-contract guard, the final case-insensitive JetBrains src/main grep, and full JetBrains/VS Code test+compile evidence. Keep daemon schema.ts's DEPRECATED/ignored notes and legacy wire/disk compatibility unchanged; docs may describe ignored legacy fields, never a live cap/seeding feature. Preserve live elapsed wall-clock behavior, chat hop limits and reopen caps. No MetricsPanel.kt edit is needed: the remaining KPI is in TaskDetailDialog and the board badge. Parent verifies delivered child commits/landing plus fresh gates before complete_task.\n\nProposed parent Windows verification from repo root: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE. Unix: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. The proposed new guard should reject active TaskBudget/seeding docs, allow clearly deprecated legacy annotations, and protect live chat/reopen settings. It is not yet created; commands are future verification, not executed evidence.\n\nThe initial get_context said isEpicFinal=true, but a fresh list_tasks found newer order-5/6 siblings. This parent is only this feature's integration/docs gate, not a claim that the whole Wave 0 epic is ready. Unrelated blocked siblings are not dependencies of this removal. Existing generated/initFiles.ts, launcher/provenance scripts and peer board dirt are foreign; preserve them. Child A was recorded createdBy=WORKER by the runtime despite architect workerId; this comment records the actual architect provenance (B/C explicitly recorded ARCHITECT).",
+      "timestamp": "2026-09-10T17:42:33.777Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:46.385Z",
+  "updatedAt": "2026-09-10T17:42:33.867Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T17:34:22.626Z"
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee"
+  ],
+  "dependsOn": [
+    "task-0471536723384823995c88fe0fb58e15",
+    "task-435683c2df8f47e7b77a77dc51ba62e9",
+    "task-9d731a5e5eb14951a9d342e5976883b6"
+  ],
+  "blockedReason": "Oversized removal has been decomposed into three existing-module implementation slices with own regressions: task-0471536723384823995c88fe0fb58e15, task-435683c2df8f47e7b77a77dc51ba62e9, task-9d731a5e5eb14951a9d342e5976883b6. Children are BACKLOG and linked by dependencies (JetBrains UI -> JetBrains model/parser -> VS Code). This parent preserves original DoD and waits for their delivery before its own docs/doc-guard and final feature integration plan. Detailed allocation and exact future verification command are in the task comment. No source edits, plan submission, approval, builds or tests performed. This is a dependency wait, not completed work.",
+  "blockedOnTaskIds": [
+    "task-0471536723384823995c88fe0fb58e15",
+    "task-435683c2df8f47e7b77a77dc51ba62e9",
+    "task-9d731a5e5eb14951a9d342e5976883b6"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-10T17:42:33.866Z"
+}

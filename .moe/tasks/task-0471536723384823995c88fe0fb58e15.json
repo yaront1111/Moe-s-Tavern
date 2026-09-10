@@ -1,0 +1,34 @@
+{
+  "id": "task-0471536723384823995c88fe0fb58e15",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Retire task time-cap presentation in JetBrains",
+  "description": "Objective: remove the deprecated task time-budget presentation from JetBrains while preserving live elapsed wall-clock metrics. Deliverable: TaskCard has only its existing uncapped elapsed presentation and TaskDetailDialog has no Budget remaining KPI or budget-only empty metrics section. Scope exactly: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt; moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt; moe-jetbrains/src/main/resources/messages/MoeBundle.properties; comment-only moe-jetbrains/src/main/kotlin/com/moe/util/MoeDuration.kt; new moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt. Use small production-used internal presentation helpers inside the two existing UI files for headless JUnit (new APIs, not test-only copies); pass a fixed Instant and build fixtures through MoeJson.parseTask from legacy JSON so tests survive later model cleanup. Preserve the existing uncapped card visibility gate: a valid firstClaimAt is required; do not introduce a new recorded-duration-only card. Preserve recorded-duration precedence, timestamp fallback/clamping, neutral theme-aware appearance and all unrelated metrics/plan-size warnings/handoffs/critique/verification. Explicit error handling: malformed/missing timestamps remain non-throwing; ignored legacy caps never influence the rendered presentation. NOT in scope: removing model/parser fields (next dependent task), daemon enforcement/deprecation comments, metrics percentage fix, live chat/reopen limits, or new duration-display features. Exact gate from repository root on Windows: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE. Unix equivalent: (cd moe-jetbrains && ./gradlew test). Serialize shared Gradle runs and leave foreign dirty files untouched.",
+  "definitionOfDone": [
+    "A JUnit regression with fixed time asserts TaskCard and TaskDetailDialog presentation is identical for otherwise-identical tasks with and without legacy budget JSON, and fails on the old cap/remaining behavior.",
+    "A budget-only legacy task renders neither a card timing badge nor an otherwise-empty metrics section; no cap denominator, budget utilization color, remaining KPI, warnedAt or escalatedAt presentation remains.",
+    "Existing uncapped elapsed timing, recorded-duration precedence, valid/malformed/future timestamp behavior and the valid-firstClaimAt card gate are preserved by tests.",
+    "Steps/files/wall-clock/reopens/rejects and supplemental plan-size warnings, critique, handoffs and verification still appear in the production-used presentation model when present.",
+    "The obsolete resource key and budget terminology are removed from the four scoped main-source/resource files; Task/MoeJson compatibility fields deliberately remain for the dependent cleanup.",
+    "Full JetBrains Gradle test gate passes with positive JUnit counts; regression evidence demonstrates failure of the old rendered behavior."
+  ],
+  "taskRails": [
+    "Keep this slice at five changed files; use production-used test seams inside existing UI files, not a separate presenter package.",
+    "Do not remove live elapsed wall-clock metrics or change timestamp/error handling semantics.",
+    "Do not edit MetricsPanel.kt or any peer-owned source/build output."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": "task-0d11e05fd60945029385c80e28da9e1f",
+  "priority": "MEDIUM",
+  "order": 3.51,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:40:02.958Z",
+  "updatedAt": "2026-09-10T17:40:02.958Z"
+}

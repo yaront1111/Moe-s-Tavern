@@ -1,0 +1,36 @@
+{
+  "id": "task-435683c2df8f47e7b77a77dc51ba62e9",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Remove deprecated time-cap fields from JetBrains task parsing",
+  "description": "Objective: finish JetBrains's deprecated task time-budget retirement after the UI consumers have landed. Deliverable: the client Task model and both JSON parsing paths ignore legacy time-budget payloads while retaining all live runtime metrics and limits. Exact scope: moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt (remove TaskBudget and Task.budget plus stale surface comment), moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt (remove import, parseTaskBudget helper and BOTH parseTasks/parseTask assignments), moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt (comment-only: replace 'short budget' retry-window wording), and moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Add red-first parser equality regressions: the same task with/without populated legacy budget JSON parses identically through snapshot and single-task APIs; old code must differ because it populates Task.budget. Also cover absent/null/malformed legacy values while preserving metrics, reopen/step data and error handling for malformed unrelated fields. The UI prerequisite removes the old typed consumers before this field disappears; do not import or construct TaskBudget in new tests. NOT in scope: daemon schema/data rewrites, daemon deprecation notes, chat hop limits, reopen caps, startup timing behavior, or presentation changes beyond the prerequisite. Exact gate from repository root on Windows: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE. Unix: (cd moe-jetbrains && ./gradlew test). The parent's final guard will run case-insensitive budget grep over all src/main. Coordinate shared Gradle output use; preserve foreign files.",
+  "definitionOfDone": [
+    "TaskBudget, Task.budget and budget-specific parser code/imports are absent from JetBrains main sources; both parseTasks and parseTask ignore the legacy field.",
+    "JUnit fixtures assert identical parsed live task/metrics data with absent, populated, null and malformed legacy budget values through both parser paths; populated-field equality fails before the removal.",
+    "No case-insensitive budget text remains in moe-jetbrains/src/main after this task and its UI prerequisite, including comment-only leftovers; unrelated startup retry behavior is unchanged.",
+    "TaskMetrics durations, reopen/step counters and all live client limits remain intact and tested.",
+    "Full JetBrains Gradle test gate passes with positive test counts, including the UI prerequisite tests unchanged."
+  ],
+  "taskRails": [
+    "Keep scope to the four named files and retain error handling for unrelated malformed JSON.",
+    "Do not remove the daemon's legacy-field deprecation notes or alter persisted task data.",
+    "Do not weaken the prerequisite's production-presentation tests."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0d11e05fd60945029385c80e28da9e1f",
+  "dependsOn": [
+    "task-0471536723384823995c88fe0fb58e15"
+  ],
+  "priority": "MEDIUM",
+  "order": 3.52,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:40:52.755Z",
+  "updatedAt": "2026-09-10T17:40:52.755Z"
+}

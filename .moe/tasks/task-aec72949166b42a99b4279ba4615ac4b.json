@@ -1,0 +1,35 @@
+{
+  "id": "task-aec72949166b42a99b4279ba4615ac4b",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Surface blocker cause, dependency waits and human-review flag on IDE task cards",
+  "description": "Roadmap 2026-09-10 §4 \"Visible parked work\" and the Wave 0 row \"blocker visibility\". A parked task is currently indistinguishable from live work in both IDE clients, so finding out why anything stopped requires a chat search.\n\nThe daemon already persists every field needed: packages/moe-daemon/src/types/schema.ts declares needsHumanReview (line 727), blockedReason (741), blockedResourceId (757), blockedOnTaskIds (767), blockedFromStatus (769) and blockedAt (771). Neither client reads any of them. moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:111 `data class Task` has no blocker field at all, and grepping the whole Kotlin source for blockedReason/needsHumanReview/blockedOnTaskIds returns nothing. moe-vscode/src/types/moe.ts is the same. Because BLOCKED is display-mapped into the Working column, a task parked on a resource lease, a dependency wait or an external blocker renders as an ordinary in-progress card with no cause and no indication of what will clear it.\n\nScope: parse those fields into the JetBrains Task model, give a BLOCKED card a distinct badge that names the cause (dependency wait, resource wait, plain external block, awaiting human review), and show blockedReason plus the blockedOnTaskIds prerequisites in task detail. Distinguish the three causes, since each clears differently: a dependency wait clears when its prerequisites reach DONE, a resource wait clears on lease grant, and a plain block needs a human. Do not add a board column and do not change any daemon behaviour or lifecycle rule; this is a read-only display change over state the daemon already sends.",
+  "definitionOfDone": [
+    "moe-jetbrains Task model parses needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt from the daemon payload, with a MoeJsonTest case asserting a BLOCKED task round-trips all six",
+    "A BLOCKED card in the Working column renders a distinct badge naming the cause: dependency wait, resource wait, external block, or awaiting human review",
+    "Task detail shows the blockedReason text and lists the blockedOnTaskIds prerequisites",
+    "needsHumanReview renders its own attention badge independent of BLOCKED status",
+    "A JUnit test covers the cause-selection logic for all four cases and fails on the old behaviour (today every BLOCKED task renders as a plain Working card)",
+    "VS Code parity lands in this task only if trivial; otherwise a follow-up card is filed and named in the completion summary",
+    "./gradlew test green"
+  ],
+  "taskRails": [
+    "Display only: do not change report_blocked, the auto-unblock paths, nextStatusForRelease or any daemon lifecycle rule.",
+    "Do not add a sixth board column; BLOCKED stays display-mapped into Working.",
+    "Keep the cause badge derived from a pure, headless-testable function so JUnit can assert it without an IDE fixture."
+  ],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:36:06.133Z",
+  "updatedAt": "2026-09-10T17:36:06.133Z"
+}

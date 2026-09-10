@@ -1,0 +1,35 @@
+{
+  "id": "task-c74179d4a32b41b88c6719f595af8dab",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Show the effective landing and gate policy in the JetBrains settings dialog",
+  "description": "Roadmap 2026-09-10 §4 \"Effective settings\" and the Wave 0 row \"legacy policy cleanup\". The settings dialog advertises a landing policy the wrappers do not implement, so what the user reads there does not describe what happens to their code.\n\nmoe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:20 `data class ProjectSettings` exposes exactly eight fields, three of which no longer drive anything: autoCreateBranch, branchPattern (default \"moe/{epicId}/{taskId}\") and commitPattern (default \"feat({epicId}): {taskTitle}\"). Real landing in scripts/moe-agent.{ps1,sh} never creates a branch per task; it peels onto the literal settings.consolidationBranch, else the shared moe/work-YYYY-MM-DD, reusing an existing non-default branch. Completion commit subjects are feat|fix(task-<id>): <title> and checkpoints are wip(task-<id>): ... — neither derives from commitPattern. Meanwhile every setting that does govern outcomes is absent from the dialog: autoCommit, checkpointCommits, checkpointPush, consolidationBranch, commitBoardState, commitHooks, qualityGate, attribution.undeclared and taskSizing.\n\nScope: stop presenting the three dead fields as live policy, and render the settings that actually decide whether a task's bytes reach a branch. Read them from the daemon's project settings with the same defaults the daemon applies, so a project that has never written a key still shows the effective value rather than a blank. Read-only display is enough; making them editable is out of scope. Do not touch the deprecated task time-budget UI, which is the separate sibling task in this epic.",
+  "definitionOfDone": [
+    "autoCreateBranch, branchPattern and commitPattern are removed from the settings dialog, or clearly labelled as ignored legacy keys that no longer affect landing",
+    "The dialog shows the effective landing policy: autoCommit, checkpointCommits, checkpointPush, consolidationBranch (with the shared moe/work-YYYY-MM-DD fallback named), commitBoardState and commitHooks",
+    "The dialog shows the effective quality-gate scope and the attribution.undeclared mode",
+    "Values absent from .moe/project.json render the daemon's default rather than blank or false, with a JUnit test covering both the populated and the all-defaults case",
+    "The JUnit test fails on the old behaviour (today the dialog renders branchPattern and commitPattern as live settings)",
+    "docs/CONFIGURATION.md matches the labels shown, and no longer implies branch-per-task landing",
+    "./gradlew test green"
+  ],
+  "taskRails": [
+    "Read-only surface: do not make these settings editable from the dialog and do not add a settings-write path.",
+    "Do not touch the deprecated time-budget UI — that is the sibling task in this epic; overlapping edits will collide.",
+    "Defaults must match packages/moe-daemon/src/index.ts, which is the source of truth for settings defaults."
+  ],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:36:25.314Z",
+  "updatedAt": "2026-09-10T17:36:25.314Z"
+}

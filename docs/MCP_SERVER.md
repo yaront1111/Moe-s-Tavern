@@ -1964,6 +1964,7 @@ Return per-task `TaskMetrics` plus an aggregate over the full filtered set. Aggr
 ```
 
 **Notes:**
+- `aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio — a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.
 - Per-task entries are sorted newest-first by `metrics.doneAt → metrics.firstClaimAt → updatedAt → createdAt`.
 - `sinceIso` uses the most recent lifecycle timestamp available on each task, so in-flight tasks aren't excluded just because they haven't reached DONE.
 
