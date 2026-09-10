@@ -1,0 +1,39 @@
+{
+  "id": "task-58f7db9a9e44469e9351b2cdea73b47d",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Reconcile attempts on daemon restart instead of purging every worker",
+  "description": "Objective: stop a daemon restart from yanking a task away from a CLI that is still running. packages/moe-daemon/src/index.ts:501 calls purgeAllWorkers on every start, and state/workerStore.ts:305 deletes every worker record and releases their tasks without first establishing that the external processes exited. A restart during a long build therefore hands live work to someone else.\n\nDeliverable: on startup, attempts in phase running are moved to reconciling rather than being destroyed, and their tasks are held from reassignment while reconciling. A runner reattaches by presenting its attempt id plus process start time and host; a successful reattach returns the attempt to running. An attempt confirmed dead, or one that stays unreattached past a configurable reconcile window, is closed and gets exactly one successor generation.\n\nNot in scope: heartbeat semantics, which are the sibling task. Preserve stable worker identity across the restart by persisting it separately from the attempt, and preserve the existing rule that a quiet build is not evidence of a dead worker: the reconcile window must not become an idle-based auto-release for WORKING or PLANNING.\n\nUnskips the acceptance case \"restarting only the daemon during a long build preserves ownership\".\n\nVerification: npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "Daemon startup moves running attempts to reconciling and holds their tasks from reassignment instead of releasing them",
+    "A runner that reattaches with a matching attempt id, process start time and host returns the attempt to running and keeps the task assigned",
+    "An attempt confirmed dead, or unreattached past the configurable reconcile window, is closed and permits exactly one successor generation",
+    "Stable worker identity survives the restart and is persisted separately from the attempt record",
+    "The reconcile window is a settings key with a documented default and is never applied to a live reattached attempt, so no idle-based auto-release is introduced for WORKING or PLANNING",
+    "The acceptance case for restart during a long build is unskipped and passes unchanged",
+    "npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not reintroduce idle-based auto-release for WORKING or PLANNING; a quiet build is not evidence of a dead worker.",
+    "REVIEW's existing reviewStaleTimeoutMs self-heal stays exactly as it is.",
+    "Reassignment must establish the old process stopped, or contain its writes; a JSON record alone does not stop a running CLI."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b6c48bf029bf4170a603a91c12451df7",
+    "task-30df41a802754b65ac29d04fa031b769"
+  ],
+  "priority": "HIGH",
+  "order": 70,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:55.761Z",
+  "updatedAt": "2026-09-10T18:00:55.761Z"
+}

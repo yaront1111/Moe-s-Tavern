@@ -1,0 +1,39 @@
+{
+  "id": "task-c6e2eca5e19f4aaf9323f02aefadb29a",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Show task blocker causes in VS Code",
+  "description": "Objective: deliver VS Code parity after the JetBrains blocker-visibility parent lands; this is not trivial parity because both initial detail HTML and its live-update script need changes. Deliverable: six optional Task metadata fields, cause-specific board badges, independent human-review attention, and read-only reason/prerequisite detail that clears on unblock without overwriting unsaved fields. Own five files only: moe-vscode/src/types/moe.ts, moe-vscode/media/board.js, moe-vscode/src/panels/TaskDetailPanel.ts, moe-vscode/media/taskDetail.js, and NEW moe-vscode/tests/task-blocker-visibility.test.cjs. Adopt the parent's confirmed presentation contract; measured runtime facts are resource wait takes precedence over dependency wait, human-review flag is independent and often on REVIEW, and dependency satisfaction includes DONE/ARCHIVED/missing IDs. Never infer or initiate unblocking from the client or label every recorded prerequisite unfinished. Preserve existing BLOCKED->WORKING mapping and reuse current .chip-blocked/.chip-question/.chip-critique plus detail field styles, avoiding another provider/style file. The raw daemon client already retains payload fields; do not add a transport parser. Use existing escaping for initial markup and DOM text nodes for live reason/ID text. Error handling: absent/null/wrong-type optional metadata must not throw or create bogus wait causes; status gates stale block metadata. Dependency on task-time-cap retirement sequences overlapping TaskDetailPanel/types/board files; do not reintroduce retired surfaces. NOT in scope: daemon lifecycle, new columns, approval/claim/release changes, editable fields, new frontend framework or network lookups. Exact root PowerShell verification: npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE . macOS/Linux equivalent: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. BACKLOG split only, not an approved implementation plan.",
+  "definitionOfDone": [
+    "Optional Task typings cover needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt matching daemon nullability; existing payload transport remains unchanged.",
+    "Actual board rendering displays specific dependency/resource/external block causes and independent Awaiting human review attention according to the JetBrains parent contract, including combined flags; BLOCKED remains in Working with no added column.",
+    "Initial task-detail HTML shows the active blockedReason and every recorded prerequisite ID, resource identity when applicable, and independent human-review attention as read-only information, with safe empty/missing-reason behavior.",
+    "The real taskDetail.js updateTask handler refreshes or clears all new read-only surfaces on cause change, unblock and human-flag changes without overwriting unsaved title, description or DoD inputs.",
+    "New node:test regression fixtures run production board.js rendering, TypeScript-transpiled TaskDetailPanel initial output and real taskDetail.js updates using existing VM conventions; cover all four labels, non-BLOCKED human attention, mixed-field precedence, null/malformed metadata, escaping, and BLOCKED->WORKING clearing.",
+    "Existing time-cap retirement tests stay unchanged and passing; npm tests and TypeScript compile pass with fresh exit code 0 and nonzero tests via the exact verification command; completion names every modified path and links the parent."
+  ],
+  "taskRails": [
+    "Read-only display: do not change daemon lifecycle or issue state mutations while rendering.",
+    "JetBrains ships first: confirm parent landing before implementation and copy its confirmed badge semantics rather than choosing new precedence.",
+    "Keep task detail live updates; do not refresh the entire webview and discard unsaved edits.",
+    "Reuse existing styles to keep the independently reviewed slice within five files; preserve foreign WIP."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-aec72949166b42a99b4279ba4615ac4b",
+  "dependsOn": [
+    "task-aec72949166b42a99b4279ba4615ac4b",
+    "task-9d731a5e5eb14951a9d342e5976883b6"
+  ],
+  "priority": "HIGH",
+  "order": 5.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:01:08.571Z",
+  "updatedAt": "2026-09-10T18:01:08.571Z"
+}

@@ -1,0 +1,37 @@
+{
+  "id": "task-b6c48bf029bf4170a603a91c12451df7",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Open and close an attempt on the claim and release paths",
+  "description": "Objective: put the attempt record on the real lifecycle so every subsequent rule has something to fence against.\n\nDeliverable: packages/moe-daemon/src/tools/claimNextTask.ts opens an attempt when it hands a task to a worker and returns the attempt id and generation in its result, and the release paths close it. The close path is shared, so route it through the existing release routing rather than duplicating logic: tools/releaseTask.ts, deregisterWorker.ts and the worker purge in state/workerStore.ts all end the attempt they own.\n\nNot in scope: the finalizing phase, restart reconciliation and heartbeat changes; each is its own sibling task. Do not change which statuses are claimable or the existing nextStatusForRelease routing.\n\nDepends on the attempt store and the fencing guard.\n\nVerification: npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "claim_next_task opens an attempt for the claimed task and returns its id and generation in the tool result",
+    "release_task, deregister_worker and the worker purge each close the attempt they own, leaving no attempt in phase running for an unassigned task",
+    "A second claim of the same task after a release opens generation N+1 rather than reusing the closed attempt",
+    "Existing claim behaviour is unchanged: claimable statuses, alreadyAssigned resume, dependency gating and nextStatusForRelease routing all keep their current test coverage green",
+    "New cases cover claim-opens, release-closes and the generation increment",
+    "npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not change claimable statuses, dependency gating or nextStatusForRelease routing.",
+    "Attempt closing must go through one shared helper, not three copies."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c97afcd55d7d41d08b9730e214b648dd",
+    "task-a135d4d63554410286a369a95e60c2a8"
+  ],
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:03.865Z",
+  "updatedAt": "2026-09-10T18:00:03.865Z"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "task-94f534924ea841af8c164191060ee4d3",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Withhold dependent claims until the prerequisite has delivery evidence",
+  "description": "Objective: stop dependent work building on a promise the recorded delivery does not support. Today dependsOn gating keys purely on the prerequisite's status reaching DONE or ARCHIVED, so a task that reached DONE without a landed commit still releases everything waiting on it.\n\nDeliverable: the dependency satisfaction check in packages/moe-daemon/src/state/dependencyUnblock.ts and the claim gating in tools/claimNextTask.ts additionally require that a DONE prerequisite satisfies the project's delivery policy. A prerequisite that is DONE but lacks the required evidence keeps its dependents withheld, and the claim result explains exactly which prerequisite and which evidence is missing.\n\nNot in scope: changing what dependsOn means for planning, which still proceeds, or the auto-unblock of blockedOnTaskIds targets beyond applying the same evidence rule. Under the default behaviour-preserving delivery policy nothing changes, so existing projects see no difference.\n\nUnskips the acceptance case \"a failed required gate cannot release dependents\".\n\nVerification: npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "A DONE prerequisite lacking the evidence its delivery policy requires keeps its dependents unclaimable",
+    "The refusal names the prerequisite task and the specific missing evidence",
+    "Planning on a dependent task still proceeds, matching the existing rule that dependsOn gates WORKING-status claims only",
+    "The blockedOnTaskIds auto-unblock applies the same evidence rule rather than releasing on status alone",
+    "Under the default delivery policy behaviour is unchanged and the existing dependency tests stay green unmodified",
+    "The acceptance case for a failed required gate not releasing dependents is unskipped and passes unchanged",
+    "npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "dependsOn still gates WORKING-status claims only; planning must keep proceeding.",
+    "Missing or deleted prerequisite ids keep counting as satisfied, as they do today."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c484696db72c4ce4855dfc599a7b2072",
+    "task-30df41a802754b65ac29d04fa031b769"
+  ],
+  "priority": "CRITICAL",
+  "order": 150,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:03:08.677Z",
+  "updatedAt": "2026-09-10T18:03:08.677Z"
+}

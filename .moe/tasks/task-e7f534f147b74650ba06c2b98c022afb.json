@@ -1,0 +1,37 @@
+{
+  "id": "task-e7f534f147b74650ba06c2b98c022afb",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Parse task blocker metadata in JetBrains",
+  "description": "Objective: expose the daemon's existing six blocker/attention fields to JetBrains without changing lifecycle or UI. Deliverable: backward-compatible Task fields and matching mappings in BOTH MoeJson.parseState -> parseTasks (snapshot) and MoeJson.parseTask (single-task update), pinned by JUnit fixtures. Own only moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, and moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Add needsHumanReview Boolean default false; blockedReason, blockedResourceId, blockedFromStatus, blockedAt nullable String default null; blockedOnTaskIds nullable List<String> default null. Preserve valid string values, order and timestamps as sent; do not parse dates or infer flags from status, critique or reason text. For new fields only, error handling must reject wrong primitive kinds rather than coercing numbers/booleans into IDs or string true into human attention; filter malformed array members without rejecting the task. Keep unrelated permissive parser helpers/fields unchanged. Dependency on the time-cap model retirement is shared-file sequencing (Models/MoeJson/MoeJsonTest), not a new runtime dependency; recheck its landed evidence before modifying those paths. NOT in scope: daemon/schema persistence, UI badges, lifecycle/claim/unblock actions, serialization protocol redesign or other settings. Exact fresh verification from repository root on Windows PowerShell: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE . macOS/Linux equivalent: (cd moe-jetbrains && ./gradlew test). Serialize shared Gradle runs; preserve foreign WIP. No implementation plan or approval is implied by this BACKLOG split.",
+  "definitionOfDone": [
+    "Task has all six optional/defaulted fields, and existing call sites compile without supplying them; no daemon behavior or persisted data changes.",
+    "MoeJsonTest proves a populated BLOCKED fixture preserves needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt identically through both parseState snapshot and parseTask update paths; a Gson JSON round-trip retains all six.",
+    "JUnit covers omitted, explicit null and wrong-type new fields; false/null defaults are safe, mixed dependency arrays retain only string members, and malformed metadata never drops the otherwise valid task.",
+    "JUnit proves a later WORKING payload with cleared/omitted blocker fields does not retain prior block metadata; a REVIEW payload with needsHumanReview=true preserves attention independently of BLOCKED.",
+    "Regression fixtures exercise production parsers and fail on the prior field-dropping behavior; all pre-existing parser/time-cap retirement tests remain unchanged and passing.",
+    "Full moe-jetbrains Gradle test passes with fresh exit code 0 and nonzero test counts using the exact command in the description; completion reports all modified paths."
+  ],
+  "taskRails": [
+    "Display-data contract only: do not change report_blocked, auto-unblock, nextStatusForRelease or daemon lifecycle rules.",
+    "Update both JetBrains Task parser paths; do not refactor unrelated parsing behavior or reintroduce retired task time-cap fields.",
+    "No shared build-output deletion, broad staging, or edits to foreign WIP."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-aec72949166b42a99b4279ba4615ac4b",
+  "dependsOn": [
+    "task-435683c2df8f47e7b77a77dc51ba62e9"
+  ],
+  "priority": "HIGH",
+  "order": 4.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:20.514Z",
+  "updatedAt": "2026-09-10T18:00:20.514Z"
+}

@@ -1,0 +1,37 @@
+{
+  "id": "task-c484696db72c4ce4855dfc599a7b2072",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Gate DONE on the delivery evidence the project policy requires",
+  "description": "Objective: close the defect the roadmap reproduced against the real handlers. Task A reaches DONE with completionCommits empty and only a soft NO-COMPLETION-COMMIT warning, and a worker then successfully claims a task that depends on A.\n\nDeliverable: a deliveryPolicy setting in .moe/project.json declaring what DONE requires: local branch commit, remote branch push, merged pull request, or an explicit manual artifact. qa_approve turns today's soft warning into a hard refusal when the recorded evidence does not satisfy the configured policy, naming exactly which evidence is missing. The default policy must reproduce today's behaviour so no existing project changes on upgrade, and the setting is what opts a project into strictness.\n\nNot in scope: the receipt record and target-movement recheck, which is the sibling task, and the dependent-claim gate, which is another. Preserve autoCommit=false and manual or no-git projects: under those the manual-artifact policy applies and missing code evidence is labelled as such, never reported as verified delivery.\n\nVerification: npx vitest run src/tools/qaApprove.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "A deliveryPolicy setting supports local branch, remote push, merged pull request and manual artifact, documented in docs/CONFIGURATION.md",
+    "qa_approve hard-refuses when the recorded evidence does not satisfy the configured policy, and the error names the specific missing evidence",
+    "The default policy preserves today's soft-warning behaviour exactly, proven by the existing qa_approve tests staying green unmodified",
+    "Under the manual-artifact policy a task with no commit reaches DONE only with a recorded artifact, and its state labels the evidence as manual rather than verified delivery",
+    "autoCommit=false projects keep working and are covered by a test",
+    "npx vitest run src/tools/qaApprove.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "The default must be behaviour-preserving; strictness is opt-in via settings.",
+    "Never label missing code evidence as verified delivery."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-867f69a6cdb748a8ab68fcbeec0de711",
+    "task-5b85773867594a8eb0cea350f2c6008f"
+  ],
+  "priority": "CRITICAL",
+  "order": 120,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:02:15.135Z",
+  "updatedAt": "2026-09-10T18:02:15.135Z"
+}

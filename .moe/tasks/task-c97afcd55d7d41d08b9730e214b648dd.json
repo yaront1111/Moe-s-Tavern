@@ -1,0 +1,33 @@
+{
+  "id": "task-c97afcd55d7d41d08b9730e214b648dd",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Persist an ExecutionAttempt record with a per-task generation counter",
+  "description": "Objective: give every execution of a task a durable identity, so a later call can be told whether it belongs to the current attempt or a superseded one. This is the foundation the rest of the epic fences on.\n\nDeliverable: an ExecutionAttempt type in packages/moe-daemon/src/types/schema.ts and a new packages/moe-daemon/src/state/attemptStore.ts holding it, persisted under .moe/attempts/. Fields: id, taskId, workerId, runnerId, generation (monotonic per task, starting at 1), workspace, phase (running, finalizing, reconciling, closed), startedAt, lastPhaseAt, and optional process start time and host for later reattachment. Copy the durable-first ordering already proven in state/resourceStore.ts: write the record before the state transition it enables, and make a second pass repair a partial write rather than duplicating it.\n\nNot in scope: wiring into claim, complete or release; any tool registration; any client change. Those are separate sibling tasks. This task adds the record and its store only.\n\nVerification: npx vitest run src/state/attemptStore.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "ExecutionAttempt is declared in packages/moe-daemon/src/types/schema.ts with the phase union running, finalizing, reconciling, closed",
+    "packages/moe-daemon/src/state/attemptStore.ts creates, reads, updates the phase of and lists attempts, persisting one JSON file per attempt under .moe/attempts/",
+    "openAttempt allocates a generation that is strictly greater than every prior attempt for that task, proven by a test opening three attempts in sequence",
+    "A new attempt written while a prior attempt for the same task is still running is rejected with a named error rather than silently overwriting it",
+    "Re-running the write path over a half-written record repairs it instead of creating a duplicate, proven by a durability test in the style of resourceStore.durability.test.ts",
+    "npx vitest run src/state/attemptStore.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Store layer only: no tool registration in tools/index.ts and no change to claim, complete or release handlers.",
+    "Follow the persist-before-transition ordering in state/resourceStore.ts; do not invent a second persistence idiom."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:59:33.295Z",
+  "updatedAt": "2026-09-10T17:59:33.295Z"
+}

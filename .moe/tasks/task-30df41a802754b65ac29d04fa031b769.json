@@ -1,0 +1,32 @@
+{
+  "id": "task-30df41a802754b65ac29d04fa031b769",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Author the Wave 1 acceptance tests as held-out red cases",
+  "description": "Objective: commit the epic's acceptance criteria as executable tests before any implementation task starts, so later tasks cannot quietly redefine what \"delivered\" means.\n\nDeliverable: one new vitest file, packages/moe-daemon/src/delivery/acceptance.test.ts, holding one describe block per acceptance criterion from the epic description: fast QA cannot finish before candidate preparation; a failed required gate cannot release dependents; reviewing candidate A cannot approve B; restarting only the daemon during a long build preserves ownership; a delayed generation-N call cannot alter generation N+1; a crash between an external effect and its bookkeeping does not repeat the effect. Each case is written against the intended tool surface and marked it.skip with a comment naming the task that will unskip it. Assertions must be mutation-resistant: assert the exact rejected error code and the exact persisted record, never a truthy result.\n\nNot in scope: any production code, any tool registration, any schema change. This task adds exactly one file.\n\nThese tests are held out. Implementation tasks unskip their own case and must make it pass unchanged; a diff that edits the assertion instead of the code is a QA reject.\n\nVerification: npx vitest run src/delivery/acceptance.test.ts from packages/moe-daemon, showing the expected skipped count and zero failures.",
+  "definitionOfDone": [
+    "packages/moe-daemon/src/delivery/acceptance.test.ts exists with one skipped case per acceptance criterion in the epic description, six in total",
+    "Each case names, in a comment, the sibling task expected to unskip it",
+    "Every assertion checks an exact error code or an exact persisted field, with no truthiness-only assertions",
+    "npx vitest run src/delivery/acceptance.test.ts reports six skipped and zero failed",
+    "The daemon suite stays green: npm test in packages/moe-daemon"
+  ],
+  "taskRails": [
+    "Tests only. This task must not touch production code, tools/index.ts, or schema.ts.",
+    "Later tasks unskip these cases; they must never edit the assertions to pass."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:59:16.035Z",
+  "updatedAt": "2026-09-10T17:59:16.035Z"
+}

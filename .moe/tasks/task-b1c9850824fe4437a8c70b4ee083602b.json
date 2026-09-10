@@ -1,0 +1,37 @@
+{
+  "id": "task-b1c9850824fe4437a8c70b4ee083602b",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Record a delivery receipt and recheck when the target moved",
+  "description": "Objective: prove where the code went, and refuse to trust a check that ran against a base the target has since left behind.\n\nDeliverable: a DeliveryReceipt type in schema.ts with a store under .moe/receipts/ and a record_delivery_receipt tool registered in getTools(). A receipt carries: candidateId, target name, target revision before and after, the landed revision, and the push result when the policy requires one. Both wrappers record it as part of landing. When the target revision moved between the check run and the landing, the wrapper reconstructs the candidate against the new tip and reruns the gate; a cached check result is reused only when the candidate tree and base both match.\n\nNot in scope: batch or queued integration of several candidates, which is Wave 2. Recovery matters here: a crash between the ref update and the receipt write must reconcile to the existing result on the next pass rather than landing twice.\n\nUnskips the acceptance case \"a crash between an external effect and its bookkeeping does not repeat the effect\".\n\nVerification: npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon, then bash scripts/tests/postflight.sh.",
+  "definitionOfDone": [
+    "DeliveryReceipt is declared in schema.ts, persisted under .moe/receipts/, and record_delivery_receipt is registered in getTools()",
+    "A receipt records target before and after, the landed revision and the push result, and both wrappers write one on every successful landing",
+    "A target that moved between check and landing forces a rebuilt candidate and a rerun gate; a cached result is reused only on an exact candidate tree and base match",
+    "Replaying the landing after a crash between ref update and receipt write reconciles to the existing receipt instead of landing a second time",
+    "The acceptance case for a crash between effect and bookkeeping is unskipped and passes unchanged",
+    "npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts passes, npm test in packages/moe-daemon stays green, and bash scripts/tests/postflight.sh passes"
+  ],
+  "taskRails": [
+    "Reconciliation must be idempotent: never land the same candidate twice after a crash.",
+    "Wave 2 owns queued or batched integration; this task handles one candidate at a time."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-49ec8755a9ad4fa29c87294adf61804d",
+    "task-c484696db72c4ce4855dfc599a7b2072"
+  ],
+  "priority": "HIGH",
+  "order": 140,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:02:52.486Z",
+  "updatedAt": "2026-09-10T18:02:52.486Z"
+}

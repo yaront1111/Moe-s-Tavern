@@ -1,0 +1,35 @@
+{
+  "id": "task-5dd49fe2f31b477bbbad581dd22dd9af",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Hold the attempt in a finalizing phase after complete_task",
+  "description": "Objective: stop a session starting its next task before the previous task's bytes are landed. Today packages/moe-daemon/src/tools/completeTask.ts moves the task to REVIEW, frees the worker and returns a next action inviting more work, while the wrapper only lands after the CLI exits. A session can therefore begin task B while task A's artifact boundary is still open.\n\nDeliverable: complete_task moves the owning attempt to phase finalizing instead of closing it, and its returned nextAction no longer tells the worker to claim or wait for more work while an attempt of theirs is finalizing. A coding claim by that worker is refused with a named, retryable reason naming the finalizing attempt.\n\nNot in scope: the tool the runner calls to acknowledge the boundary, which is the sibling finalize task; the delivery-evidence gate on DONE; and any wrapper change. Do not alter the existing verification-object validation or the REVIEW transition itself.\n\nThis task unskips the acceptance case \"fast QA cannot finish before candidate preparation\" is not this one; it unskips nothing. The finalize sibling owns that case.\n\nVerification: npx vitest run src/tools/completeTask.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "complete_task sets the owning attempt to phase finalizing and leaves it open",
+    "The nextAction returned by complete_task does not direct the worker to claim or wait for another task while one of their attempts is finalizing",
+    "A claim_next_task call from a worker holding a finalizing attempt is refused with a named retryable reason that identifies the attempt",
+    "The existing complete_task behaviour is unchanged: verification evidence validation, the completed-step check, the REVIEW transition and completionSummary persistence keep their current tests green",
+    "npx vitest run src/tools/completeTask.test.ts src/tools/claimNextTask.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not weaken or bypass the existing verification-evidence validation in util/enforcement.ts.",
+    "The refusal must be retryable and clearly worded; a wrapper reading it must not treat it as a fatal error."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b6c48bf029bf4170a603a91c12451df7"
+  ],
+  "priority": "HIGH",
+  "order": 50,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:19.867Z",
+  "updatedAt": "2026-09-10T18:00:19.867Z"
+}

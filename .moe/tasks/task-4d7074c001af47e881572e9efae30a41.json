@@ -1,0 +1,36 @@
+{
+  "id": "task-4d7074c001af47e881572e9efae30a41",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Persist a frozen Candidate record and a record_candidate tool",
+  "description": "Objective: name the exact bytes a task is offering, so review and checks can bind to something immutable instead of to a moving working tree.\n\nDeliverable: a Candidate type in packages/moe-daemon/src/types/schema.ts, a store in packages/moe-daemon/src/state/candidateStore.ts persisting under .moe/candidates/, and a record_candidate tool registered in getTools(). A candidate carries: id, attemptId, taskId, baseRevision, tree or commit sha, the intended delivery target, and createdAt. Candidates are immutable once written; a changed tree produces a new candidate rather than an edit, and the store rejects a mutation of an existing candidate.\n\nNot in scope: check runs, review binding, receipts and any wrapper change. This task lands the record, its store and the recording tool.\n\nVerification: npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "Candidate is declared in schema.ts and persisted one file per candidate under .moe/candidates/ by state/candidateStore.ts",
+    "record_candidate is registered in getTools() and is fenced by assertAttemptCurrent so a superseded attempt cannot record one",
+    "An attempt to mutate an existing candidate is rejected with a named error; a changed tree yields a new candidate id instead",
+    "Candidates are queryable by task and by attempt, proven by tests",
+    "npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts passes and npm test in packages/moe-daemon stays green",
+    "docs/SCHEMA.md documents the Candidate shape and docs/MCP_SERVER.md documents the tool"
+  ],
+  "taskRails": [
+    "Candidates are immutable; never add an update path.",
+    "The daemon records the sha the runner reports and never shells out to git itself."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c97afcd55d7d41d08b9730e214b648dd"
+  ],
+  "priority": "HIGH",
+  "order": 90,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:01:27.252Z",
+  "updatedAt": "2026-09-10T18:01:27.252Z"
+}

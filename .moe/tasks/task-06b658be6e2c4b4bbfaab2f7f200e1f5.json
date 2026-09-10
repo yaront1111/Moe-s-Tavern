@@ -1,0 +1,36 @@
+{
+  "id": "task-06b658be6e2c4b4bbfaab2f7f200e1f5",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Make heartbeat report presence kinds and demand reattachment",
+  "description": "Objective: turn the heartbeat from a bare liveness ping into the channel that tells a runner it must reattach. packages/moe-daemon/src/tools/heartbeat.ts currently acknowledges a ping even when no worker record exists, so a sidecar keeps pinging happily after a restart wiped its worker and nothing tells it to re-register.\n\nDeliverable: heartbeat accepts a presence kind from the sidecar, distinguishing process presence, provider presence, waiting for input and observed progress, and records it on the attempt. When the caller's worker record or attempt is missing, or its attempt is in phase reconciling, the response tells the runner that reattachment is required instead of acknowledging normally.\n\nNot in scope: the wrapper sidecar changes that send the new field and act on the reattach instruction; that is the sibling wrapper task. The tool must stay non-blocking and cheap, since it fires every 60 seconds per seat.\n\nVerification: npx vitest run src/tools/heartbeat.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "heartbeat accepts an optional presence kind of process, provider, waiting or progress and records the latest one on the attempt",
+    "A heartbeat whose worker record or attempt is missing returns a reattach-required response rather than a plain acknowledgement",
+    "A heartbeat against an attempt in phase reconciling also returns reattach-required",
+    "An old-style heartbeat with no presence kind still succeeds, so an un-upgraded wrapper keeps working",
+    "The tool remains non-blocking and adds no new disk write per ping beyond the attempt presence field",
+    "npx vitest run src/tools/heartbeat.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Heartbeat must stay non-blocking; it must never be marked blocking:true.",
+    "An older wrapper that sends no presence kind must keep working unchanged."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-58f7db9a9e44469e9351b2cdea73b47d"
+  ],
+  "priority": "MEDIUM",
+  "order": 80,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:01:10.694Z",
+  "updatedAt": "2026-09-10T18:01:10.694Z"
+}

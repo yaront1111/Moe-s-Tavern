@@ -1,0 +1,38 @@
+{
+  "id": "task-d72d8cc6a29a4181a3767f493007320e",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Add a finalize_attempt tool the runner calls to close the artifact boundary",
+  "description": "Objective: let the runner, not the CLI's exit, declare that a task's bytes are final. An interactive TUI seat that stays open must still be able to finalize, and a provider mode without one-shot semantics needs an explicit operation instead of an implicit exit.\n\nDeliverable: a new tool in packages/moe-daemon/src/tools/finalizeAttempt.ts, registered in getTools() in tools/index.ts, which moves an attempt from finalizing to closed after the runner reports its landing outcome. It carries the attempt id and generation and is fenced by assertAttemptCurrent, so a late call from a superseded attempt is rejected. Closing releases the claim hold added by the finalizing sibling task.\n\nNot in scope: the wrapper actually calling it, which is the sibling wrapper task; candidate and receipt records, which are separate. Registration in getTools() is mandatory — an unregistered tool is silently invisible to MCP.\n\nUnskips the acceptance case \"fast QA cannot finish before candidate preparation\" in src/delivery/acceptance.test.ts, which must pass unchanged.\n\nVerification: npx vitest run src/tools/finalizeAttempt.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts exists and is registered in getTools() in tools/index.ts",
+    "Calling it moves the attempt from finalizing to closed and lifts the claim hold on its worker",
+    "A call carrying a stale generation is rejected by assertAttemptCurrent with the exact named error, asserted in a test",
+    "Calling it twice for the same attempt is idempotent rather than an error",
+    "The acceptance case for candidate preparation is unskipped and passes with no edit to its assertions",
+    "npx vitest run src/tools/finalizeAttempt.test.ts src/delivery/acceptance.test.ts passes and npm test in packages/moe-daemon stays green",
+    "docs/MCP_SERVER.md gains a section for the new tool"
+  ],
+  "taskRails": [
+    "The tool must be registered in getTools(); an unregistered tool is invisible to MCP.",
+    "Do not mark this tool blocking:true — it must not park the shared state mutex."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5dd49fe2f31b477bbbad581dd22dd9af",
+    "task-30df41a802754b65ac29d04fa031b769"
+  ],
+  "priority": "HIGH",
+  "order": 60,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:38.246Z",
+  "updatedAt": "2026-09-10T18:00:38.246Z"
+}

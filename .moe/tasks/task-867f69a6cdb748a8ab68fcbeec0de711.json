@@ -1,0 +1,36 @@
+{
+  "id": "task-867f69a6cdb748a8ab68fcbeec0de711",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Persist a CheckRun bound to a candidate tree",
+  "description": "Objective: separate what a process actually observed from what an agent said. Today util/enforcement.ts assertVerificationEvidence validates a worker-reported command and exit code without running it or binding it to a revision, so a passing claim can describe a tree that was never delivered.\n\nDeliverable: a CheckRun type in schema.ts, a store in packages/moe-daemon/src/state/checkRunStore.ts persisting under .moe/checks/, and a record_check_run tool registered in getTools(). A check run carries: id, candidateId, the tree sha it ran against, the configured command, exit code, a bounded log tail, the runner id and a source field distinguishing runner-observed from agent-reported. The existing verification object keeps working and is stored with source agent-reported, so nothing regresses for projects that never adopt runner checks.\n\nNot in scope: making DONE require a check run, which is the sibling delivery-policy task, and the wrapper that produces them.\n\nVerification: npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "CheckRun is declared in schema.ts with a source field distinguishing runner-observed from agent-reported evidence",
+    "state/checkRunStore.ts persists check runs under .moe/checks/ keyed by candidate, and record_check_run is registered in getTools()",
+    "A check run whose tree sha does not match its candidate's tree is rejected with a named error",
+    "The log tail is bounded to a documented byte cap so a huge failure log cannot bloat state",
+    "Existing agent-reported verification keeps its current behaviour and is retrievable as source agent-reported",
+    "npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not remove or weaken the existing agent-reported verification path; label it, do not delete it.",
+    "The daemon never executes the check command; it records what the runner observed."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4d7074c001af47e881572e9efae30a41"
+  ],
+  "priority": "HIGH",
+  "order": 100,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:01:42.561Z",
+  "updatedAt": "2026-09-10T18:01:42.561Z"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "task-5b85773867594a8eb0cea350f2c6008f",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Bind qa_approve to the exact candidate the reviewer read",
+  "description": "Objective: make an approval apply to the bytes the reviewer actually read. packages/moe-daemon/src/tools/qaApprove.ts today checks status and a summary, so an approval issued against one candidate silently blesses whatever the task holds by the time it lands.\n\nDeliverable: qa_approve accepts the reviewed candidate id and rejects the call when that candidate is not the task's current one, with a named error telling the reviewer to re-read. get_context surfaces the current candidate id to QA so the reviewer has it. A Review record is persisted carrying reviewer, decision, the exact reviewed candidate and the summary, and qa_reject records the same binding.\n\nNot in scope: the delivery-evidence gate on DONE, which is the sibling task, and any IDE change. Keep qa_approve's existing soft commit-evidence warnings working; this task adds a hard binding on candidate identity only.\n\nUnskips the acceptance case \"reviewing candidate A cannot approve B\".\n\nVerification: npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "qa_approve accepts a reviewed candidate id and rejects a mismatch against the task's current candidate with a named error, asserted exactly",
+    "qa_reject records the same candidate binding as qa_approve",
+    "A Review record persisting reviewer, decision, reviewed candidate and summary is written for both outcomes",
+    "get_context returns the current candidate id for a task in REVIEW",
+    "A project with no candidate recorded keeps the current approve behaviour, so adoption is incremental",
+    "The acceptance case for reviewing candidate A cannot approve B is unskipped and passes unchanged",
+    "npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Keep the existing qa_approve warnings array and commitEvidence; this task adds a hard candidate binding, it does not restructure the tool's result.",
+    "A task with no candidate recorded must keep working, so the change is additive."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4d7074c001af47e881572e9efae30a41",
+    "task-30df41a802754b65ac29d04fa031b769"
+  ],
+  "priority": "HIGH",
+  "order": 110,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:01:58.916Z",
+  "updatedAt": "2026-09-10T18:01:58.916Z"
+}

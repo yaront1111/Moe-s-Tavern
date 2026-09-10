@@ -1,0 +1,35 @@
+{
+  "id": "task-a135d4d63554410286a369a95e60c2a8",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Reject stale-generation mutations with an attempt fencing guard",
+  "description": "Objective: make a late call from a superseded execution fail instead of corrupting current state. Today packages/moe-daemon/src/util/enforcement.ts guards ownership by comparing worker ids and keeps legacy tolerances for an omitted id or an unassigned task, so nothing distinguishes a live worker from a zombie that woke up after reassignment.\n\nDeliverable: an assertAttemptCurrent guard in util/enforcement.ts that takes the caller's attempt id or generation and the task, and throws a named MoeError when the attempt is not the current one for that task. It sits alongside the existing assertWorkerOwns rather than replacing it, and the existing omitted-id tolerance stays intact for callers that predate attempts.\n\nNot in scope: calling the guard from any tool handler. Wiring is the sibling attempt-lifecycle task; this task lands the guard and its tests so the wiring task stays small.\n\nDepends on the ExecutionAttempt store because the guard reads the current generation from it.\n\nVerification: npx vitest run src/util/enforcement.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "assertAttemptCurrent is exported from packages/moe-daemon/src/util/enforcement.ts and reads the current attempt through the attempt store",
+    "A call carrying generation N against a task whose current attempt is generation N+1 throws a named error code, asserted exactly",
+    "A call carrying the current generation passes, and a call from a caller that supplies no attempt identity keeps the existing legacy tolerance rather than throwing",
+    "New cases in src/util/enforcement.test.ts cover current, stale and absent attempt identity",
+    "npx vitest run src/util/enforcement.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Add the guard beside assertWorkerOwns; do not change or weaken the existing ownership guards.",
+    "No tool handler is edited in this task."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c97afcd55d7d41d08b9730e214b648dd"
+  ],
+  "priority": "HIGH",
+  "order": 30,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:59:50.402Z",
+  "updatedAt": "2026-09-10T17:59:50.402Z"
+}
