@@ -97,7 +97,7 @@
       "completedAt": "2026-09-10T18:34:58.873Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,17 +110,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:45.663Z",
-  "updatedAt": "2026-09-10T18:36:25.223Z",
+  "updatedAt": "2026-09-10T18:40:23.970Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T09:51:56.372Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-10T18:40:23.970Z",
+    "wallClockMs": 31707598
   },
   "contextFetchedBy": [
     "architect-6f3113ee",
     "architect-4dcf9b5f",
-    "worker-f2b3ac93"
+    "worker-f2b3ac93",
+    "qa-813933f7"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -179,6 +182,30 @@
       "treeId": "18f060577726e327a5676738920b7ef1758d834a",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f17f5572d36703d1d0bbd8378ab2b9e9f1dd70a1",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-10T18:26:26Z",
+      "paths": [
+        ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+        ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json",
+        "docs/roles/qa.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "docs/TROUBLESHOOTING.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/util/qaCommitPolicy.test.ts"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-10T18:36:34.740Z",
+      "treeId": "a857dc8b4d8e047a3e747b91859212a9fda7533c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -188,14 +215,17 @@
     "docs/skills/moe-qa-loop/SKILL.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
     "packages/moe-daemon/src/generated/skillFiles.ts",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+    ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+    ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-f2b3ac93@2026-09-10T18:26:26Z",
-    "at": "2026-09-10T18:26:29.288Z"
+    "at": "2026-09-10T18:36:34.740Z"
   },
   "workStartedAt": "2026-09-10T18:26:50.679Z",
   "reviewStartedAt": "2026-09-10T18:36:25.223Z",
@@ -205,5 +235,11 @@
     "outputTail": " Test Files  103 passed (103)\n      Tests  1183 passed (1183)\n   Start at  21:34:20\n   Duration  7.54s (tests 83%, transform 11%, import 6%)\n\nNPM_TEST_EXIT=0",
     "reportedAt": "2026-09-10T18:36:25.223Z"
   },
-  "completionSummary": "QA now has ONE rule for an empty `task.commits`, stated identically everywhere it appears.\n\n**The reconciled rule.** An empty `task.commits` at REVIEW is a bounded wait, not a blocker: re-run `task.verification` and the tests first, then re-poll `get_context` — up to ~2 minutes total, never a sleep loop, because the wrapper lands seconds after REVIEW. If a completion commit arrives, review that. If none does, verify the row on its merits on the working tree and land it yourself with the measured-attribution path recipe, then `moe.record_commit`, then approve, saying in the `qa_approve` summary that you self-landed. A `NO-COMPLETION-COMMIT` warning after that is a daemon race, not a defect. The ordering is re-poll-then-decide, never stage-then-poll.\n\n`docs/roles/qa.md` carries it in one bullet, `docs/roles/qa.reference.md` holds the full procedure plus the path recipe moved verbatim plus the 2026-09-06 rationale, and `docs/skills/moe-qa-loop/SKILL.md` matches — verified by loading the generated constants and reading all four texts side by side, not by trusting the phrase guard.\n\n**Red-to-green (the epic rail's evidence).** `packages/moe-daemon/src/util/qaCommitPolicy.test.ts` was written first and run against the untouched docs: `Test Files 1 failed (1) | Tests 5 failed | 1 passed (6)`, exit 1, naming `Do NOT wait` in both qa.md and its generated copy, the missing `bounded wait, not a blocker` sentinel, and the missing 2026-09-06 anchor. It stayed red through the doc edits — it asserts on the generated constants, so only regeneration clears it, which is the staleness half of the guard proving itself. Now green.\n\n**Verification, all fresh after the last edit.** `npm test` from packages/moe-daemon: 103 files, 1183 tests, all passed, exit 0. `npx tsc --noEmit`: exit 0. `npm run lint` from repo root: exit 0, \"OK: docs/roles/qa.md has 25 lines (max 40)\". Focused suite `qaCommitPolicy + initFiles + skillFiles`: 3 files, 24 tests, green.\n\n**skillFiles.ts was regenerated alo"
+  "completionSummary": "QA now has ONE rule for an empty `task.commits`, stated identically everywhere it appears.\n\n**The reconciled rule.** An empty `task.commits` at REVIEW is a bounded wait, not a blocker: re-run `task.verification` and the tests first, then re-poll `get_context` — up to ~2 minutes total, never a sleep loop, because the wrapper lands seconds after REVIEW. If a completion commit arrives, review that. If none does, verify the row on its merits on the working tree and land it yourself with the measured-attribution path recipe, then `moe.record_commit`, then approve, saying in the `qa_approve` summary that you self-landed. A `NO-COMPLETION-COMMIT` warning after that is a daemon race, not a defect. The ordering is re-poll-then-decide, never stage-then-poll.\n\n`docs/roles/qa.md` carries it in one bullet, `docs/roles/qa.reference.md` holds the full procedure plus the path recipe moved verbatim plus the 2026-09-06 rationale, and `docs/skills/moe-qa-loop/SKILL.md` matches — verified by loading the generated constants and reading all four texts side by side, not by trusting the phrase guard.\n\n**Red-to-green (the epic rail's evidence).** `packages/moe-daemon/src/util/qaCommitPolicy.test.ts` was written first and run against the untouched docs: `Test Files 1 failed (1) | Tests 5 failed | 1 passed (6)`, exit 1, naming `Do NOT wait` in both qa.md and its generated copy, the missing `bounded wait, not a blocker` sentinel, and the missing 2026-09-06 anchor. It stayed red through the doc edits — it asserts on the generated constants, so only regeneration clears it, which is the staleness half of the guard proving itself. Now green.\n\n**Verification, all fresh after the last edit.** `npm test` from packages/moe-daemon: 103 files, 1183 tests, all passed, exit 0. `npx tsc --noEmit`: exit 0. `npm run lint` from repo root: exit 0, \"OK: docs/roles/qa.md has 25 lines (max 40)\". Focused suite `qaCommitPolicy + initFiles + skillFiles`: 3 files, 24 tests, green.\n\n**skillFiles.ts was regenerated alo",
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/qaCommitPolicy.test.ts"
+  ],
+  "completedAt": "2026-09-10T18:40:23.970Z",
+  "reviewCompletedAt": "2026-09-10T18:40:23.970Z",
+  "reviewSummary": "APPROVED. Reviewed recorded completion commit f17f557 (completion, moe/work-2026-09-10, pushed); task.commits was already populated, so no bounded wait or self-land needed. ~55 net doc/code lines outside board JSON.\n\nQA re-ran, all green: `npm test` in packages/moe-daemon = 103 files / 1183 tests, exit 0, matching the recorded outputTail; `npm run lint` = \"OK: docs/roles/qa.md has 25 lines (max 40)\"; qaCommitPolicy.test.ts 6/6.\n\nDoD1: read qa.md line 8, SKILL.md step 3 + Approve-when + Reject-when + approve paragraph, and qa.reference.md side by side - one rule everywhere (bounded wait absorbed by the verification/test re-run, re-poll up to ~2 min, commit arrives review it, none self-land measured paths, record_commit, say so), ordered re-poll-then-decide. DoD2 green. DoD3 proven independently of the step note: recomputed sha12 of LF-normalized sources against the embedded moe-generated markers - qa.md bdf6c4fed023, qa.reference.md 20b816870e69, SKILL.md ba3961f3fd71, all in sync (skillFiles.ts regenerated too, unnamed by the DoD but required). DoD4: guard covers both forbidden phrases and four sentinels across source and generated copies, with key-presence and skipIf(!docsRoot) handling. DoD5: the 2026-09-06 \"one completion in three\" rationale present and asserted.\n\nEpic rail \"test fails on the old behaviour\" verified by mutation: reintroducing the old phrase into docs/roles/qa.md went RED (2 named failures), and the same edit in generated initFiles.ts alone, source untouched, also went RED, proving the staleness half. Restore confirmed clean in a separate git status call. Repo-wide git grep leaves no contradictory phrase outside the test's own constant.\n\nNoted, not defects: allowed-tools gained Bash(grep:*) beyond the four planned entries (the recipe is a git diff | grep pipeline, and it is narrower than the forbidden bare git wildcard); TROUBLESHOOTING.md was edited because it held a fourth contradicting statement."
 }
