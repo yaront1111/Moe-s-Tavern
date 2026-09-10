@@ -655,8 +655,11 @@ The warning is advisory. It fires when `settings.autoCommit` is on and no `task.
 3. The fleet still runs an older installed wrapper that never calls `record_commit` (rebuild +
    reinstall, note below).
 
-Policy for QA: treat the warning as a reject unless you verified HEAD yourself (`git show <sha>`); a
-DONE task without a completion commit is a merge with no reviewed diff.
+Policy for QA: an empty `task.commits` at REVIEW is a bounded wait, then a self-land — the full rule is
+in `docs/roles/qa.md` and `docs/roles/qa.reference.md` ("Empty `task.commits` at REVIEW"). A warning
+that fires after QA landed the row itself and called `moe.record_commit` is this race, not a defect;
+it is grounds to reject only when the bytes cannot be attributed to the row at all. A DONE task with
+no completion commit from anyone is still a merge with no reviewed diff.
 
 ---
 

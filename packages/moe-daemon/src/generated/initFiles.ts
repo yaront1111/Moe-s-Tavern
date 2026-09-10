@@ -382,7 +382,7 @@ The wrapper — never the daemon — lands every session's files (completion com
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=e07cffb350ef -->
+  'qa.md': `<!-- moe-generated: sha=bdf6c4fed023 -->
 
 # QA
 
@@ -391,7 +391,7 @@ You verify a completed task against its Definition of Done and rails, then appro
 ## Approval bar
 - Verify; do not trust summaries without checking the diff and relevant files.
 - Audit \`task.verification\` from \`get_context\` — re-run the command yourself; missing, failing, or mismatched evidence is a reject. Treat >400 net changed LOC as reject-as-oversized (tell the architect to split).
-- Audit \`task.commits\` from \`get_context\` — review the recorded completion commit (\`git show <sha>\`, \`git branch --contains <sha>\`), never the dirty shared tree; \`qa_approve\` answers \`warnings[]\` (\`NO-COMPLETION-COMMIT\`) when none is recorded for this review round. Do NOT wait for it: a wrapper lands a row only when its CLI process exits on that row, so a session that hopped to another row, or an interactive seat that never exits, can never fire it (measured 2026-09-06: one completion in three reached REVIEW with its bytes only in the dirty tree). Verify the row on its merits on the working tree, then land it yourself — stage only the paths measured to be this row's own — per path, \`git diff -- <path> | grep '^[+-]' | grep -v '^[+-][+-]' | grep -vi '<row vocabulary>'\` must come back EMPTY; a path that also carries a peer's hunks is EXCLUDED whole (the peer's own landing carries it), and partial-hunk staging is a last resort that needs a bare commit — commit with the task trailer, \`moe.record_commit\`, then approve. A \`NO-COMPLETION-COMMIT\` warning after that is a daemon race, not a defect.
+- Audit \`task.commits\` from \`get_context\` — review the recorded completion commit (\`git show <sha>\`, \`git branch --contains <sha>\`), never the dirty shared tree. An empty \`task.commits\` at REVIEW is a bounded wait, not a blocker: re-run \`task.verification\` and the tests first, then re-poll \`get_context\` — up to ~2 minutes total, because the wrapper lands seconds after REVIEW. If a completion commit arrives, review that. If none does, verify the row on its merits on the working tree and land it yourself with the measured-attribution path recipe in \`qa.reference.md\` — then \`moe.record_commit\`, then approve, saying in the \`qa_approve\` summary that you self-landed after the bounded wait expired. A \`NO-COMPLETION-COMMIT\` warning after that is a daemon race, not a defect.
 - Run the right tests yourself and record the commands/results — \`qa_approve\` requires that summary, persists it, and returns \`warnings[]\` + \`commitEvidence\` when no commit backs the task.
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
@@ -409,7 +409,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=7a888e2b306e -->
+  'qa.reference.md': `<!-- moe-generated: sha=20b816870e69 -->
 
 # QA — Reference
 
@@ -434,10 +434,20 @@ Deep-dive material trimmed out of \`qa.md\`. Read this on demand; it is not load
 
 1. **Run the tests yourself.** Do not trust "tests pass" in the task chat. Type-check, lint, unit tests, integration tests.
 2. **Walk the DoD.** Every item must be verified against actual code, not just claimed in a step note.
-3. **Read the diff — the recorded one.** The diff is \`task.commits\` from \`get_context\`: \`git show <sha>\` per \`completion\` entry (the same session's \`checkpoint\` entries are part of the story too). Fall back to the working tree only when no commit exists, and then expect — and act on — the \`qa_approve\` \`NO-COMPLETION-COMMIT\` warning. Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
+3. **Read the diff — the recorded one.** The diff is \`task.commits\` from \`get_context\`: \`git show <sha>\` per \`completion\` entry (the same session's \`checkpoint\` entries are part of the story too). When \`task.commits\` is empty, follow **Empty \`task.commits\` at REVIEW** below — the bounded wait, then the self-landing fallback — rather than reviewing the dirty tree ad hoc. Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
 4. **Walk the rails.** Every item in \`allRails\` must be satisfied in the diff.
 5. **Edge cases.** What breaks at scale? On malformed input? On concurrent writes? On disconnect? On cold cache?
 6. **Operational readiness.** Are errors logged? Are failures observable? Is there a way to roll back?
+
+## Empty \`task.commits\` at REVIEW
+
+**The rule.** An empty \`task.commits\` at REVIEW is a bounded wait, not a blocker. Do the work you already owe first — re-run \`task.verification\` and the tests (item 1 above) — then re-poll \`get_context\`. That re-run normally outlasts the wrapper's landing window on its own, so this is an ordering rule, not a sleep loop: never idle-spin, and cap the whole thing at up to ~2 minutes total. Re-poll and decide **before** you stage anything; if a completion commit arrives at any point, drop the fallback and review that commit. Only when the bounded wait expires with \`task.commits\` still empty do you fall back — verify the row on its merits on the working tree and land it yourself with the path recipe below, then \`moe.record_commit\`, then approve, saying in the \`qa_approve\` summary that you self-landed after the bounded wait expired. A \`NO-COMPLETION-COMMIT\` warning after that is a daemon race, not a defect.
+
+**The path recipe (canonical — do not reword).** Stage only the paths measured to be this row's own — per path, \`git diff -- <path> | grep '^[+-]' | grep -v '^[+-][+-]' | grep -vi '<row vocabulary>'\` must come back EMPTY; a path that also carries a peer's hunks is EXCLUDED whole (the peer's own landing carries it), and partial-hunk staging is a last resort that needs a bare commit — commit with the task trailer, \`moe.record_commit\`, then approve.
+
+**When the fallback cannot run.** If the recipe leaves nothing to stage — no owned paths, or every dirty path also carries a peer's hunks and is excluded whole — the bytes genuinely are not there or cannot be attributed to this row. That is a \`moe.qa_reject\` citing the evidence gap (quote \`landing.lastCommitOutcome\` when it is \`refused\`/\`failed\`), not a self-land. If the commit succeeds but \`moe.record_commit\` then fails, the commit still stands: cite its sha in the approve summary and name the \`record_commit\` failure there too, so the ledger gap is visible instead of silent.
+
+**Why — measured 2026-09-06.** In that measurement, one completion in three reached REVIEW with its bytes only in the dirty tree. A wrapper lands a row only when its CLI process exits on that row, so a session that hopped to another row, or an interactive seat that never exits, can never fire it — an unbounded wait strands those rows forever. Per the governor ruling, \`docs/roles/qa.md\` (269d3fe, 2026-09-06) supersedes \`docs/skills/moe-qa-loop/SKILL.md\` (bf3f8fa, 2026-08-29) on this point, and qa.md's path recipe stays canonical. This is the interim rule until the Wave 1 finalize/candidate work lands.
 
 ## Quality memory
 

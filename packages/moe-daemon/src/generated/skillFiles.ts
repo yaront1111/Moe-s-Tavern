@@ -1371,11 +1371,11 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=80aba0a9eeb9
+# moe-generated: sha=ba3961f3fd71
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
-allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git branch:*)
+allowed-tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(git show:*), Bash(git branch:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git add:*), Bash(git commit:*), Bash(grep:*)
 ---
 
 # Moe QA Loop
@@ -1388,7 +1388,7 @@ For each task in \`REVIEW\`:
 
 1. **Read \`task.implementationPlan\` and \`task.definitionOfDone\`.** Know what was promised.
 2. **Audit the verification evidence.** \`moe.get_context\` returns \`task.verification\` — the exact command the worker ran at completion, its exit code, and an output tail — plus \`filesModified\`, \`commits\` (the wrapper's recorded landings — sha, ref, kind, pushed), \`landing.lastCompletion\` and recent \`rejectionHistory\`. Re-run the command yourself. Missing evidence, a non-zero exit, output that contradicts the claim, or a command that isn't the one the plan named → reject, citing the evidence gap.
-3. **Read the diff — the recorded one.** \`git show <sha>\` for each \`task.commits[]\` entry of kind \`completion\` (plus the same session's \`checkpoint\` entries when the completion is a follow-up), or \`git diff <base>..HEAD -- <filesModified>\`; \`git branch --contains <sha>\` confirms it is on the shared branch. Do not review the dirty shared working tree — other sessions' edits live there too. An empty \`task.commits\` means the evidence is not yet verifiable: the wrapper lands the commit seconds after REVIEW, so wait for it before reviewing. Read it adversarially — see the \`adversarial-self-review\` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below).
+3. **Read the diff — the recorded one.** \`git show <sha>\` for each \`task.commits[]\` entry of kind \`completion\` (plus the same session's \`checkpoint\` entries when the completion is a follow-up), or \`git diff <base>..HEAD -- <filesModified>\`; \`git branch --contains <sha>\` confirms it is on the shared branch. Do not review the dirty shared working tree — other sessions' edits live there too. An empty \`task.commits\` at REVIEW is a bounded wait, not a blocker. Step 2 already re-ran \`task.verification\` and the tests, and that re-run normally outlasts the wrapper's landing window on its own — so re-poll \`moe.get_context\` straight after it rather than idling, up to ~2 minutes total. Never sleep-loop, and re-poll and decide before you stage anything. If a completion commit arrives, review that. If none has by then, verify the row on its merits on the working tree and land it yourself, then \`moe.record_commit\`, then approve — saying in the \`qa_approve\` summary that you self-landed after the bounded wait expired. That self-landing fallback is the one sanctioned exception to the dirty-tree rule above, and it is scoped to the paths *measured* to be this row's own by the recipe in \`.moe/roles/qa.reference.md\` (a path that also carries a peer's hunks is excluded whole). Read it adversarially — see the \`adversarial-self-review\` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below).
 4. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
 5. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (\`assertEquals('expected', actual)\`, not \`assert(actual)\`)? Are edge cases covered or only the happy path? Any **deleted or weakened test** in the diff (loosened assertion, skipped case, removed file) that the plan didn't call for is a reject on sight.
 6. **Run the regression suite if you can.** If the worker's \`complete_step\` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
@@ -1410,18 +1410,18 @@ More than **400 net changed LOC** is legitimate grounds for \`moe.qa_reject\` on
 ## Approve when
 
 - \`task.verification\` is present, matches the plan's named command, and re-runs green.
-- \`task.commits\` contains a completion commit recorded for this review round and reachable from the shared branch (with \`autoCommit\` on).
+- \`task.commits\` contains a completion commit recorded for this review round and reachable from the shared branch (with \`autoCommit\` on) — or, when the bounded wait expired with none, the commit you landed yourself and recorded via \`moe.record_commit\`.
 - Every DoD item has clear evidence in the diff.
 - Tests cover the new behavior (happy path + at least one edge case) at the depth the plan called for.
 - No obvious adversarial-review red flags (concurrency, null-deref, missing cleanup).
 - The diff scope matches the plan's scope. No drift, no surprise refactors.
 
-Call \`moe.qa_approve\` with a \`summary\` naming what you verified — the commands you re-ran and the DoD items you checked. It is required (the daemon rejects approvals without it) and is persisted on the task as the review audit trail. A \`warnings\` entry (\`NO-COMPLETION-COMMIT\`) in the response means you approved without commit evidence — expected only with \`autoCommit\` off or when you approved inside the post-flight race; otherwise you should have rejected. \`commitEvidence\` in the response is what to cite in your summary.
+Call \`moe.qa_approve\` with a \`summary\` naming what you verified — the commands you re-ran and the DoD items you checked. It is required (the daemon rejects approvals without it) and is persisted on the task as the review audit trail. A \`warnings\` entry (\`NO-COMPLETION-COMMIT\`) in the response means you approved without commit evidence — expected only with \`autoCommit\` off or when you approved inside the post-flight race; otherwise you should have landed it yourself first. \`commitEvidence\` in the response is what to cite in your summary.
 
 ## Reject when
 
 - \`verification\` evidence is missing, its exit code isn't 0, or it doesn't reproduce when you re-run the command.
-- \`task.commits\` has no completion commit while \`autoCommit\` is on and the wrapper's landing had time to run (\`lastCommitOutcome\` is \`refused\`/\`failed\`, or its \`[OK] Committed\` banner never came) — the work never landed.
+- \`task.commits\` has no completion commit after the bounded wait **and** the self-landing fallback cannot run — the recipe leaves nothing to stage (no owned paths, or every dirty path also carries a peer's hunks and is excluded whole), so the bytes genuinely are not there or cannot be attributed to this row. Cite the evidence: \`lastCommitOutcome\` is \`refused\`/\`failed\`, or the wrapper's \`[OK] Committed\` banner never came. A missing commit you *can* attribute and land yourself is not a reject — land it.
 - A DoD item has no corresponding code change.
 - Tests are missing or only check the happy path (for *this* task's behavior — see the depth section above before demanding system-wide coverage from a mid-epic task).
 - The diff deletes or weakens existing tests without the plan calling for it.

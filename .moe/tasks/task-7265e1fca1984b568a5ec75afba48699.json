@@ -11,8 +11,51 @@
     "./gradlew test and daemon npm test green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Confirm prerequisite delivery and the resolved scope before editing. This parent is the final original-DoD integration gate, not a replacement implementation task. Read all six prerequisite contexts (task-492b573920264188888d56638dd98d81, task-dd743a02000e46cca6ae2442a1821066, task-0ad3744e77bd43b08b9c0b63293912a6, task-247fdf296ff2445daae8e057c0608f51, task-34dba87e4e1948bcba69e85f3f34bfd3, task-1bf079020e504aaaa760a8faeddebbcd) and verify actual landing: epicSiblings landing.merged true or a reachable branch commit carrying each exact Moe-Task trailer; DONE status or dirty source alone is not evidence. Ensure the scope ruling in msg-2af1526f3f154a76af884f5ddb637293 and producer/dialog rail corrections have taken effect: every successful submit increments once, and every actual sanitized steps or DoD change increments once whatever writer performs it. If a prerequisite is unlanded, its contract is absent or rails still conflict, report_blocked with specific unmet ids instead of duplicating child work. Re-measure git status, note all foreign dirty paths (including generated initFiles, launcher and board records) in the step note and preserve them. Make a DoD-to-child-evidence checklist; keep each child regression intact. Load test-driven-development before tests. No full regression in this exploration step.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Error handling: every failed approval, malformed token, write failure and temporary-resource teardown must have an explicit tested refusal/cleanup path. Add test-first daemon integration coverage using the existing WebSocketServer/McpAdapter real-dispatch test pattern and disposable temporary projects, with CONTROL mode and actual state serialization. Have review client A retain revision N from a snapshot, submit a newer plan through MCP from client B, then approve N over APPROVE_TASK; assert exact -32002/PLAN_REVISION_MISMATCH, context task id and expected/current revision, persisted/current AWAITING_APPROVAL, unchanged approval timestamp/assignment/activity/events and no approval response. Refresh to N+1 and prove approval succeeds. Repeat with real amend_plan_step and WS UPDATE_TASK steps/DoD edits (both fields together increments once); equal sanitized edits/comments alone do not bump. Include identical full resubmit incrementing exactly once, reload preserving the counter and legacy record/omitted-token compatibility. Exercise UPDATE_TASK awaiting-to-working approval metadata as well as APPROVE_TASK, malformed present tokens, forged revision fields and a serialized stale race. Pin test assertions to observable refusal and state, not source order or a mock-only helper. Reuse child tests for individual boundaries rather than duplicating their entire matrix. Demonstrate a targeted red by reverting the relevant fence/bump only in an isolated scratch copy, never the shared checkout; preserve the exact regression/evidence and restore that scratch mutation before the final gate. Close WS clients/server, cancel test timers and remove only the test-owned temporary project in finally/afterEach on all OSes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/planApproval.integration.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/server/planApproval.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Complete the approval-freshness contract/docs sweep against delivered code. Keep docs/SCHEMA.md and docs/MCP_SERVER.md consistent on new-task revision 0, legacy missing-as-0, the safe-integer domain, exactly-one increment per full submission or actual sanitized steps/DoD mutation, persistence and error precedence; describe APPROVE_TASK plus UPDATE_TASK metadata location, current/mismatched/malformed/omitted-token behavior and the actual structured WS error shape. Explicitly state that no MCP approve_task exists and set_task_status/automatic approval policies are not silently changed. Add docs/PLAN_APPROVAL_FRESHNESS.md with a concise user-visible change note and deterministic reproduction checklist: open JetBrains review N, submit or amend steps/DoD to N+1 without comments changing, stale action disabled with reopen notice; reopen and review N+1; VS Code delayed N click never upgrades to unseen N+1, and only complete render advances its token. Include stale refusal/disconnected/render-failure recovery, same-revision comments, missing task, and non-awaiting status. Map all five original parent DoD items to delivered child tests plus the new integration case. Name the intentionally compatible omitted-token legacy board/detail/old-client routes and SPEED/TURBO automatic policy boundary so the docs do not promise universal approval fencing. If code/docs disagree, request a scoped amendment/replan or report a prerequisite defect; do not spread implementation edits across child-owned files.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md",
+        "docs/PLAN_APPROVAL_FRESHNESS.md"
+      ],
+      "newFiles": [
+        "docs/PLAN_APPROVAL_FRESHNESS.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run the one final feature regression gate fresh after tests/docs are final. From repository root on Windows use exactly: cmd /d /c \"npm --prefix packages/moe-daemon test && cd moe-jetbrains && gradlew.bat test && cd .. && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\". On macOS/Linux the equivalent exact command is: npm --prefix packages/moe-daemon test && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. This executes all daemon Vitest, primary JetBrains JUnit, secondary VS Code node:test and TypeScript compile; require nonzero counts from each test suite and the new integration test being collected. Coordinate shared Gradle outputs via Moe's resource protocol if another build owns them; do not kill peer processes or clean shared caches. Record fresh command, exitCode and outputTail including suite counts for complete_task, plus focused red-on-old proof from each child. A failed command, uncollected test, missing SDK/build prerequisite or unrelated suite failure is an honest incomplete gate, not a passing partial result. Do not rebuild generated assets or broaden task ownership to make unrelated failures disappear.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Perform one final adversarial self-review over the six delivered child diffs and this integration/docs diff before completion. Use adversarial-self-review and verify counter never regresses or double-bumps; sanitized no-op versus changed bytes; every steps/DoD writer including amendment and WS; compare under real mutex before timer cancellation; no forged stamp/metadata persistence; explicit stale code and unchanged task state; null/negative/fractional/huge/reload input; missing-token compatibility without claimed universal coverage; JetBrains both parsers and action-time guard before comments debounce; VS Code actual rendered token across debounce/failed rendering; duplicate sends, disconnected/error recovery and disposal. Check cross-package numeric domain and packet/error fields match, the original DoD is fully mapped and no held-out/child tests were weakened. If review requires code changes, repeat the final gate on those final bytes before claiming success. Report every path actually created/modified via complete_step.modifiedFiles and do not attribute foreign WIP. Complete only through moe.complete_task with the recorded fresh verification evidence; leave QA its explicit checklist and stop for wrapper landing, never mark DONE yourself.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,20 +65,58 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7bd766c41ee249be9ca33f1625b5dea9",
+      "author": "architect-fa3e53b1",
+      "content": "Parent integration plan prepared (not submitted pending REPL confirmation). Governor ruling msg-2af1526f3f154a76af884f5ddb637293 resolves the in-place scope: centralized revision covers steps+DoD from all writers; six-slice shape unchanged. All six prerequisite ids are in dependsOn and have been promoted to PLANNING. Parent owns only new packages/moe-daemon/src/server/planApproval.integration.test.ts, docs/SCHEMA.md, docs/MCP_SERVER.md, new docs/PLAN_APPROVAL_FRESHNESS.md (4 files). Ordered steps: 1 delivered-prerequisite/rail/foreign-WIP guard and original-DoD mapping; 2 production MCP-to-WS red/green integration of submit/amend/DoD edits, matched/stale/malformed/omitted approval, both WS approval routes, exact structured refusal and unchanged state; 3 docs contract/changelog/reproduction sweep with rendered-revision and deliberate legacy/auto-policy boundary; 4 ONE fresh full daemon+JetBrains+VS Code gate; 5 ONE whole-feature adversarial review and complete_task QA handoff. Exact Windows gate from repo root: cmd /d /c \"npm --prefix packages/moe-daemon test && cd moe-jetbrains && gradlew.bat test && cd .. && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\". Unix: npm --prefix packages/moe-daemon test && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Original DoD: schema/bump=producer+integration; stale/legacy=CAS+integration; JetBrains rendered guarantee=model+dialog JUnit; VS Code token=bridge+webview node:test; all required green gates=parent step 4. No source edits/builds/tests performed; no success/delivery claim. Two stale child rails have formal pending corrections prop-62543e10acf0414fbb59a956155cabc4 and prop-914337637c4f4e459c5d6ea406018c73, which must not be overridden by prose.",
+      "timestamp": "2026-09-10T18:29:41.159Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:46.031Z",
-  "updatedAt": "2026-09-10T17:57:20.765Z",
+  "updatedAt": "2026-09-10T18:32:23.481Z",
   "metrics": {
-    "firstClaimAt": "2026-09-10T10:19:45.220Z"
+    "firstClaimAt": "2026-09-10T10:19:45.220Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-6f3113ee"
+    "architect-6f3113ee",
+    "architect-fa3e53b1"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Read-only daemon and both-client exploration found two planning constraints needing scope confirmation. (1) Even DoD-minimum coverage requires 14 client files plus daemon/schema/docs/tests, over 20 total and above submit_plan's hard 10-file limit. Proposed dependency slices: daemon durable revision contract; daemon approval CAS/WS errors; JetBrains model+wire; JetBrains reviewed-dialog binding; VS Code model+wire; VS Code rendered-review binding; preserve this task as the final original-DoD integration gate. (2) Bumping only submit_plan does not fence all changes to the plan shown in a dialog: moe.amend_plan_step allows AWAITING_APPROVAL and WS UPDATE_TASK accepts implementationPlan/definitionOfDone. Need the human to confirm whether these in-place edits also increment the revision, or explicitly limit this card's promise to full resubmissions. Asked that question in the REPL; no confirmation received. Do not silently claim immutable plan-content freshness or remove legacy no-field compatibility. No plan submitted, code edited or tests/builds run. Detailed handoff to be saved in Serena.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "dependsOn": [
+    "task-492b573920264188888d56638dd98d81",
+    "task-dd743a02000e46cca6ae2442a1821066",
+    "task-0ad3744e77bd43b08b9c0b63293912a6",
+    "task-247fdf296ff2445daae8e057c0608f51",
+    "task-34dba87e4e1948bcba69e85f3f34bfd3",
+    "task-1bf079020e504aaaa760a8faeddebbcd"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-10T18:32:23.426Z",
+  "planningNotes": {
+    "approachesConsidered": "The user explicitly requested submission for the original-DoD task. Governor rulings msg-d2d4b6d8f0d74231bed2e3991cbbb260, msg-2af1526f3f154a76af884f5ddb637293 and msg-ec2732f3b8084faa95972c6dfd884a8a resolve six-slice shape and centralized all-writer steps+DoD stamping; no seventh slice. Rejected 20+ file monolith and submit-only stamping. This parent is the final original-DoD gate after all six prerequisite deliveries, not their implementation.",
+    "codebaseInsights": "Live verified taskStore.updateTask sanitizes before write/map/publication, covers submitPlan/amendPlanStep/WS UPDATE_TASK; StateManager.approveTask serves APPROVE_TASK and WS awaiting-to-working. Existing MoeError supports STATE_CONFLICT and custom codeName. WS emits top-level operation that the current VS Code client drops. JetBrains has distinct full/incremental parsers, comment equality early return and 200ms dialog debounce. VS Code also has 200ms debounce: reviewed token must originate in successful rendering, not latest cache. No MCP approve_task exists.",
+    "risks": "All six children are PLANNING, not delivered; structural dependsOn gates parent WORKING claims. Shared JetBrains/VS Code model changes are sequenced after existing blocker/budget slices. Formal rail corrections prop-62543e10acf0414fbb59a956155cabc4 and prop-914337637c4f4e459c5d6ea406018c73 remain PENDING; do not override them in prose. Parent guard rejects absent/contradictory delivered contracts. Match JS safe integer and Kotlin Long domains; preserve exact refusal code/layer, timer state and actual reviewed revision. Legacy omitted-token paths and automatic approval policy remain compatible; no universal-fencing claim. No tests/builds/source edits performed. Foreign generated initFiles, launcher/provenance and peer/runtime board changes preserved. Initial submission was rejected for missing literal required phrase error handling; now explicit in step 2, with its previously planned error cases unchanged.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/amendPlanStep.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-vscode/src/panels/PlanReviewPanel.ts",
+      "moe-vscode/media/planReview.js"
+    ]
+  },
+  "planApprovedAt": "2026-09-10T18:32:23.481Z"
 }
