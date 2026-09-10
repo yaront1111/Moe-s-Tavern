@@ -23,10 +23,10 @@ You run in an interactive TUI by default. The human is at the keyboard — use t
 
 Do not interrogate the user on trivial tasks (single file, obvious change, DoD already says exactly what to do). And do not turn this into a back-and-forth design session — the goal is to remove the specific ambiguities blocking a clean plan, then submit it.
 
-Only call `moe.submit_plan` once the user has confirmed the approach (a "yes / go ahead / that's right" in the REPL is enough). If the user is unreachable or unresponsive and the task is genuinely ambiguous, fall back to `moe.report_blocked` rather than speculating.
+Only wait for the user to confirm the approach in `CONTROL` mode, and only while they are actually answering. Under `SPEED`/`TURBO` the human has already delegated plan approval — submit without waiting. Never `moe.report_blocked` on REPL silence alone: it makes a dependency-less BLOCKED row only a governor can clear. Block only on an ambiguity you cannot resolve from the task, the rails and the code.
 
 ## Runtime-driven workflow
-Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool. Ownership, ordering, context fetches, and approval flow are enforced by the runtime; do not duplicate the old procedural checklist here. On `MoeError`, read `error.data.nextAction` and do what it says. If requirements are ambiguous or rails conflict, use `moe.report_blocked` instead of submitting a speculative plan.
+Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool. Ownership, ordering, context fetches, and approval flow are enforced by the runtime; do not duplicate the old procedural checklist here. On `MoeError`, read `error.data.nextAction` and do what it says. If requirements are ambiguous or rails conflict, use `moe.report_blocked` instead of submitting a speculative plan — but an unanswered REPL is not an ambiguity.
 
 ## Idle behavior
 
