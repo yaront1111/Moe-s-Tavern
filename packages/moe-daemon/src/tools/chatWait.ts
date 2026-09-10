@@ -290,17 +290,32 @@ function validateChatWaitParams(params: ChatWaitParams, state: StateManager): vo
   }
   if (params.channels !== undefined) {
     if (!Array.isArray(params.channels)) {
-      throw invalidInput('channels', 'must be an array of channel IDs');
+      throw invalidInput('channels', 'must be an array of channel references');
     }
     for (const ch of params.channels) {
       if (typeof ch !== 'string' || !ch) {
-        throw invalidInput('channels', 'each channel ID must be a non-empty string');
+        throw invalidInput('channels', 'each channel reference must be a non-empty string');
       }
-      if (!state.getChannel(ch)) {
+      if (!state.resolveChannelRef(ch)) {
         throw invalidInput('channels', `unknown channel: ${ch}`);
       }
     }
   }
+}
+
+/**
+ * Canonical channel ids for a caller's filter. The subscription set is matched
+ * against `message.channel`, which only ever holds an id — so a reference that
+ * merely VALIDATED would filter every message out and the caller would block to
+ * timeout on a channel that exists. Resolve, never pass the raw reference on.
+ */
+function resolveChannelFilter(state: StateManager, channels: string[]): Set<string> {
+  const ids = new Set<string>();
+  for (const ref of channels) {
+    const channel = state.resolveChannelRef(ref);
+    if (channel) ids.add(channel.id);
+  }
+  return ids;
 }
 
 export function chatWaitTool(_state: StateManager): ToolDefinition {
@@ -312,7 +327,7 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         workerId: { type: 'string', description: 'Your worker ID (messages mentioning you will trigger)' },
-        channels: { type: 'array', items: { type: 'string' }, description: 'Optional channel filter' },
+        channels: { type: 'array', items: { type: 'string' }, description: 'Optional channel filter: channel ids, or names in either "governors" or "#governors" form' },
         sinceId: { type: 'string', description: 'Explicit catch-up cursor: overrides the stored per-channel cursor' },
         timeoutMs: { type: 'number', description: 'Max wait time in ms (default 300000, max 600000)' },
         maxContentChars: {
@@ -361,7 +376,7 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         new ChatWaitSession({
           state,
           workerId,
-          channelSet: params.channels ? new Set(params.channels) : null,
+          channelSet: params.channels ? resolveChannelFilter(state, params.channels) : null,
           sinceId: params.sinceId,
           timeoutMs,
           maxContentChars,
