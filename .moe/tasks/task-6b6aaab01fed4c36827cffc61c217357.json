@@ -92,8 +92,8 @@
       "completedAt": "2026-09-10T19:21:50.859Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -118,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:15.833Z",
-  "updatedAt": "2026-09-10T19:23:45.638Z",
+  "updatedAt": "2026-09-10T19:30:09.530Z",
   "declaredFiles": [
     "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh",
@@ -130,7 +130,9 @@
     "firstClaimAt": "2026-09-10T18:50:37.488Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-10T19:30:09.530Z",
+    "wallClockMs": 2372042
   },
   "contextFetchedBy": [
     "architect-fa3e53b1",
@@ -196,13 +198,31 @@
       "treeId": "c7a0b109ca22bdfbd1ab8947a7ca41b6957e33eb",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "944b93369dc3012674bf9596c75a3130a8a636d5",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-10T19:10:57Z",
+      "paths": [
+        ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-10T19:24:38.656Z",
+      "treeId": "f5f84bec641177044388e39cb1c2ddd84060f975",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-10T19:23:42Z",
-    "at": "2026-09-10T19:23:45.638Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-10T19:10:57Z",
+    "at": "2026-09-10T19:24:38.656Z"
+  },
+  "completedAt": "2026-09-10T19:30:09.530Z",
+  "reviewCompletedAt": "2026-09-10T19:30:09.530Z",
+  "reviewSummary": "APPROVED, all 6 DoD verified by me. Diff = exactly the 5 declared paths (ps1 +17/-1, sh +4/-2, provenance.ps1 +53, proxy.js +2/-1, seed.py +49).\n\nGATE RE-RUN (exact recorded command, exit 0, no SKIP): mention-provenance.ps1 PASSED 10 cases x faithful+substitute; mention-provenance.sh PASSED 10 x 4 modes; PASS parity-check.sh. DoD 3+4.\n\nDoD 2, my own probe, both hosts: pwsh 7.6.6 resolves JsonTextReader AND Linq.JObject from \"Newtonsoft.Json, Version=13.0.0.0, PublicKeyToken=30ad4fe6b2a6aeed\". Also -PowerShell powershell: WinPS 5.1.26100.9444 prints PROBE_TYPES not-required and still PASSES, so PS5 carries no Core-only dependency. Guard preserved.\n\nRED PROOF (epic rail), 3 mutations, each restored via trap with absolute paths, each restore confirmed by a separate git status (all empty): (1) bf17851 moe-agent.sh -> 20 timestamp assertion failures; (2) bf17851 moe-agent.ps1 -> 20 failures; (3) decisive: current ps1 \"-is [datetime]\" -> \"if ($false)\" failed exactly the 5 string-timestamp cases per mode (\"delivered timestamp None\") while the 5 null-expecting cases passed. So the Newtonsoft branch is load-bearing and the harnesses bind to real production code. Fixtures mutation-resistant: exact equality vs the independent JSONL oracle, +03:00 and 7-digit-fraction tokens no reserialise reproduces, absent/null/numeric-42 requiring explicit null, forged 2099 RPC time.\n\nDoD 1: wrapper-landed, no chore commit. Checkpoint e53048f (my QA pre-flight recovering the worker's rescue) carried the 5 source paths; worker completion 944b933 (kind=completion) is its child, equals HEAD and origin. git diff e53048f 944b933 and git diff HEAD over the 5 are both empty: tested bytes == landed bytes.\n\nDoD 5: unattributedPaths [] at postflight. DoD 6: landings touch only the 5 plus this task's board json; no forbidden patterns. Both-launchers rail held."
 }
