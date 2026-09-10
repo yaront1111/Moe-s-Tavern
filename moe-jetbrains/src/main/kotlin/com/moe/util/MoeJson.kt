@@ -22,6 +22,7 @@ import com.moe.model.Task
 import com.moe.model.TaskBudget
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
+import com.moe.model.TaskSizingThresholds
 import com.moe.model.TaskVerification
 import com.moe.model.Team
 import com.moe.model.Worker
@@ -91,6 +92,22 @@ object MoeJson {
         return try { element.asBoolean } catch (_: Exception) { default }
     }
 
+    /**
+     * Honours the value ONLY when it is a real JSON boolean, so a `default` of
+     * true reproduces the daemon's `settings.X !== false` and a default of false
+     * reproduces `settings.X === true` for every JSON shape.
+     *
+     * [getBooleanOrDefault] cannot be used for landing policy: Gson's `asBoolean`
+     * routes a JSON string through `Boolean.parseBoolean`, turning `"no"` into
+     * false where the daemon's `"no" !== false` is true.
+     */
+    private fun getStrictBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean {
+        val element = obj.get(key) ?: return default
+        if (!element.isJsonPrimitive) return default
+        val primitive = element.asJsonPrimitive
+        return if (primitive.isBoolean) primitive.asBoolean else default
+    }
+
     private fun JsonObject.getStringListOrDefault(key: String, default: List<String> = emptyList()): List<String> {
         val element = get(key)
         if (element == null || element.isJsonNull || !element.isJsonArray) return default
@@ -130,20 +147,65 @@ object MoeJson {
         }.toMap().takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * Mirrors `resolveTaskSizing` in `packages/moe-daemon/src/util/planSize.ts`:
+     * each threshold must be a positive int or the default is used, and a max
+     * below its warn is lifted to the warn value so a partial hand edit of
+     * project.json cannot render an inverted band.
+     */
+    private fun parseTaskSizing(settingsJson: JsonObject): TaskSizingThresholds {
+        val sizing = settingsJson.get("taskSizing")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: JsonObject()
+        val warnSteps = sizing.getIntOrNull("warnSteps")?.takeIf { it > 0 } ?: 8
+        val warnDistinctFiles = sizing.getIntOrNull("warnDistinctFiles")?.takeIf { it > 0 } ?: 5
+        return TaskSizingThresholds(
+            warnSteps = warnSteps,
+            maxSteps = maxOf(warnSteps, sizing.getIntOrNull("maxSteps")?.takeIf { it > 0 } ?: 12),
+            warnDistinctFiles = warnDistinctFiles,
+            maxDistinctFiles = maxOf(
+                warnDistinctFiles,
+                sizing.getIntOrNull("maxDistinctFiles")?.takeIf { it > 0 } ?: 10
+            )
+        )
+    }
+
+    /**
+     * `.moe/project.json` is hand-editable, so no read here may throw: every
+     * value guards its JSON type and falls back to the daemon's own default. A
+     * malformed settings block must degrade to defaults, never crash the state
+     * parse and blank the board.
+     */
     private fun parseProjectSettings(settingsJson: JsonObject?): ProjectSettings {
         val settings = settingsJson ?: JsonObject()
         val approvalMode = settings.getStringOrDefault("approvalMode", "CONTROL")
             .takeIf { it in setOf("CONTROL", "SPEED", "TURBO") }
             ?: "CONTROL"
+        val attribution = settings.get("attribution")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: JsonObject()
         return ProjectSettings(
             approvalMode = approvalMode,
             speedModeDelayMs = settings.getIntOrDefault("speedModeDelayMs", 2000),
-            autoCreateBranch = getBooleanOrDefault(settings, "autoCreateBranch", true),
-            branchPattern = settings.getStringOrDefault("branchPattern", "moe/{epicId}/{taskId}"),
-            commitPattern = settings.getStringOrDefault("commitPattern", "feat({epicId}): {taskTitle}"),
             agentCommand = settings.getStringOrDefault("agentCommand", "claude").ifBlank { "claude" },
             enableAgentTeams = getBooleanOrDefault(settings, "enableAgentTeams", false),
-            columnLimits = parseColumnLimits(settings)
+            columnLimits = parseColumnLimits(settings),
+            autoCommit = getStrictBooleanOrDefault(settings, "autoCommit", true),
+            checkpointCommits = getStrictBooleanOrDefault(settings, "checkpointCommits", true),
+            checkpointPush = getStrictBooleanOrDefault(settings, "checkpointPush", true),
+            commitBoardState = getStrictBooleanOrDefault(settings, "commitBoardState", true),
+            commitHooks = getStrictBooleanOrDefault(settings, "commitHooks", false),
+            consolidationBranch = settings.getStringOrDefault("consolidationBranch", "").trim(),
+            qualityGate = settings.getStringOrDefault("qualityGate", "").trim(),
+            qualityGateScope = settings.getStringOrDefault("qualityGateScope", "epicFinal")
+                .takeIf { it in setOf("epicFinal", "everyTask") }
+                ?: "epicFinal",
+            attributionUndeclared = attribution.getStringOrDefault("undeclared", "solo")
+                .takeIf { it in setOf("solo", "never", "always") }
+                ?: "solo",
+            taskSizing = parseTaskSizing(settings)
         )
     }
 

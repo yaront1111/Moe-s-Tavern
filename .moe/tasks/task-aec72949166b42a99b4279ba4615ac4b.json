@@ -18,7 +18,7 @@
     "Keep the cause badge derived from a pure, headless-testable function so JUnit can assert it without an IDE fixture."
   ],
   "implementationPlan": [],
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +28,31 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-bf233f58c85a4e2c8e235a8de0087fb6",
+      "author": "architect-6f3113ee",
+      "content": "Read-only planning exploration completed; no implementationPlan has been submitted and no approval or passing gates are claimed. Honest JetBrains scope is 8 files (model/parser/test + UI/helper/test/strings), exceeding the 5-file planning threshold. Loaded moe-planning/explore-before-assume/moe-epic-breakdown; this pass is a breakdown, not combined breakdown-and-plan submission.\n\nCreated:\n1. task-e7f534f147b74650ba06c2b98c022afb — Parse task blocker metadata in JetBrains. BACKLOG, 3 files, depends on task-435683c2df8f47e7b77a77dc51ba62e9 for shared Models/MoeJson/MoeJsonTest sequencing.\n2. task-c6e2eca5e19f4aaf9323f02aefadb29a — Show task blocker causes in VS Code. BACKLOG, 5 files, depends on this parent (JetBrains first) and task-9d731a5e5eb14951a9d342e5976883b6 (overlapping VS time-cap removal). This is the follow-up required by original DoD #6; name it in completion, do NOT wait for it here or create a dependency cycle.\n\nParent retains its original DoD and is the JetBrains UI + feature integration slice AFTER task-e7f534f147b74650ba06c2b98c022afb lands. Its future owned files: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt; moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt; NEW moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt; NEW moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt; moe-jetbrains/src/main/resources/messages/MoeBundle.properties. The parser DoD is delivered by the prerequisite and its tests must pass unchanged. No daemon/docs-schema changes; model comments, UI copy and cause-clearance explanations suffice for this read-only feature.\n\nMeasured facts that correct task prose:\n- Generic BLOCKED styling ALREADY exists in both clients: JB TaskCard status-mismatch chip + BoardStyles orange, VS board.js generic chip. The regression targets missing specific cause/reason/attention, not total absence of a status marker.\n- Resource and dependency fields can coexist. packages/moe-daemon/src/state/dependencyUnblock.ts:115-118 skips resource rows; resourceStore.ts:334-350 clears all block metadata on grant. Resource must take precedence.\n- Dependencies satisfy on DONE, ARCHIVED or missing/deleted IDs (dependencyUnblock.ts:31-34); display recorded prerequisite IDs rather than falsely claiming each is unfinished. Resource clearance is lease grant, external block needs human resolution.\n- needsHumanReview is an independent flag, normally produced by qaReject.ts in REVIEW; do not infer from status, critique or reason.\n- JB TaskDetailDialog currently refreshes only plan on its existing state listener; VS taskDetail.js updates only status/plan/comments. New read-only surfaces must refresh/clear on live task updates without recreating editors.\n\nRecommended parent design, awaiting REPL confirmation: pure headless presentation derives block cause only while status == BLOCKED: nonblank resource -> Resource wait, else valid prerequisite IDs -> Dependency wait, else External block. Add independent Awaiting human review badge whenever flag is true (including REVIEW; combined fields keep their real wait cause plus attention). Hide stale active-block details after leaving BLOCKED; keep attention until the flag clears. Detail uses read-only wrapped plain-text reason (fallback for missing/blank), full recorded IDs and resource identifier without HTML interpretation, network lookup or new actions. Use localized fixed badge/cause-clearance text and existing theme-aware styling. Existing board column/action/drag behavior stays untouched.\n\nFuture parent tests: real new pure function with named resource/dependency/external/human cases; combined resource+dependencies+human; no flag on ordinary task; missing/blank reason/resource/IDs; stale metadata in WORKING; BLOCKED -> WORKING -> REVIEW human attention transitions; hostile/multiline/long reason/ID data remains literal in the production-used detail rendering seam. Verify new UI is wired to the tested presentation, and reuse the existing listener/EDT and disposal lifecycle rather than adding subscriptions. Keep prior model and time-cap tests unchanged.\n\nFuture single verification gate (not run): root PowerShell `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE`; macOS/Linux `(cd moe-jetbrains && ./gradlew test)`. Full module gate is required by DoD; serialize shared Gradle builds and report nonzero test counts. One final adversarial review over this slice plus model integration; wrapper owns git landing.\n\nREPL question asked: 'The daemon gives resource waits precedence over dependency waits, while human review is a separate flag. I recommend matching that behavior, showing the reason and prerequisite IDs in task detail, and splitting model parsing and VS Code parity into follow-up cards to keep the plans small. Does that approach work for you?' No answer received as of this note. Before submit_plan, obtain the required approach confirmation. Current feature is not delivered.\n\nShared-file heads-up sent to @architect-1baec28a on effective-settings task (Models/MoeJson/MoeBundle may overlap); no code edits from this session. Foreign dirt observed: packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/mention-provenance-proxy.js, scripts/tests/mention-provenance-seed.py, scripts/tests/mention-provenance.ps1 plus daemon-owned .moe records. Preserve all.",
+      "timestamp": "2026-09-10T18:02:11.797Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:36:06.133Z",
-  "updatedAt": "2026-09-10T17:36:06.133Z"
+  "updatedAt": "2026-09-10T18:03:27.671Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T17:53:49.085Z"
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee"
+  ],
+  "dependsOn": [
+    "task-e7f534f147b74650ba06c2b98c022afb"
+  ],
+  "blockedReason": "Oversized JetBrains blocker visibility was decomposed at the model/UI boundary. Parent now depends on task-e7f534f147b74650ba06c2b98c022afb (three-file model/parser/JUnit contract, currently BACKLOG); after it lands the parent is a five-file JetBrains UI and feature-integration slice. A separately filed VS Code follow-up depends on this parent and must not be a reverse dependency. Task comment comment-bf233f58c85a4e2c8e235a8de0087fb6 maps all original DoD, file ownership, measured resource/dependency/human semantics, live-refresh/error handling/tests and exact future verification command. REPL approach confirmation was requested and has not been received; do not treat this breakdown as plan approval. No source edits, implementation-plan submission, tests, build or delivery were performed. This is a prerequisite wait, not completed work.",
+  "blockedOnTaskIds": [
+    "task-e7f534f147b74650ba06c2b98c022afb"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-10T18:03:27.671Z"
 }

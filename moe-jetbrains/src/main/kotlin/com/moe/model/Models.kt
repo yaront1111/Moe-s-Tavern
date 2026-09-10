@@ -17,15 +17,48 @@ data class Project(
     val settings: ProjectSettings? = null
 )
 
+/**
+ * The plugin's parsed view of `.moe/project.json` `settings`.
+ *
+ * Every default here must track the daemon, which applies its own defaults at
+ * read time rather than at init: the landing booleans come from the `policy`
+ * block of `packages/moe-daemon/src/tools/getCommitScope.ts` (`!== false` for
+ * [autoCommit]/[checkpointCommits]/[checkpointPush]/[commitBoardState], `=== true`
+ * for [commitHooks], `?? 'solo'` for [attributionUndeclared]), [qualityGateScope]
+ * falls back to `epicFinal` in `scripts/moe-agent.sh`, and [taskSizing] mirrors
+ * `packages/moe-daemon/src/util/planSize.ts`. A snapshot missing a key must still
+ * construct a valid object, so no field is nullable without a default.
+ *
+ * `autoCreateBranch`, `branchPattern` and `commitPattern` are deliberately absent:
+ * they are inert legacy keys that no longer affect landing. No wrapper creates a
+ * branch per task (they peel onto [consolidationBranch] else the shared
+ * `moe/work-<YYYY-MM-DD>`) and no commit subject derives from `commitPattern`.
+ * The daemon still accepts and stores them, so existing project.json files load.
+ */
 data class ProjectSettings(
     val approvalMode: String = "CONTROL",
     val speedModeDelayMs: Int = 2000,
-    val autoCreateBranch: Boolean = true,
-    val branchPattern: String = "moe/{epicId}/{taskId}",
-    val commitPattern: String = "feat({epicId}): {taskTitle}",
     val agentCommand: String = "claude",
     val enableAgentTeams: Boolean = false,
-    val columnLimits: Map<String, Int>? = null
+    val columnLimits: Map<String, Int>? = null,
+    val autoCommit: Boolean = true,
+    val checkpointCommits: Boolean = true,
+    val checkpointPush: Boolean = true,
+    val commitBoardState: Boolean = true,
+    val commitHooks: Boolean = false,
+    val consolidationBranch: String = "",
+    val qualityGate: String = "",
+    val qualityGateScope: String = "epicFinal",
+    val attributionUndeclared: String = "solo",
+    val taskSizing: TaskSizingThresholds = TaskSizingThresholds()
+)
+
+/** Plan-size bands from `settings.taskSizing`; defaults mirror `util/planSize.ts`. */
+data class TaskSizingThresholds(
+    val warnSteps: Int = 8,
+    val maxSteps: Int = 12,
+    val warnDistinctFiles: Int = 5,
+    val maxDistinctFiles: Int = 10
 )
 
 data class Epic(

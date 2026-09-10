@@ -21,37 +21,56 @@
     {
       "stepId": "step-1",
       "description": "Extend the Kotlin settings model with the settings that actually govern landing, and drop the three dead ones.\n\nFIRST re-read the two daemon default sources and confirm the table below still holds (read-only, no edits): packages/moe-daemon/src/tools/getCommitScope.ts (the `policy:` block near the end of the handler) and packages/moe-daemon/src/util/planSize.ts. If any default drifted, use what the daemon does today and say so in the step note.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:\n- DELETE `autoCreateBranch`, `branchPattern`, `commitPattern` from `data class ProjectSettings`. Nothing else in moe-jetbrains/src reads them once steps 2 and 5 land (verified: only Models.kt, MoeJson.kt, MoeCommandSender.kt, MoeSettingsDialog.kt and MoeJsonTest.kt reference them; MoeProjectInitializer.kt writes them into its scaffolded project.json and is deliberately left alone, because the daemon's own init in packages/moe-daemon/src/index.ts still seeds the same three keys and diverging the two seeds is out of scope).\n- ADD, with these exact defaults: `autoCommit: Boolean = true`, `checkpointCommits: Boolean = true`, `checkpointPush: Boolean = true`, `commitBoardState: Boolean = true`, `commitHooks: Boolean = false`, `consolidationBranch: String = \"\"`, `qualityGate: String = \"\"`, `qualityGateScope: String = \"epicFinal\"`, `attributionUndeclared: String = \"solo\"`, `taskSizing: TaskSizingThresholds = TaskSizingThresholds()`.\n- ADD `data class TaskSizingThresholds(val warnSteps: Int = 8, val maxSteps: Int = 12, val warnDistinctFiles: Int = 5, val maxDistinctFiles: Int = 10)` next to ProjectSettings.\n\nThese defaults mirror the daemon exactly: getCommitScope.ts reads `autoCommit/checkpointCommits/checkpointPush/commitBoardState` as `settings.X !== false` (default true) and `commitHooks` as `settings.commitHooks === true` (default false), and `attribution.undeclared ?? 'solo'`; planSize.ts uses 8/12/5/10; the wrapper (scripts/moe-agent.sh, the qualityGateScope python block) falls back to `epicFinal` for anything not in {epicFinal, everyTask}. Empty `consolidationBranch`/`qualityGate` mean \"unset\" — step 4 turns that into the human-readable effective value.\n\nDefaults on the data class are themselves error handling: a snapshot missing a key must construct a valid object, never a null field.\n\nAdd a short KDoc on ProjectSettings saying it is the plugin's parsed view of `.moe/project.json` `settings`, that the defaults must track the daemon, and that the three removed keys are inert legacy that no longer affect landing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "note": "Re-read both daemon default sources first (read-only, no edits): getCommitScope.ts:170-178 still has autoCommit/checkpointCommits/checkpointPush/commitBoardState as `settings.X !== false` (default true), `commitHooks === true` (default false), `attribution.undeclared ?? 'solo'`; planSize.ts still exports 8/12/5/10 with the `Math.max(warn, max)` inversion guard in resolveTaskSizing. scripts/moe-agent.sh:6054 still clamps qualityGateScope to {epicFinal, everyTask} else epicFinal. NO defaults drifted — the plan's table holds verbatim.\n\nAlso confirmed the plan's reference list is exact: grep for autoCreateBranch/branchPattern/commitPattern across moe-jetbrains/src hits only Models.kt, MoeCommandSender.kt, MoeSettingsDialog.kt, MoeJson.kt, MoeJsonTest.kt, MoeProjectInitializer.kt (left alone by design) and MoeBundle.properties.\n\nModels.kt: deleted autoCreateBranch/branchPattern/commitPattern from ProjectSettings; added autoCommit/checkpointCommits/checkpointPush/commitBoardState=true, commitHooks=false, consolidationBranch=\"\"/qualityGate=\"\", qualityGateScope=\"epicFinal\", attributionUndeclared=\"solo\", taskSizing=TaskSizingThresholds(); added data class TaskSizingThresholds(8,12,5,10). KDoc on ProjectSettings names the daemon source of each default and records the three removed keys as inert legacy that the daemon still accepts. Does not compile yet — MoeJson/MoeSettingsDialog/MoeCommandSender still reference the removed fields; steps 2 and 5 fix that.\n\nShared checkout: 6 dirty paths from other sessions (scripts/moe-agent.{ps1,sh}, scripts/tests/mention-provenance-*, packages/moe-daemon/src/generated/initFiles.ts) plus normal .moe/tasks churn — untouched.",
+      "startedAt": "2026-09-10T18:06:36.774Z",
+      "completedAt": "2026-09-10T18:08:56.729Z"
     },
     {
       "stepId": "step-2",
       "description": "Parse the new settings in MoeJson with the daemon's exact default semantics and total error handling.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, `parseProjectSettings`:\n- Drop the `autoCreateBranch` / `branchPattern` / `commitPattern` lines.\n- Add a private helper `getStrictBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean` that returns the value ONLY when the element is a JSON boolean primitive (`element.isJsonPrimitive && element.asJsonPrimitive.isBoolean`), and the default for absent, null, or any non-boolean. This is not cosmetic: the existing `getBooleanOrDefault` calls Gson's `asBoolean`, which on the JSON string \"no\" returns false via `Boolean.parseBoolean`, while the daemon's `\"no\" !== false` evaluates to TRUE. The strict helper reproduces `!== false` (default true) and `=== true` (default false) for every JSON shape. Leave the existing `getBooleanOrDefault` and its callers untouched.\n- `autoCommit`, `checkpointCommits`, `checkpointPush`, `commitBoardState`: `getStrictBooleanOrDefault(settings, key, true)`.\n- `commitHooks`: `getStrictBooleanOrDefault(settings, \"commitHooks\", false)`.\n- `consolidationBranch` and `qualityGate`: `settings.getStringOrDefault(key, \"\").trim()`.\n- `qualityGateScope`: `settings.getStringOrDefault(\"qualityGateScope\", \"epicFinal\")` clamped with `.takeIf { it in setOf(\"epicFinal\", \"everyTask\") } ?: \"epicFinal\"`, matching the `approvalMode` clamp two lines above and the wrapper's own fallback.\n- `attributionUndeclared`: read the nested `attribution` object (guard `isJsonObject`, else an empty JsonObject), then `getStringOrDefault(\"undeclared\", \"solo\")` clamped to {solo, never, always} with `solo` as the fallback.\n- `taskSizing`: add `private fun parseTaskSizing(settingsJson: JsonObject): TaskSizingThresholds` next to `parseColumnLimits`. Read the nested `taskSizing` object (guard `isJsonObject`, else empty). Each value must be a POSITIVE int or the default is used — mirror planSize.ts `positiveInt`: use `getIntOrNull(key)?.takeIf { it > 0 } ?: default`. Then apply planSize.ts's inversion guard: `maxSteps = maxOf(warnSteps, rawMaxSteps)` and `maxDistinctFiles = maxOf(warnDistinctFiles, rawMaxDistinctFiles)`, so a partial settings edit cannot render an inverted band.\n\nThe error handling contract for this whole function: `.moe/project.json` is hand-editable, so no reader may throw. Every new read guards its JSON type before touching it and falls back to the daemon default, exactly as the existing helpers wrap `asInt`/`asString` in try/catch. A malformed settings block must degrade to defaults, never crash the state parse and blank the board.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "note": "parseProjectSettings rewritten per plan. Dropped the three legacy reads; added the ten new ones.\n\nNew private helper getStrictBooleanOrDefault(obj, key, default) returns the value only when `element.isJsonPrimitive && asJsonPrimitive.isBoolean`, else the default — reproducing the daemon's `!== false` (default true) and `=== true` (default false) for every JSON shape. Existing getBooleanOrDefault and its two remaining callers (approvalMode-adjacent enableAgentTeams, plus the task-parsing callers) untouched, per plan.\n\nautoCommit/checkpointCommits/checkpointPush/commitBoardState -> strict true; commitHooks -> strict false. consolidationBranch/qualityGate -> getStringOrDefault(key, \"\").trim(). qualityGateScope clamped to {epicFinal, everyTask} else epicFinal, same shape as the approvalMode clamp above it. attribution read as a type-guarded nested object (else empty JsonObject) then undeclared clamped to {solo, never, always} else solo.\n\nNew private fun parseTaskSizing(settingsJson) sits next to parseColumnLimits: type-guarded nested taskSizing object, each value `getIntOrNull(key)?.takeIf { it > 0 } ?: default` (planSize.ts positiveInt), then maxSteps = maxOf(warnSteps, raw) and maxDistinctFiles = maxOf(warnDistinctFiles, raw) (planSize.ts inversion guard).\n\nError handling verified by re-reading the helpers rather than assuming: getStringOrDefault (MoeJson.kt:41) already returns the default for a null/absent/non-primitive element inside a try/catch, and getIntOrNull (MoeJson.kt:71) wraps asInt the same way — so no new read can throw on a hand-corrupted project.json. Added a KDoc on parseProjectSettings stating that contract and one on parseTaskSizing naming planSize.ts.\n\nAdded `import com.moe.model.TaskSizingThresholds` alphabetically between TaskMetrics and TaskVerification. Deliberately did NOT touch the TaskBudget import or any task-parsing code — that region belongs to sibling task-435683c2df8f47e.",
+      "startedAt": "2026-09-10T18:08:58.720Z",
+      "completedAt": "2026-09-10T18:11:17.844Z"
     },
     {
       "stepId": "step-3",
       "description": "Cover the parser in MoeJsonTest: populated snapshot, all-defaults snapshot, and malformed-input error handling.\n\nIn moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt:\n- Update `parseState preserves project settings from daemon snapshot`: remove the three `autoCreateBranch`/`branchPattern`/`commitPattern` keys from the fixture JSON and their three assertions. Add explicit non-default values for the new keys (`\"autoCommit\": false`, `\"checkpointCommits\": false`, `\"checkpointPush\": false`, `\"commitBoardState\": false`, `\"commitHooks\": true`, `\"consolidationBranch\": \"moe/work-*\"`, `\"qualityGate\": \"npm run lint\"`, `\"qualityGateScope\": \"everyTask\"`, `\"attribution\": { \"undeclared\": \"never\" }`, `\"taskSizing\": { \"warnSteps\": 3, \"maxSteps\": 6, \"warnDistinctFiles\": 2, \"maxDistinctFiles\": 4 }`) and assert each parsed value with `assertEquals`/`assertFalse`/`assertTrue` on the concrete value — never a bare truthiness assert.\n- Update `parseState falls back safely for malformed optional settings`: drop the `autoCreateBranch` assertion, and add malformed inputs proving daemon parity — `\"autoCommit\": \"no\"` must parse to TRUE (the daemon's `!== false`; a naive Gson `asBoolean` would give false, so this assertion is the whole point of the strict helper), `\"commitHooks\": \"true\"` must parse to FALSE (the daemon's `=== true`), `\"qualityGateScope\": \"whenever\"` must clamp to `epicFinal`, `\"attribution\": []` must yield `solo`, and `\"taskSizing\": { \"warnSteps\": 0, \"maxSteps\": -4 }` must yield 8 and 12. These are the error handling assertions for a hand-corrupted project.json.\n- Add a new test `settings absent from project json parse to the daemon defaults` feeding a snapshot whose `project` object has NO `settings` key at all, asserting every one of the ten new values equals its default (autoCommit/checkpointCommits/checkpointPush/commitBoardState true, commitHooks false, consolidationBranch \"\", qualityGate \"\", qualityGateScope \"epicFinal\", attributionUndeclared \"solo\", taskSizing 8/12/5/10).\n- Add a test that an inverted band lifts: `\"taskSizing\": { \"warnSteps\": 9, \"maxSteps\": 2 }` yields warnSteps 9 and maxSteps 9.\n\nThis file is also touched by the sibling task \"Remove deprecated time-cap fields from JetBrains task parsing\" (task-435683c2df8f47e), which edits the TASK-parsing tests. Confine your edits to the settings tests, do not reformat the rest of the file, and do not touch any budget/time-cap fixture or assertion.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "All four test changes landed in MoeJsonTest.kt, confined to the two settings tests plus two new ones. No budget/time-cap fixture or assertion touched (sibling task-435683c2df8f47e owns those), no reformatting of the rest of the file. Added the `org.junit.Assert.assertTrue` import; assertEquals/assertFalse were already imported.\n\n1. `parseState preserves project settings from daemon snapshot`: the three legacy keys and their assertions are gone; the fixture now carries explicit non-default values for all ten new keys and every one is asserted on its concrete value (assertFalse x4 on the landing booleans, assertTrue on commitHooks, assertEquals on \"moe/work-*\", \"npm run lint\", \"everyTask\", \"never\", and 3/6/2/4). No truthiness asserts.\n2. `parseState falls back safely for malformed optional settings`: dropped the autoCreateBranch assertion; added `\"autoCommit\": \"no\"` -> asserted TRUE (this is the assertion the strict helper exists for — Gson asBoolean would make it false, the daemon's `\"no\" !== false` makes it true), `\"checkpointCommits\": {}` -> TRUE, `\"commitHooks\": \"true\"` -> FALSE (`=== true`), `\"qualityGateScope\": \"whenever\"` -> \"epicFinal\", `\"attribution\": []` -> \"solo\", `\"taskSizing\": {warnSteps: 0, maxSteps: -4}` -> 8 and 12. Comments in the test name the daemon expression each case mirrors.\n3. New `settings absent from project json parse to the daemon defaults`: project object with NO settings key; asserts all ten defaults concretely (true/true/true/true, false, \"\", \"\", \"epicFinal\", \"solo\", 8/12/5/10).\n4. New `an inverted task sizing band lifts max to warn`: warnSteps 9 / maxSteps 2 -> 9 and 9.\n\nRED evidence is deferred, not skipped: these assertions cannot even compile against the pre-change ProjectSettings (no autoCommit/commitHooks/taskSizing fields exist there), which is the failure-on-old-behaviour the DoD asks for. I could not run them at this step because main does not compile yet — MoeSettingsDialog.kt and MoeCommandSender.kt still reference the fields step 1 deleted, and step 5 is what removes those references. Per mem:pattern-qa-reconstruct-missing-test-baseline I will MEASURE the RED rather than assert it: one throwaway git worktree at HEAD (pre-change sources) with the new test files copied in, compiled to capture the actual Unresolved reference errors, covering this file and MoeSettingsDialogTest.kt together after step 5. Recorded in the step-4/step-7 notes.",
+      "startedAt": "2026-09-10T18:11:22.275Z",
+      "completedAt": "2026-09-10T18:12:47.595Z"
     },
     {
       "stepId": "step-4",
       "description": "Add the pure, headless-testable row builder plus its test — this is the step whose test fails on the old behaviour.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt add a `companion object` (same convention as `CreateTaskDialog.epicSelectionModel` and `MetricsPanel.firstPassApprovalText`, both of which are already unit-tested headlessly in this module):\n- `data class PolicyRow(val label: String, val value: String, val detail: String = \"\")`.\n- `fun effectivePolicyRows(settings: ProjectSettings?): List<PolicyRow>` returning, in this order, from `settings ?: ProjectSettings()` — the null coalesce is deliberate error handling for a board that has not received a snapshot yet, so the dialog shows daemon defaults instead of a blank panel:\n  1. \"Auto-commit\" — On/Off. detail: on = \"Every session exit lands this task's attributed paths.\"; off = \"No completion, checkpoint or rescue commits.\"\n  2. \"Checkpoint commits\" — On/Off. detail names the `wip(task-<id>)` subject.\n  3. \"Push checkpoints\" — On/Off. detail: off = \"Checkpoints stay local.\"\n  4. \"Commit board state\" — On/Off. detail names `.moe/tasks/<id>.json`.\n  5. \"Commit hooks\" — \"Run on completion commits\" / \"Skipped (plumbing commits)\".\n  6. \"Landing branch\" — three cases, all tested: empty -> value \"moe/work-<YYYY-MM-DD> (shared, default)\" with detail \"No consolidationBranch set; wrappers peel onto the shared dated branch.\"; a literal value -> that value, detail \"Peel target and the branch complete_task requires.\"; a value containing `*` -> that value, detail \"Glob checked at complete_task only; wrappers still peel onto moe/work-<YYYY-MM-DD>.\" The glob distinction is real (see docs/CONFIGURATION.md `consolidationBranch` and the `ensure_safe_branch`/`peel_target_branch` comment in scripts/moe-agent.sh: only a literal doubles as the peel target). Render the literal placeholder text \"moe/work-<YYYY-MM-DD>\" — do NOT compute today's date, so the row is stable and the test is not time-dependent.\n  7. \"Quality gate\" — empty -> \"Disabled (no command configured)\"; else the command string.\n  8. \"Quality gate scope\" — \"epicFinal\" -> \"Epic-final task only\"; \"everyTask\" -> \"Every task\".\n  9. \"Undeclared-file attribution\" — solo -> \"Commit when no other worker is live (solo)\"; never -> \"Declared files only (never)\"; always -> \"Always commit (always)\".\n  10. \"Plan size limits\" — \"Warn past N steps / M files, reject past P / Q\" from the four thresholds.\n\nUse plain Kotlin strings, NOT MoeBundle, for these labels and values. `MoeBundle` wraps `DynamicBundle`, which needs an application instance the plain-JUnit `test` task does not create (build.gradle.kts strips the IntelliJ platform argument provider), and no existing test calls it. `MetricsPanel.firstPassApprovalText` sets the precedent of a hardcoded display string tested directly.\n\nCreate moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt (JUnit 4, `org.junit.Test` + `org.junit.Assert`, matching the sibling tests):\n- `all defaults render the daemon defaults not blanks or false`: call `effectivePolicyRows(null)` AND `effectivePolicyRows(ProjectSettings())`, assert both give identical rows, and assert the concrete value of every row (On/On/On/On/Skipped, the shared dated branch, gate disabled, epic-final scope, solo, 8/5/12/10). Assert no row `value` is blank.\n- `populated settings render their configured values`: build a ProjectSettings with everything non-default and assert each row's value.\n- `an unset consolidation branch names the shared dated fallback`, `a literal consolidation branch is the peel target`, `a glob consolidation branch is check-only`: three focused tests on row 6.\n- `no row presents the retired branch or commit pattern settings`: assert that the concatenation of every label+value+detail contains none of \"branchPattern\", \"commitPattern\", \"Branch Pattern\", \"Commit Pattern\", \"{epicId}\", \"{taskId}\", \"{taskTitle}\", \"Auto-create git branches\".\n- One end-to-end test that feeds a raw daemon snapshot JSON with NO `settings` key through `MoeJson.parseState`, takes `state.project.settings`, and passes it to `effectivePolicyRows`, asserting the same all-defaults rows. This proves the DoD's \"absent from .moe/project.json renders the daemon default\" across the real parse path rather than a hand-built object.\n\nBaseline evidence for QA: `effectivePolicyRows` does not exist on the old code, so this test file does not compile against it — capture that (the `Unresolved reference` compile error from checking the test file out against the pre-change sources) in the step note, alongside the fact that the old dialog rendered branchPattern and commitPattern as editable live fields. If the companion-object access turns out to fail at class-init under the platform-free test JVM, extract the same functions into a top-level `object LandingPolicyRows` in a new file in the same package and point the test at it — do not weaken the assertions to work around it.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeSettingsDialog.kt"
       ],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MoeSettingsDialogTest.kt"
-      ]
+      ],
+      "startedAt": "2026-09-10T18:12:49.675Z"
     },
     {
       "stepId": "step-5",
@@ -79,7 +98,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": "worker-6f2a9008",
+  "assignedWorkerId": "worker-010099ab",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -91,20 +110,26 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:36:25.314Z",
-  "updatedAt": "2026-09-10T18:03:06.887Z",
+  "updatedAt": "2026-09-10T18:20:18.481Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T17:54:15.069Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-1baec28a",
-    "worker-6f2a9008"
+    "worker-6f2a9008",
+    "worker-010099ab"
   ],
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-10T18:02:51.640Z",
   "planningNotes": {
@@ -123,5 +148,81 @@
       "docs/CONFIGURATION.md"
     ]
   },
-  "planApprovedAt": "2026-09-10T18:02:51.721Z"
+  "planApprovedAt": "2026-09-10T18:02:51.721Z",
+  "commits": [
+    {
+      "sha": "36541ac2873b3b9651cba42f34bad32ec2667ba5",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-6f2a9008@2026-09-10T18:03:14Z",
+      "paths": [
+        ".moe/epics/epic-3d096d59120542fc9fc9c7b91a713795.json",
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+        ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+        ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+        ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+        ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json",
+        ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json",
+        ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json",
+        ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "worker-6f2a9008",
+      "recordedAt": "2026-09-10T18:05:42.474Z",
+      "treeId": "4c07bacef0996df5a5ce0fd3bc29cabdcd5515f6",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/epics/epic-3d096d59120542fc9fc9c7b91a713795.json",
+    ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+    ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+    ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+    ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+    ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+    ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+    ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+    ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+    ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+    ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+    ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
+    ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+    ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+    ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json",
+    ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json",
+    ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json",
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-6f2a9008@2026-09-10T18:03:14Z",
+    "at": "2026-09-10T18:05:42.474Z"
+  },
+  "workStartedAt": "2026-09-10T18:06:36.774Z"
 }
