@@ -66,9 +66,6 @@ class MoeCommandSender(
         val payload = JsonObject().apply {
             addProperty("approvalMode", settings.approvalMode)
             addProperty("speedModeDelayMs", settings.speedModeDelayMs)
-            addProperty("autoCreateBranch", settings.autoCreateBranch)
-            addProperty("branchPattern", settings.branchPattern)
-            addProperty("commitPattern", settings.commitPattern)
             addProperty("agentCommand", settings.agentCommand)
             addProperty("enableAgentTeams", settings.enableAgentTeams)
         }

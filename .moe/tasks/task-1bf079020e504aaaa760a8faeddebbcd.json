@@ -1,0 +1,36 @@
+{
+  "id": "task-1bf079020e504aaaa760a8faeddebbcd",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Bind VS Code approval to the rendered plan",
+  "description": "Objective: ensure the VS Code Plan Review command sends the revision the webview actually rendered, not the newer client cache during its 200ms debounce. Deliverable in moe-vscode/src/panels/PlanReviewPanel.ts, media/planReview.js and new tests/plan-review.test.cjs (3 files): initialize the token from the exact task used for initial HTML; in the webview advance it only after a complete successful DoD/steps render. Disable approval before rendering and on render failure/missing task/non-awaiting status/invalid token; absent legacy task field is effective 0, malformed present data is not legacy. Approve posts expectedPlanRevision from that rendered snapshot, and panel forwards the supplied token unchanged through the client contract delivered by task-34dba87e4e1948bcba69e85f3f34bfd3. Never look up a latest revision to manufacture/replace this token; a queued N click while cache is N+1 must either be locally refused or send N for daemon rejection, never N+1. Remove optimistic 'Plan approved' and immediate close on successful send: pending action disables duplicate sends, correlated daemon stale error/disconnection/send or postMessage/render failure preserves visible feedback, and only authoritative matching task state can finish approval. Listen to onError/onConnectionChanged/state updates with correct cleanup; removed task and disposed panel cannot retain enabled sends. Existing safe DOM creation/textContent pattern only. Tests must execute production panel bridge plus production webview script using existing node:test+VM conventions, with deterministic timer control. NOT in scope: other legacy board/detail approval routes, daemon changes, broad webview redesign. Gate at repo root on Windows: cmd /d /c \"npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\"; Unix uses the same npm commands joined by &&. Record nonzero test counts and regression failure on old behavior.",
+  "definitionOfDone": [
+    "Production initial render/click emits the exact rendered expectedPlanRevision; a delayed N click after client cache N+1 never sends N+1, proven across script-to-panel-to-client bridge.",
+    "Successful full rerender advances the token; partial/render/postMessage failure, malformed revision, missing task or non-awaiting status disables approval instead of approving unseen content.",
+    "Panel forwards a valid supplied token unchanged and refuses malformed/missing webview command tokens without invoking the legacy one-argument approval path.",
+    "Repeated clicks send at most once while pending; disconnected/send failure and correlated PLAN_REVISION_MISMATCH retain visible failure feedback without false approval success or premature disposal.",
+    "Tests prove listener/timer disposal, reopening at a newer revision and authoritative acceptance recovery; fresh VS Code npm test plus npm run compile exit 0 with nonzero counts and old-behavior red proof."
+  ],
+  "taskRails": [
+    "Client cache freshness is not rendered-plan freshness; preserve the webview's reviewed token.",
+    "No optimistic approval success or unsafe HTML injection.",
+    "Keep unrelated legacy approval routes unchanged and document their compatibility boundary at the parent."
+  ],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion of architect-fa3e53b1's approved six-slice decomposition of task-7265e1fc (slice 6/6, VS Code approval binding). dependsOn gates WORKING claims only; JetBrains-first ordering holds.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-34dba87e4e1948bcba69e85f3f34bfd3"
+  ],
+  "priority": "HIGH",
+  "order": 2.36,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:26:26.993Z",
+  "updatedAt": "2026-09-10T18:27:21.384Z"
+}
