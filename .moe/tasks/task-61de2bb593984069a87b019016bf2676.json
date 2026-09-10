@@ -104,7 +104,7 @@
       "completedAt": "2026-09-10T17:42:30.975Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -117,17 +117,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:45.300Z",
-  "updatedAt": "2026-09-10T17:44:40.876Z",
+  "updatedAt": "2026-09-10T17:56:34.749Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T09:18:48.249Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-10T17:56:34.749Z",
+    "wallClockMs": 31066500
   },
   "contextFetchedBy": [
     "architect-6f3113ee",
     "architect-5178e9c0",
-    "worker-6f2a9008"
+    "worker-6f2a9008",
+    "qa-b80b801c"
   ],
   "priorHandoffs": [
     {
@@ -172,6 +175,33 @@
       "treeId": "a4e6a6e207f011f935bfc1ccc79697d20f7d63ab",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "ea6f3ca9c0b0f4a4b9f9b2f78f4c2749d5c4caae",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6f2a9008@2026-09-10T17:34:51Z",
+      "paths": [
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+        ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json",
+        "docs/MCP_SERVER.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt",
+        "moe-vscode/src/providers/MetricsViewProvider.ts",
+        "moe-vscode/tests/metrics-view.test.cjs",
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "recordedBy": "worker-6f2a9008",
+      "recordedAt": "2026-09-10T17:44:54.544Z",
+      "treeId": "f615c290f6e915c0f89d25c7db70bcb563c07a3c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -180,7 +210,14 @@
     "moe-vscode/src/providers/MetricsViewProvider.ts",
     "moe-vscode/tests/metrics-view.test.cjs",
     "packages/moe-daemon/src/util/metrics.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+    ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+    ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+    ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+    ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json"
   ],
   "unattributedPaths": [
     "scripts/moe-agent.ps1",
@@ -191,9 +228,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-6f2a9008@2026-09-10T17:34:51Z",
-    "at": "2026-09-10T17:34:54.258Z"
+    "at": "2026-09-10T17:44:54.544Z"
   },
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -232,5 +269,13 @@
     "outputTail": "GRADLE_EXIT=0 (BUILD SUCCESSFUL; build/test-results/test/*.xml sums to tests=72 skipped=0 failures=0 errors=0 across 9 classes, including all 4 MetricsPanelTest cases)\n Test Files  102 passed (102)\n      Tests  1177 passed (1177)\n   Start at  20:43:19\n   Duration  9.10s (tests 82%, transform 13%, import 5%)\n(vscode) tests 13 / suites 0 / pass 13 / fail 0 / cancelled 0 / skipped 0 / todo 0 / duration_ms 250.8284\n> moe-vscode@0.8.0 compile\n> tsc -p ./\nGATE_EXIT=0",
     "reportedAt": "2026-09-10T17:44:40.876Z"
   },
-  "completionSummary": "Both IDE clients now render the daemon's firstPassApprovalPct exactly once; the producer is unchanged.\n\nCHANGES (6 paths): MetricsPanel.kt — new `companion object { internal fun firstPassApprovalText(pct: Double?): String = pct?.let { \"%.0f%%\".format(it) } ?: \"—\" }`, and renderAggregate line 213 is bound to it (no parallel copy; the old inline expression is gone). MetricsPanelTest.kt (NEW, JUnit 4 headless). MetricsViewProvider.ts line 295 `Math.round(a.firstPassApprovalPct * 100)` -> `Math.round(a.firstPassApprovalPct)`. metrics-view.test.cjs (NEW). packages/moe-daemon/src/util/metrics.test.ts (NEW). docs/MCP_SERVER.md one Notes bullet. packages/moe-daemon/src/util/metrics.ts is NOT modified.\n\nDoD MAPPING (5/5):\n1. MetricsPanel.kt renders 0/50/100 as 0%/50%/100% — MetricsPanelTest.kt has 4 JUnit cases (0.0, 50.0, 100.0, null -> U+2014 em dash), all executed in TEST-com.moe.toolwindow.MetricsPanelTest.xml.\n2. MetricsViewProvider.ts renders the same three values identically — metrics-view.test.cjs runs the script actually emitted by the private getHtml(), asserting kpiFirstPass.textContent is '0%'/'50%'/'100%', plus the em dash for omitted, null and non-number.\n3. metrics.ts has a vitest 1-of-2 fixture — packages/moe-daemon/src/util/metrics.test.ts asserts firstPassApprovalPct is exactly 50 and within 0..100 (7 cases total: 0/2=0, 2/2=100, non-DONE excluded from the denominator, dashboard passthrough=50, and the zero-vs-omitted empty-input split).\n4. Docs state the unit explicitly — docs/MCP_SERVER.md:1967, moe.list_metrics Notes: \"`aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio - a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.\" (Not duplicated into docs/SCHEMA.md, which covers per-task TaskMetrics only.)"
+  "completionSummary": "Both IDE clients now render the daemon's firstPassApprovalPct exactly once; the producer is unchanged.\n\nCHANGES (6 paths): MetricsPanel.kt — new `companion object { internal fun firstPassApprovalText(pct: Double?): String = pct?.let { \"%.0f%%\".format(it) } ?: \"—\" }`, and renderAggregate line 213 is bound to it (no parallel copy; the old inline expression is gone). MetricsPanelTest.kt (NEW, JUnit 4 headless). MetricsViewProvider.ts line 295 `Math.round(a.firstPassApprovalPct * 100)` -> `Math.round(a.firstPassApprovalPct)`. metrics-view.test.cjs (NEW). packages/moe-daemon/src/util/metrics.test.ts (NEW). docs/MCP_SERVER.md one Notes bullet. packages/moe-daemon/src/util/metrics.ts is NOT modified.\n\nDoD MAPPING (5/5):\n1. MetricsPanel.kt renders 0/50/100 as 0%/50%/100% — MetricsPanelTest.kt has 4 JUnit cases (0.0, 50.0, 100.0, null -> U+2014 em dash), all executed in TEST-com.moe.toolwindow.MetricsPanelTest.xml.\n2. MetricsViewProvider.ts renders the same three values identically — metrics-view.test.cjs runs the script actually emitted by the private getHtml(), asserting kpiFirstPass.textContent is '0%'/'50%'/'100%', plus the em dash for omitted, null and non-number.\n3. metrics.ts has a vitest 1-of-2 fixture — packages/moe-daemon/src/util/metrics.test.ts asserts firstPassApprovalPct is exactly 50 and within 0..100 (7 cases total: 0/2=0, 2/2=100, non-DONE excluded from the denominator, dashboard passthrough=50, and the zero-vs-omitted empty-input split).\n4. Docs state the unit explicitly — docs/MCP_SERVER.md:1967, moe.list_metrics Notes: \"`aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio - a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.\" (Not duplicated into docs/SCHEMA.md, which covers per-task TaskMetrics only.)",
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "moe-vscode/src/providers/MetricsViewProvider.ts",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt"
+  ],
+  "completedAt": "2026-09-10T17:56:34.749Z",
+  "reviewCompletedAt": "2026-09-10T17:56:34.749Z",
+  "reviewSummary": "APPROVED. Completion commit ea6f3ca audited via `git show`; working tree adds nothing beyond it for the 6 task paths (other dirty paths belong to peer sessions: scripts/moe-agent.*, mention-provenance*, generated/initFiles.ts — left untouched).\n\nSuites re-run by QA from repo root, all exit 0:\n- `gradlew.bat -p moe-jetbrains test --rerun` BUILD SUCCESSFUL; XML census 72 tests / 0 skipped / 0 failures; TEST-com.moe.toolwindow.MetricsPanelTest.xml freshly written (not UP-TO-DATE).\n- `npm --prefix packages/moe-daemon test` 102 files / 1177 tests passed.\n- `npm --prefix moe-vscode test` 13/13 passed incl. the 6 new webview cases; `npm run compile` (tsc -p ./) clean.\n\nEpic rail \"test fails on old behaviour\" independently proven by QA mutation, both consumers restored to HEAD afterwards (tree verified clean):\n- reinstating `* 100` in MetricsViewProvider.ts: 2 fails, `'5000%' !== '50%'`, `'10000%' !== '100%'`.\n- reinstating `it * 100.0` in MetricsPanel.kt: `4 tests completed, 2 failed` (50%/100% cases).\n\nDoD1 PASS: MetricsPanel.kt:213 binds to the tested companion `firstPassApprovalText` (symbol occurs exactly twice = 1 call + 1 definition, no parallel copy); JUnit covers 0.0/50.0/100.0 + null em dash.\nDoD2 PASS: VS Code test executes the script actually emitted by getHtml(), same 0/50/100 plus omitted/null/non-number em dash; throws loudly on missing script or handler; provider.dispose() in finally.\nDoD3 PASS: new packages/moe-daemon/src/util/metrics.test.ts pins exactly 50 for 1-of-2 plus 0..100 bounds, 0/100 ends, non-DONE excluded from denominator, dashboard passthrough, and the 0-vs-undefined empty split. metrics.ts itself unchanged (0 diff lines).\nDoD4 PASS: docs/MCP_SERVER.md:1967 states the integer 0..100 scale and the never-multiply rule; pre-existing :1957 and :2288 intact.\nDoD5 PASS: see suites above.\n\nRails: no Wave 1 scope, no forbidden patterns in the new files, error-handling paths (em dash, typeof guard, empty-input branch) preserved."
 }
