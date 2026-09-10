@@ -26,7 +26,7 @@ import path from 'path';
 import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
-import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
+import { nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
@@ -306,12 +306,37 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const workersDir = path.join(state.moePath, 'workers');
     let deletedCount = 0;
+    let keptCount = 0;
 
-    // Delete all worker files from disk
+    // A DAEMON RESTART IS NOT EVIDENCE THAT ITS AGENTS DIED. The daemon can
+    // restart under a live fleet (upgrade, crash-restart, manual bounce), and a
+    // registration still heartbeating inside the presence window belongs to a
+    // process that is very much running. Deleting one is indistinguishable from
+    // a crash to the seat itself: its next tool call is refused with "Unknown
+    // sender", and its in-flight task is unassigned out from under it.
+    //
+    // So purge on the SAME evidence the rest of the fleet already uses -
+    // isWorkerAlive, which listWorkers and the stale watcher key on - instead of
+    // assuming startup implies a previous run. Fail toward KEEPING a
+    // registration: a wrongly-kept one is reclaimed moments later by the
+    // ordinary stale sweep, while a wrongly-deleted one silently decapitates a
+    // live seat mid-task.
+    const now = Date.now();
+    const liveWorkerIds = new Set<string>();
+    for (const worker of state.workers.values()) {
+      if (isWorkerAlive(worker, now, LIVENESS_TIMEOUT_MS)) liveWorkerIds.add(worker.id);
+    }
+
+    // Delete only registrations with no live process behind them.
     try {
       if (fs.existsSync(workersDir)) {
         const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
         for (const file of files) {
+          const workerId = file.slice(0, -'.json'.length);
+          if (liveWorkerIds.has(workerId)) {
+            keptCount++;
+            continue;
+          }
           try {
             const workerFile = path.join(workersDir, file);
             // Suppress the watcher echo so our own delete doesn't re-trigger load().
@@ -327,8 +352,10 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
       logger.error({ error }, 'Failed to read workers directory during purge');
     }
 
-    // Clear workers map
-    state.workers.clear();
+    // Drop only the purged records from the map; live ones stay registered.
+    for (const workerId of [...state.workers.keys()]) {
+      if (!liveWorkerIds.has(workerId)) state.workers.delete(workerId);
+    }
 
     // Clear assignedWorkerId references that are now orphaned.
     let clearedAssignments = 0;
@@ -368,10 +395,15 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     // instead of coming back as a solo — see util/teamMembershipHeal.ts.
     for (const team of state.teams.values()) {
       if (team.memberIds.length === 0) continue;
+      // Evict only members whose registration was actually purged. A live
+      // worker that keeps its record must keep its membership too, or it comes
+      // back as a solo and loses its team's role.
+      const evicted = team.memberIds.filter((id) => !liveWorkerIds.has(id));
+      if (evicted.length === 0) continue;
       const updated = {
         ...team,
-        memberIds: [],
-        formerMemberIds: withEvictionTombstones(team, team.memberIds),
+        memberIds: team.memberIds.filter((id) => liveWorkerIds.has(id)),
+        formerMemberIds: withEvictionTombstones(team, evicted),
         updatedAt: new Date().toISOString()
       };
       state.teams.set(team.id, updated);
@@ -384,7 +416,7 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     }
 
     if (deletedCount > 0) {
-      logger.info({ count: deletedCount, clearedAssignments }, 'Purged stale workers from previous run');
+      logger.info({ count: deletedCount, kept: keptCount, clearedAssignments }, 'Purged stale workers from previous run');
     } else if (clearedAssignments > 0) {
       logger.info({ clearedAssignments }, 'Cleared orphan task assignments during worker purge');
     }
