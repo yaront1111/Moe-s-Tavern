@@ -1,0 +1,37 @@
+{
+  "id": "task-dd743a02000e46cca6ae2442a1821066",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Reject stale daemon approval commands",
+  "description": "Objective: implement compare-and-swap approval against the durable planRevision producer task-492b573920264188888d56638dd98d81; work only after its delivered contract is available. Deliverable: optional expectedPlanRevision forwarded by StateManager.approveTask to taskStore.approveTask, plus APPROVE_TASK and the UPDATE_TASK AWAITING_APPROVAL-to-WORKING route in WebSocketServer. Put UPDATE_TASK command metadata beside taskId/updates, never persist it; strip forged planRevision and expectedPlanRevision from updates. Under the existing state mutex, validate supplied revision then compare to current effective revision before cancelSpeedModeTimeout or any write/publication. Only absence uses legacy approval; null, strings, booleans, fractional/negative/unsafe/non-finite numbers refuse INVALID_INPUT. A mismatch throws MoeErrorCode.STATE_CONFLICT (-32002) with codeName PLAN_REVISION_MISMATCH and safe taskId/expected/current revision details. WS ERROR keeps existing message, operation, context.taskId plus machine-readable code/codeName and allowlisted revision details, never arbitrary exception contexts. Use existing registration census to confirm no MCP approve_task tool exists; do not create one or repurpose set_task_status, whose role/policy stays unchanged. Scope: packages/moe-daemon/src/state/taskStore.ts, src/state/StateManager.ts, src/server/WebSocketServer.ts, new src/server/planApproval.test.ts, docs/MCP_SERVER.md (5 files). Tests use real serialization/dispatch or explicitly state.runExclusive, not concurrent direct handlers that bypass production locking. NOT in scope: IDE rendering, in-place revision policy, SPEED/TURBO policy rewrites, Wave 1. Verification at repo root: npm --prefix packages/moe-daemon test (Windows npm.cmd); document wire contract where no MCP approval tool exists. Capture focused old-behavior failure.",
+  "definitionOfDone": [
+    "Vitest proves current revision approves with PLAN_APPROVED and planApprovedAt; omitted revision remains accepted; legacy task without a stored revision accepts explicit 0.",
+    "Stale revision throws/returns exact STATE_CONFLICT code -32002 and PLAN_REVISION_MISMATCH codeName; task remains AWAITING_APPROVAL with persisted bytes, map, timestamps, assignment, activity/events and pending SPEED timeout unchanged.",
+    "Malformed supplied tokens refuse INVALID_INPUT instead of coercion or legacy fallback; unrelated error responses retain backwards-compatible message/operation fields and do not leak unallowlisted context.",
+    "Both APPROVE_TASK and UPDATE_TASK approval routes forward the token under the mutex; forged stored stamps and command metadata are not writable task fields, proven by WS regression tests.",
+    "A serialized newer-submit-before-older-approval race rejects the older token; a matched/legacy approval still succeeds under existing policy, proven through the real dispatch/locking path.",
+    "docs/MCP_SERVER.md records the actual approval wire/error shape and absence of MCP approve_task; fresh npm --prefix packages/moe-daemon test exits 0 with nonzero counts and recorded red proof."
+  ],
+  "taskRails": [
+    "Compare before timer cancellation or task mutation; do not weaken status/role checks.",
+    "A task-write failure does not promise new multi-entity transaction rollback.",
+    "No new MCP approval tool or automatic approval policy change."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-492b573920264188888d56638dd98d81"
+  ],
+  "priority": "HIGH",
+  "order": 2.32,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:23:52.742Z",
+  "updatedAt": "2026-09-10T18:23:52.742Z"
+}

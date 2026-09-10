@@ -1,0 +1,37 @@
+{
+  "id": "task-34dba87e4e1948bcba69e85f3f34bfd3",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Carry plan revisions through VS Code commands",
+  "description": "Objective: provide the secondary IDE wire bridge after the JetBrains reviewed-dialog child task-247fdf296ff2445daae8e057c0608f51. Deliverable: moe-vscode/src/types/moe.ts adds legacy-compatible Task.planRevision and optional expectedPlanRevision on the APPROVE_TASK message type; src/services/MoeDaemonClient.ts accepts and forwards an explicitly supplied nonnegative safe-integer revision unchanged. Omit the key for omitted arguments, including all unchanged old callers; never replace a supplied revision with currentState. Guard malformed supplied input against silent no-field fallback, preserve boolean disconnected send result. Extend the existing onError payload additively to preserve daemon top-level operation/code/codeName and safe context.taskId/revision fields, accepting old payload-nested format too; this gives the rendered panel correlated stale-refusal feedback. Own new tests/plan-approval-client.test.cjs using node:test and the existing TypeScript transpileModule/VM mocking convention to execute production client code. Scope is these 3 files only. Also depends on task-c6e2eca5e19f4aaf9323f02aefadb29a to serialize shared VS Code model work. NOT in scope: webview click/render logic, changing all legacy board/detail callers, daemon policy or JetBrains. Exact gate at repo root on Windows: cmd /d /c \"npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\"; Unix: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Require nonzero node:test counts and focused red-on-old evidence.",
+  "definitionOfDone": [
+    "Production APPROVE_TASK serialization preserves explicit 0/normal/large safe revision tokens unchanged and omits the property for legacy one-argument calls; node:test covers exact JSON payloads.",
+    "Invalid supplied token is refused without an outbound legacy command; disconnected/send-error behavior is preserved and tested with no false success.",
+    "Task snapshots preserve planRevision through the existing client state update path without discarding legacy missing fields; compile verifies type compatibility with unchanged callers.",
+    "onError preserves both modern top-level and old nested operation fields and safe mismatch code/task context; tests prove unrelated or unallowlisted error context is not promoted into the public payload.",
+    "Fresh VS Code npm test and npm run compile exit 0 with nonzero test counts, and the new serialization/refusal regression fails on old code."
+  ],
+  "taskRails": [
+    "VS Code follows the JetBrains reviewed-dialog delivery.",
+    "Never infer the reviewed revision from latest currentState.",
+    "Do not alter old callers' omitted-token compatibility."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-247fdf296ff2445daae8e057c0608f51",
+    "task-c6e2eca5e19f4aaf9323f02aefadb29a"
+  ],
+  "priority": "HIGH",
+  "order": 2.35,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:25:37.487Z",
+  "updatedAt": "2026-09-10T18:25:37.487Z"
+}

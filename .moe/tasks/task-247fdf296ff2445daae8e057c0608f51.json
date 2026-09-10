@@ -1,0 +1,36 @@
+{
+  "id": "task-247fdf296ff2445daae8e057c0608f51",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Bind JetBrains approval to the rendered plan",
+  "description": "Objective: close PlanReviewDialog's stale-render hole using the landed JetBrains model/wire child task-0ad3744e77bd43b08b9c0b63293912a6. Deliverable: freeze a valid reviewed plan revision only after initial DoD/steps render; on a changed revision latch Approve disabled with a localized 'Plan changed - close and reopen to review' notice rather than partially re-rendering the plan. onState must invalidate before the comments-equality return and before the 200ms comment debounce; missing task, non-AWAITING_APPROVAL status, invalid revision and disconnected service cannot approve. The action must independently recheck getState()/isConnected() against the captured revision, but must never substitute the cache's newer revision. Use a production-used headless presenter/state helper in a new src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt plus new src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt; existing files are toolwindow/PlanReviewDialog.kt and src/main/resources/messages/MoeBundle.properties (4 files total). Disable repeated sends while approval pending. Keep dialog open on send failure or daemon APPROVE_TASK error, show the existing onError message without treating transport success as approval; only observed authoritative state may finish an approval. EDT-safe callbacks, stopped debounce timers and removed listener on disposal are mandatory. NOT in scope: rewriting all board/detail approval routes, in-place mutation stamping policy, or VS Code. Tests cover new revision with identical comments, same-revision comment update, forced action while disabled, stale/deleted/status-changed task, invalid stamp, send failure/disconnection, error, duplicate click, reopen and disposal. Gate at repo root on Windows: cmd /d /c \"cd /d moe-jetbrains && gradlew.bat test\"; Unix: cd moe-jetbrains && ./gradlew test. Reuse the headless JUnit approach, require nonzero counts and red-on-old evidence; serialize shared Gradle outputs.",
+  "definitionOfDone": [
+    "JUnit on the production-used presenter proves the token sent is the successfully rendered revision, never the latest cached one; reopening renders/captures the new revision.",
+    "A revision update with unchanged comments invalidates before debounce/early return, shows the refresh notice and prevents even a forced approval action; comment-only same-revision updates stay usable.",
+    "Deleted task, changed status, malformed revision or disconnected service cannot send an approval; repeated/pending clicks send at most once, asserted against captured outgoing command.",
+    "Send failure or daemon error retains usable failure feedback without reporting approval success; state transitions and disposed callbacks are handled without stale sends or leaked listeners/timers.",
+    "Fresh Gradle test exits 0 with nonzero JUnit counts, with scoped red-on-old regression evidence and no unrelated approval entry-point changes."
+  ],
+  "taskRails": [
+    "Use disable-and-reopen UX, not partial plan rendering or automatic approval of a newer cached revision.",
+    "Never equate transport send success to daemon acceptance.",
+    "This slice does not resolve the parent's awaiting in-place mutation scope decision."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-0ad3744e77bd43b08b9c0b63293912a6"
+  ],
+  "priority": "HIGH",
+  "order": 2.34,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:25:04.295Z",
+  "updatedAt": "2026-09-10T18:25:04.295Z"
+}

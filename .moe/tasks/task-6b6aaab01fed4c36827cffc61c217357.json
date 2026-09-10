@@ -1,0 +1,41 @@
+{
+  "id": "task-6b6aaab01fed4c36827cffc61c217357",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Land the orphaned mention-timestamp provenance change in both launchers",
+  "description": "Five paths have been sitting dirty in the working tree with no owning task since at least 2026-09-10T17:34Z, and they re-trigger MOE_ATTRIBUTION_UNRESOLVED on every landing while polluting each new worker's baseline snapshot.\n\nThe paths are scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/mention-provenance.ps1, scripts/tests/mention-provenance-proxy.js and scripts/tests/mention-provenance-seed.py — 59 insertions, 17 deletions across the five. They trace via git log to task-14ea45a5f5ae4e21a88ec3fc45f51f8c, whose record no longer exists under .moe/tasks, so moe.declare_files had no live task to attribute them to. That deleted task's three landed commits are b3eb5a1, 7607b70 and 21529d2.\n\nThe change itself carries the stored message timestamp through the verified-mention path instead of trusting the RPC's claim of freshness, and falls back to an explicit null when the stored metadata is missing or is not a string. It is present in BOTH launcher twins, so the both-launchers-or-neither rule was already respected by whoever wrote it.\n\nThis task exists to review that orphaned work and land it through the normal wrapper path. Do not hand-land it with a chore commit.\n\nOne specific thing to verify rather than assume: the PowerShell side of Get-MoeStoredMentionRecord reaches for [Newtonsoft.Json.JsonTextReader] and [Newtonsoft.Json.Linq.JObject] to re-read the raw timestamp token, on the reasoning that PowerShell 6+ auto-converts ISO strings to DateTime. Confirm those types actually resolve in the pwsh the fleet runs before trusting that branch — it is the guard for the exact case it is meant to fix, so if the type does not load it throws on the path that matters. If it does not resolve, replace it with something that does rather than deleting the guard.\n\nScope is exactly those five files. Do not sweep other dirty paths in.",
+  "definitionOfDone": [
+    "The five orphaned paths are attributed to this task via moe.declare_files and land through the wrapper post-flight, not through a hand-written chore commit",
+    "[Newtonsoft.Json.JsonTextReader] and [Newtonsoft.Json.Linq.JObject] are confirmed to resolve in the fleet's pwsh, with the check command and its output recorded in the completion verification; if they do not resolve, the branch is replaced by a working equivalent and the guard is preserved",
+    "The mention-provenance harness passes on both platforms: bash scripts/tests/mention-provenance.sh if present, and the .ps1 sibling",
+    "bash scripts/tests/parity-check.sh passes, confirming the .ps1 and .sh twins did not drift",
+    "The working tree no longer reports these five paths as unattributed on the next landing",
+    "No file outside the five listed paths is modified"
+  ],
+  "taskRails": [
+    "Scope is frozen at the five named paths. Any other dirty path in the tree belongs to a peer seat — leave it alone.",
+    "The wrapper is the only git actor. Attribute via moe.declare_files and let post-flight land it.",
+    "Both launchers or neither: a change to scripts/moe-agent.ps1 without its scripts/moe-agent.sh twin is a new bug on the other platform."
+  ],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:23:15.833Z",
+  "updatedAt": "2026-09-10T18:23:29.837Z",
+  "declaredFiles": [
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/mention-provenance.ps1",
+    "scripts/tests/mention-provenance-proxy.js",
+    "scripts/tests/mention-provenance-seed.py"
+  ]
+}

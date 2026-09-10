@@ -1,0 +1,32 @@
+{
+  "id": "task-492b573920264188888d56638dd98d81",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Persist daemon plan revisions on submission",
+  "description": "Objective: deliver the daemon-owned revision producer for stale-plan approval parent task-7265e1fca1984b568a5ec75afba48699. Deliverable: Task.planRevision in packages/moe-daemon/src/types/schema.ts and docs/SCHEMA.md, initialized to 0 for newly created tasks, with absent legacy values interpreted as 0; every successful moe.submit_plan increments the persisted nonnegative safe-integer revision exactly once, including identical resubmissions and all approval modes. Plan and revision must be committed in the same task write before publication; return the persisted revision from submit_plan. Rejected validation and a failed task write must not advance revision/map/events; no wrap, coercion, or reset on reopen. Expected seams: src/state/taskStore.ts, src/tools/submitPlan.ts, and src/tools/submitPlan.test.ts under packages/moe-daemon (5 files including schema/docs). Keep the optional legacy-compatible TypeScript shape if needed rather than mechanically rewriting every historical Task fixture. Error handling: malformed existing non-absent revision refuses as INVALID_INPUT, exhaustion as a stable conflict, and task-write failure remains observable. NOT in scope: approval CAS, IDE changes, changing auto-approval policy, or Wave 1 records. This child establishes the mandatory submit_plan behavior; whether awaiting in-place amendments/DoD edits also bump is still a parent-scope decision and must not be advertised as solved by submit-only stamping. Verification from repository root: npm --prefix packages/moe-daemon test (PowerShell: npm.cmd --prefix packages/moe-daemon test); require nonzero Vitest counts and record old-behavior red proof. Do not build/regenerate foreign generated files.",
+  "definitionOfDone": [
+    "docs/SCHEMA.md and Task type describe daemon-owned planRevision, safe-integer domain, new-task 0, legacy missing-as-0 and monotonic submission semantics; a creation/legacy fixture test proves the defaults.",
+    "Vitest proves first submit 0->1, resubmit 1->2 (including identical steps), independent tasks, CONTROL/SPEED/TURBO publication and the returned persisted revision.",
+    "Vitest reloads persisted state and proves revision survives restart and reopen; submitting from a legacy record missing the field produces 1.",
+    "Validation refusal, simulated task-write failure, malformed stored revision and safe-integer exhaustion are regression-tested with unchanged revision/task state and no success publication.",
+    "Fresh npm --prefix packages/moe-daemon test exits 0 with nonzero test counts; record a focused test failing on old behavior without disturbing foreign WIP."
+  ],
+  "taskRails": [
+    "Preserve the parent original DoD; this producer does not certify all in-place edits as fenced.",
+    "No new MCP approval tool, automatic-approval policy change, or Wave 1 work."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "priority": "HIGH",
+  "order": 2.31,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:23:13.671Z",
+  "updatedAt": "2026-09-10T18:23:13.671Z"
+}

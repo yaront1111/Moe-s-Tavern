@@ -1,0 +1,38 @@
+{
+  "id": "task-0ad3744e77bd43b08b9c0b63293912a6",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Carry plan revisions through JetBrains commands",
+  "description": "Objective: deliver the primary IDE model/wire contract consumed by the reviewed-dialog slice. Deliverable in moe-jetbrains: src/main/kotlin/com/moe/model/Models.kt stores planRevision without Int truncation; util/MoeJson.kt preserves it in BOTH parseTasks/full-snapshot and parseTask/incremental paths; services/MoeCommandSender.kt and MoeProjectService.kt expose optional expectedPlanRevision and forward supplied values unchanged. Represent valid revisions as Long within JS safe-integer range 0..9007199254740991; missing task field is legacy effective 0, malformed present field must remain distinguishable/unusable rather than silently becoming 0. Model can use nullable Long with default 0 for that distinction. Omitted command argument keeps old JSON shape (never a null token); explicit 0 and supplied revisions appear in APPROVE_TASK. Make sender/facade report whether command was sent so the dialog can retain UI on disconnection, without interpreting transport send as daemon approval. Validate invalid numeric arguments before send and preserve existing disconnected callback; send failures propagate to the caller's error path. Own new src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt exercising real production parsers/serializer. Dependencies include the two daemon producers and task-e7f534f147b74650ba06c2b98c022afb (blocker parser after budget retirement), to serialize overlapping Models/MoeJson work. NOT in scope: PlanReviewDialog UX, other legacy approval entry points, daemon edits, broad parser refactors. Exact gate at repo root on Windows: cmd /d /c \"cd /d moe-jetbrains && gradlew.bat test\"; on macOS/Linux: cd moe-jetbrains && ./gradlew test. Serialize shared Gradle output via Moe resource protocol if occupied; do not clean peer build state. Record nonzero JUnit counts and an old-behavior red test.",
+  "definitionOfDone": [
+    "JUnit proves full snapshot and incremental task parsing preserve revision 0, normal values and values above Int range exactly; absent legacy task field means 0.",
+    "JUnit proves null, fractional, negative, string/boolean and out-of-safe-range revision input cannot become an approvable 0 or truncated revision.",
+    "Production APPROVE_TASK JSON includes an explicitly supplied expectedPlanRevision unchanged (including 0); legacy one-argument calls omit the key entirely, proven by serializer tests.",
+    "Sender/facade return send success versus disconnected refusal; tests prove no packet on disconnection or invalid revision, existing disconnected notification preserved, and send exceptions are not claimed as approval.",
+    "Fresh Gradle test exits 0 with nonzero JUnit counts; the scoped regression fails against old parsing/serialization, and no peer parser changes are discarded."
+  ],
+  "taskRails": [
+    "JetBrains first; never fetch a newer revision from service state to replace the caller's reviewed token.",
+    "Both MoeJson parser paths are mandatory; no Int/coercive revision parsing.",
+    "Wait for blocker-model prerequisite delivery to avoid shared-file overlap."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-492b573920264188888d56638dd98d81",
+    "task-dd743a02000e46cca6ae2442a1821066",
+    "task-e7f534f147b74650ba06c2b98c022afb"
+  ],
+  "priority": "HIGH",
+  "order": 2.33,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:24:33.518Z",
+  "updatedAt": "2026-09-10T18:24:33.518Z"
+}
