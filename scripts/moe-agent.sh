@@ -4710,7 +4710,7 @@ def verified_mention(msg, mid):
     ok, reason, rec = stored_record(msg.get("channel"), mid)
     if not ok:
         return {
-            "id": mid, "channel": msg.get("channel"), "sender": msg.get("sender"),
+            "id": mid, "channel": msg.get("channel"), "sender": msg.get("sender"), "timestamp": None,
             "content": "%s reason=%s id=%s channel=%s" % (MARKER, reason, mid, msg.get("channel")),
             "provenance": reason,
         }
@@ -4720,6 +4720,9 @@ def verified_mention(msg, mid):
     body = rec["content"]
     sender = rec.get("sender") if isinstance(rec.get("sender"), str) else msg.get("sender")
     channel = rec.get("channel") if isinstance(rec.get("channel"), str) else msg.get("channel")
+    # Historical messages need their stored time, never the RPC's claim of
+    # freshness. Unavailable/non-string metadata remains explicitly unknown.
+    timestamp = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else None
     rpc = msg.get("content")
     rpc = rpc if isinstance(rpc, str) else ""
     if body == rpc:
@@ -4732,7 +4735,7 @@ def verified_mention(msg, mid):
     else:
         prov = "MOE_MENTION_CONTENT_DIVERGED"
     return {
-        "id": mid, "channel": channel, "sender": sender,
+        "id": mid, "channel": channel, "sender": sender, "timestamp": timestamp,
         "content": body, "provenance": prov,
     }
 

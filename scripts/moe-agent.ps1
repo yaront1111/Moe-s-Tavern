@@ -1310,6 +1310,17 @@ function Get-MoeStoredMentionRecord {
                     # fails to parse and is skipped -- the mention then fails
                     # CLOSED to a marker rather than being served half a body.
                     try { $rec = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+                    # PowerShell 6+ auto-converts ISO strings to DateTime. Read
+                    # the original token with its bundled JSON reader so the
+                    # canonical offset/precision survives on old 7.x too.
+                    if ($rec.timestamp -is [datetime]) {
+                        $reader = [Newtonsoft.Json.JsonTextReader]::new([System.IO.StringReader]::new($line))
+                        try {
+                            $reader.DateParseHandling = [Newtonsoft.Json.DateParseHandling]::None
+                            $raw = [Newtonsoft.Json.Linq.JObject]::Load($reader)
+                            $rec.timestamp = [string]$raw['timestamp']
+                        } finally { $reader.Close() }
+                    }
                     if ($rec -and $rec.id -is [string]) { $records[$rec.id] = $rec }
                 }
                 $script:MoeMentionStoreCache[$Channel] = $records
@@ -1325,7 +1336,7 @@ function Get-MoeStoredMentionRecord {
     if ($rec.content -isnot [string]) {
         return @{ ok = $false; reason = 'MOE_MENTION_CONTENT_MISSING' }
     }
-    return @{ ok = $true; content = $rec.content; sender = $rec.sender; channel = $rec.channel }
+    return @{ ok = $true; content = $rec.content; sender = $rec.sender; channel = $rec.channel; timestamp = $rec.timestamp }
 }
 
 function New-MoeVerifiedMention {
@@ -1336,6 +1347,9 @@ function New-MoeVerifiedMention {
     # while every byte of the body verified clean.
     $senderOut = if ($stored.ok -and $stored.sender -is [string]) { $stored.sender } else { $Message.sender }
     $channelOut = if ($stored.ok -and $stored.channel -is [string]) { $stored.channel } else { $Message.channel }
+    # Historical messages need their stored time, never the RPC's claim of
+    # freshness. Unavailable/non-string metadata remains explicitly unknown.
+    $timestampOut = if ($stored.ok -and $stored.timestamp -is [string]) { $stored.timestamp } else { $null }
     if ($stored.ok) {
         $body = $stored.content
         $rpcBody = if ($Message.content -is [string]) { $Message.content } else { '' }
@@ -1359,6 +1373,7 @@ function New-MoeVerifiedMention {
         id         = $Message.id
         channel    = $channelOut
         sender     = $senderOut
+        timestamp  = $timestampOut
         content    = $body
         provenance = $prov
     }
