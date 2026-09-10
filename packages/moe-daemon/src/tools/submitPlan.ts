@@ -373,7 +373,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           keyFiles: params.planningNotes.keyFiles?.slice(0, 50),
         };
       }
-      await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId);
+      // Keep the Task this write returned: its planRevision is the value that
+      // was actually committed with this plan. Reading the cache later would
+      // report a stamp a concurrent write had already moved past.
+      const submitted = await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId);
       // Use the captured assignee because updateTask clears assignedWorkerId on
       // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
       // records and never blocks a successfully submitted plan.
@@ -519,6 +522,9 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         taskId: task.id,
         status: finalStatus,
         stepCount: implementationPlan.length,
+        // The revision committed alongside this plan — the token a later
+        // approval check compares against, not a recomputed value.
+        planRevision: submitted.planRevision,
         distinctFileCount: planSize.distinctFileCount,
         newFileCount: exemptKeys.size,
         ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),

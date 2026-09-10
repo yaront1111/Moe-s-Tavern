@@ -591,6 +591,26 @@ export interface Task {
   definitionOfDone: string[];
   taskRails: string[];
   implementationPlan: ImplementationStep[];
+  /**
+   * Monotonic version of the approval-relevant plan surface
+   * (`implementationPlan` + `definitionOfDone`), owned exclusively by the
+   * daemon: `createTask` stamps 0, and `taskStore.updateTask` derives the next
+   * value inside the SAME task write that persists the surface — every
+   * successful `moe.submit_plan` (even a byte-identical resubmission) plus any
+   * write that actually changes the sanitized steps or DoD, whoever the writer
+   * is. Metadata-only writes keep it; reopen never resets it.
+   *
+   * A caller-supplied value is stripped, so it can be neither forged nor reset.
+   * Optional because records written before this field exist: an absent stamp
+   * is read as 0 (no migration, no schemaVersion bump) and materializes as a
+   * real number on the row's next successful write. The domain is a
+   * non-negative safe integer — shared with the Kotlin/JSON clients' Long — and
+   * a stored value outside it fails closed rather than being coerced.
+   *
+   * Consumers (a stale-approval check, an IDE review dialog) compare the
+   * revision they rendered against this one; see docs/SCHEMA.md.
+   */
+  planRevision?: number;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;
