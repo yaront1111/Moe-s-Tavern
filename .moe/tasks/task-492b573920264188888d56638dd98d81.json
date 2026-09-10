@@ -119,8 +119,8 @@
       "completedAt": "2026-09-10T19:31:11.614Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:13.671Z",
-  "updatedAt": "2026-09-10T19:31:58.053Z",
+  "updatedAt": "2026-09-10T19:36:30.236Z",
   "contextFetchedBy": [
     "governor-c9adec43",
     "architect-fa3e53b1",
@@ -150,7 +150,9 @@
     "firstClaimAt": "2026-09-10T19:10:58.788Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-10T19:36:30.236Z",
+    "wallClockMs": 1531448
   },
   "stepsCompleted": [
     "step-1",
@@ -220,13 +222,45 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "7da080b33007ffa250f1c8a05566b74fb3decc49",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-10T19:17:43Z",
+      "paths": [
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-10T19:32:32.927Z",
+      "treeId": "f81dd145052a02630fa7daa2bdf3ecdc78d120d9",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
-    "at": "2026-09-10T19:31:58.053Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-f2b3ac93@2026-09-10T19:17:43Z",
+    "at": "2026-09-10T19:32:32.927Z"
+  },
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/planRevision.block.tmp",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts"
+  ],
+  "completedAt": "2026-09-10T19:36:30.236Z",
+  "reviewCompletedAt": "2026-09-10T19:36:30.236Z",
+  "reviewSummary": "APPROVED. 5 declared files, 646+/2-, no new files; landed as 8e23c42 plus completion 7da080b (docs/SCHEMA.md + board json) on moe/work-2026-09-10. Tree clean vs HEAD for packages/ and docs/, so tested bytes == landed bytes. Re-ran verification: npm --prefix packages/moe-daemon test -> 103 files / 1219 tests passed, EXIT=0 captured outside a pipe; tsc --noEmit exit 0. DoD1: schema.ts docblock + SCHEMA.md planRevision section, interface field, example JSON, validation line cover ownership, safe-integer domain, create-0, absent-0, no migration; createTask and legacy-record tests prove defaults. DoD2: 0->1, identical resubmit 1->2, changed resubmit, per-task counters, CONTROL/SPEED-delayed/TURBO-immediate each return and persist 1 with no second bump, TASK_UPDATED carries it. DoD3: restart via fresh StateManager().load(); reopen advances once when it clears step evidence, holds when it rewrites nothing; legacy -> 1. DoD4: validation refusal, injected writeEntity rejection on submission and on an in-place DoD change, 7 malformed stored stamps, MAX_SAFE_INTEGER exhaustion, each asserting unchanged bytes, unchanged cached object, zero events, retry advancing once. DoD5: red proof re-established by mutation rather than trusted: dropping the PLAN_SUBMITTED predicate fails 2 tests, coercing instead of throwing in decodeStoredPlanRevision fails 8 (focused file, 77 tests); checkout restored and re-checked in a separate git status. Rails: single choke point in updateTask (the three other direct task writers all spread ...task and touch neither surface field), one bump per write when steps, DoD and event all change, sanitized-vs-sanitized comparison with identical params. tools/index.ts untouched, no approval-policy change, no Wave 1 work, no forbidden patterns. SCHEMA.md correctly states nothing compares revisions yet. Non-blocking: the caller-stamp delete is an equivalent mutant since the derived value is spread last; recorded in the handoff memory."
 }
