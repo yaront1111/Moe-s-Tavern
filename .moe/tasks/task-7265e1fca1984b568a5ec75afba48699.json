@@ -1,0 +1,39 @@
+{
+  "id": "task-7265e1fca1984b568a5ec75afba48699",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Reject stale plan approvals with an expectedPlanRevision on approve",
+  "description": "MoeCommandSender.approveTask(taskId) sends only the task id, and the daemon approve path (taskStore / WebSocketServer) checks status, not which plan revision the human saw. The JetBrains PlanReviewDialog builds DoD and steps once and rerenders only comments on later updates, so a newer submit_plan can be approved from a dialog still showing the old plan. Add a monotonically increasing plan revision to the task (bumped on every submit_plan), accept expectedPlanRevision on the approve command (WS message from the plugins and the MCP tool if one exists), reject with a structured error when it does not match the current revision, and make the JetBrains dialog either rerender the plan on a revision change or disable Approve with a 'plan changed — refresh' notice. VS Code: send the revision too (small). Source: roadmap 2026-09-10 §4 'Fix approval freshness'.",
+  "definitionOfDone": [
+    "task.planRevision exists in docs/SCHEMA.md and is bumped by submit_plan (vitest)",
+    "Approve with a stale expectedPlanRevision returns a structured error and leaves the task in AWAITING_APPROVAL (vitest); approve without the field keeps working for old clients",
+    "JetBrains PlanReviewDialog sends expectedPlanRevision and cannot approve a plan it has not rendered (JUnit test on the dialog model or presenter)",
+    "VS Code approve command sends expectedPlanRevision",
+    "./gradlew test and daemon npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:46.031Z",
+  "updatedAt": "2026-09-10T10:26:57.567Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T10:19:45.220Z"
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee"
+  ],
+  "blockedReason": "Read-only daemon and both-client exploration found two planning constraints needing scope confirmation. (1) Even DoD-minimum coverage requires 14 client files plus daemon/schema/docs/tests, over 20 total and above submit_plan's hard 10-file limit. Proposed dependency slices: daemon durable revision contract; daemon approval CAS/WS errors; JetBrains model+wire; JetBrains reviewed-dialog binding; VS Code model+wire; VS Code rendered-review binding; preserve this task as the final original-DoD integration gate. (2) Bumping only submit_plan does not fence all changes to the plan shown in a dialog: moe.amend_plan_step allows AWAITING_APPROVAL and WS UPDATE_TASK accepts implementationPlan/definitionOfDone. Need the human to confirm whether these in-place edits also increment the revision, or explicitly limit this card's promise to full resubmissions. Asked that question in the REPL; no confirmation received. Do not silently claim immutable plan-content freshness or remove legacy no-field compatibility. No plan submitted, code edited or tests/builds run. Detailed handoff to be saved in Serena.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-10T10:26:57.567Z"
+}
