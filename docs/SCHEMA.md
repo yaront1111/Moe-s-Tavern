@@ -351,6 +351,10 @@ interface Task {
   
   // Implementation Plan (AI-generated)
   implementationPlan: ImplementationStep[];
+
+  // Monotonic version of the approval-relevant plan surface
+  // (implementationPlan + definitionOfDone). Daemon-owned; see `planRevision` below.
+  planRevision?: number;
   
   // Status
   status: TaskStatus;
@@ -567,7 +571,9 @@ effect immediately.
       "affectedFiles": ["src/components/auth/LoginForm.test.tsx"]
     }
   ],
-  
+
+  "planRevision": 1,
+
   "status": "WORKING",
   
   "assignedWorkerId": "worker-w1x2y3z4",
@@ -600,6 +606,30 @@ effect immediately.
 ### `newFiles`
 
 `ImplementationStep.newFiles` (and the `moe.submit_plan` step input) declares the paths a step will **create**. Same normalization and 50-entry cap as `affectedFiles`. Declared paths are exempt from the existence check above, plan-wide — a file declared in step 1's `newFiles` may be cited in step 2's `affectedFiles`. They still count toward the plan-size distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so the exemption cannot be used to dodge either gate. The key is omitted from persisted steps when empty. Do not park files that already exist in `newFiles` to silence the gate — that hides a wrong path from the next worker and from collision detection.
+
+### `planRevision`
+
+`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface** — `implementationPlan` + `definitionOfDone`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
+
+Producer rules, all enforced in `taskStore.updateTask` — the single choke point every plan/DoD writer already routes through (`moe.submit_plan`, `moe.amend_plan_step`, `moe.qa_reject`/reopen step resets, `moe.request_replan`, the plugin `UPDATE_TASK` message):
+
+- **`create_task` stamps 0**, even when the caller ships an initial `implementationPlan` — so the first submission is always 1.
+- **Absent = 0.** A record written before this field existed is read as revision 0. There is **no migration and no `schemaVersion` bump**; the row materializes a real `0`/`1` on its next successful write.
+- **No caller-selected stamp.** A `planRevision` in a tool argument or an `UPDATE_TASK` payload is stripped before the write, so a client can neither forge a newer value nor reset an older one.
+- **+1 for every committed submission**, including a resubmission whose steps are byte-identical to the ones already stored.
+- **+1 for any write that actually changes the sanitized surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not. Every retained key inside a step participates — `status`, `startedAt`/`completedAt`, `note`, `modifiedFiles`, `newFiles`, `amendments`, `activeAmendmentId` — so an amendment or a completed step advances the revision exactly like a re-plan.
+- **One bump per task write.** A write that changes steps *and* DoD *and* carries the submission event advances by exactly 1.
+- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
+- **Reopen never resets it.** `qa_reject` / reopen may *advance* it, because resetting steps to `PENDING` and dropping their execution evidence is a real surface change; an already-pending plan sanitizes equal and holds steady.
+
+Atomicity and errors:
+
+- The derived stamp is placed in the **same fresh `Task` object, and therefore the same `writeEntity` call**, as the plan/DoD it versions. A reader can never see one without the other. If that primary write fails, the revision, the in-memory task, the persisted bytes and the `TASK_UPDATED` publication are all unchanged, and a later retry advances exactly once.
+- A **malformed stored stamp** (`null`, a string, negative, fractional, non-finite, or an unsafe integer) refuses the write with `INVALID_INPUT` rather than coercing or resetting it — fail-closed, on any write, not just submissions.
+- A **required increment at `Number.MAX_SAFE_INTEGER`** refuses with numeric code `STATE_CONFLICT` (-32002) and `codeName` `PLAN_REVISION_EXHAUSTED`, carrying `taskId`/`currentRevision`/`maxPlanRevision`, and throws before anything is persisted. A metadata-only write at that value still succeeds.
+- `moe.submit_plan` returns the committed value as `planRevision` in its success result (never a recomputed or later-cached number).
+
+**Scope note:** this is the *producer* only. Nothing in the daemon yet **compares** a caller's revision against this one — the `expectedPlanRevision` approval check (a stale approval refused with `PLAN_REVISION_MISMATCH`) and the IDE protection that binds an approval to the plan revision actually rendered in the review dialog are separate follow-up slices. Until those land, a stamped revision documents staleness; it does not prevent an approval from landing on a plan the approver never read.
 
 ### Task subtypes
 
@@ -1376,6 +1406,7 @@ function generateId(prefix: string): string {
 - `definitionOfDone` at least 1 item
 - `order` must be unique within epic
 - `status` transitions must be valid (see state machine)
+- `planRevision` is daemon-derived: a caller-supplied value is stripped, and a stored value outside the non-negative safe-integer domain refuses the write (`INVALID_INPUT`)
 
 ### Worker
 - `epicId` must exist

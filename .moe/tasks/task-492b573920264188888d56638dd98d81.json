@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:13.671Z",
-  "updatedAt": "2026-09-10T19:31:53.700Z",
+  "updatedAt": "2026-09-10T19:31:58.053Z",
   "contextFetchedBy": [
     "governor-c9adec43",
     "architect-fa3e53b1",
@@ -189,7 +189,44 @@
     "packages/moe-daemon/src/tools/submitPlan.ts",
     "packages/moe-daemon/src/tools/submitPlan.test.ts",
     "packages/moe-daemon/src/types/schema.ts",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+    ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json"
   ],
-  "completionSummary": "Delivered the daemon-owned plan-revision producer in 5 files (no new files): packages/moe-daemon/src/types/schema.ts, src/state/taskStore.ts, src/tools/submitPlan.ts, src/tools/submitPlan.test.ts, docs/SCHEMA.md.\n\nWHAT LANDED. Task.planRevision is an optional documented number (optional so every historical fixture and on-disk record stays valid; absent reads as 0, no migration and no schemaVersion bump). createTask stamps 0 in its literal even when the caller supplies a stamp and an initial plan. taskStore.updateTask is the single authority: it strips any caller-supplied planRevision beside the existing id/createdAt hardening, then derivePlanRevision() decodes the stored value (undefined => 0, else non-negative Number.isSafeInteger or refuse), structurally compares the sanitized candidate implementationPlan/definitionOfDone against the re-sanitized prior values (array order significant, object key order irrelevant, every retained step/amendment/execution key compared), and returns current+1 exactly once when the event is PLAN_SUBMITTED or either surface actually changed. The stamp goes into the same fresh Task object and the same writeEntity call as the plan/DoD, before the map set, activity append and TASK_UPDATED emit. submit_plan now keeps the Task that write returned and reports its planRevision in the success result.\n\nERROR HANDLING. A malformed stored stamp (null, string, negative, fractional, non-finite, unsafe) refuses via the existing invalidInput helper as INVALID_INPUT with no coercion, on any write. A required bump at Number.MAX_SAFE_INTEGER refuses with numeric STATE_CONFLICT (-32002) and codeName PLAN_REVISION_EXHAUSTED plus taskId/currentRevision/maxPlanRevision. Both throw before any persistence, so revision, cached task, persisted bytes and publication stay unchanged and a retry advances exactly once. Metadata-only writes at the max still succeed.\n\nTESTS. 36 new tests in a planRevision describe using the existing ToolTestHarness (harness file untouc"
+  "completionSummary": "Delivered the daemon-owned plan-revision producer in 5 files (no new files): packages/moe-daemon/src/types/schema.ts, src/state/taskStore.ts, src/tools/submitPlan.ts, src/tools/submitPlan.test.ts, docs/SCHEMA.md.\n\nWHAT LANDED. Task.planRevision is an optional documented number (optional so every historical fixture and on-disk record stays valid; absent reads as 0, no migration and no schemaVersion bump). createTask stamps 0 in its literal even when the caller supplies a stamp and an initial plan. taskStore.updateTask is the single authority: it strips any caller-supplied planRevision beside the existing id/createdAt hardening, then derivePlanRevision() decodes the stored value (undefined => 0, else non-negative Number.isSafeInteger or refuse), structurally compares the sanitized candidate implementationPlan/definitionOfDone against the re-sanitized prior values (array order significant, object key order irrelevant, every retained step/amendment/execution key compared), and returns current+1 exactly once when the event is PLAN_SUBMITTED or either surface actually changed. The stamp goes into the same fresh Task object and the same writeEntity call as the plan/DoD, before the map set, activity append and TASK_UPDATED emit. submit_plan now keeps the Task that write returned and reports its planRevision in the success result.\n\nERROR HANDLING. A malformed stored stamp (null, string, negative, fractional, non-finite, unsafe) refuses via the existing invalidInput helper as INVALID_INPUT with no coercion, on any write. A required bump at Number.MAX_SAFE_INTEGER refuses with numeric STATE_CONFLICT (-32002) and codeName PLAN_REVISION_EXHAUSTED plus taskId/currentRevision/maxPlanRevision. Both throw before any persistence, so revision, cached task, persisted bytes and publication stay unchanged and a retry advances exactly once. Metadata-only writes at the max still succeed.\n\nTESTS. 36 new tests in a planRevision describe using the existing ToolTestHarness (harness file untouc",
+  "commits": [
+    {
+      "sha": "8e23c426bd7fd8f7d3b15d41e48221b09946a9d8",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
+      "paths": [
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-10T19:31:58.053Z",
+      "treeId": "8eb88c313f4fd07723c969a8b31f2c0c830ec238",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
+    "at": "2026-09-10T19:31:58.053Z"
+  }
 }
