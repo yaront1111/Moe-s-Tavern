@@ -123,8 +123,8 @@
       "completedAt": "2026-09-10T18:26:59.538Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -136,12 +136,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:36:25.314Z",
-  "updatedAt": "2026-09-10T18:27:31.988Z",
+  "updatedAt": "2026-09-10T18:31:46.596Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T17:54:15.069Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-10T18:31:46.596Z",
+    "wallClockMs": 2251527
   },
   "contextFetchedBy": [
     "architect-1baec28a",
@@ -265,6 +267,23 @@
       "treeId": "31551077987a4c285a092f5b7ccadc28bb46194c",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "a4d8415b5703b5bfa1c4abb87e90c262311b4896",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-10T18:20:18Z",
+      "paths": [
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-10T18:28:17.987Z",
+      "treeId": "5bba24f7135388fe6cabed5522aba29b7515f317",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -288,9 +307,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-10T18:27:28Z",
-    "at": "2026-09-10T18:27:31.988Z"
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-10T18:20:18Z",
+    "at": "2026-09-10T18:28:17.987Z"
   },
   "workStartedAt": "2026-09-10T18:06:36.774Z",
   "reviewStartedAt": "2026-09-10T18:27:26.329Z",
@@ -300,5 +319,8 @@
     "outputTail": "> Task :compileTestKotlin\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 10s\n11 actionable tasks: 7 executed, 4 up-to-date\n\nJUnit XML (moe-jetbrains/build/test-results/test/): 10 classes / 82 tests / 0 failures / 0 errors / 0 skipped.\nMoeDaemonSupervisorTest 15, MoeProjectConnectionTest 5, MoeProjectServiceTest 2, CreateTaskDialogTest 3, MetricsPanelTest 4, MoeSettingsDialogTest 8 (new), MoeJsonTest 5, MoeProjectInitializerTest 17, MoeProjectRegistryTest 3, TerminalAgentLauncherTest 20.",
     "reportedAt": "2026-09-10T18:27:26.329Z"
   },
-  "completionSummary": "The JetBrains settings dialog now shows the landing and gate policy that actually governs whether a task's bytes reach a branch, and no longer advertises three settings nothing implements.\n\nREMOVED AS LIVE POLICY: autoCreateBranch, branchPattern and commitPattern are gone from the Kotlin ProjectSettings, from parseProjectSettings, from the dialog (checkbox + two text fields + their Git Settings block), from the Save payload, and from MoeCommandSender.updateSettings. Dropping them from the payload clobbers nothing: validateSettingsUpdate builds next from { ...project.settings } and only overwrites keys present in the payload, so any stored value survives and simply stops being presented. MoeProjectInitializer still seeds the three keys on purpose, matching the daemon's own init.\n\nADDED AS READ-ONLY: a \"Landing & Gate Policy (read-only)\" section rendering ten effective values from MoeSettingsDialog.effectivePolicyRows(settings) — Auto-commit, Checkpoint commits, Push checkpoints, Commit board state, Commit hooks, Landing branch, Quality gate, Quality gate scope, Undeclared-file attribution, Plan size limits. Labels, not controls; no route from the section to updateSettings (the only write path is the four editable settings that already existed).\n\nDEFAULTS MIRROR THE DAEMON, applied at read time exactly as the daemon does: getCommitScope.ts:170-178 gives autoCommit/checkpointCommits/checkpointPush/commitBoardState `!== false` (default true), commitHooks `=== true` (default false), attribution.undeclared `?? 'solo'`; the wrapper falls back to epicFinal for qualityGateScope; planSize.ts gives 8/12/5/10 with the max-lifted-to-warn guard. A new strict boolean reader was needed for parity: Gson's asBoolean turns the JSON string \"no\" into false, while the daemon's `\"no\" !== false` is TRUE — the strict helper honours only a real JSON boolean, and a test pins both directions.\n\nLANDING BRANCH TELLS THE TRUTH about the glob distinction: unset shows \"moe/work-<YYYY-MM-DD> (shared"
+  "completionSummary": "The JetBrains settings dialog now shows the landing and gate policy that actually governs whether a task's bytes reach a branch, and no longer advertises three settings nothing implements.\n\nREMOVED AS LIVE POLICY: autoCreateBranch, branchPattern and commitPattern are gone from the Kotlin ProjectSettings, from parseProjectSettings, from the dialog (checkbox + two text fields + their Git Settings block), from the Save payload, and from MoeCommandSender.updateSettings. Dropping them from the payload clobbers nothing: validateSettingsUpdate builds next from { ...project.settings } and only overwrites keys present in the payload, so any stored value survives and simply stops being presented. MoeProjectInitializer still seeds the three keys on purpose, matching the daemon's own init.\n\nADDED AS READ-ONLY: a \"Landing & Gate Policy (read-only)\" section rendering ten effective values from MoeSettingsDialog.effectivePolicyRows(settings) — Auto-commit, Checkpoint commits, Push checkpoints, Commit board state, Commit hooks, Landing branch, Quality gate, Quality gate scope, Undeclared-file attribution, Plan size limits. Labels, not controls; no route from the section to updateSettings (the only write path is the four editable settings that already existed).\n\nDEFAULTS MIRROR THE DAEMON, applied at read time exactly as the daemon does: getCommitScope.ts:170-178 gives autoCommit/checkpointCommits/checkpointPush/commitBoardState `!== false` (default true), commitHooks `=== true` (default false), attribution.undeclared `?? 'solo'`; the wrapper falls back to epicFinal for qualityGateScope; planSize.ts gives 8/12/5/10 with the max-lifted-to-warn guard. A new strict boolean reader was needed for parity: Gson's asBoolean turns the JSON string \"no\" into false, while the daemon's `\"no\" !== false` is TRUE — the strict helper honours only a real JSON boolean, and a test pins both directions.\n\nLANDING BRANCH TELLS THE TRUTH about the glob distinction: unset shows \"moe/work-<YYYY-MM-DD> (shared",
+  "completedAt": "2026-09-10T18:31:46.596Z",
+  "reviewCompletedAt": "2026-09-10T18:31:46.596Z",
+  "reviewSummary": "Read the full diff ccfeb45..HEAD, 8 files +528/-66. moe-jetbrains and docs/CONFIGURATION.md clean at HEAD, so reviewed bytes = committed bytes. Completion commit a4d8415; code landed earlier in checkpoints 93e5222/cd097b4.\n\nRE-RAN TESTS MYSELF: `gradlew.bat test --rerun` inside moe-jetbrains, exit 0, XML 10 classes / 82 tests / 0 failures, files 5s old (real run, not UP-TO-DATE). The recorded command assumes a repo-root gradlew.bat that does not exist; wrapper is only at moe-jetbrains/gradlew{,.bat}.\n\nRED PROVEN BY MUTATION, not from the step note: reverted the strict boolean reader in MoeJson.kt to getBooleanOrDefault and disabled the glob check in MoeSettingsDialog.kt, giving \"13 tests completed, 2 failed\" (MoeJsonTest malformed-settings, MoeSettingsDialogTest glob-is-check-only). Restored under a trap, git status clean, full suite green after.\n\nDoD: the three legacy keys are gone from ProjectSettings, parseProjectSettings, dialog controls, Save payload and MoeCommandSender; grep finds them only in KDoc, the untouched MoeProjectInitializer seed and the test negative list. Ten read-only rows cover autoCommit, checkpointCommits, checkpointPush, commitBoardState, commitHooks, landing branch naming \"moe/work-<YYYY-MM-DD> (shared, default)\" when unset, gate scope and undeclared attribution. Defaults and populated cases both tested plus a settings-less snapshot end-to-end through MoeJson.parseState. CONFIGURATION.md marks the three IGNORED LEGACY and drops them from the example JSON.\n\nDefaults audited against getCommitScope.ts:171-176, planSize.ts 8/12/5/10 with the max lift, moe-agent.sh:6055 epicFinal clamp. All match.\n\nRails hold: rows are JBLabel only and Save still sends just the four editable keys, so no write path was added. No time-budget surface, SCHEMA.md or moe-vscode touched. Retired bundle keys removed with no surviving reference. Row strings HTML-escaped."
 }
