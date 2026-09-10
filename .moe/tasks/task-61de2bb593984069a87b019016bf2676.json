@@ -1,0 +1,47 @@
+{
+  "id": "task-61de2bb593984069a87b019016bf2676",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Fix first-pass approval percent rendered 100x too large in both IDE clients",
+  "description": "Producer packages/moe-daemon/src/util/metrics.ts emits firstPassApprovalPct on a 0..100 scale (Math.round(count/total*100), comment '// 0..100'). Both consumers multiply by 100 again: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt:213 formats it * 100.0, and moe-vscode/src/providers/MetricsViewProvider.ts:295 does Math.round(pct * 100). A 50% rate shows as 5000%. Fix the consumers (keep the producer's documented 0..100 contract) and pin the contract with fixtures on both sides so the unit cannot drift again. Source: roadmap 2026-09-10 §4 'Small corrections'.",
+  "definitionOfDone": [
+    "MetricsPanel.kt renders firstPassApprovalPct 0/50/100 as 0%/50%/100% (JUnit test in moe-jetbrains covers all three values)",
+    "MetricsViewProvider.ts renders the same three values identically",
+    "metrics.ts has a vitest case asserting firstPassApprovalPct is 0..100 for a 1-of-2 first-pass fixture",
+    "docs/SCHEMA.md (or the metrics section of docs/MCP_SERVER.md) states the 0..100 unit explicitly",
+    "./gradlew test and daemon npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-5178e9c0",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:45.300Z",
+  "updatedAt": "2026-09-10T10:19:35.582Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T09:18:48.249Z"
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee",
+    "architect-5178e9c0"
+  ],
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Completed repository exploration and drafted a five-step, five-file consumer percentage fix plan. Complete draft and evidence saved in Serena task-task-61de2bb593984069a87b019016bf2676-handoff. No source edits.",
+      "whatRemains": "Obtain explicit REPL confirmation of the proposed approach, submit the saved plan via moe.submit_plan, and update the handoff with actual submission status.",
+      "pitfalls": "Producer already emits 0..100; documentation DoD already satisfied in docs/MCP_SERVER.md. Preserve pre-existing generated/initFiles.ts and peer board state. Do not claim the draft was submitted or tests ran.",
+      "openQuestions": "Approach confirmation remains outstanding; user requested switching to the next task instead.",
+      "releasedAt": "2026-09-10T09:51:52.345Z",
+      "releasedBy": "architect-6f3113ee",
+      "reason": "User explicitly requested next-task; preserve the prepared plan without treating that request as approval to submit it."
+    }
+  ]
+}

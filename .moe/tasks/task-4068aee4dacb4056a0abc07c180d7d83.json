@@ -1,0 +1,39 @@
+{
+  "id": "task-4068aee4dacb4056a0abc07c180d7d83",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Reconcile QA role doc with moe-qa-loop skill on waiting for the completion commit",
+  "description": "docs/roles/qa.md line 8 tells QA 'Do NOT wait' for task.commits and to stage/land the row's own paths itself, while docs/skills/moe-qa-loop/SKILL.md step 3 says an empty task.commits 'means the evidence is not yet verifiable ... wait for it before reviewing' and never review the dirty shared tree. Agents load both, so QA behaviour is currently whichever text it read last. Pick ONE rule and make both documents state it. Recommended interim rule until the Wave 1 finalize/candidate work lands: wait a bounded time (e.g. poll get_context for task.commits up to ~2 minutes) because the wrapper lands seconds after REVIEW; only if nothing arrives, fall back to the role doc's measured-attribution self-landing procedure, and say so in the qa_approve summary. Keep docs/roles/qa.md under the 40-line lint cap; put the long procedure in qa.reference.md. Role docs reach IDE users only via daemon prebuild + plugin rebuild, so also regenerate packages/moe-daemon/src/generated/initFiles.ts (npm run build). Source: roadmap 2026-09-10 §2.",
+  "definitionOfDone": [
+    "docs/roles/qa.md and docs/skills/moe-qa-loop/SKILL.md give the same instruction for an empty task.commits, including the bounded wait and the fallback",
+    "npm run lint (role-doc linter) passes with qa.md at or under 40 lines",
+    "packages/moe-daemon/src/generated/initFiles.ts regenerated and committed",
+    "A daemon test or doc test asserts the two documents do not contain the contradictory phrases ('Do NOT wait' vs 'wait for it before reviewing') — or an equivalent guard",
+    "Rationale recorded in docs/roles/qa.reference.md pointing at the 2026-09-06 measurement (one completion in three reached REVIEW with bytes only in the dirty tree)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:45.663Z",
+  "updatedAt": "2026-09-10T09:54:04.474Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T09:51:56.372Z"
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee"
+  ],
+  "blockedReason": "Planning needs a human authority decision: the task recommends a bounded wait followed by QA self-landing, and docs/roles/qa.md currently instructs that, but CLAUDE.md's Land on every exit rule says wrappers are the only git actors. Cannot submit a speculative plan authorizing QA to create commits or silently replace the requested fallback. Asked in the REPL whether to use a 2-minute wait then worker/governor escalation with wrapper-only landing; awaiting confirmation. Packaging audit also found the honest scope is 6 files (qa.md, qa.reference.md, moe-qa-loop/SKILL.md, generated/initFiles.ts, generated/skillFiles.ts, and one doc-contract test), so the current planning skill calls for a source-policy/test slice plus a linked generated-artifact delivery slice. No files edited or builds/tests run; preserve existing generated/initFiles.ts dirt. Need approved fallback policy and task-scope reconciliation before submission.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-10T09:54:04.474Z"
+}
