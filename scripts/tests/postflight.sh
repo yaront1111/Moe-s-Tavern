@@ -125,7 +125,21 @@ switch (tool) {
   case 'join_team': ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
+  case 'chat_read': {
+    // FAKE_MENTION=1 models one unread message tagging the caller. The record
+    // is also appended to the store the wrapper re-reads bodies from, so the
+    // mention passes provenance instead of degrading to a delivery marker.
+    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
+      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+      const dir = path.join(moe, 'messages');
+      ensureDir(dir);
+      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
+      ok({ messages: [msg], cursor: null, truncated: 0 });
+      break;
+    }
+    ok({ messages: [], cursor: null, truncated: 0 });
+    break;
+  }
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
@@ -145,6 +159,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-blocked', title: 'Blocked smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.wait_for_task', reason: 'One task per worker: you already hold task-blocked (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
+      // Nothing claimable and nothing held: the board state that used to make
+      // the wrapper launch a CLI and tell it to claim itself.
+      ok({ hasNext: false });
     } else {
       ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
     }
@@ -157,6 +175,11 @@ switch (tool) {
     // so a stale id silently answers with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the real fallback: some OTHER task comes back.
+    if (!args.taskId) {
+      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
+      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
+      break;
+    }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
@@ -2410,12 +2433,77 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario Z2] ok"
 
+  # Scenario AA -- the reproduction. No claimable task, single-shot run (the
+  # harness always passes --no-loop, which is exactly the shape whose fast path
+  # used to be gated off): the wrapper must do its own waiting and launch
+  # NOTHING rather than hand a CLI a prompt telling it to claim. A CLI that ran
+  # here would have edited with no baseline and landed nothing.
+  echo "[scenario AA] a taskless single-shot run never launches an unbound CLI"
+  SCOPE_AA_DIR="$TMP_DIR/scope-aa"
+  make_scope_project "$SCOPE_AA_DIR" '[]'
+  set +e
+  # The single-shot wait is bounded by MOE_TASKLESS_WAIT_SEC; 5s keeps the
+  # scenario inside the harness's per-wrapper timeout instead of idling for the
+  # 300s production default.
+  FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 run_scope_wrapper "$SCOPE_AA_DIR" "$TMP_DIR/scope-aa.out" "$FILE_CLI" worker worker-scope-aa
+  scope_aa_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""
+  [ "$scope_aa_code" -eq 0 ] || scope_fail AA "wrapper exited with $scope_aa_code" "$TMP_DIR/scope-aa.out"
+  if [ -f "$SCOPE_AA_DIR/session-new.txt" ]; then
+    scope_fail AA "a CLI was launched with no task bound -- it would edit with no baseline and land nothing" "$TMP_DIR/scope-aa.out"
+  fi
+  grep -Fq 'MOE_TASKLESS_NO_LAUNCH reason=idle' "$TMP_DIR/scope-aa.out" \
+    || scope_fail AA "the suppressed launch must be named, not silent" "$TMP_DIR/scope-aa.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AA] ok"
+
+  # Scenario AB -- the adoption alarm. The one legitimate taskless launch is a
+  # chat-only session answering a routed mention; it holds no task and so has no
+  # baseline by design. If it nonetheless ends holding one and left the tree
+  # dirty, the wrapper must REFUSE under a named code, leave the bytes alone
+  # (no invented baseline, no staging) and page #governors.
+  echo "[scenario AB] a chat-only session that adopts a task refuses to land, loudly"
+  SCOPE_AB_DIR="$TMP_DIR/scope-ab"
+  make_scope_project "$SCOPE_AB_DIR" '[]'
+  echo peer-base > "$SCOPE_AB_DIR/peer-mod.txt"
+  git -C "$SCOPE_AB_DIR" add peer-mod.txt >/dev/null
+  git -C "$SCOPE_AB_DIR" commit -qm peer-base >/dev/null
+  echo peer-dirty > "$SCOPE_AB_DIR/peer-mod.txt"
+  scope_ab_head="$(git -C "$SCOPE_AB_DIR" rev-parse HEAD)"
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_ADOPTED_TASK_ID=task-adopted MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB_DIR" "$TMP_DIR/scope-ab.out" "$FILE_CLI" worker worker-scope-ab
+  scope_ab_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""; FAKE_ADOPTED_TASK_ID=""
+  [ "$scope_ab_code" -eq 0 ] || scope_fail AB "wrapper exited with $scope_ab_code" "$TMP_DIR/scope-ab.out"
+  [ -f "$SCOPE_AB_DIR/session-new.txt" ] \
+    || scope_fail AB "the chat-only session was never launched, so the adoption path was not exercised" "$TMP_DIR/scope-ab.out"
+  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted' "$TMP_DIR/scope-ab.out" \
+    || scope_fail AB "an adopted task with a dirty tree must refuse under the named code, not exit silently" "$TMP_DIR/scope-ab.out"
+  if [ "$(git -C "$SCOPE_AB_DIR" rev-parse HEAD)" != "$scope_ab_head" ]; then
+    scope_fail AB "the refusal still moved the branch -- nothing may land without a baseline" "$TMP_DIR/scope-ab.out"
+  fi
+  if ! git -C "$SCOPE_AB_DIR" status --porcelain | grep -q '^?? session-new\.txt$'; then
+    git -C "$SCOPE_AB_DIR" status --porcelain >&2 || true
+    scope_fail AB "the adopted session's bytes must stay in the working tree, unstaged" "$TMP_DIR/scope-ab.out"
+  fi
+  if ! git -C "$SCOPE_AB_DIR" status --porcelain | grep -q '^ M peer-mod\.txt$'; then
+    git -C "$SCOPE_AB_DIR" status --porcelain >&2 || true
+    scope_fail AB "the peer's dirty file must be untouched by the refusal" "$TMP_DIR/scope-ab.out"
+  fi
+  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted' "$SCOPE_AB_DIR/.moe/messages/chan-general.jsonl" \
+    || scope_fail AB "the refusal must page #governors, not just print" "$TMP_DIR/scope-ab.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AB] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 26 ]; then
-    echo "Expected 26 commit-scope scenarios (A-P, M2, R-U, W-Z, Z2); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 28 ]; then
+    echo "Expected 28 commit-scope scenarios (A-P, M2, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

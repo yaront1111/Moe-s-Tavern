@@ -3762,6 +3762,15 @@ if ($cliType -eq "grok") {
     }
 }
 $loopEnabled = (($AutoClaim -or $Loop) -and (-not $NoLoop) -and ($PollInterval -gt 0))
+# How long a SINGLE-SHOT wrapper run keeps re-claiming before it gives up and
+# exits without launching anything. A looping run does not use this: its outer
+# relaunch loop is the wait. Same name and same default in moe-agent.sh.
+$moeTasklessWaitSec = 300
+if ($env:MOE_TASKLESS_WAIT_SEC -match '^\d+$') { $moeTasklessWaitSec = [int]$env:MOE_TASKLESS_WAIT_SEC }
+if ($moeTasklessWaitSec -lt 5) { $moeTasklessWaitSec = 5 }
+if ($moeTasklessWaitSec -gt 600) { $moeTasklessWaitSec = 600 }
+$moeTasklessPollSec = 5
+if ($moeTasklessPollSec -gt $moeTasklessWaitSec) { $moeTasklessPollSec = $moeTasklessWaitSec }
 if ($codexInteractive -or $geminiInteractive -or $grokInteractive) {
     # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
@@ -3926,6 +3935,12 @@ do {
     $preflightNoTask = $false
     $preflightIsResume = $false
     $preflightRoutedMentions = @()
+    # Taskless-launch state. A CLI that can edit code is only ever launched
+    # with a task already bound, so these three record WHY a taskless
+    # iteration happened and decide between "launch nothing" and "launch a
+    # chat-only session". Spelled identically in moe-agent.sh.
+    $preflightClaimFailed = $false
+    $preflightHasUnreadMention = $false
     # Land-on-every-exit state. Reset per iteration so nothing leaks across
     # tasks: the session id, the repo probe, the baseline path, the
     # "bytes handled" flag the teardown rescue keys on, and the stream-json
@@ -3987,6 +4002,88 @@ do {
         } else {
             $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
         }
+
+        # Role-group tag for @architects/@workers/@qa routing. Computed HERE
+        # rather than beside the mention extraction below because the
+        # wrapper-side wait needs it first.
+        $roleGroupTag = switch ($Role) { "architect" { "architects" } "worker" { "workers" } "qa" { "qa" } "governor" { "governors" } default { "" } }
+        # Does anything ALREADY unread tag this worker? moe.wait_for_task only
+        # wakes on NEW messages, so entering the wait with an unanswered
+        # mention in hand would sit on it for the whole timeout.
+        if ($preflightGeneralUnread -and $preflightGeneralUnread.messages) {
+            foreach ($msg in $preflightGeneralUnread.messages) {
+                if (-not $msg -or -not $msg.mentions) { continue }
+                foreach ($m in $msg.mentions) {
+                    if ($m -eq $WorkerId -or $m -eq "all" -or ($roleGroupTag -and $m -eq $roleGroupTag)) { $preflightHasUnreadMention = $true; break }
+                }
+                if ($preflightHasUnreadMention) { break }
+            }
+        }
+
+        # -------- Wrapper-side task wait (bind the task BEFORE the launch) ----
+        # NOT moe.wait_for_task, and that is measured rather than preferred:
+        # Invoke-MoeRpc pipes ONE json line into a fresh moe-proxy and closes
+        # stdin, and the proxy treats stdin EOF as shutdown, erroring every
+        # still-open request after a flat 2s grace ("Proxy shutting down before
+        # response received" -- reproduced against a real daemon on
+        # 2026-09-12). A blocking long-poll therefore cannot survive this
+        # transport in either wrapper, so the wait is a bounded CLAIM poll over
+        # the same non-blocking RPC the pre-flight already uses.
+        # The per-task baseline, the live-session marker and the post-flight
+        # landing all key on $preflightTaskId. A CLI told to claim inside
+        # itself therefore edits with no snapshot of what was already dirty
+        # and lands nothing at all, silently. So the WRAPPER does the waiting
+        # and the claiming; the claimed session then falls through the
+        # EXISTING baseline block and the EXISTING launch, with no second
+        # delivery path and no hand-made baseline anywhere.
+        #
+        # Skipped for: a claim that already succeeded or that reported a held
+        # task (the resume path owns that), the governor (never claims;
+        # taskless is its normal state), AutoClaim=false (the operator opted
+        # out of the whole claim/baseline/landing path), and a pending unread
+        # mention (answered by a chat-only session below instead of waited on).
+        if ($AutoClaim -and $Role -ne 'governor' -and -not $preflightHasUnreadMention -and $null -ne $claim) {
+            $claimHeldTaskId = ""
+            if ($claim.PSObject.Properties['alreadyAssigned'] -and $claim.alreadyAssigned -and $claim.alreadyAssigned.taskId) {
+                $claimHeldTaskId = [string]$claim.alreadyAssigned.taskId
+            }
+            if (-not $claim.hasNext -and -not $claimHeldTaskId -and $loopEnabled) {
+                # The outer relaunch loop IS the wait: it sleeps $PollInterval
+                # and re-runs this pre-flight. Adding a second loop here would
+                # duplicate it; the launch below is suppressed instead.
+                Write-Host "[no-task] No claimable task for role $Role; not launching a CLI without one - the wrapper polls again in ${PollInterval}s." -ForegroundColor DarkGray
+            } elseif (-not $claim.hasNext -and -not $claimHeldTaskId) {
+                # Single-shot run (-NoLoop / -PollInterval 0): there is no next
+                # iteration, so the waiting happens HERE rather than in a CLI
+                # told to claim itself. Idle waiting is NOT a resume attempt --
+                # the resume budget counts relaunches at a HELD task -- so no
+                # resume counter is touched.
+                Write-Host "[no-task] No claimable task for role $Role; waiting up to ${moeTasklessWaitSec}s in the wrapper (single-shot run) rather than launching a CLI without one." -ForegroundColor DarkGray
+                $tasklessWaited = 0
+                while ($tasklessWaited -lt $moeTasklessWaitSec) {
+                    Start-Sleep -Seconds $moeTasklessPollSec
+                    $tasklessWaited += $moeTasklessPollSec
+                    $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+                    if ($null -eq $claim) {
+                        # Unreachable daemon/proxy. Falling through to a launch
+                        # is exactly the hole being closed, so stop waiting and
+                        # let the seat exit without an unbound CLI.
+                        Write-Host "[WARN] claim_next_task stopped answering during the wait; not launching an unbound CLI." -ForegroundColor Yellow
+                        $preflightClaimFailed = $true
+                        break
+                    }
+                    $claimHeldTaskId = ""
+                    if ($claim.PSObject.Properties['alreadyAssigned'] -and $claim.alreadyAssigned -and $claim.alreadyAssigned.taskId) {
+                        $claimHeldTaskId = [string]$claim.alreadyAssigned.taskId
+                    }
+                    if ($claim.hasNext -or $claimHeldTaskId) {
+                        Write-Host "[no-task] A claimable task appeared after ${tasklessWaited}s; claimed in the wrapper." -ForegroundColor Green
+                        break
+                    }
+                }
+            }
+        }
+        # -------- End wrapper-side task wait --------
         if ($null -ne $claim) {
             # Resume signal: hasNext:false + alreadyAssigned means THIS worker
             # still holds an active task from a previous CLI session that died
@@ -4130,8 +4227,15 @@ do {
                 Write-Host "[OK] Pre-flight complete. ${preflightVerb}: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
             } else {
                 $preflightNoTask = $true
-                Write-Host "[INFO] No claimable task for role $Role. Agent will wait_for_task." -ForegroundColor Yellow
+                Write-Host "[INFO] No claimable task for role $Role after the wrapper-side wait." -ForegroundColor Yellow
             }
+        } elseif ($AutoClaim -and $Role -ne 'governor') {
+            # Same hole as the taskless prompt, different trigger: an
+            # unanswered claim RPC used to render the in-agent claim chain,
+            # which is a CLI editing with no baseline and no landing. Back off
+            # and let the outer loop retry instead.
+            $preflightClaimFailed = $true
+            Write-Host "[WARN] Pre-flight claim RPC failed; not falling back to an in-agent claim (that session would have no baseline and would land nothing)." -ForegroundColor Yellow
         } else {
             Write-Host "[WARN] Pre-flight claim RPC failed; falling back to in-agent claim." -ForegroundColor Yellow
         }
@@ -4141,7 +4245,6 @@ do {
         # <routed_mentions> banner injected below gives the model a focused list.
         # Match directly on workerId, on @all, or on the role-group tag this
         # worker belongs to (architects/workers/qa).
-        $roleGroupTag = switch ($Role) { "architect" { "architects" } "worker" { "workers" } "qa" { "qa" } "governor" { "governors" } default { "" } }
         $buckets = @()
         if ($preflightGeneralUnread -and $preflightGeneralUnread.messages) { $buckets += ,$preflightGeneralUnread.messages }
         if ($preflightTaskUnread    -and $preflightTaskUnread.messages)    { $buckets += ,$preflightTaskUnread.messages }
@@ -4198,7 +4301,7 @@ do {
     # mentions. Claiming later inside that CLI bypasses the task baseline and
     # postflight, both keyed to the preflight task id. Return to the wrapper.
     $notificationPrompt = $null
-    if ($AutoClaim -and $preflightNoTask -and -not $preflightOk -and $Role -ne 'governor' -and $cliType -eq 'claude' -and -not $Interactive -and $loopEnabled) {
+    if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor') {
         $notificationPrompt = "This is a notification-only session for workerId=$WorkerId. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
     }
     if ($preflightOk) {
@@ -4552,7 +4655,29 @@ $mentionsJson
     }
 
     $script:CliLaunchedAt = Get-Date
-    if ($cliType -eq "codex") {
+
+    # -------- Single taskless launch decision (all CLI types) --------
+    # No task bound means no baseline, no live-session marker and no landing,
+    # so the ONLY thing such a session may do is answer chat. With nothing to
+    # answer there is nothing for a CLI to do at all: skip the spawn and let
+    # the outer loop (or this single-shot run) end. Deliberately NOT gated on
+    # $loopEnabled -- a -NoLoop run has already done its waiting in the
+    # wrapper, so launching an unbound CLI here would be the very defect this
+    # closes rather than a fallback. Governor keeps its terminal; AutoClaim=false
+    # is the operator owning the session.
+    $moeSkipLaunch = $false
+    if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor' `
+        -and ($preflightRoutedMentions.Count -eq 0)) {
+        $moeSkipLaunch = $true
+    }
+    if ($moeSkipLaunch) {
+        if ($preflightClaimFailed) {
+            Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
+        } else {
+            Write-Host "MOE_TASKLESS_NO_LAUNCH reason=idle role=$Role worker=$WorkerId - no claimable task and nothing to answer." -ForegroundColor DarkGray
+        }
+        $script:CliExitCode = 0
+    } elseif ($cliType -eq "codex") {
         # Check codex is available
         $codexCheck = Get-Command $Command -ErrorAction SilentlyContinue
         if (-not $codexCheck) {
@@ -4812,20 +4937,10 @@ $mentionsJson
         $grokEffortArgs = @()
         if (-not [string]::IsNullOrWhiteSpace($env:MOE_GROK_EFFORT)) { $grokEffortArgs = @("--effort", $env:MOE_GROK_EFFORT) }
 
-        # No-task fast path, ported from the claude branch (same gates, same
-        # reasoning): a headless session whose only job would be to park in
-        # moe.wait_for_task is skipped and the outer loop polls instead.
-        # Governor is excluded (it never claims and still needs its terminal),
-        # -NoLoop must still launch (there is no next iteration), and routed
-        # mentions already consumed by the pre-flight chat_read must reach a
-        # CLI. An interactive grok TUI never loops ($loopEnabled is false), so
-        # this only ever fires for headless runs.
+        # The taskless launch decision is taken ONCE for every CLI type
+        # before this dispatch ($moeSkipLaunch), so this branch only runs when
+        # a CLI really is launching.
         $grokLaunchSkipped = $false
-        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor' -and $loopEnabled -and (-not $grokInteractive) -and ($preflightRoutedMentions.Count -eq 0)) {
-            Write-Host "[no-task] Skipping CLI launch — wrapper will poll again in $PollInterval s." -ForegroundColor DarkGray
-            $script:CliExitCode = 0
-            $grokLaunchSkipped = $true
-        }
 
         if (-not $grokLaunchSkipped) {
             # Per-iteration prompt file. Grok has no --prompt flag and does not
@@ -4953,34 +5068,10 @@ $mentionsJson
         $modelArgs = @()
         if ($resolvedModel) { $modelArgs = @("--model", $resolvedModel) }
 
-        # No-task fast path: when the pre-flight reports no claimable task, skip
-        # launching the CLI entirely. The outer do/while loop will sleep
-        # PollInterval seconds and retry pre-flight. Avoids paying for a CLI
-        # session whose only job would be to call moe.wait_for_task.
-        #
-        # Governor is excluded: governors never claim tasks (preflightNoTask is
-        # synthesized true on every iteration), but they DO need an interactive
-        # Claude session so the human can drive governance decisions. Skipping
-        # the launch would leave the governor terminal dead.
-        #
-        # Gated on $loopEnabled: with -NoLoop (or -PollInterval 0) there is no
-        # next iteration — skipping would print "will poll again" and then exit
-        # without ever launching, a silent no-op. Single-shot runs must still
-        # launch the CLI, which parks in moe.wait_for_task.
-        #
-        # Gated on routed mentions: pre-flight chat_read already consumed the
-        # unread messages and baked @mentions into the prompt; skipping the
-        # launch would discard them permanently. If anything tagged this
-        # worker, launch so the CLI can reply.
-        if ($AutoClaim -and $preflightNoTask -and $Role -ne 'governor' -and $loopEnabled -and ($preflightRoutedMentions.Count -eq 0)) {
-            Write-Host "[no-task] Skipping CLI launch — wrapper will poll again in $PollInterval s." -ForegroundColor DarkGray
-            $script:CliExitCode = 0
-            # Jump past the launch block to the post-flight cleanup.
-            $launchSkipped = $true
-        } else {
-            $launchSkipped = $false
-        }
-
+        # The taskless launch decision is taken ONCE for every CLI type before
+        # this dispatch ($moeSkipLaunch), so this branch only runs when a CLI
+        # really is launching.
+        $launchSkipped = $false
         if (-not $launchSkipped) {
             # Windows CreateProcess caps the total command line at ~32K UTF-16 chars
             # (~8K through cmd.exe). $claimPrompt — claimed_task_context + inbox +
@@ -5375,6 +5466,45 @@ $mentionsJson
         # deliberately KEPT for the next pre-flight to recover — which only
         # works if the marker is gone. Same as the sh twin.
         if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId }
+    } elseif ($AutoClaim -and -not $moeSkipLaunch) {
+        # -------- Adoption boundary (the alarm, not the fix) --------
+        # This session launched WITHOUT a task, so it took no baseline: the
+        # wrapper cannot tell this session's bytes from a live peer's work in
+        # progress or from dirt that predated it. If it nonetheless ends up
+        # holding a task -- an agent ignoring its chat-only prompt, or a launch
+        # path nobody has written yet -- the honest outcome is a loud refusal,
+        # not silence and not a fabricated baseline. get_context with only a
+        # workerId resolves the caller's held task and has no side effects;
+        # claim_next_task would CLAIM one, so it must never be used here.
+        $adoptedTaskId = ""
+        try {
+            $adoptResp = Invoke-MoeRpc -Tool "get_context" -Args @{ workerId = $WorkerId }
+            if ($adoptResp -and $adoptResp.task -and $adoptResp.task.PSObject.Properties['id'] -and $adoptResp.task.id) {
+                $adoptedTaskId = [string]$adoptResp.task.id
+            }
+        } catch { $adoptedTaskId = "" }
+        if ($adoptedTaskId) {
+            if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
+            $adoptedDirty = @()
+            if ($moeGit) {
+                try {
+                    $adoptedStatus = & git -C $moeGit.Top status --porcelain=v1 -z --untracked-files=all --no-renames 2>$null
+                    $adoptedDirty = @(($adoptedStatus -join "") -split "`0" | Where-Object { $_ -and $_.Length -gt 3 })
+                } catch { $adoptedDirty = @() }
+            }
+            if ($adoptedDirty.Count -eq 0) {
+                Write-Host "[adoption] Session started with no task and now holds $adoptedTaskId, but the tree is clean - nothing to land." -ForegroundColor Cyan
+            } else {
+                # No baseline means no safe attribution, and the task rails
+                # forbid inventing one or staging the tree. Say what that costs.
+                Write-Host "MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=$adoptedTaskId worker=$WorkerId dirty=$($adoptedDirty.Count) - this session launched without a task, so no pre-edit baseline exists and its bytes CANNOT be separated from a peer's work in progress. Refusing to land; $($adoptedDirty.Count) dirty path(s) stay in the working tree and the NEXT session of $adoptedTaskId will snapshot them as pre-existing. A human must land or discard them." -ForegroundColor Red
+                if ($generalChannelId) {
+                    $adoptMsg = "@governors ${WorkerId}: MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=$adoptedTaskId - a session launched with no task ended holding one and left $($adoptedDirty.Count) dirty path(s) unlanded. No pre-edit baseline exists, so the wrapper will not guess which bytes are its own. Needs a human."
+                    try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $adoptMsg } | Out-Null } catch {}
+                }
+            }
+        }
+        # -------- End adoption boundary --------
     }
     # Session-ended chat line carries the landing summary, so it runs AFTER
     # the landing; the loop `break` for gate/peel failures happens after it.

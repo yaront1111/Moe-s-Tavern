@@ -141,7 +141,21 @@ switch (tool) {
   case 'join_team': ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
+  case 'chat_read': {
+    // FAKE_MENTION=1 models one unread message tagging the caller. The record
+    // is also appended to the store the wrapper re-reads bodies from, so the
+    // mention passes provenance instead of degrading to a delivery marker.
+    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
+      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+      const dir = path.join(moe, 'messages');
+      ensureDir(dir);
+      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
+      ok({ messages: [msg], cursor: null, truncated: 0 });
+      break;
+    }
+    ok({ messages: [], cursor: null, truncated: 0 });
+    break;
+  }
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
@@ -160,6 +174,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
+      // Nothing claimable and nothing held: the board state that used to make
+      // the wrapper launch a CLI and tell it to claim itself.
+      ok({ hasNext: false });
     } else {
       ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
     }
@@ -172,6 +190,14 @@ switch (tool) {
     // so a stale id silently answers with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the real fallback: some OTHER task comes back.
+    // get_context with NO taskId is the post-flight adoption probe
+    // (getContext.ts falls back to the caller's currentTaskId). Every other
+    // caller passes a taskId, so this cannot disturb the other scenarios.
+    if (!args.taskId) {
+      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
+      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
+      break;
+    }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
@@ -1820,11 +1846,97 @@ switch (tool) {
                 $scopeScenariosRun++
                 Write-Host '[scenario Z] ok'
 
+                # Scenario AA -- the reproduction. No claimable task, single-shot
+                # run (Invoke-GateWrapper always passes -NoLoop, exactly the
+                # shape whose fast path used to be gated off): the wrapper must
+                # do its own waiting and launch NOTHING rather than hand a CLI a
+                # prompt telling it to claim. A CLI that ran here would have
+                # edited with no baseline and landed nothing.
+                Write-Host '[scenario AA] a taskless single-shot run never launches an unbound CLI'
+                $scopeAADir = Join-Path $tempRoot 'scope-aa'
+                New-ScopeProject $scopeAADir @()
+                $scopeAAOut = Join-Path $tempRoot 'scope-aa.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                # The single-shot wait is bounded by MOE_TASKLESS_WAIT_SEC; 5s
+                # keeps the scenario inside the harness's per-wrapper timeout
+                # instead of idling for the 300s production default.
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AA' (Invoke-GateWrapper $scopeAADir $scopeAAOut 'REVIEW' $createFileCmd 'worker' 'worker-scope-aa') $scopeAAOut
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                if (Test-Path (Join-Path $scopeAADir 'session-new.txt')) {
+                    Get-Content $scopeAAOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO AA FAILED: a CLI was launched with no task bound -- it would edit with no baseline and land nothing'
+                }
+                $scopeAAText = Get-Content -Raw -Path $scopeAAOut
+                if (-not $scopeAAText.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle')) {
+                    Write-Host $scopeAAText
+                    throw 'SCENARIO AA FAILED: the suppressed launch must be named, not silent'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AA] ok'
+
+                # Scenario AB -- the adoption alarm. The one legitimate taskless
+                # launch is a chat-only session answering a routed mention; it
+                # holds no task and so has no baseline by design. If it
+                # nonetheless ends holding one and left the tree dirty, the
+                # wrapper must REFUSE under a named code, leave the bytes alone
+                # (no invented baseline, no staging) and page #governors.
+                Write-Host '[scenario AB] a chat-only session that adopts a task refuses to land, loudly'
+                $scopeABDir = Join-Path $tempRoot 'scope-ab'
+                New-ScopeProject $scopeABDir @()
+                Set-Content -Path (Join-Path $scopeABDir 'peer-mod.txt') -Value 'peer-base'
+                & git -C $scopeABDir add peer-mod.txt 2>$null | Out-Null
+                & git -C $scopeABDir commit -qm peer-base 2>$null | Out-Null
+                Set-Content -Path (Join-Path $scopeABDir 'peer-mod.txt') -Value 'peer-dirty'
+                $scopeABHead = ((& git -C $scopeABDir rev-parse HEAD 2>$null) -join '')
+                $scopeABOut = Join-Path $tempRoot 'scope-ab.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                $env:FAKE_MENTION = '1'
+                $env:FAKE_ADOPTED_TASK_ID = 'task-adopted'
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AB' (Invoke-GateWrapper $scopeABDir $scopeABOut 'REVIEW' $createFileCmd 'worker' 'worker-scope-ab') $scopeABOut
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_MENTION -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_ADOPTED_TASK_ID -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                if (-not (Test-Path (Join-Path $scopeABDir 'session-new.txt'))) {
+                    Get-Content $scopeABOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO AB FAILED: the chat-only session was never launched, so the adoption path was not exercised'
+                }
+                $scopeABText = Get-Content -Raw -Path $scopeABOut
+                if (-not $scopeABText.Contains('MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted')) {
+                    Write-Host $scopeABText
+                    throw 'SCENARIO AB FAILED: an adopted task with a dirty tree must refuse under the named code, not exit silently'
+                }
+                if (((& git -C $scopeABDir rev-parse HEAD 2>$null) -join '') -ne $scopeABHead) {
+                    throw 'SCENARIO AB FAILED: the refusal still moved the branch -- nothing may land without a baseline'
+                }
+                $scopeABStatus = @(& git -C $scopeABDir status --porcelain 2>$null)
+                if ($scopeABStatus -notcontains '?? session-new.txt') {
+                    throw "SCENARIO AB FAILED: the adopted session's bytes must stay in the working tree, unstaged; status was [$($scopeABStatus -join '|')]"
+                }
+                if ($scopeABStatus -notcontains ' M peer-mod.txt') {
+                    throw "SCENARIO AB FAILED: the peer's dirty file must be untouched by the refusal; status was [$($scopeABStatus -join '|')]"
+                }
+                $scopeABChat = Get-Content -Raw -Path (Join-Path $scopeABDir '.moe\messages\chan-general.jsonl') -ErrorAction SilentlyContinue
+                if (-not ($scopeABChat -and $scopeABChat.Contains('MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted'))) {
+                    throw 'SCENARIO AB FAILED: the refusal must page #governors, not just print'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AB] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 26) {
-                    throw "Expected 26 commit-scope scenarios (A-V, M2, X-Z); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 28) {
+                    throw "Expected 28 commit-scope scenarios (A-V, M2, X-Z, AA, AB); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

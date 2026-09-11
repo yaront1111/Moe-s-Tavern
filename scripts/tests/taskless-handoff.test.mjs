@@ -25,7 +25,7 @@ const engines = windows
   : [['bash', '/bin/bash']];
 
 function render(engine, executable, options = {}) {
-  const o = { role: 'worker', cli: 'claude', interactive: false, loop: true, auto: true, claimed: false, noTask: true, resume: false, ...options };
+  const o = { role: 'worker', cli: 'claude', interactive: false, loop: true, auto: true, claimed: false, noTask: true, resume: false, claimFailed: false, ...options };
   const bool = value => String(value);
   let script;
   if (engine === 'bash') {
@@ -34,6 +34,7 @@ CLAUDE_INTERACTIVE=${bool(o.interactive)}; GROK_INTERACTIVE=false
 LOOP_ENABLED=${bool(o.loop)}; AUTO_CLAIM=${bool(o.auto)}
 PREFLIGHT_OK=${bool(o.claimed)}; PREFLIGHT_NO_TASK=${bool(o.noTask)}
 PREFLIGHT_IS_RESUME=${bool(o.resume)}; PREFLIGHT_TASK_ID=${o.claimed ? 'task-fixture' : ''}
+PREFLIGHT_CLAIM_FAILED=${bool(o.claimFailed)}
 PREFLIGHT_ROUTED_MENTIONS_COUNT=1; PREFLIGHT_ROUTED_MENTIONS_JSON='[{"content":"reply-fixture"}]'
 STATUSES='["WORKING"]'; PROJECT=/nonexistent-moe-prompt-fixture
 `;
@@ -45,6 +46,7 @@ $Interactive=$${bool(o.interactive)}; $grokInteractive=$false
 $loopEnabled=$${bool(o.loop)}; $AutoClaim=$${bool(o.auto)}
 $preflightOk=$${bool(o.claimed)}; $preflightNoTask=$${bool(o.noTask)}
 $preflightIsResume=$${bool(o.resume)}; $preflightTaskId='${o.claimed ? 'task-fixture' : ''}'
+$preflightClaimFailed=$${bool(o.claimFailed)}
 $preflightRoutedMentions=@([pscustomobject]@{content='reply-fixture'})
 $statuses=@('WORKING'); $serenaProject=[IO.Path]::GetTempPath()
 `;
@@ -88,14 +90,38 @@ for (const [engine, executable] of engines) {
         'a taskless notification must not require a task terminal call before exit');
     });
   }
+  // Every taskless launch a CLAIMING role can reach under AutoClaim is
+  // chat-only. The wrapper does the waiting and the claiming now, so a session
+  // that may edit code is never launched without a task bound -- which is the
+  // only way it can have the per-task baseline, the live-session marker and the
+  // post-flight landing, all of which key on the pre-flight task id. These four
+  // shapes used to render the claim invitation and are the reproduction.
+  for (const [name, options] of [
+    ['interactive', { interactive: true }],
+    ['no-loop', { loop: false }],
+    ['other CLI', { cli: 'codex' }],
+    ['claim RPC failure', { noTask: false, claimFailed: true }],
+  ]) {
+    test(`${engine}: taskless ${name} launch is chat-only and never claims`, () => {
+      const rendered = render(engine, executable, options);
+      for (const [part, prompt] of Object.entries({ context: rendered.context, body: rendered.body })) {
+        assert.match(prompt, /notification-only session/, `${part} must not invite an untracked claim`);
+        assert.match(prompt, /moe\.chat_send/, `${part} must still route the mention reply`);
+        assert.match(prompt, /Do NOT call moe\.wait_for_task or moe\.claim_next_task/,
+          `${part} must forbid claiming: this session has no baseline`);
+        assert.match(prompt, /edit project files/, `${part} must forbid editing without a baseline`);
+      }
+      assert.doesNotMatch(rendered.combined, /FIRST action MUST be moe\.wait_for_task/);
+      assert.doesNotMatch(rendered.combined, /When it (?:returns|wakes) (?:with )?hasNext:true/);
+    });
+  }
   for (const [name, options, expected] of [
-    ['interactive', { interactive: true }, /FIRST action MUST be moe\.wait_for_task/],
-    ['no-loop', { loop: false }, /FIRST action MUST be moe\.wait_for_task/],
-    ['other CLI', { cli: 'codex' }, /FIRST action MUST be moe\.wait_for_task/],
     ['governor', { role: 'governor' }, /moe\.chat_wait/],
     ['claimed', { claimed: true, noTask: false }, /Task task-fixture is claimed/],
     ['resume', { claimed: true, noTask: false, resume: true }, /RESUME:.*task-fixture/],
-    ['preflight failure', { noTask: false }, /Then (?:use the MCP tool|call) moe\.claim_next_task/],
+    // AutoClaim=false is the operator opting OUT of wrapper claiming, baseline
+    // and landing altogether, so the in-CLI claim chain is still correct there
+    // -- and it renders no PROMPT_BODY at all, only the dynamic context.
     ['manual launch', { auto: false }, /FIRST action MUST be moe\.wait_for_task/],
   ]) {
     test(`${engine}: preserves ${name} prompt contract`, () => {
@@ -104,4 +130,38 @@ for (const [engine, executable] of engines) {
       assert.match(rendered.combined, expected);
     });
   }
+}
+
+// ---- Wrapper-side wait + adoption boundary: assert the GUARDS, in both
+// wrappers. These live outside the rendered prompt slices (pre-flight and
+// post-flight), and a fix that lands in only one wrapper is the failure mode
+// this repository has shipped before, so every case is checked twice.
+const wrappers = [['moe-agent.ps1', ps], ['moe-agent.sh', sh]];
+for (const [name, src] of wrappers) {
+  // The wait is a bounded CLAIM poll, not moe.wait_for_task: the wrappers pipe
+  // one JSON line into a fresh moe-proxy and close stdin, and the proxy errors
+  // every still-open request ~2s after EOF, so a blocking long-poll cannot
+  // survive that transport. A looping run's wait is its own relaunch loop; a
+  // single-shot run does the waiting here.
+  test(`${name}: a single-shot run waits in the wrapper instead of in the CLI`, () => {
+    assert.ok(src.includes('in the wrapper (single-shot run) rather than launching a CLI without one.'),
+      'a --no-loop taskless run must keep re-claiming in the wrapper, not hand an unbound CLI the claim');
+    assert.ok(src.includes('the wrapper polls again in'),
+      'a looping taskless run must say the wrapper (not the CLI) will retry');
+  });
+  test(`${name}: a taskless iteration never launches an unbound editing CLI`, () => {
+    for (const reason of ['reason=idle', 'reason=claim-failed']) {
+      assert.ok(src.includes(`MOE_TASKLESS_NO_LAUNCH ${reason}`),
+        `missing the suppressed-launch outcome "${reason}" -- every taskless exit of the wait must be named, not silent`);
+    }
+  });
+  // The alarm for a path nobody wrote: a session launched WITHOUT a task that
+  // ends holding one has no pre-edit baseline, so it must refuse to land under
+  // a named code rather than exit silently. Behaviour is proven end-to-end by
+  // scenario AB in scripts/tests/postflight.{sh,ps1}; this only pins that both
+  // wrappers carry the code (parity-check enforces the MOE_COMMIT_ family too).
+  test(`${name}: an adopted task with no baseline has a named refusal`, () => {
+    assert.ok(src.includes('MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE'),
+      'an adopted task with a dirty tree must produce a named refusal, not silence');
+  });
 }
