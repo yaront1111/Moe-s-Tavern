@@ -28,39 +28,62 @@
     {
       "stepId": "step-2",
       "description": "DECLARE THE RECORD AND GIVE IT A HOME. In packages/moe-daemon/src/types/schema.ts add an exported Candidate interface carrying id, attemptId, taskId, baseRevision, the tree or commit sha the runner reported, the intended delivery target, and createdAt. Document two things in the comment because they are the whole point of the record. First, immutability: a candidate names a fixed set of bytes, so a changed tree produces a NEW candidate with a new id rather than an edit to this one - there is deliberately no updatedAt field, and adding one later would be a design regression. Second, provenance: the sha is what the runner REPORTED, not something the daemon observed, because an epic rail keeps git entirely out of the daemon - so the field name and comment must not imply the daemon verified it. Keep the addition purely additive with no schemaVersion bump and no migration, matching how the plan-revision and attempt records were added. Then wire the collection into packages/moe-daemon/src/state/StateManager.ts with the two minimal edits the store needs: a candidates map declared beside the existing resources and attempts maps, and one loadEntities call in load over the candidates directory, which tolerates a missing directory so a project that has never recorded one loads empty.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/StateManager.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Session is wrapper-bound this time: pre-flight claimed the task and wrote a fresh baseline (.git/moe/baseline/task-4d7074c0....tsv at=2026-09-11T10:41:02Z, head=0fc21ec, landed=0). That clears the session-scoped block the governor lifted.\n\nschema.ts (+38, purely additive): `export interface Candidate { id; attemptId; taskId; baseRevision; treeSha; deliveryTarget; createdAt }`, placed after ExecutionAttempt under its own section banner. It has no updatedAt and no schemaVersion bump. The comment covers IMMUTABILITY (a changed tree gets a new id; a same-id record that differs is refused; no update path) and PROVENANCE (baseRevision/treeSha are runner-REPORTED and the daemon never observed or verified them, because it runs no git).\n\nField names are taken EXACTLY from the frozen held-out contract in packages/moe-daemon/src/delivery/acceptance.test.ts:28-46 (task-30df41a8): the persisted Candidate is {id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt (daemon clock)}. That lets the unskip owners bind without an alias. `treeSha` is neutral and does not imply verification; the comment says it is runner-reported.\n\nStateManager.ts (+5): a `Candidate` type import, a `candidates = new Map<string, Candidate>()` beside `attempts`, and one `loadEntities<Candidate>(.moe/candidates)` line in load(). loadEntities tolerates a missing dir, so the map loads empty with no scaffolding.\n\n`npx tsc --noEmit -p tsconfig.json` (packages/moe-daemon): TSC_EXIT=0.\n\nGotcha: Serena replace_content rewrote the LF file StateManager.ts entirely as CRLF. I restored LF with python, so the git diff is 5 lines. Peer dirty paths (.moe/tasks/*, moe-vscode/media/board.js, moe-vscode/tests/task-time-budget.test.cjs, src/delivery/) are untouched.",
+      "startedAt": "2026-09-11T10:43:23.566Z",
+      "completedAt": "2026-09-11T10:44:58.126Z"
     },
     {
       "stepId": "step-3",
       "description": "WRITE THE STORE, WITH NO UPDATE PATH AT ALL. Create packages/moe-daemon/src/state/candidateStore.ts as stateless exported functions taking the StateManager first, mirroring resourceStore, with a header comment stating that callers hold the state mutex. Functions: recordCandidate, getCandidate, listCandidatesForTask and listCandidatesForAttempt - and deliberately NO update or patch function, which is a task rail. Not merely 'do not call it': the function must not exist, so a later caller cannot find one to misuse. recordCandidate persists with writeEntity BEFORE touching the map, so a failed write leaves no candidate visible anywhere. Its rules: reject a record whose id already exists with a named immutability error, UNLESS every field of the incoming record is identical to the stored one, in which case return the stored record unchanged - that single exception is what makes a retry after a crash idempotent rather than a spurious failure, and it is not a mutation because nothing changes. A same-id record differing in ANY field is the error case, and the error message must say plainly that a changed tree needs a new candidate. Validate inputs rather than coercing them: the attempt id, task id, base revision, sha and delivery target are non-blank strings, and the sha matches a hexadecimal shape with a sensible length bound - reuse the shape recordCommit.ts already uses rather than inventing a second one. Error handling throughout uses MoeError with an explicit stable codeName so callers can branch on a name, reusing an existing numeric code rather than adding an enum member. The two list functions filter the in-memory map and return in a deterministic order - createdAt then id, so a tie cannot make test output flaky.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "TDD. I wrote the store test file FIRST, then an export-only stub. RED against the stub: `npx vitest run src/state/candidateStore.test.ts` gave EXIT=1, 32 failed | 2 passed (34), every failure \"Error: not implemented\". The 2 that passed are the export-list test and the empty-load test. After the real store: EXIT=0, 34 passed (34). `npx tsc --noEmit -p tsconfig.json` EXIT=0.\n\ncandidateStore.ts (LF, 223 lines; every function is 50 lines or fewer). It exports exactly getCandidate, listCandidatesForTask, listCandidatesForAttempt, recordCandidate and validateCandidateParams. There is NO update/patch/delete function, and a test asserts the exact runtime export list, so adding one fails the suite.\n\nRules:\n- writeEntity runs BEFORE map.set.\n- A same-id record is compared on every caller field (attemptId, taskId, baseRevision, treeSha, deliveryTarget).\n  - Identical: it returns the stored copy with duplicate:true and writes nothing.\n  - Any difference: MoeError STATE_CONFLICT (-32002) with codeName CANDIDATE_IMMUTABLE, context {candidateId, differingFields}. The message names the fields and says \"a changed tree needs a new candidate id\".\n- createdAt is always the daemon clock.\n- Validation refuses and never coerces:\n  - Absent (undefined or null) required fields raise MISSING_REQUIRED.\n  - attemptId and taskId must be non-blank valid entity ids. validateEntityId also bounds their length to 128, which bounds what the fence echoes.\n  - baseRevision and treeSha must match /^[0-9a-f]{7,40}$/i, the same shape recordCommit.ts SHA_RE uses. I duplicated the literal with a comment rather than export it from recordCommit.ts, because that file is outside the nine declared paths.\n  - deliveryTarget must be non-blank, carry no surrounding whitespace, no control characters, and be 255 chars or fewer (recordCommit's ref bound).\n  - An optional id must be a valid entity id. Only undefined means omitted: a null id is refused. When omitted, the store generates cand-<uuid32>.\n- Lists filter the map, sort by createdAt then id, and return copies. getCandidate also returns a copy.\n\nTwo deliberate additions beyond the plan text, both small:\n(1) Referential integrity in the store. The attempt must exist (NOT_FOUND -32001 ATTEMPT_NOT_FOUND) and belong to the task (STATE_CONFLICT ATTEMPT_ID_TASK_MISMATCH, context {attemptId, existingTaskId, requestedTaskId}). Both codeNames and context keys are reused from attemptStore. Why: assertAttemptCurrent TOLERATES a task with no attempt records (legacy rule), so without this check a candidate could name an attempt that does not exist. This is not a second fence: it never checks currency or phase.\n(2) Candidate fields are `readonly` in schema.ts, and readers hand out copies, so no code path can edit a stored candidate even in memory. A test casts around readonly, mutates every returned object, and asserts the map is unchanged.\n\nStore tests (34) cover:\n- round trip with the exact 7 keys\n- generated id\n- createdAt-then-id ordering. Insertion order z,m,b against expected z,b,m kills no-sort, id-only and no-tiebreak mutants.\n- per-field immutability refusals (5), with byte-identical Buffer checks\n- idempotent replay: writeEntity spy not called, createdAt still T1 after the clock moved\n- changed tree recorded under a new id\n- copies\n- export list\n- unknown attempt and foreign attempt\n- 16 malformed-input cases, each asserting code -32602 plus the exact codeName and that nothing was written\n- injected write failure: nothing visible, then a retry succeeds\n- restart reload, where immutability survives the restart\n- empty load",
+      "startedAt": "2026-09-11T10:45:07.491Z",
+      "completedAt": "2026-09-11T10:54:14.458Z"
     },
     {
       "stepId": "step-4",
       "description": "ADD THE TOOL AND REGISTER IT. Create packages/moe-daemon/src/tools/recordCandidate.ts exporting a recordCandidateTool factory in the ToolDefinition shape, following src/tools/recordCommit.ts for input reading and result shape. Do NOT set blocking - the dispatch layer already serializes every non-blocking tool under the global state mutex, and marking this one blocking would remove exactly the serialization the store's write path assumes. The handler: read and validate the inputs, resolve the task and refuse a missing one with the existing not-found helper, then call assertAttemptCurrent from util/enforcement.ts BEFORE writing anything, so a superseded attempt cannot record a candidate - that ordering is the Definition of Done item, and doing the write first and checking after would satisfy the letter of it while leaving the hole open. Then delegate to the store; do not re-implement any store rule in the handler. The tool records the sha the caller reported and never shells out to git, which is both a task rail and an epic rail - there must be no child process anywhere in this file. Register it in packages/moe-daemon/src/tools/index.ts with an import beside the recordCommit import and an entry in the returned array; an unregistered tool is silently invisible to MCP, and the existing registry test asserts every exported tool factory is registered, so a missed registration fails the suite rather than shipping quietly. Keep the input schema honest about what is optional and give each field a description a runner author can act on.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCandidate.ts",
         "packages/moe-daemon/src/tools/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCandidate.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "note": "TDD again. I wrote the tool test file FIRST, then an unregistered stub factory whose handler throws.\n\nRED: `npx vitest run src/tools/recordCandidate.test.ts src/tools/registry.test.ts` gave EXIT=1, 20 failed | 2 passed (22). The failures include the EXISTING registry test \"registers every exported *Tool factory in src/tools\" (unregistered factory), and every tool case fails with \"Error: not implemented\". The two that pass are the no-child-process source scan and the registry chat-tools test.\n\nGREEN after the real tool plus registration: the same two files plus src/state/candidateStore.test.ts gave EXIT=0, 3 files / 56 tests. `npx tsc --noEmit -p tsconfig.json` EXIT=0. Because the package tsconfig excludes tests, I also type-checked BOTH new test files through a temp tsconfig that extends it (--listFiles confirmed both were included): EXIT=0.\n\nrecordCandidate.ts (LF, 95 lines):\n- `recordCandidateTool` returns {name 'moe.record_candidate', description, inputSchema, handler}. It has NO `blocking` field, and a test asserts `tool.blocking ?? false` is false.\n- Handler order:\n  1. `validateCandidateParams(args)` from the store, so the rules live in one place and are not re-implemented here.\n  2. `readGeneration` refuses a non-number without coercing (only undefined means omitted). The guard then refuses 0 or a non-integer.\n  3. `state.getTask`, then `notFound('Task', id)`.\n  4. `assertAttemptCurrent(state, task, {attemptId, generation?}, 'moe.record_candidate')`, BEFORE the write.\n  5. `recordCandidate(state, params)` returns `{success:true, candidate, duplicate}`.\n- No ownership or status gate, on purpose. The runner records after complete_task, when the fixture task is REVIEW and unassigned or QA-held (held-out acceptance criterion 3 calls it exactly so).\n- No child process or git anywhere.\n\nThe input schema marks required: taskId, attemptId, baseRevision, treeSha, deliveryTarget. It marks optional: id, generation (integer, min 1) and workerId (proxy-injected, not stored). additionalProperties is false. Each field has a runner-actionable description. The args match the frozen contract { id, taskId, attemptId, generation, workerId, baseRevision, treeSha, deliveryTarget }.\n\nindex.ts: +1 import beside recordCommit and +1 array entry after recordCommitTool(state). CRLF was preserved (158 CRLF / 0 LF) and the diff is 2 lines.\n\nTool tests (20):\n- registered and non-blocking\n- records for the current attempt: the exact stored record, with no generation or workerId on it\n- current attempt id without a generation\n- 4 superseded cases (stale id, stale generation, future generation, closed-since). Each asserts -32002 ATTEMPT_SUPERSEDED and that the tool name appears in the message. Each also asserts a writeEntity spy was NEVER called, no .moe/candidates dir exists, and the map is empty.\n- unknown task: -32001 TASK_NOT_FOUND, nothing written\n- legacy task with no attempts: the guard tolerates it, the store refuses -32001 ATTEMPT_NOT_FOUND, nothing written\n- 8 malformed cases (-32602 with exact INVALID_INPUT or MISSING_REQUIRED). These include null or string generation, non-object args, and a malformed sha on a SUPERSEDED attempt, which proves validation runs before the fence.\n- idempotent replay: duplicate:true with byte-identical bytes\n- changed tree under an existing id: CANDIDATE_IMMUTABLE with bytes untouched; the same tree under a new id is accepted\n- static source scan: neither recordCandidate.ts nor candidateStore.ts matches child_process, exec*() or spawn*()",
+      "startedAt": "2026-09-11T10:55:02.987Z",
+      "completedAt": "2026-09-11T10:57:21.107Z"
     },
     {
       "stepId": "step-5",
       "description": "TEST BOTH LAYERS. Create packages/moe-daemon/src/state/candidateStore.test.ts and packages/moe-daemon/src/tools/recordCandidate.test.ts using ToolTestHarness, matching the file split the verification command names. Store tests: a recorded candidate round-trips and is queryable by task and by attempt, with a deterministic order across several candidates; a second record with the same id and any differing field is refused by name and leaves the persisted bytes byte-identical; a byte-identical re-record returns the stored record and writes no second file, which is the crash-retry case; a changed tree recorded under a NEW id succeeds and both candidates remain queryable, which is the rail that a change yields a new record rather than an edit; blank or malformed inputs including a bad sha shape are refused without writing; durability in the style of resourceStore.durability.test.ts, where an injected writeEntity failure leaves both the accessor and the candidates directory empty; and a fresh StateManager over the same directory loads the candidates after a restart. Tool tests: the tool is present in getTools by name; a call from the current attempt records and returns the candidate; a call carrying a superseded attempt identity is refused by the fencing guard and writes NOTHING, asserted on the directory rather than only on the thrown error; a call for an unknown task is refused; and malformed input is refused with the invalid-input error rather than coerced. Assert exact codes and exact codeName strings everywhere - several codes share a number in this codebase, so a number-only assertion proves little. Run npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts and require green with nonzero counts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.test.ts",
         "packages/moe-daemon/src/tools/recordCandidate.test.ts"
@@ -68,30 +91,51 @@
       "newFiles": [
         "packages/moe-daemon/src/state/candidateStore.test.ts",
         "packages/moe-daemon/src/tools/recordCandidate.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts"
+      ],
+      "note": "Both test files already existed. I wrote them test-first in steps 3 and 4 and saw red there (32/34 and 20/22 failing against stubs). This step audited them against the plan's list and filled two gaps.\n\nAdditions:\n- Tool test \"has no ownership or status gate\". It creates task-review (REVIEW, assigned to qa-1) with a 'finalizing' attempt, and a call carrying workerId worker-1 records successfully. This pins the held-out criterion-3 shape: a later \"helpful\" assertWorkerOwns or status gate would fail it visibly.\n- The store restart test now also asserts code -32002 beside codeName CANDIDATE_IMMUTABLE, so every refusal asserts both the numeric code and the exact codeName.\n\nPlan coverage map:\n- Store round-trip, by task, by attempt, deterministic order: the 'persists one file…' and 'lists … createdAt-then-id order' tests.\n- Same id with any field changed is refused by name and the bytes stay identical: 5 per-field tests (Buffer.equals).\n- Byte-identical re-record returns the stored record with no second file: the replay test (writeEntity spy not called; one file).\n- Changed tree under a NEW id: both queryable, old bytes intact.\n- Malformed input: 16 cases, including bad sha shapes, all asserting nothing was written.\n- Durability: an injected writeEntity failure leaves the accessor, both lists and the dir empty.\n- Restart: a fresh StateManager loads the candidates.\n- Tool: registered by name; the current attempt records; superseded identities (4 cases) are refused by the guard and write NOTHING, asserted on the directory, a writeEntity spy and the map; unknown task; malformed input is refused as INVALID_INPUT or MISSING_REQUIRED, never coerced.\n\nNamed verification, run fresh: `npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts` (packages/moe-daemon): EXIT=0, Test Files 2 passed (2), Tests 55 passed (55), which is 34 store + 21 tool. Both test files also type-check through the temp tsconfig that extends the package config: TSC_TESTS_EXIT=0.",
+      "startedAt": "2026-09-11T10:57:37.529Z",
+      "completedAt": "2026-09-11T10:58:08.573Z"
     },
     {
       "stepId": "step-6",
       "description": "DOCUMENT THE RECORD AND THE TOOL. In docs/SCHEMA.md add a Candidate section following the conventions of the neighbouring record sections, covering every field, the immutability rule with the explicit statement that a changed tree yields a new candidate, the fact that the sha is runner-reported rather than daemon-observed, and the storage location of one file per candidate. In docs/MCP_SERVER.md add a record_candidate section in the tool list covering the arguments, the success result, and every refusal a caller can hit by name: a superseded attempt, an unknown task, an immutability violation on a same-id record that differs, and invalid input. Say plainly that a byte-identical re-record is idempotent and returns the existing candidate, because a runner author retrying after a crash needs to know that is safe. Both documents are contended - sibling tasks are editing them for plan revisions and approval wiring - so re-read the landed text immediately before editing and add your section rather than restructuring theirs. No behaviour change in this step.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Docs only; no behaviour change. Right before editing I re-checked both files: clean in git status, last touched by ed4c8b7 (12:36 today, task-dd743a02). All edits are APPEND-ONLY: git diff --stat shows 95 insertions and 0 deletions. CRLF is preserved (SCHEMA 1600/0 and MCP_SERVER 2412/0 CRLF/LF). No sibling text was restructured.\n\ndocs/SCHEMA.md (+49):\n- A new `## Candidate` section between `## Resource` and `## Chat Channel`, in the house style (**File:** line, TS interface block, prose, **Example:** JSON). It covers:\n  - every field, including the `readonly` markers, the id format (generated cand-<32 hex>, or caller-supplied [A-Za-z0-9_-]{1,128}) and the rule that attemptId must exist for that task\n  - immutability, with the explicit sentence \"A changed tree yields a new candidate with a new id\"; no updatedAt and no update/patch/delete path; the byte-identical re-record exception\n  - provenance: the shas are runner-REPORTED, shape-checked only, and never observed or verified by the daemon\n  - storage: one file per candidate under .moe/candidates/, with no schemaVersion bump and no migration\n  - query order: createdAt, then id\n- A `### Candidate` subsection under `## Validation Rules`, after `### Resource`.\n\ndocs/MCP_SERVER.md (+46):\n- A new `### moe.record_candidate` section right after `### moe.record_commit`, using the same Parameters / Returns / Notes / Errors layout. It says plainly that a byte-identical re-record is idempotent (duplicate:true, original createdAt, nothing written). It also advises runners to choose their own id so a crash retry replays instead of recording a second candidate.\n- Every refusal is listed by code and codeName: -32002 ATTEMPT_SUPERSEDED, -32001 TASK_NOT_FOUND, -32001 ATTEMPT_NOT_FOUND / -32002 ATTEMPT_ID_TASK_MISMATCH, -32002 CANDIDATE_IMMUTABLE, -32602 INVALID_INPUT, -32602 MISSING_REQUIRED. For the two attempt refusals it says they are only reachable on a task with no attempt records. I checked that against assertAttemptCurrent: on a task that has attempts, any non-current attemptId is ATTEMPT_SUPERSEDED first.\n- One added paragraph in `## Ownership & Ordering`, after the guard-exempt tools sentence: record_candidate is also exempt from the ownership guard and allowed in every status, and the attempt fence guards it instead. The existing sentence is untouched.\n\nI left the stale `## ID Generation` examples alone (they describe 8-char ids; the code uses 32 hex), so as not to extend inaccurate text.",
+      "startedAt": "2026-09-11T10:58:13.738Z",
+      "completedAt": "2026-09-11T11:00:34.899Z"
     },
     {
       "stepId": "step-7",
       "description": "MUTATION RED, FULL GATE, ADVERSARIAL REVIEW, HANDOFF. (a) These are new files, so establish the red by mutation, restoring the checkout after each and re-verifying with a separate git status call, never mutating anything outside your own files in this shared checkout. Perform at least four and name the failing test for each: move the fencing call to after the write, which must break the superseded-attempt case that asserts nothing was written; relax the immutability check so a same-id record overwrites, which must break the refusal and byte-identical-bytes cases; set the map before writeEntity, which must break the injected-failure case; and remove the registry entry, which must break both the tool-present test and the existing registry completeness test. (b) Run the named verification, then the full daemon suite from the repository root with npm.cmd on Windows, requiring exit 0 and counts no lower than before; filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Run npx tsc --noEmit -p tsconfig.json and require exit 0, remembering the config excludes test files. (c) Adversarially review: does any code path mutate a stored candidate; does the file genuinely contain no update function rather than merely not calling one; can a superseded attempt write anything at all; is there any child process or git invocation anywhere in the new files, which both a task rail and an epic rail forbid; does the sha field's naming and documentation avoid implying the daemon verified it; is the tool left non-blocking so it stays serialized; and did anything outside the nine declared files change. (d) Complete through moe.complete_task with the recorded commands, exit codes and counts plus the mutation proofs, listing every modified path, and note in the summary which siblings consume this record next - the check-run and review-binding tasks - and that this slice deliberately stops at recording.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts",
         "packages/moe-daemon/src/tools/recordCandidate.ts",
         "packages/moe-daemon/src/state/candidateStore.test.ts",
         "packages/moe-daemon/src/tools/recordCandidate.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts"
+      ],
+      "note": "(a) MUTATION RED on the FINAL bytes. Driver: %TEMP%\\cand_mut.py. It does an exact byte replace, asserts the needle matched exactly once, runs vitest, restores the pristine copy from outside the repo in `finally`, and sha-verifies after each mutant. It never uses `git checkout`, because index.ts carries uncommitted work.\nAll 10 mutants were killed (EXIT=1 each, restored=True each):\n- M1, fence moved AFTER the write: 5 failed / 16. The failures are the superseded id, stale generation, future generation and closed-since cases (each asserts nothing was written), plus the zero-generation case.\n- M2, a same id overwrites: 9 failed / 57. The failures are the 5 per-field CANDIDATE_IMMUTABLE tests, store and tool replay, the tool changed-tree test, and the restart test.\n- M3, map.set before writeEntity: 1 failed / 36, 'exposes no candidate anywhere when the write fails…'.\n- M4, registry entry removed: 2 failed / 23. The failures are the tool 'is registered in getTools()…' test and the EXISTING registry.test.ts 'registers every exported *Tool factory'.\n- M5, no id tiebreak: the ordering test fails.\n- M6, the live object handed out: the copies test fails.\n- M7, attempt integrity check dropped: 3 failed. These are the 2 store tests and the tool legacy-task test.\n- M8, replay without comparing fields: 7 failed.\n- M9, blocking:true: the non-blocking test fails.\n- M10, DEL not counted as a control character: 'refuses a deliveryTarget with a DEL'.\nA separate call afterwards confirmed all three files `cmp`-identical to pristine, 0 'MUTANT-' markers, and git status showing only my expected entries.\n\n(b) GATES on the final bytes:\n- Named verification `npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts`: NAMED_EXIT=0, 2 files, 57 passed (57).\n- `npx tsc --noEmit -p tsconfig.json`: TSC_EXIT=0. Both test files also compile via a temp extending tsconfig: TSC_TESTS_EXIT=0.\n- Full suite, SHARED tree, via `npm.cmd --prefix packages\\moe-daemon test` from the repo root: FULL_EXIT=1, 1 file failed | 107 passed | 1 skipped, and 2 failed | 1429 passed.\n  - Both failures are in src/tools/releaseTask.test.ts 'attempt closing on the release paths > the startup purge…' (expected 'closed', got 'running').\n  - That file and releaseTask.ts, workerLifecycle.ts, workerStore.ts, claimNextTask*.ts and attemptStore.ts are live WIP of task-b6c48bf0 (WORKING, worker-010099ab). None are mine.\n- So the gate of record ran in an ISOLATED worktree: HEAD 037473c plus exactly my 9 files, node_modules junctioned. `npm.cmd test`: GATE_FULL_EXIT=0, 108 passed | 1 skipped (109), 1409 passed | 6 skipped (1415).\n  - HEAD-only baseline in the same kind of worktree (d607ec2): 106 passed | 1 skipped (107), 1352 passed.\n  - The delta is exactly +2 files and +57 tests, with 0 failures.\n  - Cleanup: the junction was removed with .Delete(), the real node_modules\\vitest still exists, and the worktree is gone and pruned.\n\n(c) ADVERSARIAL REVIEW. One real defect found and FIXED: the Write tool had decoded my `\u0000-\u001f` regex escapes into RAW NUL/0x1F/0x7F bytes, so git and grep saw candidateStore.ts as BINARY. It is replaced by a code-point helper `hasControlChar` (no escapes), with NUL and DEL test cases added. A byte scan now shows 0 control bytes in all 9 files, and `file` reports UTF-8 text.\nChecks:\n- Stored candidates are never mutated. The only writers are StateManager.load (assignment) and candidateStore (a set for NEW ids only), grep-verified. Readers return copies and fields are readonly.\n- No update function exists; the export-list test pins it.\n- A superseded attempt cannot write: the fence precedes the store, and M1 proves the ordering. A task with no attempt records cannot get a candidate at all, because of the attempt-integrity check.\n- No child process or git call: grep is clean, backed by a static test.\n- treeSha naming and the docs say runner-reported and never verified.\n- The tool is non-blocking, so McpAdapter runs it inside state.runExclusive.\n- Only the 9 declared paths changed. The shared files carry only my hunks (re-verified), and no peer commit since baseline touched them.\n- Noted, not fixed: .moe/candidates/ is not in .gitignore, the same tidiness gap as attempts/ and resources/. Attribution DENY already covers it.",
+      "startedAt": "2026-09-11T11:01:23.108Z",
+      "completedAt": "2026-09-11T11:10:25.116Z"
     }
   ],
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,24 +152,31 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T10:40:44.614Z",
+  "updatedAt": "2026-09-11T11:11:13.568Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
     "worker-010099ab",
-    "worker-6dd2f337"
+    "worker-6dd2f337",
+    "worker-e67b0dd2"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T09:54:58.086Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 1
+    "executedStepCount": 7
   },
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:56:36.918Z",
@@ -170,8 +221,15 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
-    ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json"
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "packages/moe-daemon/src/state/candidateStore.test.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -180,5 +238,13 @@
     "sessionId": "worker-010099ab@2026-09-11T10:03:31Z",
     "at": "2026-09-11T10:07:07.929Z"
   },
-  "priorBlockedReason": "No verified task-bound wrapper delivery boundary for this session. Its supplied moe-codex-instructions-worker-53136.md (created 2026-09-11T10:10:55Z) explicitly says preflight had no claimable task; this CLI claimed the row only around 10:34Z after waiting. Existing task baseline is the PREVIOUS worker snapshot: at=2026-09-11T10:07:05Z head=792e4ced24dd2f720c289e874613a217def36266 landed=1. Read-only current wrapper inspection confirms scripts/moe-agent.ps1:4176 establishes baseline only under AutoClaim + preflightOk + preflightTaskId; :5015 runs postflight only for preflightTaskId. A mid-CLI claim does not bind those wrapper variables. Need a fresh correctly task-bound wrapper session, not a hand-created baseline or manual commit bypass.\n\nBoth source prerequisites are now DONE/landed=true/merged=true in get_context, and assertAttemptCurrent exists at enforcement.ts:148; the prior missing-guard blocker is resolved. No source edits, tests, or newly completed steps this session. All nine planned paths clean against measured HEAD 63ce15548ec89c5692c38b2c4792bf32bca36a4a on moe/work-2026-09-10. Step-1 remains COMPLETED; steps 2-7 remain PENDING. Resume at step-2 after fresh task preflight. Foreign WIP untouched. Current evidence added to existing Serena task handoff; governor notified and separate wrapper defect filed in chat. This block requires session relaunch, not a new source dependency."
+  "priorBlockedReason": "No verified task-bound wrapper delivery boundary for this session. Its supplied moe-codex-instructions-worker-53136.md (created 2026-09-11T10:10:55Z) explicitly says preflight had no claimable task; this CLI claimed the row only around 10:34Z after waiting. Existing task baseline is the PREVIOUS worker snapshot: at=2026-09-11T10:07:05Z head=792e4ced24dd2f720c289e874613a217def36266 landed=1. Read-only current wrapper inspection confirms scripts/moe-agent.ps1:4176 establishes baseline only under AutoClaim + preflightOk + preflightTaskId; :5015 runs postflight only for preflightTaskId. A mid-CLI claim does not bind those wrapper variables. Need a fresh correctly task-bound wrapper session, not a hand-created baseline or manual commit bypass.\n\nBoth source prerequisites are now DONE/landed=true/merged=true in get_context, and assertAttemptCurrent exists at enforcement.ts:148; the prior missing-guard blocker is resolved. No source edits, tests, or newly completed steps this session. All nine planned paths clean against measured HEAD 63ce15548ec89c5692c38b2c4792bf32bca36a4a on moe/work-2026-09-10. Step-1 remains COMPLETED; steps 2-7 remain PENDING. Resume at step-2 after fresh task preflight. Foreign WIP untouched. Current evidence added to existing Serena task handoff; governor notified and separate wrapper defect filed in chat. This block requires session relaunch, not a new source dependency.",
+  "reviewStartedAt": "2026-09-11T11:11:13.568Z",
+  "verification": {
+    "command": "npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts (from packages/moe-daemon)",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\nTests  57 passed (57)\nDuration  1.90s (tests 53%, transform 40%, import 7%)\nFINAL_NAMED_EXIT=0\n--- isolated full suite (HEAD 037473c + the 9 task files): npm.cmd test -> GATE_FULL_EXIT=0, Test Files 108 passed | 1 skipped (109), Tests 1409 passed | 6 skipped (1415); HEAD-only baseline 1352 passed; npx tsc --noEmit -p tsconfig.json -> EXIT=0",
+    "reportedAt": "2026-09-11T11:11:13.568Z"
+  },
+  "completionSummary": "Delivered the frozen Candidate record, its store and the moe.record_candidate tool. This slice deliberately stops at RECORDING.\n\nChanged files:\n- types/schema.ts: readonly `Candidate` {id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt}. Names follow the held-out contract in acceptance.test.ts. No updatedAt, no schemaVersion bump.\n- StateManager.ts: `candidates` map, loaded from .moe/candidates.\n- NEW state/candidateStore.ts: record, get, listForTask, listForAttempt, validate. There is NO update path, and a test pins the export list.\n  - Write order is writeEntity, then map.set.\n  - A same-id record that differs is refused with -32002 CANDIDATE_IMMUTABLE. A byte-identical re-record replays (duplicate:true) and writes nothing.\n  - The attempt must exist and belong to the task.\n  - The shas are runner-reported and checked for shape only (7-40 hex).\n- NEW tools/recordCandidate.ts, registered in index.ts, non-blocking. Order: validate, then TASK_NOT_FOUND, then assertAttemptCurrent BEFORE the write, then the store. No git or child process.\n- NEW tests: store 36, tool 21.\n- docs/SCHEMA.md and docs/MCP_SERVER.md: append-only sections.\n\nVerification (fresh):\n- The named vitest command: EXIT 0, 57/57.\n- tsc: EXIT 0. Both test files also compile via an extending tsconfig.\n- Full suite, isolated worktree at HEAD 037473c plus these 9 files: EXIT 0, 108 files, 1409 passed. The HEAD-only baseline was 1352, so the delta is +57 with 0 failures.\n- Shared-tree `npm test` has 2 failures in releaseTask.test.ts. Those are uncommitted WIP of task-b6c48bf0, not this task.\n\nMutations: 10 of 10 killed, each restore sha-verified. They cover the fence after the write (5 fail), same-id overwrite (9), map before write (1), registry entry removed (2, including registry.test), no id tiebreak, live object handed out, integrity check dropped (3), replay without comparing (7), blocking:true, and DEL.\n\nA defect found and fixed during self-review: raw control bytes had made candi"
 }

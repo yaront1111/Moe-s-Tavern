@@ -904,6 +904,44 @@ export interface ExecutionAttempt {
   host?: string;
 }
 
+// =============================================================================
+// Candidates — the exact bytes a task is offering for delivery
+// =============================================================================
+//
+// A candidate names one fixed set of bytes, so review and checks can bind to
+// something immutable instead of to a moving working tree. Purely additive: no
+// existing type changed, no schemaVersion bump, no migration (same shape as the
+// ExecutionAttempt addition above).
+// =============================================================================
+
+/**
+ * One offered set of bytes for one task; persisted at .moe/candidates/<id>.json
+ * (daemon sole-writer, via state/candidateStore.ts only).
+ *
+ * IMMUTABLE. A candidate is never edited: a changed tree is a NEW candidate
+ * with a new id, and the store refuses a same-id record that differs in any
+ * field. There is deliberately no `updatedAt` and no update path — adding
+ * either later would be a design regression, not a feature.
+ *
+ * PROVENANCE. `baseRevision` and `treeSha` are what the runner REPORTED. The
+ * daemon is state-only and never runs git, so it has observed and verified
+ * neither; a consumer that needs proof must re-derive it from the repository.
+ */
+export interface Candidate {
+  readonly id: string;
+  /** Execution attempt that produced these bytes (an ExecutionAttempt id). */
+  readonly attemptId: string;
+  readonly taskId: string;
+  /** Runner-reported commit the bytes were built on. */
+  readonly baseRevision: string;
+  /** Runner-reported tree or commit sha naming the offered bytes. */
+  readonly treeSha: string;
+  /** Where the runner intends to deliver the bytes, e.g. `refs/heads/wave1-pilot`. */
+  readonly deliveryTarget: string;
+  /** Daemon clock when the candidate was first recorded. */
+  readonly createdAt: string;
+}
+
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
 export type ProposalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 

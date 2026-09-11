@@ -33,6 +33,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import type {
   ActivityEvent,
   ActivityEventType,
+  Candidate,
   ChatChannel,
   ChatMessage,
   Decision,
@@ -368,6 +369,8 @@ export class StateManager {
   resources = new Map<string, ResourceState>();
   /** Execution attempts, keyed by attempt id. Mutated only via state/attemptStore.ts. */
   attempts = new Map<string, ExecutionAttempt>();
+  /** Candidates, keyed by candidate id. Written only via state/candidateStore.ts, which has no update path. */
+  candidates = new Map<string, Candidate>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -1042,6 +1045,8 @@ export class StateManager {
       // loadEntities tolerates a missing directory, so a project that has never
       // opened an attempt simply loads an empty map — no scaffolding needed.
       this.attempts = loadEntities<ExecutionAttempt>(path.join(this.moePath, 'attempts'));
+      // Same tolerance: a project that has never recorded a candidate loads empty.
+      this.candidates = loadEntities<Candidate>(path.join(this.moePath, 'candidates'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {
