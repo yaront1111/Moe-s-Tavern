@@ -143,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:40:02.958Z",
-  "updatedAt": "2026-09-11T09:59:36.303Z",
+  "updatedAt": "2026-09-11T09:59:41.271Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:33:56.838Z",
     "plannedStepCount": 6,
@@ -191,7 +191,80 @@
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
     "moe-jetbrains/src/main/kotlin/com/moe/util/MoeDuration.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt",
+    ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+    ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+    ".moe/tasks/task-1bf079020e504aaaa760a8faeddebbcd.json",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+    ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+    ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+    ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+    ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+    ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
+    ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+    ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json"
   ],
-  "completionSummary": "Retired the deprecated task time-cap presentation from the JetBrains client, keeping live elapsed wall-clock metrics.\n\nFILES (exactly the five owned paths): TaskCard.kt, TaskDetailDialog.kt, MoeBundle.properties, MoeDuration.kt (comment-only), new test TaskTimingPresentationTest.kt. Models.kt and util/MoeJson.kt are byte-identical on purpose (git diff empty), as is every pre-existing test.\n\nHELPER CONTRACT (new, internal, production-used — both consumed by the real Swing builders, no dead code, no separate presenter file, DTOs nested on the outer classes not in a companion):\n- TaskCard.elapsedPresentation(task: Task, now: Instant): TaskCard.ElapsedPresentation?  -> label, tooltip, lightRgb, darkRgb. Null unless metrics.firstClaimAt parses (gate preserved: still null when only wallClockMs is recorded). Elapsed = metrics.wallClockMs ?: elapsedMs(firstClaim, parsedDoneAt ?: now) ?: 0. Label is the duration alone; colour is always the neutral pair 0x6B7280/0xA7ABB1; tooltip is \"Elapsed: started <iso>, used <duration>\".\n- TaskDetailDialog.metricsPresentation(task: Task, now: Instant): MetricsPresentation? -> ordered List<KpiRow(labelKey, value)> plus CritiqueBlock, sizeWarningLines, verificationBody, reviewSummary, failedDodLines and List<HandoffBlock>. Null unless metrics / handoffs / failed DoD / critique / size warnings / verification / nonblank review summary exists — a legacy cap alone no longer opens it.\nBoth are pure: caller supplies `now`, neither touches MoeBundle, JBColor or any service.\n\nREMOVED: card cap denominator, ratio-based red/yellow/green colours, \"Budget: \" tooltip with \"of <cap>\"/warned/escalated, the detail \"Budget remaining\" KPI and its helper, the cap-only section eligibility, the moe.metrics.budgetRemaining bundle key and all budget wording in the four scoped files (verified by a case-insensitive budget|warnedAt|escalatedAt|remaining sweep). task.budget is read nowhere in either UI file.\n\nPRESERVED (asserted): recorded-duration precedence, timest"
+  "completionSummary": "Retired the deprecated task time-cap presentation from the JetBrains client, keeping live elapsed wall-clock metrics.\n\nFILES (exactly the five owned paths): TaskCard.kt, TaskDetailDialog.kt, MoeBundle.properties, MoeDuration.kt (comment-only), new test TaskTimingPresentationTest.kt. Models.kt and util/MoeJson.kt are byte-identical on purpose (git diff empty), as is every pre-existing test.\n\nHELPER CONTRACT (new, internal, production-used — both consumed by the real Swing builders, no dead code, no separate presenter file, DTOs nested on the outer classes not in a companion):\n- TaskCard.elapsedPresentation(task: Task, now: Instant): TaskCard.ElapsedPresentation?  -> label, tooltip, lightRgb, darkRgb. Null unless metrics.firstClaimAt parses (gate preserved: still null when only wallClockMs is recorded). Elapsed = metrics.wallClockMs ?: elapsedMs(firstClaim, parsedDoneAt ?: now) ?: 0. Label is the duration alone; colour is always the neutral pair 0x6B7280/0xA7ABB1; tooltip is \"Elapsed: started <iso>, used <duration>\".\n- TaskDetailDialog.metricsPresentation(task: Task, now: Instant): MetricsPresentation? -> ordered List<KpiRow(labelKey, value)> plus CritiqueBlock, sizeWarningLines, verificationBody, reviewSummary, failedDodLines and List<HandoffBlock>. Null unless metrics / handoffs / failed DoD / critique / size warnings / verification / nonblank review summary exists — a legacy cap alone no longer opens it.\nBoth are pure: caller supplies `now`, neither touches MoeBundle, JBColor or any service.\n\nREMOVED: card cap denominator, ratio-based red/yellow/green colours, \"Budget: \" tooltip with \"of <cap>\"/warned/escalated, the detail \"Budget remaining\" KPI and its helper, the cap-only section eligibility, the moe.metrics.budgetRemaining bundle key and all budget wording in the four scoped files (verified by a case-insensitive budget|warnedAt|escalatedAt|remaining sweep). task.budget is read nowhere in either UI file.\n\nPRESERVED (asserted): recorded-duration precedence, timest",
+  "commits": [
+    {
+      "sha": "97f295b75c9c9649756e340a43cc5ce22c60e5c0",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T09:59:36Z",
+      "paths": [
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+        ".moe/tasks/task-1bf079020e504aaaa760a8faeddebbcd.json",
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+        ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+        ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+        ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeDuration.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T09:59:41.271Z",
+      "treeId": "0635574f747775623db07b6982081a4783672e62",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+          "taskId": "task-aec72949166b42a99b4279ba4615ac4b"
+        },
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+          "taskId": "task-aec72949166b42a99b4279ba4615ac4b"
+        },
+        {
+          "path": "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+          "taskId": "task-247fdf296ff2445daae8e057c0608f51"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/providers/codexDescriptor.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.test.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T09:59:36Z",
+    "at": "2026-09-11T09:59:41.271Z"
+  }
 }

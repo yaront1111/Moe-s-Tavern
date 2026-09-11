@@ -1,7 +1,11 @@
 package com.moe.toolwindow
 
+import com.moe.model.FailedDodItem
+import com.moe.model.HandoffNote
 import com.moe.model.MoeState
+import com.moe.model.PlanCritiqueResult
 import com.moe.model.Task
+import com.moe.model.TaskVerification
 import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
@@ -132,7 +136,7 @@ class TaskDetailDialog(
             panel.add(reopenScroll)
         }
 
-        // Metrics / Budget / Handoffs / Critique section
+        // Live metrics / Handoffs / Critique section
         val metricsSection = buildMetricsSection()
         if (metricsSection != null) {
             panel.add(metricsSection)
@@ -284,21 +288,14 @@ class TaskDetailDialog(
     }
 
     private fun buildMetricsSection(): JComponent? {
-        val metrics = task.metrics
-        val budget = task.budget
-        val handoffs = task.priorHandoffs.orEmpty()
-        val failedDod = task.failedDodItems.orEmpty()
-        val critique = task.planCritiqueResult
-        val sizeWarnings = task.planSizeWarnings.orEmpty()
-        val verification = task.verification
-        val reviewSummary = task.reviewSummary
-
-        // Nothing to render? Return null to avoid empty sections.
-        if (metrics == null && budget == null && handoffs.isEmpty() && failedDod.isEmpty() &&
-            critique == null && sizeWarnings.isEmpty() && verification == null && reviewSummary.isNullOrBlank()
-        ) {
-            return null
-        }
+        // Every visibility/value decision lives in the pure helper; this only renders it.
+        val presentation = metricsPresentation(task, Instant.now()) ?: return null
+        val handoffs = presentation.handoffs
+        val failedDod = presentation.failedDodLines
+        val critique = presentation.critique
+        val sizeWarnings = presentation.sizeWarningLines
+        val verificationBody = presentation.verificationBody
+        val reviewSummary = presentation.reviewSummary
 
         val container = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -311,48 +308,14 @@ class TaskDetailDialog(
 
         // Headline KPI rows
         val kpis = JPanel(FlowLayout(FlowLayout.LEFT, 12, 2)).apply { isOpaque = false }
-        val planned = metrics?.plannedStepCount
-        val executed = metrics?.executedStepCount
-        if (planned != null || executed != null) {
-            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.steps"), "${executed ?: "-"} / ${planned ?: "-"}"))
-        }
-        metrics?.plannedDistinctFileCount?.let {
-            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.files"), it.toString()))
-        }
-        metrics?.wallClockMs?.let {
-            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.wallClock"), MoeDuration.humanise(it)))
-        } ?: run {
-            // Derive from firstClaimAt if metrics.wallClockMs is unset
-            val first = MoeDuration.parseInstant(metrics?.firstClaimAt)
-            val done = MoeDuration.parseInstant(metrics?.doneAt)
-            if (first != null) {
-                val derived = MoeDuration.elapsedMs(first, done ?: Instant.now())
-                if (derived != null) {
-                    kpis.add(kpiLabel(MoeBundle.message("moe.metrics.wallClock"), MoeDuration.humanise(derived)))
-                }
-            }
-        }
-        (metrics?.reopenCount ?: task.reopenCount).let { reopenCount ->
-            if (reopenCount > 0 || metrics?.reopenCount != null) {
-                kpis.add(kpiLabel(MoeBundle.message("moe.metrics.reopen"), reopenCount.toString()))
-            }
-        }
-        metrics?.rejectCount?.let {
-            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.reject"), it.toString()))
-        }
-        budget?.wallClockMs?.let { cap ->
-            val first = MoeDuration.parseInstant(metrics?.firstClaimAt)
-            val done = MoeDuration.parseInstant(metrics?.doneAt)
-            val used = metrics?.wallClockMs ?: MoeDuration.elapsedMs(first, done ?: Instant.now()) ?: 0L
-            val remaining = (cap - used).coerceAtLeast(0L)
-            kpis.add(kpiLabel(MoeBundle.message("moe.metrics.budgetRemaining"),
-                MoeDuration.humanise(remaining) + " / " + MoeDuration.humanise(cap)))
+        for (row in presentation.kpis) {
+            kpis.add(kpiLabel(MoeBundle.message(row.labelKey), row.value))
         }
         container.add(kpis)
 
         // Critique panel
         if (critique != null) {
-            val isBlock = critique.verdict == "block"
+            val isBlock = critique.isBlock
             val panelBg = if (isBlock) {
                 JBColor(Color(0xFEE2E2), Color(0x321C1C))
             } else {
@@ -363,14 +326,13 @@ class TaskDetailDialog(
                 background = panelBg
                 border = JBUI.Borders.empty(6, 8)
             }
-            val verdictText = MoeBundle.message("moe.metrics.critiquePrefix") + " " + critique.verdict.uppercase()
+            val verdictText = MoeBundle.message("moe.metrics.critiquePrefix") + " " + critique.verdictLabel
             val header = JBLabel(verdictText).apply {
                 font = font.deriveFont(Font.BOLD)
             }
             critiquePanel.add(header, BorderLayout.NORTH)
-            val concerns = critique.concerns
-            if (!concerns.isNullOrEmpty()) {
-                val list = JBTextArea(concerns.joinToString("\n") { "• $it" }).apply {
+            if (critique.concernLines.isNotEmpty()) {
+                val list = JBTextArea(critique.concernLines.joinToString("\n")).apply {
                     isEditable = false
                     lineWrap = true
                     wrapStyleWord = true
@@ -378,10 +340,8 @@ class TaskDetailDialog(
                 }
                 critiquePanel.add(list, BorderLayout.CENTER)
             }
-            if (!critique.reviewedBy.isNullOrBlank() || !critique.reviewedAt.isNullOrBlank()) {
-                val by = critique.reviewedBy ?: "unknown"
-                val at = critique.reviewedAt ?: ""
-                critiquePanel.add(JBLabel("$by  $at").apply {
+            critique.reviewerFooter?.let { footer ->
+                critiquePanel.add(JBLabel(footer).apply {
                     foreground = JBColor.GRAY
                     font = JBUI.Fonts.smallFont()
                 }, BorderLayout.SOUTH)
@@ -399,7 +359,7 @@ class TaskDetailDialog(
             warnPanel.add(JBLabel(MoeBundle.message("moe.metrics.planSizeWarnings")).apply {
                 font = font.deriveFont(Font.BOLD)
             }, BorderLayout.NORTH)
-            warnPanel.add(JBTextArea(sizeWarnings.joinToString("\n") { "• $it" }).apply {
+            warnPanel.add(JBTextArea(sizeWarnings.joinToString("\n")).apply {
                 isEditable = false
                 lineWrap = true
                 wrapStyleWord = true
@@ -409,7 +369,7 @@ class TaskDetailDialog(
         }
 
         // Verification evidence from complete_task (command + exit + output tail)
-        if (verification != null) {
+        if (verificationBody != null) {
             val vPanel = JPanel(BorderLayout()).apply {
                 isOpaque = false
                 border = JBUI.Borders.emptyTop(6)
@@ -417,15 +377,7 @@ class TaskDetailDialog(
             vPanel.add(JBLabel(MoeBundle.message("moe.metrics.verification")).apply {
                 font = font.deriveFont(Font.BOLD)
             }, BorderLayout.NORTH)
-            val exitText = verification.exitCode?.let { " (exit $it)" } ?: ""
-            val atText = verification.reportedAt?.let { "  @ ${it.take(19)}" } ?: ""
-            val bodyText = buildString {
-                append("$ ").append(verification.command).append(exitText).append(atText)
-                verification.outputTail?.takeIf { it.isNotBlank() }?.let {
-                    append("\n").append(it)
-                }
-            }
-            val area = JBTextArea(bodyText).apply {
+            val area = JBTextArea(verificationBody).apply {
                 isEditable = false
                 lineWrap = true
                 wrapStyleWord = true
@@ -454,13 +406,9 @@ class TaskDetailDialog(
             container.add(rPanel)
         }
 
-        // Failed DoD list
+        // Failed DoD list (already grouped per item by the helper)
         if (failedDod.isNotEmpty()) {
-            // Group by item to surface per-item failure counts
-            val grouped = failedDod.groupingBy { it.item }.eachCount()
-            val text = grouped.entries.joinToString("\n") { (item, count) ->
-                if (count > 1) "• $item  ($count failures)" else "• $item"
-            }
+            val text = failedDod.joinToString("\n")
             val section = JPanel(BorderLayout()).apply {
                 isOpaque = false
                 border = JBUI.Borders.emptyTop(6)
@@ -489,19 +437,13 @@ class TaskDetailDialog(
             section.add(JBLabel(MoeBundle.message("moe.metrics.handoffs", handoffs.size)).apply {
                 font = font.deriveFont(Font.BOLD)
             })
-            for ((i, h) in handoffs.withIndex()) {
-                val header = buildString {
-                    append("#").append(i + 1)
-                    if (!h.from.isNullOrBlank()) append(" from ").append(h.from)
-                    if (!h.to.isNullOrBlank()) append(" → ").append(h.to)
-                    if (!h.createdAt.isNullOrBlank()) append("  (").append(h.createdAt).append(")")
-                }
+            for (h in handoffs) {
                 val sub = JPanel().apply {
                     layout = BoxLayout(this, BoxLayout.Y_AXIS)
                     isOpaque = false
                     border = BorderFactory.createTitledBorder(
                         JBUI.Borders.customLine(JBColor.border()),
-                        header
+                        h.header
                     )
                 }
                 sub.add(handoffBlock(MoeBundle.message("moe.metrics.handoff.whatIsDone"), h.whatIsDone))
@@ -651,5 +593,149 @@ class TaskDetailDialog(
 
         actions.add(cancelAction)
         return actions.toTypedArray()
+    }
+
+    /** One headline KPI: the bundle key of its label plus the already-formatted value. */
+    data class KpiRow(val labelKey: String, val value: String)
+
+    /** The plan-critique block, pre-formatted (the bundle prefix stays on the Swing side). */
+    data class CritiqueBlock(
+        val isBlock: Boolean,
+        val verdictLabel: String,
+        val concernLines: List<String>,
+        val reviewerFooter: String?
+    )
+
+    /** One prior hand-off: its titled-border header plus the four note fields. */
+    data class HandoffBlock(
+        val header: String,
+        val whatIsDone: String?,
+        val whatRemains: String?,
+        val pitfalls: String?,
+        val openQuestions: String?
+    )
+
+    /**
+     * Everything the metrics section renders, as plain data. A null result from
+     * [metricsPresentation] means the section is not rendered at all.
+     */
+    data class MetricsPresentation(
+        val kpis: List<KpiRow>,
+        val critique: CritiqueBlock?,
+        val sizeWarningLines: List<String>,
+        val verificationBody: String?,
+        val reviewSummary: String?,
+        val failedDodLines: List<String>,
+        val handoffs: List<HandoffBlock>
+    )
+
+    companion object {
+        /**
+         * Compute the detail dialog's metrics section, or null when there is nothing
+         * to show. Pure: [now] is supplied by the caller and no platform bundle or
+         * service is touched, so the whole model can be asserted headlessly.
+         */
+        internal fun metricsPresentation(task: Task, now: Instant): MetricsPresentation? {
+            val metrics = task.metrics
+            val handoffs = task.priorHandoffs.orEmpty()
+            val failedDod = task.failedDodItems.orEmpty()
+            val critique = task.planCritiqueResult
+            val sizeWarnings = task.planSizeWarnings.orEmpty()
+            val verification = task.verification
+            val reviewSummary = task.reviewSummary
+
+            // Nothing to render? Return null to avoid empty sections.
+            if (metrics == null && handoffs.isEmpty() && failedDod.isEmpty() &&
+                critique == null && sizeWarnings.isEmpty() && verification == null && reviewSummary.isNullOrBlank()
+            ) {
+                return null
+            }
+
+            return MetricsPresentation(
+                kpis = kpiRows(task, now),
+                critique = critiqueBlock(critique),
+                sizeWarningLines = sizeWarnings.map { "• $it" },
+                verificationBody = verificationBody(verification),
+                reviewSummary = reviewSummary?.takeUnless { it.isBlank() },
+                failedDodLines = failedDodLines(failedDod),
+                handoffs = handoffBlocks(handoffs)
+            )
+        }
+
+        private fun kpiRows(task: Task, now: Instant): List<KpiRow> {
+            val metrics = task.metrics
+            val rows = mutableListOf<KpiRow>()
+            val planned = metrics?.plannedStepCount
+            val executed = metrics?.executedStepCount
+            if (planned != null || executed != null) {
+                rows.add(KpiRow("moe.metrics.steps", "${executed ?: "-"} / ${planned ?: "-"}"))
+            }
+            metrics?.plannedDistinctFileCount?.let { rows.add(KpiRow("moe.metrics.files", it.toString())) }
+            wallClockValue(task, now)?.let { rows.add(KpiRow("moe.metrics.wallClock", it)) }
+            (metrics?.reopenCount ?: task.reopenCount).let { reopenCount ->
+                if (reopenCount > 0 || metrics?.reopenCount != null) {
+                    rows.add(KpiRow("moe.metrics.reopen", reopenCount.toString()))
+                }
+            }
+            metrics?.rejectCount?.let { rows.add(KpiRow("moe.metrics.reject", it.toString())) }
+            return rows
+        }
+
+        /** Recorded wall-clock wins; otherwise derive firstClaimAt -> doneAt (or [now]). */
+        private fun wallClockValue(task: Task, now: Instant): String? {
+            val metrics = task.metrics
+            metrics?.wallClockMs?.let { return MoeDuration.humanise(it) }
+            val first = MoeDuration.parseInstant(metrics?.firstClaimAt) ?: return null
+            val done = MoeDuration.parseInstant(metrics?.doneAt)
+            val derived = MoeDuration.elapsedMs(first, done ?: now) ?: return null
+            return MoeDuration.humanise(derived)
+        }
+
+        private fun critiqueBlock(critique: PlanCritiqueResult?): CritiqueBlock? {
+            if (critique == null) return null
+            val footer = if (!critique.reviewedBy.isNullOrBlank() || !critique.reviewedAt.isNullOrBlank()) {
+                "${critique.reviewedBy ?: "unknown"}  ${critique.reviewedAt ?: ""}"
+            } else {
+                null
+            }
+            return CritiqueBlock(
+                isBlock = critique.verdict == "block",
+                verdictLabel = critique.verdict.uppercase(),
+                concernLines = critique.concerns.orEmpty().map { "• $it" },
+                reviewerFooter = footer
+            )
+        }
+
+        private fun verificationBody(verification: TaskVerification?): String? {
+            if (verification == null) return null
+            val exitText = verification.exitCode?.let { " (exit $it)" } ?: ""
+            val atText = verification.reportedAt?.let { "  @ ${it.take(19)}" } ?: ""
+            return buildString {
+                append("$ ").append(verification.command).append(exitText).append(atText)
+                verification.outputTail?.takeIf { it.isNotBlank() }?.let { append("\n").append(it) }
+            }
+        }
+
+        /** Group by item to surface per-item failure counts, in first-seen order. */
+        private fun failedDodLines(items: List<FailedDodItem>): List<String> =
+            items.groupingBy { it.item }.eachCount().entries.map { (item, count) ->
+                if (count > 1) "• $item  ($count failures)" else "• $item"
+            }
+
+        private fun handoffBlocks(notes: List<HandoffNote>): List<HandoffBlock> =
+            notes.mapIndexed { i, h ->
+                HandoffBlock(
+                    header = buildString {
+                        append("#").append(i + 1)
+                        if (!h.from.isNullOrBlank()) append(" from ").append(h.from)
+                        if (!h.to.isNullOrBlank()) append(" → ").append(h.to)
+                        if (!h.createdAt.isNullOrBlank()) append("  (").append(h.createdAt).append(")")
+                    },
+                    whatIsDone = h.whatIsDone,
+                    whatRemains = h.whatRemains,
+                    pitfalls = h.pitfalls,
+                    openQuestions = h.openQuestions
+                )
+            }
     }
 }

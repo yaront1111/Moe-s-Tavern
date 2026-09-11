@@ -249,15 +249,15 @@ class TaskCard(
             content.add(arrows, BorderLayout.EAST)
         }
 
-        // Budget badge (bottom-right). Only rendered when we have something
-        // meaningful to show — either a budget cap or a firstClaimAt timestamp.
-        val budgetBadge = buildBudgetBadge()
-        if (budgetBadge != null) {
+        // Elapsed-time badge (bottom-right). Only rendered once the task has a
+        // usable firstClaimAt timestamp to measure from.
+        val elapsed = elapsedPresentation(task, Instant.now())
+        if (elapsed != null) {
             val south = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
                 isOpaque = false
                 border = JBUI.Borders.emptyTop(2)
             }
-            south.add(budgetBadge)
+            south.add(buildElapsedBadge(elapsed))
             content.add(south, BorderLayout.SOUTH)
         }
 
@@ -349,63 +349,18 @@ class TaskCard(
     }
 
     /**
-     * Build the bottom-right budget badge. Returns null when neither a budget
-     * nor a first-claim timestamp is available — we don't want to spam every
-     * card with an empty placeholder.
+     * Render the bottom-right badge from an already-computed [ElapsedPresentation].
+     * Every text/colour decision comes from the pure helper; this only turns it
+     * into Swing.
      */
-    private fun buildBudgetBadge(): JBLabel? {
-        val budgetMs = task.budget?.wallClockMs
-        val firstClaimAt = MoeDuration.parseInstant(task.metrics?.firstClaimAt)
-        val doneAt = MoeDuration.parseInstant(task.metrics?.doneAt)
-
-        // Nothing to render if we have no budget AND no claim timestamp.
-        if (budgetMs == null && firstClaimAt == null) return null
-
-        // Compute used wall-clock: prefer metrics.wallClockMs when present,
-        // otherwise derive from firstClaimAt -> doneAt (or now).
-        val now = Instant.now()
-        val derivedUsed = MoeDuration.elapsedMs(firstClaimAt, doneAt ?: now)
-        val usedMs = task.metrics?.wallClockMs ?: derivedUsed ?: 0L
-
-        val ratio = if (budgetMs != null && budgetMs > 0) usedMs.toDouble() / budgetMs.toDouble() else 0.0
-        val color: JBColor = when {
-            budgetMs == null -> JBColor(java.awt.Color(0x6B7280), java.awt.Color(0xA7ABB1)) // neutral
-            ratio > 1.0 -> JBColor(java.awt.Color(220, 53, 69), java.awt.Color(255, 80, 80)) // red
-            ratio >= 0.8 -> JBColor(java.awt.Color(245, 158, 11), java.awt.Color(251, 191, 36)) // yellow
-            else -> JBColor(java.awt.Color(22, 163, 74), java.awt.Color(34, 197, 94)) // green
-        }
-
-        val usedText = MoeDuration.humanise(usedMs)
-        val labelText = if (budgetMs != null) {
-            "${usedText} / ${MoeDuration.humanise(budgetMs)}"
-        } else {
-            usedText
-        }
-
-        val tooltip = buildString {
-            append("Budget: ")
-            if (firstClaimAt != null) {
-                append("started ").append(task.metrics?.firstClaimAt)
-            } else {
-                append("no start timestamp")
-            }
-            if (budgetMs != null) {
-                append(", used ").append(MoeDuration.humanise(usedMs))
-                append(" of ").append(MoeDuration.humanise(budgetMs))
-            } else {
-                append(", used ").append(MoeDuration.humanise(usedMs))
-            }
-            task.budget?.warnedAt?.let { append(", warned ").append(it) }
-            task.budget?.escalatedAt?.let { append(", escalated ").append(it) }
-        }
-
-        return JBLabel(labelText).apply {
+    private fun buildElapsedBadge(presentation: ElapsedPresentation): JBLabel {
+        return JBLabel(presentation.label).apply {
             isOpaque = true
             border = JBUI.Borders.empty(1, 6)
             font = JBUI.Fonts.smallFont()
             foreground = java.awt.Color.WHITE
-            background = color
-            toolTipText = tooltip
+            background = JBColor(java.awt.Color(presentation.lightRgb), java.awt.Color(presentation.darkRgb))
+            toolTipText = presentation.tooltip
         }
     }
 
@@ -463,5 +418,44 @@ class TaskCard(
         }
 
         override fun getSourceActions(c: javax.swing.JComponent?): Int = MOVE
+    }
+
+    /**
+     * What the card's bottom-right timing badge shows: its text, its tooltip and
+     * the light/dark background RGB pair Swing wraps in a [JBColor]. Plain data so
+     * the decision can be asserted headlessly.
+     */
+    data class ElapsedPresentation(
+        val label: String,
+        val tooltip: String,
+        val lightRgb: Int,
+        val darkRgb: Int
+    )
+
+    companion object {
+        // Neutral badge background: grey in light themes, lighter grey in dark.
+        private const val NEUTRAL_LIGHT_RGB = 0x6B7280
+        private const val NEUTRAL_DARK_RGB = 0xA7ABB1
+
+        /**
+         * Compute the card's timing badge, or null when there is nothing meaningful
+         * to show. Pure: [now] is supplied by the caller so the render is testable
+         * and time-independent, and no platform bundle/service is touched.
+         */
+        internal fun elapsedPresentation(task: Task, now: Instant): ElapsedPresentation? {
+            // A usable start timestamp is the only reason to show the badge — we
+            // don't want to spam every card with an empty placeholder.
+            val firstClaimAt = MoeDuration.parseInstant(task.metrics?.firstClaimAt) ?: return null
+            val doneAt = MoeDuration.parseInstant(task.metrics?.doneAt)
+
+            // Elapsed wall-clock: prefer metrics.wallClockMs when present,
+            // otherwise derive from firstClaimAt -> doneAt (or now).
+            val derivedUsed = MoeDuration.elapsedMs(firstClaimAt, doneAt ?: now)
+            val usedMs = task.metrics?.wallClockMs ?: derivedUsed ?: 0L
+            val usedText = MoeDuration.humanise(usedMs)
+
+            val tooltip = "Elapsed: started ${task.metrics?.firstClaimAt}, used $usedText"
+            return ElapsedPresentation(usedText, tooltip, NEUTRAL_LIGHT_RGB, NEUTRAL_DARK_RGB)
+        }
     }
 }
