@@ -152,8 +152,8 @@
       "completedAt": "2026-09-11T10:43:32.751Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -184,12 +184,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:16.035Z",
-  "updatedAt": "2026-09-11T10:44:56.211Z",
+  "updatedAt": "2026-09-11T10:55:52.818Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:43:43.698Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-11T10:55:52.818Z",
+    "wallClockMs": 4329120
   },
   "contextFetchedBy": [
     "architect-2d25447a",
@@ -240,7 +242,8 @@
   "filesModified": [
     "packages/moe-daemon/src/delivery/acceptance.test.ts",
     ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
-    ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json"
+    ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json",
+    ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json"
   ],
   "completionSummary": "Added exactly one file, packages/moe-daemon/src/delivery/acceptance.test.ts. It has six describes, one per Wave 1 acceptance criterion, each with one literal it.skip, an UNSKIP OWNER comment and the old-behaviour counterexample that owner must show. No production, tool-registry, schema or harness file changed. Owners: 1 task-d72d8cc6 (prereq 5dd49fe2), 2 task-94f53492, 3 task-5b857738, 4 task-58f7db9a, 5 task-b6c48bf0, 6 task-b1c98508. The header freezes the pilot (Codex exec, local branch refs/heads/wave1-pilot) and the normative payload, field and codeName contracts (full map in a task comment). Cases use real registered tools under state.runExclusive and exact disk bytes or projections; a missing tool fails with [WAVE1-CONTRACT-MISSING]. Case 4 boots the real daemon via `_run` over tsx, kills it abruptly and restarts it. Case 6 runs the real platform wrapper with runtime shims, holds the first record_delivery_receipt as a crash barrier, then checks Git rev-list and reflog. Skipped collection is NOT behavioural or red proof. Throwaway unskipped copies (deleted) confirmed each case fails at a meaningful point today: case 2 shows the released dependent live, case 4 the purged owner, case 6 a real landing followed by 'receipt barrier never reached'. Deviations reported in #architects (msg-96b63cbb): MCP forwards no MoeError.context, so case 4 checks that the message names the held attempt; b6c48bf0's plan lacks the release fencing case 5 needs; Candidate fields are frozen at seven. Gate exit 0: 6 skipped focused; 1352 passed and 6 skipped in the suite. The file type-checks clean under strict mode.",
   "commits": [
@@ -260,13 +263,35 @@
       "treeId": "184ebd3ecb6427fa3515934002ea5eaa4dcfb5ec",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "44f6ba85198b53c4c4c3f104a610bb8bbe7131c5",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-11T10:03:25Z",
+      "paths": [
+        ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+        ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-11T10:45:54.517Z",
+      "treeId": "8bc52a53c88e01c89385daad1d5003bf0a231eab",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T10:44:52Z",
-    "at": "2026-09-11T10:44:56.211Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-f2b3ac93@2026-09-11T10:03:25Z",
+    "at": "2026-09-11T10:45:54.517Z"
+  },
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/acceptance.test.ts"
+  ],
+  "completedAt": "2026-09-11T10:55:52.818Z",
+  "reviewCompletedAt": "2026-09-11T10:55:52.818Z",
+  "reviewSummary": "Verified all 5 DoD items. (1) packages/moe-daemon/src/delivery/acceptance.test.ts: 6 describes, 6 literal it.skip, 0 bare it/test/.only. (2) Each describe has an UNSKIP OWNER comment matching the plan map (d72d8cc6 with prereq 5dd49fe2, 94f53492, 5b857738, 58f7db9a, b6c48bf0, b1c98508) plus a header map. (3) Grep found no toBeTruthy/Defined/expect.any/snapshot/objectContaining. Refusals assert exact code and codeName. Disk checks use exact bytes or projections. The one toContain is the documented case-4 wire deviation: McpAdapter.ts:310-314 forwards only {tool, codeName}, pinned by McpAdapter.test.ts. (4+5) Re-ran the exact plan gate from repo root. Run 1: focused file 6 skipped, but the suite had 1 failure in waitForTask.test.ts:344 (a 50ms-sleep waiter check), which passed 3/3 in isolation. Run 2: GATE_EXIT=0, focused 6 skipped (6), suite 106 passed | 1 skipped files, 1352 passed | 6 skipped. Rails: only this file is source. b5925e2 (qa checkpoint) carries it; completion 44f6ba8 is board-only. Both are pushed, and tree == HEAD. No production, schema or registry edits. Red proof reproduced independently in a detached worktree at 44f6ba8 with all six unskipped. Each fails at the claimed point: case 1 :1060 generation undefined; case 2 :1354 D claim resolves (live released-dependent); case 3 WAVE1-CONTRACT-MISSING record_candidate; case 4 real _run boot, then Tool not found reattach_attempt; case 5 :1888 generation undefined; case 6 the real ps1 wrapper claimed, gated and landed on wave1-pilot, then exited 0 with no receipt. Strict tsc on the file: 0 errors. No leaked processes or temp roots. Frozen contracts match landed code: ExecutionAttemptPhase values, and ATTEMPT_SUPERSEDED as STATE_CONFLICT -32002. Not exercised: the POSIX case-6 path (bash wrapper, process-group kill). The b6c48bf0 release-fencing gap is flagged in #architects."
 }
