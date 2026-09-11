@@ -19,8 +19,9 @@
     {
       "stepId": "step-1",
       "description": "SCOPE THE SPIKE AND PICK THE PROVIDER. Read-only, no edits. This is a decision task: the deliverable is knowledge plus a small typed artifact, and the launchers must end byte-identical. (a) Establish the central constraint before designing anything: neither wrapper has a dry-run or print-argv mode. Confirm it - the only argv introspection in scripts/moe-agent.sh is the codex probe around lines 5251-5264, which appends --help to the real argv to make the CLI short-circuit, and there is no flag that prints the argv without launching. Consequence: a contract test cannot execute a wrapper to capture argv, so it must assert against the scripts as text, the way scripts/tests/parity-check.sh already extracts and compares string vocabularies across both files. That limitation is itself a finding for the decision note. (b) Choose ONE provider and record why in the step note. The recommendation is codex, because it exercises all six descriptor facets with evidence that already exists in the repository: two session modes (the interactive terminal default and the exec headless path), real config construction in .codex/config.toml including mcp_servers entries, a startup timeout, a reasoning-effort key and a tools-approval pin, sandbox argv that differs per platform, and a genuine failure classification in the argv probe that stops a seat with a named code instead of relaunch-looping. The claude provider is a worse first choice precisely because its two wrappers diverge most - one runs in the launcher directory with a temporary config, the other changes directory and merges a user-level file - and the spike should learn whether a descriptor handles the ordinary case before the hardest one. If exploration changes your mind, say so in the note and proceed. (c) Read that provider's construction sites in BOTH scripts end to end and list, literally, every argv fragment, environment key, config key and failure code it builds. (d) Confirm whether docs/plans exists and how existing notes there are named and dated. (e) Record the git status baseline for the two wrapper scripts so step 5 can prove they are untouched.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-09-11T11:09:12.076Z"
     },
     {
       "stepId": "step-2",
@@ -85,7 +86,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T10:57:07.410Z",
+  "updatedAt": "2026-09-11T11:09:12.076Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
@@ -145,7 +146,8 @@
     "docs/plans/2026-09-11-provider-registry-spike.md",
     ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
     ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
-    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+    ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json"
   ],
   "completionSummary": "RECOMMENDATION: AGAINST starting a staged migration of launch policy into a typed provider registry now. FOR one narrow prerequisite first: a print-argv mode in both wrappers, then re-decide. Reason #1 of 4: a migration cannot be verified today, because neither wrapper can print its real argv, so text presence is the ceiling. Full note: docs/plans/2026-09-11-provider-registry-spike.md.\n\nEVIDENCE: codex transcribed into a typed descriptor. It has 31 shared facts, 13 divergent and 3 unsupported, so 29.5% diverge on the provider picked as the easy case. Five divergences change behaviour:\n1. The MOE_DAEMON_HOST post-discovery TOML upsert exists only in bash.\n2. For the moe MCP server, PowerShell hardcodes command=\"node\", while bash resolves the command and may omit args.\n3. The PowerShell 7.3-and-older quote guard rewrites prompt bytes.\n4. Bash escapes TOML values with json.dumps; PowerShell interpolates them raw.\n5. The two wrappers validate the startup timeout differently.\nCodex has no tool event stream the wrappers parse, so a codex seat can never reach the TOOL attribution tier. Resume is wrapper-level, so it is not a provider property.\n\nFILES: packages/moe-daemon/src/providers/providerDescriptor.ts (types, provisional location, no importer outside src/providers) and codexDescriptor.ts (codex only, pure data). providerDescriptor.contract.test.ts holds 20 vitest tests collected by the normal suite. The docs/plans note is the fourth file.\n\nDoD CAVEAT: \"reproduces current argv and config\" is proven as literal presence at the codex branches of both scripts, not as argv equality. No dry-run mode exists, as the plan anticipated. Presence is site-scoped because whole-file matching missed a mutation: 22 of 65 literals also occur in grok's writer and elsewhere. The site-scoped test catches that mutation and 3 descriptor corruptions. parity-check.sh has the same whole-file exposure.\n\nLAUNCHERS: byte-identical, git diff empty. parity-check PASS. postflight PASS with 25 scenari",
   "commits": [
@@ -184,20 +186,38 @@
       "treeId": "b0bc9aec6d9b6f00f404ea65bccb96c59bd578aa",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "c980ff8c44ec5c1308d90beb1eaf2b231b2fd685",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T10:33:42Z",
+      "paths": [
+        ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T10:57:10.041Z",
+      "treeId": "93c106b632323f7beb0c6879d16a49cc28bf2074",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e67b0dd2@2026-09-11T09:48:52Z",
-    "at": "2026-09-11T10:33:50.177Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T10:33:42Z",
+    "at": "2026-09-11T10:57:10.041Z"
   },
   "touchedFiles": [
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
     "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
     "packages/moe-daemon/src/providers/codexDescriptor.ts",
-    "docs/plans/2026-09-11-provider-registry-spike.md"
+    "docs/plans/2026-09-11-provider-registry-spike.md",
+    ".worktrees/qa-dd73/packages/moe-daemon/src/providers/zzQaAnalysis.test.ts"
   ],
   "reviewCompletedAt": "2026-09-11T10:56:00.602Z",
   "rejectionDetails": {
