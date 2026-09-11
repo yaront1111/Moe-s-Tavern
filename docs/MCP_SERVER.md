@@ -274,8 +274,9 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, budget, warnings?: string[], message, nextAction }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, planRevision, budget, warnings?: string[], message, nextAction }
 ```
+- `planRevision` is the revision this submission committed (read from the write's own Task, not a later cache read). It is the token a client sends back as `expectedPlanRevision` when it later approves the plan — see [Plan approval — `expectedPlanRevision` compare-and-swap](#plan-approval--expectedplanrevision-compare-and-swap).
 
 ---
 
@@ -2270,6 +2271,50 @@ Liveness ping: refreshes the calling worker's `lastActivityAt` with no other sid
 ## Plugin WebSocket Messages
 
 The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
+
+### Plan approval — `expectedPlanRevision` compare-and-swap
+
+**There is no `moe.approve_task` MCP tool, and none is being added.** Plan approval is a human-gated action that reaches the daemon *only* over `/ws`, through the two messages below. `moe.set_task_status` keeps its existing role/policy and is not an approval route.
+
+Both routes accept an **optional** `expectedPlanRevision`: the `planRevision` the approver actually reviewed. The daemon compares it to the task's current revision under the state mutex, **before** it cancels any pending SPEED timer and before it writes anything, so a refused approval leaves the task byte-identical (same status, `updatedAt`, `planApprovedAt` absence, assignment, activity log, pending auto-approval timer) and publishes nothing.
+
+**`APPROVE_TASK` request:**
+```typescript
+{ type: 'APPROVE_TASK', payload: { taskId: string, expectedPlanRevision?: number } }
+```
+
+**`UPDATE_TASK` request** (the AWAITING_APPROVAL → WORKING drag, e.g. a JetBrains board drop into the Working column — it delegates to the same approval path and still ignores the rest of `updates`):
+```typescript
+{ type: 'UPDATE_TASK', payload: { taskId: string, updates: { status: 'WORKING' }, expectedPlanRevision?: number } }
+```
+
+The token is **command metadata beside `taskId`/`updates`, never a task field.** `planRevision` and `expectedPlanRevision` are both on the `UPDATE_TASK` denylist, so a client that puts either inside `updates` has it stripped: a forged stamp can never be persisted, and a token smuggled through `updates` is never read as the token.
+
+**Token rules**
+
+- **Omitting the key** is the only token-free (legacy, unchecked) approval. JSON cannot carry `undefined`, so omission is the wire signal — an explicit `null` is a *malformed* token, not an omission.
+- A supplied token must be a **non-negative safe integer**. `null`, strings (`"3"`), booleans, fractional (`3.5`), negative, unsafe (`Number.MAX_SAFE_INTEGER + 1`), `NaN` and `Infinity` are all refused with `INVALID_INPUT` (`-32602`). There is no coercion and no fallback to the legacy path.
+- A **legacy task row with no stored `planRevision`** has effective revision `0`, so an explicit `0` matches it and approves.
+- Any **non-equal** revision is refused — a *newer* token is as stale-or-forged as an older one.
+- Unchanged and still token-free: **SPEED/TURBO auto-approval** and the **`moe.set_task_status` relaxed-mode** approval. They take the legacy path and are unaffected.
+
+**Mismatch `ERROR` frame** (identical for both routes; `operation` echoes the request type):
+```json
+{
+  "type": "ERROR",
+  "message": "[PLAN_REVISION_MISMATCH] Plan for task task-abc123 changed since it was reviewed (approved revision 4, current revision 5). Re-open the plan, review the current revision and approve again.",
+  "operation": "APPROVE_TASK",
+  "code": -32002,
+  "codeName": "PLAN_REVISION_MISMATCH",
+  "context": { "taskId": "task-abc123", "expectedPlanRevision": 4, "currentPlanRevision": 5 }
+}
+```
+
+`message`, `operation` and `context.taskId`/`context.epicId` are the pre-existing fields and are unchanged for every message type. `code` and `codeName` are added **only** when the failure is a `MoeError`; a plain error (an illegal status transition, say) still carries neither. **No other exception context is ever forwarded** — `context` is built from the request payload plus an allowlist of exactly `expectedPlanRevision` and `currentPlanRevision` (finite numbers only), so debugging fields such as `field`/`reason`/paths never reach a client.
+
+A malformed token produces the same shape with `code: -32602` and `codeName: "INVALID_INPUT"`, and no revision numbers in `context`.
+
+Clients get the token from the `planRevision` returned by `moe.submit_plan` (see above) or from the task record in `STATE_SNAPSHOT`/`TASK_UPDATED`. Send back the revision that was **rendered and reviewed**, never a newer value re-read from a cache.
 
 ### `GET_METRICS` → `METRICS`
 
