@@ -131,8 +131,8 @@
       "completedAt": "2026-09-11T12:16:44.636Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -161,12 +161,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:03.865Z",
-  "updatedAt": "2026-09-11T12:17:26.570Z",
+  "updatedAt": "2026-09-11T12:22:49.027Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:53:53.467Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T12:22:49.027Z",
+    "wallClockMs": 8935560
   },
   "contextFetchedBy": [
     "architect-31b9f5b1",
@@ -289,6 +291,21 @@
       "treeId": "3509758f62b9c1de7cfc919dd932f98a0ac2f504",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "8f994c36f055459905360d89915aa439930efc07",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T12:12:36Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T12:18:15.643Z",
+      "treeId": "79c0c2534dccf63c9bdf10e5ed1930f073f7f2bc",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -309,9 +326,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T12:17:23Z",
-    "at": "2026-09-11T12:17:26.570Z"
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-11T12:12:36Z",
+    "at": "2026-09-11T12:18:15.643Z"
   },
   "reviewStartedAt": "2026-09-11T12:17:17.296Z",
   "verification": {
@@ -320,5 +337,8 @@
     "outputTail": "Test Files  2 passed (2)\n     Tests  89 passed (89)\n  Start at  15:13:57\n  Duration  2.31s (tests 79%, transform 17%, import 4%)\nGATE_EXIT=0\n\nAlso fresh this session, from packages/moe-daemon:\n  npx tsc --noEmit -p tsconfig.json -> TSC_EXIT=0 (no output)\n  npm test -> FULL_EXIT=1, Test Files 1 failed | 108 passed | 1 skipped (110), Tests 5 failed | 1441 passed | 6 skipped (1452). The single failing file is src/util/taskTimeBudgetDocs.test.ts, which is UNTRACKED debris from another live session in this shared checkout (git ls-files --error-unmatch: \"Did you forget to 'git add'?\"); its assertions are doc-lint checks over docs/SCHEMA.md:742, a line identical at HEAD and untouched by this task.\n  npx vitest run --exclude '**/taskTimeBudgetDocs.test.ts' -> EXCL_EXIT=0, Test Files 108 passed | 1 skipped (109), Tests 1436 passed | 6 skipped (1442).",
     "reportedAt": "2026-09-11T12:17:17.296Z"
   },
-  "completionSummary": "Attempt records now ride the real claim/release lifecycle. All source landed in commit c7f6593 (later wip commits are board-state only).\n\nWHERE IT OPENS. claimNextTask.ts opens the attempt immediately AFTER the single assignment write (the one site both ranked and explicit-taskId claims funnel through), never before it: that write is an optimistic race, and an attempt opened by the loser would sit in phase running and make the WINNER's open fail with ATTEMPT_ALREADY_OPEN. The successful result carries attemptId and generation as SIBLINGS of `task` (task mirrors the persisted row). runnerId is filled from the worker id and workspace from the project root, each commented as placeholders the reattachment sibling replaces.\n\nTHREE RECOVERY ARMS on the claim path (helper openClaimAttempt): (1) nothing open -> open fresh, generation = max over all prior + 1; (2) ATTEMPT_ALREADY_OPEN on a genuine resume of a seat this worker already held -> ADOPT the open attempt, because a respawned CLI is the same execution, not a second one (`resumingOwnSeat` is read from state BEFORE the assignment write, so the two eviction branches — which null the assignment first — can never be mistaken for a resume); (3) ATTEMPT_ALREADY_OPEN otherwise -> close via the shared helper and open the successor generation (crash recovery). Anything else is fatal to the claim: a best-effort compensating unassign in its own try/catch, then rethrow — handing out an execution the daemon has no record of is exactly the silent state this epic removes.\n\nWHERE IT CLOSES. One shared helper, `closeOpenAttempts(state, taskId)` in attemptStore.ts (a task rail forbids copies; grep shows one definition). Idempotent (a second call writes nothing) and tolerant (a pre-attempts task returns []); it never deletes, because generations are allocated over every prior record including closed ones. Called right after the unassign write at: releaseTask.ts:338, workerLifecycle.releaseWorkerTasks:146 (serves deregister_worker), wor"
+  "completionSummary": "Attempt records now ride the real claim/release lifecycle. All source landed in commit c7f6593 (later wip commits are board-state only).\n\nWHERE IT OPENS. claimNextTask.ts opens the attempt immediately AFTER the single assignment write (the one site both ranked and explicit-taskId claims funnel through), never before it: that write is an optimistic race, and an attempt opened by the loser would sit in phase running and make the WINNER's open fail with ATTEMPT_ALREADY_OPEN. The successful result carries attemptId and generation as SIBLINGS of `task` (task mirrors the persisted row). runnerId is filled from the worker id and workspace from the project root, each commented as placeholders the reattachment sibling replaces.\n\nTHREE RECOVERY ARMS on the claim path (helper openClaimAttempt): (1) nothing open -> open fresh, generation = max over all prior + 1; (2) ATTEMPT_ALREADY_OPEN on a genuine resume of a seat this worker already held -> ADOPT the open attempt, because a respawned CLI is the same execution, not a second one (`resumingOwnSeat` is read from state BEFORE the assignment write, so the two eviction branches — which null the assignment first — can never be mistaken for a resume); (3) ATTEMPT_ALREADY_OPEN otherwise -> close via the shared helper and open the successor generation (crash recovery). Anything else is fatal to the claim: a best-effort compensating unassign in its own try/catch, then rethrow — handing out an execution the daemon has no record of is exactly the silent state this epic removes.\n\nWHERE IT CLOSES. One shared helper, `closeOpenAttempts(state, taskId)` in attemptStore.ts (a task rail forbids copies; grep shows one definition). Idempotent (a second call writes nothing) and tolerant (a pre-attempts task returns []); it never deletes, because generations are allocated over every prior record including closed ones. Called right after the unassign write at: releaseTask.ts:338, workerLifecycle.releaseWorkerTasks:146 (serves deregister_worker), wor",
+  "completedAt": "2026-09-11T12:22:49.027Z",
+  "reviewCompletedAt": "2026-09-11T12:22:49.027Z",
+  "reviewSummary": "APPROVED. Re-ran from packages/moe-daemon: gate `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` GATE_EXIT=0 (89 tests); `npm test` FULL_EXIT=0 (109 files, 1446 tests); `tsc --noEmit` TSC_EXIT=0 — the taskTimeBudgetDocs debris the worker saw failing now passes. All source is in checkpoint c7f6593 (8 files, +822/-5); completion 8f994c36 is board-JSON only (known QA-preflight-recovered pattern, not missing code); both pushed, tree == HEAD for src.\n\nDoD 6/6: (1) claimNextTask.ts:~370 opens the attempt inside runExclusive and AFTER the assignment write, returns attemptId+generation beside `task` (contract key set updated). (2) Four unassign sites close after their write — releaseTask.ts:338, workerLifecycle:146 (deregister_worker), workerStore:273 (deleteWorker), :377 (purge); each `continue`-guarded so a FAILED unassign keeps seat+attempt, purge keeps per-record try/catch so one bad record cannot abort startup. (3) Generation increment asserted as exact tuples ([1,closed],[2,running]) plus a disk read, not truthiness. (4) Claimable statuses, dependency gating, nextStatusForRelease untouched; green suite proves existing coverage intact. (5) Edges: alreadyAssigned opens nothing, lost race leaves nothing (control: winner gets generation 1), eviction-then-failed-write, ENOSPC hands the seat back, idempotent re-close, legacy no-attempt release silent. Rails: ONE helper (single closeOpenAttempts, 7 callers); OPEN_PHASES covers running/finalizing/reconciling; closed records never deleted; no git in the daemon.\n\nNoted, not blocking: release_task also gained optional attemptId/generation on assertAttemptCurrent (beyond plan, backward compatible — no identity = legacy no-op, enforcement.ts:159-166 — tested); MCP_SERVER.md claim/release sections lack the new fields (follow-up); sweeps.ts:255/302, qaReject.ts:237, unblockWorker.ts:109 and seat-freeing report_blocked still leave a running attempt on an unassigned row, self-healed by the next claim."
 }
