@@ -167,7 +167,15 @@ data class Task(
     val planSizeWarnings: List<String>? = null,
     // complete_task verification evidence + qa_approve summary (audit trail).
     val verification: TaskVerification? = null,
-    val reviewSummary: String? = null
+    val reviewSummary: String? = null,
+    // Daemon blocker/attention metadata, display data only: kept exactly as sent,
+    // never inferred from status. needsHumanReview is independent of BLOCKED.
+    val needsHumanReview: Boolean = false,
+    val blockedReason: String? = null,
+    val blockedOnTaskIds: List<String>? = null,
+    val blockedResourceId: String? = null,
+    val blockedFromStatus: String? = null,
+    val blockedAt: String? = null
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.

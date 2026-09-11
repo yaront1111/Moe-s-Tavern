@@ -131,6 +131,27 @@ object MoeJson {
         }
     }
 
+    /**
+     * Strict readers for the task blocker metadata only. The permissive getters above
+     * read `asString` from any JSON primitive, so a numeric 42 would become the task id
+     * "42" and `true` the reason "true"; these honour real JSON strings and nothing else.
+     */
+    private fun JsonObject.getStrictStringOrNull(key: String): String? {
+        val element = get(key)
+        if (element == null || !element.isJsonPrimitive) return null
+        val primitive = element.asJsonPrimitive
+        return if (primitive.isString) primitive.asString else null
+    }
+
+    /** Keeps only real JSON string members, in order; `[]` and all-invalid arrays give an empty list. */
+    private fun JsonObject.getStrictStringListOrNull(key: String): List<String>? {
+        val element = get(key)
+        if (element == null || !element.isJsonArray) return null
+        return element.asJsonArray.mapNotNull {
+            if (it.isJsonPrimitive && it.asJsonPrimitive.isString) it.asString else null
+        }
+    }
+
     private fun parseColumnLimits(settingsJson: JsonObject): Map<String, Int>? {
         val columnLimits = settingsJson.get("columnLimits")
             ?.takeIf { it.isJsonObject }
@@ -331,7 +352,13 @@ object MoeJson {
                 planCritiqueResult = parsePlanCritiqueResult(obj),
                 planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
                 verification = parseVerification(obj),
-                reviewSummary = obj.getStringOrNull("reviewSummary")
+                reviewSummary = obj.getStringOrNull("reviewSummary"),
+                needsHumanReview = getStrictBooleanOrDefault(obj, "needsHumanReview", false),
+                blockedReason = obj.getStrictStringOrNull("blockedReason"),
+                blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
+                blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
+                blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
+                blockedAt = obj.getStrictStringOrNull("blockedAt")
             )
         }
     }
@@ -480,7 +507,13 @@ object MoeJson {
             planCritiqueResult = parsePlanCritiqueResult(obj),
             planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
             verification = parseVerification(obj),
-            reviewSummary = obj.getStringOrNull("reviewSummary")
+            reviewSummary = obj.getStringOrNull("reviewSummary"),
+            needsHumanReview = getStrictBooleanOrDefault(obj, "needsHumanReview", false),
+            blockedReason = obj.getStrictStringOrNull("blockedReason"),
+            blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
+            blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
+            blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
+            blockedAt = obj.getStrictStringOrNull("blockedAt")
         )
     }
 
