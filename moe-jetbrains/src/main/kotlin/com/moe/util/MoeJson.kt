@@ -19,7 +19,6 @@ import com.moe.model.Project
 import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
 import com.moe.model.Task
-import com.moe.model.TaskBudget
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
 import com.moe.model.TaskSizingThresholds
@@ -327,7 +326,6 @@ object MoeJson {
                 reopenCount = obj.getIntOrDefault("reopenCount", 0),
                 taskRails = obj.getStringListOrNull("taskRails"),
                 metrics = parseTaskMetrics(obj),
-                budget = parseTaskBudget(obj),
                 priorHandoffs = parseHandoffs(obj),
                 failedDodItems = parseFailedDodItems(obj),
                 planCritiqueResult = parsePlanCritiqueResult(obj),
@@ -351,17 +349,6 @@ object MoeJson {
             wallClockMs = m.getLongOrNull("wallClockMs"),
             firstClaimAt = m.getStringOrNull("firstClaimAt"),
             doneAt = m.getStringOrNull("doneAt")
-        )
-    }
-
-    private fun parseTaskBudget(obj: JsonObject): TaskBudget? {
-        val element = obj.get("budget") ?: return null
-        if (element.isJsonNull || !element.isJsonObject) return null
-        val b = element.asJsonObject
-        return TaskBudget(
-            wallClockMs = b.getLongOrNull("wallClockMs"),
-            warnedAt = b.getStringOrNull("warnedAt"),
-            escalatedAt = b.getStringOrNull("escalatedAt")
         )
     }
 
@@ -488,7 +475,6 @@ object MoeJson {
             reopenCount = obj.getIntOrDefault("reopenCount", 0),
             taskRails = obj.getStringListOrNull("taskRails"),
             metrics = parseTaskMetrics(obj),
-            budget = parseTaskBudget(obj),
             priorHandoffs = parseHandoffs(obj),
             failedDodItems = parseFailedDodItems(obj),
             planCritiqueResult = parsePlanCritiqueResult(obj),

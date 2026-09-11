@@ -187,7 +187,7 @@ class MoeProjectService @JvmOverloads constructor(
             // Alive but never bound within the generous window: treat as hung and give up.
         } else if (attempt < maxAttempts) {
             // No live spawned process yet (external daemon coming up, or daemon.json not
-            // written): keep the original short budget before declaring failure.
+            // written): keep the original short retry window before declaring failure.
             publishStatus(false, "Waiting for daemon... (${attempt}/${maxAttempts})")
             scheduleRetryAttempt(maxAttempts, delayMs, attempt + 1)
             return

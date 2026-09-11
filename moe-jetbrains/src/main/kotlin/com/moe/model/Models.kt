@@ -112,12 +112,6 @@ data class TaskVerification(
     val reportedAt: String? = null
 )
 
-data class TaskBudget(
-    val wallClockMs: Long? = null,
-    val warnedAt: String? = null,
-    val escalatedAt: String? = null
-)
-
 data class HandoffNote(
     val from: String? = null,
     val to: String? = null,
@@ -163,9 +157,8 @@ data class Task(
     val stepsCompleted: List<String>? = null,
     val reopenCount: Int = 0,
     val taskRails: List<String>? = null,
-    // Schema additions for budget + metrics surface (rendered when present)
+    // Schema additions for the metrics surface (rendered when present)
     val metrics: TaskMetrics? = null,
-    val budget: TaskBudget? = null,
     val priorHandoffs: List<HandoffNote>? = null,
     val failedDodItems: List<FailedDodItem>? = null,
     val planCritiqueResult: PlanCritiqueResult? = null,
