@@ -118,7 +118,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:19.867Z",
-  "updatedAt": "2026-09-11T12:34:54.922Z",
+  "updatedAt": "2026-09-11T12:34:59.081Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "worker-010099ab",
@@ -166,7 +166,39 @@
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/util/claimGuards.ts",
     "packages/moe-daemon/src/tools/completeTask.test.ts",
-    "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+    ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json"
   ],
-  "completionSummary": "complete_task now holds the owning attempt OPEN in the `finalizing` phase instead of leaving it running, and stops inviting the worker to take more work; a claim by a worker with a finalizing attempt is refused, retryably, by name.\n\nWHERE THE PHASE CHANGES. src/tools/completeTask.ts:149-152 — `currentAttempt(state, task.id)` then `setAttemptPhase(..., 'finalizing')` — placed after every existing assertion and immediately BEFORE the single `updateTask` to REVIEW at :156. That ordering is the whole feature: the REVIEW write is what clears assignedWorkerId and frees the worker, so an attempt still `running` at that instant is exactly the window where a session starts task B while task A's bytes are unlanded. Failing forward leaves a conservatively finalizing attempt on a still-WORKING task (blocks only that worker, repaired by its own retry); the reverse order would leave a freed worker holding a running attempt, which is the defect. Not a cross-entity transaction, no rollback promised — stated in the code comment. Never `closed`: that is terminal in the store, and `closeOpenAttempts` is deliberately not imported into this file. A task with no attempt is a legacy row — currentAttempt returns null, it completes exactly as before and keeps the old `moe.wait_for_task` hint. The response gained flat `attemptId`/`generation` (the claim result's key names) and, when finalizing, a nextAction carrying ONLY a `reason` — no `tool`, no `args`.\n\nTHE NEW REFUSAL ON THE WIRE (src/tools/claimNextTask.ts:173-210, inside runExclusive, after blockingHold and before candidate resolution, ranking and any assignment write):\n  { hasNext: false,\n    code: \"CLAIM_ATTEMPT_FINALIZING\",\n    finalizingAttempt: { attemptId, generation, taskId },\n    message: \"Worker <id> still holds attempt <attemptId> (generation <n>) on task <taskId> in phase finalizing: its bytes are not landed yet, so no new task may be started. This is a retryable refusal, NOT a fatal error.\",\n    nextAction: { reason: \"End t"
+  "completionSummary": "complete_task now holds the owning attempt OPEN in the `finalizing` phase instead of leaving it running, and stops inviting the worker to take more work; a claim by a worker with a finalizing attempt is refused, retryably, by name.\n\nWHERE THE PHASE CHANGES. src/tools/completeTask.ts:149-152 — `currentAttempt(state, task.id)` then `setAttemptPhase(..., 'finalizing')` — placed after every existing assertion and immediately BEFORE the single `updateTask` to REVIEW at :156. That ordering is the whole feature: the REVIEW write is what clears assignedWorkerId and frees the worker, so an attempt still `running` at that instant is exactly the window where a session starts task B while task A's bytes are unlanded. Failing forward leaves a conservatively finalizing attempt on a still-WORKING task (blocks only that worker, repaired by its own retry); the reverse order would leave a freed worker holding a running attempt, which is the defect. Not a cross-entity transaction, no rollback promised — stated in the code comment. Never `closed`: that is terminal in the store, and `closeOpenAttempts` is deliberately not imported into this file. A task with no attempt is a legacy row — currentAttempt returns null, it completes exactly as before and keeps the old `moe.wait_for_task` hint. The response gained flat `attemptId`/`generation` (the claim result's key names) and, when finalizing, a nextAction carrying ONLY a `reason` — no `tool`, no `args`.\n\nTHE NEW REFUSAL ON THE WIRE (src/tools/claimNextTask.ts:173-210, inside runExclusive, after blockingHold and before candidate resolution, ranking and any assignment write):\n  { hasNext: false,\n    code: \"CLAIM_ATTEMPT_FINALIZING\",\n    finalizingAttempt: { attemptId, generation, taskId },\n    message: \"Worker <id> still holds attempt <attemptId> (generation <n>) on task <taskId> in phase finalizing: its bytes are not landed yet, so no new task may be started. This is a retryable refusal, NOT a fatal error.\",\n    nextAction: { reason: \"End t",
+  "commits": [
+    {
+      "sha": "e7e172a9675113e47450e12ca7b18140c4140696",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:34:55Z",
+      "paths": [
+        ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+        ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:34:59.081Z",
+      "treeId": "1952e881b23a24870cc55104d54bdff75742644b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T12:34:55Z",
+    "at": "2026-09-11T12:34:59.081Z"
+  }
 }
