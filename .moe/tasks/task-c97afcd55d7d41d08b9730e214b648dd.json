@@ -112,7 +112,7 @@
       "completedAt": "2026-09-11T09:58:03.170Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,17 +132,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:33.295Z",
-  "updatedAt": "2026-09-11T09:59:42.077Z",
+  "updatedAt": "2026-09-11T10:03:05.478Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:44:10.177Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T10:03:05.478Z",
+    "wallClockMs": 1135301
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
     "architect-2d25447a",
-    "worker-010099ab"
+    "worker-010099ab",
+    "qa-813933f7"
   ],
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -186,7 +189,62 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/state/StateManager.ts",
     "packages/moe-daemon/src/state/attemptStore.ts",
-    "packages/moe-daemon/src/state/attemptStore.test.ts"
+    "packages/moe-daemon/src/state/attemptStore.test.ts",
+    ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json"
   ],
-  "completionSummary": "Adds the ExecutionAttempt record and its store ONLY. Wiring into claim, complete and release belongs to the sibling tasks that depend on this one (task-a135d4d6, task-b6c48bf0, task-4d7074c0) — nothing here registers a tool, changes a handler, or touches a client.\n\nDELIVERED\n- types/schema.ts (+50): ExecutionAttemptPhase with exactly running | finalizing | reconciling | closed, and ExecutionAttempt { id, taskId, workerId, runnerId, generation, workspace, phase, startedAt, lastPhaseAt } plus optional processStartedAt and host. generation is documented as the fencing token: monotonic per task from 1, never reused after a close, a deletion or a restart, allocated as max-over-prior + 1 and explicitly not from a count; its domain is a positive safe integer shared with the Kotlin/JSON clients' Long. The optional process fields are documented as advisory reattachment hints that CANNOT prove a process is alive and that nothing may treat as proof.\n- state/attemptStore.ts (NEW, 253 lines): stateless functions taking the StateManager first, mirroring resourceStore. openAttempt, getAttempt, listAttempts, setAttemptPhase, currentAttempt, MAX_ATTEMPT_GENERATION. openAttempt applies, in order, idempotent repair on a caller-suppliable id (returns the persisted record, no second file, no generation advance), ATTEMPT_ID_TASK_MISMATCH when that id belongs to another task, ATTEMPT_ALREADY_OPEN carrying the live attempt's id/generation/phase, then the max-based generation, then writeEntity BEFORE map.set. setAttemptPhase stamps lastPhaseAt through the same ordering, treats re-asserting the current phase as a write-free no-op, and refuses any other change out of closed with ATTEMPT_CLOSED; no fuller transition table is encoded, deliberately.\n- state/StateManager.ts (+6): the attempts map beside resources and one loadEntities line in load(). No delegating methods, no snapshot change.\n- state/attemptStore.test.ts (NEW): 30 tests with exact assertions.\n\nVERIFICATION, all run fresh after the"
+  "completionSummary": "Adds the ExecutionAttempt record and its store ONLY. Wiring into claim, complete and release belongs to the sibling tasks that depend on this one (task-a135d4d6, task-b6c48bf0, task-4d7074c0) — nothing here registers a tool, changes a handler, or touches a client.\n\nDELIVERED\n- types/schema.ts (+50): ExecutionAttemptPhase with exactly running | finalizing | reconciling | closed, and ExecutionAttempt { id, taskId, workerId, runnerId, generation, workspace, phase, startedAt, lastPhaseAt } plus optional processStartedAt and host. generation is documented as the fencing token: monotonic per task from 1, never reused after a close, a deletion or a restart, allocated as max-over-prior + 1 and explicitly not from a count; its domain is a positive safe integer shared with the Kotlin/JSON clients' Long. The optional process fields are documented as advisory reattachment hints that CANNOT prove a process is alive and that nothing may treat as proof.\n- state/attemptStore.ts (NEW, 253 lines): stateless functions taking the StateManager first, mirroring resourceStore. openAttempt, getAttempt, listAttempts, setAttemptPhase, currentAttempt, MAX_ATTEMPT_GENERATION. openAttempt applies, in order, idempotent repair on a caller-suppliable id (returns the persisted record, no second file, no generation advance), ATTEMPT_ID_TASK_MISMATCH when that id belongs to another task, ATTEMPT_ALREADY_OPEN carrying the live attempt's id/generation/phase, then the max-based generation, then writeEntity BEFORE map.set. setAttemptPhase stamps lastPhaseAt through the same ordering, treats re-asserting the current phase as a write-free no-op, and refuses any other change out of closed with ATTEMPT_CLOSED; no fuller transition table is encoded, deliberately.\n- state/StateManager.ts (+6): the attempts map beside resources and one loadEntities line in load(). No delegating methods, no snapshot change.\n- state/attemptStore.test.ts (NEW): 30 tests with exact assertions.\n\nVERIFICATION, all run fresh after the",
+  "commits": [
+    {
+      "sha": "fbeb07611e52caefeaa9dfec36e3b0b671cdd3cf",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T09:46:25Z",
+      "paths": [
+        ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json",
+        "packages/moe-daemon/src/state/attemptStore.test.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T09:59:57.546Z",
+      "treeId": "e097c84e8aa721f911bb40517b9aca7bfde91114",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/state/attemptStore.ts",
+          "taskId": "task-b6c48bf029bf4170a603a91c12451df7"
+        },
+        {
+          "path": "packages/moe-daemon/src/state/StateManager.ts",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/state/attemptStore.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/tools/enterGovernance.test.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-11T09:46:25Z",
+    "at": "2026-09-11T09:59:57.546Z"
+  },
+  "completedAt": "2026-09-11T10:03:05.478Z",
+  "reviewCompletedAt": "2026-09-11T10:03:05.478Z",
+  "reviewSummary": "APPROVED. Read the diff in completion commit fbeb076 (5 paths, +828/-5). Re-ran both commands myself: `npx vitest run src/state/attemptStore.test.ts` EXIT=0, 30/30; `npm.cmd test` in packages/moe-daemon EXIT=0, 105 files / 1279 tests, 0 failures (worker saw 1281; delta is another session's dirty enterGovernance.test.ts in this shared tree, not a regression).\n\nDoD all met. Phase union is exactly running|finalizing|reconciling|closed; ExecutionAttempt has the 9 required + 2 optional fields (schema.ts:857-905); additive, schema version still 6. Store persists through state.writeEntity('attempts',...) as one JSON per attempt under .moe/attempts/, no fs import. nextGeneration is max-over-prior+1 (attemptStore.ts:97-111), proven by the 1/2/3 test and the delete-the-middle test demanding 4. ATTEMPT_ALREADY_OPEN carries attemptId, generation and phase, tested over all three open phases with byte-identity assertions on the prior record. Same-id re-open returns the record unchanged, same bytes, one file, generation not advanced; two resourceStore.durability-style writeEntity injection tests cover failed open and failed phase write.\n\nIndependent red proof, not trusting the recorded mutations: isolated worktree at fbeb076 with junctioned node_modules, mutated there only. Count-based generation gave 1 failed / 29 passed, EXIT=1, \"expected 3 to be 4\". map.set before writeEntity in both paths gave 3 failed / 27 passed, EXIT=1 (both injection tests plus the path-separator test). Matches the worker's record. Worktree and junction removed, real node_modules verified intact.\n\nRails held: zero files under src/tools/, no claim/complete/release change, no delegating methods, no migration, persist-before-publish both paths, no forbidden pattern. Header states the caller-holds-mutex requirement; process hints documented as not evidence of liveness.\n\nNon-blocking follow-up: .moe/attempts/ and .moe/resources/ missing from .gitignore. Tidiness only; attribution DENYs .moe/** except BOARD."
 }
