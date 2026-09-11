@@ -4,9 +4,16 @@ import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { releaseTaskTool } from './releaseTask.js';
+import { claimNextTaskTool } from './claimNextTask.js';
+import { deregisterWorkerTool } from './deregisterWorker.js';
+import { ToolTestHarness } from './toolTestHarness.js';
+import { currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { UNIDENTIFIED_RELEASER } from '../util/claimGuards.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
-import type { Project, Epic, HandoffNote, ImplementationStep, Task, Worker } from '../types/schema.js';
+import { MoeError } from '../util/errors.js';
+import type {
+  Project, Epic, ExecutionAttempt, ExecutionAttemptPhase, HandoffNote, ImplementationStep, Task, Worker,
+} from '../types/schema.js';
 
 // The helper shells out to git; these suites only care about the wiring, so the
 // module is mocked and the real subprocess is covered in util/diskState.test.ts.
@@ -824,5 +831,329 @@ describe('moe.release_task — caller attribution and CAS (task-6df8a07b)', () =
     // into the durable record as its own releaser.
     expect(state.getTask('task-1')!.priorHandoffs![0].releasedBy).toBe(UNIDENTIFIED_RELEASER);
     expect(posted[0]).toContain(UNIDENTIFIED_RELEASER);
+  });
+});
+
+// =============================================================================
+// Attempt closing on every release path (task-b6c48bf0). A release gives the
+// seat up, so the attempt that held it ends — through ONE shared helper — on
+// release_task, deregister_worker, worker deletion and the startup purge alike,
+// keyed on the seat and never on where nextStatusForRelease routed the task.
+// The deregister and purge cases live here on purpose: this file and
+// claimNextTask.test.ts are the task's named verification command, and neither
+// deregisterWorker.test.ts nor workerStore.test.ts exists.
+// =============================================================================
+describe('attempt closing on the release paths', () => {
+  const h = new ToolTestHarness();
+
+  beforeEach(() => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  /** A task held by `workerId`, with the worker's record pointing back at it. */
+  function seedHeldTask(taskId: string, workerId: string, overrides: Partial<Task> = {}): void {
+    h.createTask({ id: taskId, status: 'WORKING', assignedWorkerId: workerId, ...overrides });
+    h.createWorker({ id: workerId, status: 'CODING', currentTaskId: taskId });
+  }
+
+  async function openFor(taskId: string, workerId: string): Promise<ExecutionAttempt> {
+    return openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });
+  }
+
+  /** A record written the way a previous daemon run left it — BEFORE load(). */
+  function persistAttempt(fields: Pick<ExecutionAttempt, 'id' | 'taskId' | 'workerId' | 'generation' | 'phase'>): void {
+    const dir = path.join(h.moePath, 'attempts');
+    fs.mkdirSync(dir, { recursive: true });
+    const record: ExecutionAttempt = {
+      runnerId: fields.workerId,
+      workspace: h.testDir,
+      startedAt: '2026-09-11T00:00:00.000Z',
+      lastPhaseAt: '2026-09-11T00:00:00.000Z',
+      ...fields,
+    };
+    fs.writeFileSync(path.join(dir, `${fields.id}.json`), JSON.stringify(record, null, 2));
+  }
+
+  /** [generation, workerId, phase] for each attempt of the task, in generation order. */
+  function attemptsOf(taskId: string): Array<[number, string, ExecutionAttemptPhase]> {
+    return listAttempts(h.state, taskId).map((a) => [a.generation, a.workerId, a.phase]);
+  }
+
+  function readMoeFile(...segments: string[]): string {
+    return fs.readFileSync(path.join(h.moePath, ...segments), 'utf8');
+  }
+
+  async function release(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return await releaseTaskTool(h.state).handler(args, h.state) as Record<string, unknown>;
+  }
+
+  async function claimAs(workerId: string, taskId: string): Promise<{ attemptId: string; generation: number }> {
+    return await claimNextTaskTool(h.state).handler(
+      { statuses: ['WORKING'], taskId, workerId }, h.state) as { attemptId: string; generation: number };
+  }
+
+  it('release_task closes the attempt it releases and leaves none open for the unassigned task', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    await h.state.load();
+    const attempt = await openFor('task-1', 'worker-a');
+
+    await release({ taskId: 'task-1', workerId: 'worker-a' });
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(currentAttempt(h.state, 'task-1')).toBeNull();
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+    // Closed on disk and KEPT: generations are allocated over every prior record.
+    expect(JSON.parse(readMoeFile('attempts', `${attempt.id}.json`))).toMatchObject({
+      id: attempt.id, taskId: 'task-1', generation: 1, phase: 'closed',
+    });
+  });
+
+  it('closes on the seat, not the routed status: an all-steps-done release routed to REVIEW still closes', async () => {
+    seedHeldTask('task-1', 'worker-a', {
+      implementationPlan: [{ stepId: 'step-1', description: 'done', status: 'COMPLETED', affectedFiles: [] }],
+    });
+    await h.state.load();
+    await openFor('task-1', 'worker-a');
+
+    const result = await release({ taskId: 'task-1', workerId: 'worker-a' });
+
+    expect(result.status).toBe('REVIEW');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+  });
+
+  it('leaves the attempt running when the release is refused', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    await h.state.load();
+    await openFor('task-1', 'worker-a');
+
+    await expect(release({ taskId: 'task-1', workerId: 'worker-b' }))
+      .rejects.toMatchObject({ codeName: 'RELEASE_NOT_ASSIGNEE' });
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBe('worker-a');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'running']]);
+  });
+
+  it('release_task closes every open attempt of the task, not only the newest', async () => {
+    // openAttempt cannot produce two open records for one task; a restored backup
+    // or a hand-edited file can. The seat is given up, so neither may survive.
+    seedHeldTask('task-1', 'worker-a');
+    persistAttempt({ id: 'attempt-old', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
+    persistAttempt({ id: 'attempt-new', taskId: 'task-1', workerId: 'worker-a', generation: 2, phase: 'running' });
+    await h.state.load();
+
+    await release({ taskId: 'task-1', workerId: 'worker-a' });
+
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed'], [2, 'worker-a', 'closed']]);
+  });
+
+  it('deregister_worker closes the attempt of every task the worker held, and only those', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    // An out-of-sync second hold: the release loop scans tasks, not currentTaskId.
+    h.createTask({ id: 'task-2', status: 'REVIEW', assignedWorkerId: 'worker-a', order: 2 });
+    seedHeldTask('task-3', 'worker-b', { order: 3 });
+    await h.state.load();
+    await openFor('task-1', 'worker-a');
+    await openFor('task-2', 'worker-a');
+    await openFor('task-3', 'worker-b');
+
+    const result = await deregisterWorkerTool(h.state).handler(
+      { workerId: 'worker-a', reason: 'terminal_closed' }, h.state) as { releasedTaskIds: string[] };
+
+    expect([...result.releasedTaskIds].sort()).toEqual(['task-1', 'task-2']);
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+    expect(attemptsOf('task-2')).toEqual([[1, 'worker-a', 'closed']]);
+    // A bystander's seat was not given up, so its attempt keeps running.
+    expect(attemptsOf('task-3')).toEqual([[1, 'worker-b', 'running']]);
+  });
+
+  it('worker deletion closes the attempts of the tasks it releases', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    await h.state.load();
+    await openFor('task-1', 'worker-a');
+
+    await h.state.deleteWorker('worker-a');
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+  });
+
+  it('the startup purge closes the attempt of every task it releases, over records loaded from disk', async () => {
+    // index.ts runs load() and THEN purgeAllWorkers(); mirror that order over
+    // records a previous daemon run persisted.
+    seedHeldTask('task-1', 'worker-a');
+    seedHeldTask('task-2', 'architect-b', { status: 'PLANNING', order: 2 });
+    persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
+    persistAttempt({ id: 'attempt-2', taskId: 'task-2', workerId: 'architect-b', generation: 3, phase: 'running' });
+    await h.state.load();
+
+    await h.state.purgeAllWorkers();
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(h.state.getTask('task-2')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+    expect(attemptsOf('task-2')).toEqual([[3, 'architect-b', 'closed']]);
+    expect(JSON.parse(readMoeFile('attempts', 'attempt-2.json')).phase).toBe('closed');
+  });
+
+  it('the startup purge survives an attempt it cannot close: one bad record never aborts startup', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    seedHeldTask('task-2', 'worker-b', { order: 2 });
+    persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
+    persistAttempt({ id: 'attempt-2', taskId: 'task-2', workerId: 'worker-b', generation: 1, phase: 'running' });
+    await h.state.load();
+    const realWrite = h.state.writeEntity.bind(h.state);
+    vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+      if (args[0] === 'attempts' && args[1] === 'attempt-1') throw new Error('EPERM: attempt-1 is unwritable');
+      return realWrite(...args);
+    });
+
+    await expect(h.state.purgeAllWorkers()).resolves.toBeUndefined();
+
+    // Both seats were still released, and the other task's attempt still closed.
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(h.state.getTask('task-2')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'running']]);
+    expect(attemptsOf('task-2')).toEqual([[1, 'worker-b', 'closed']]);
+  });
+
+  it('the startup purge closes the attempt even when the task write fails: the seat is gone in memory', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
+    await h.state.load();
+    const realWrite = h.state.writeEntity.bind(h.state);
+    vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+      if (args[0] === 'tasks') throw new Error('EPERM: task-1 is unwritable');
+      return realWrite(...args);
+    });
+
+    await expect(h.state.purgeAllWorkers()).resolves.toBeUndefined();
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+  });
+
+  it('keeps the attempt when the unassign itself fails, on deregister and on deletion', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    seedHeldTask('task-2', 'worker-b', { order: 2 });
+    await h.state.load();
+    await openFor('task-1', 'worker-a');
+    await openFor('task-2', 'worker-b');
+    const realUpdate = h.state.updateTask.bind(h.state);
+    vi.spyOn(h.state, 'updateTask').mockImplementation(async (...args: Parameters<StateManager['updateTask']>) => {
+      if (args[1].assignedWorkerId === null) throw new Error('EIO: task write failed');
+      return realUpdate(...args);
+    });
+
+    await deregisterWorkerTool(h.state).handler({ workerId: 'worker-a' }, h.state);
+    await h.state.deleteWorker('worker-b');
+
+    // Neither seat was actually given up, so neither attempt may end.
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBe('worker-a');
+    expect(h.state.getTask('task-2')!.assignedWorkerId).toBe('worker-b');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'running']]);
+    expect(attemptsOf('task-2')).toEqual([[1, 'worker-b', 'running']]);
+  });
+
+  it('releases a task that never had an attempt silently on every path (legacy rows predate attempts)', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    seedHeldTask('task-2', 'worker-b', { order: 2 });
+    seedHeldTask('task-3', 'worker-c', { order: 3 });
+    await h.state.load();
+
+    const released = await release({ taskId: 'task-1', workerId: 'worker-a' });
+    const deregistered = await deregisterWorkerTool(h.state).handler(
+      { workerId: 'worker-b' }, h.state) as { releasedTaskIds: string[] };
+    await h.state.purgeAllWorkers();
+
+    expect(released.success).toBe(true);
+    expect(deregistered.releasedTaskIds).toEqual(['task-2']);
+    for (const taskId of ['task-1', 'task-2', 'task-3']) {
+      expect(h.state.getTask(taskId)!.assignedWorkerId).toBeNull();
+    }
+    // Closing never invents a record to close.
+    expect(listAttempts(h.state)).toEqual([]);
+    expect(fs.existsSync(path.join(h.moePath, 'attempts'))).toBe(false);
+  });
+
+  it('is idempotent: a second close of the same task finds nothing open and rewrites nothing', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    await h.state.load();
+    const attempt = await openFor('task-1', 'worker-a');
+    await release({ taskId: 'task-1', workerId: 'worker-a' });
+    const closedBytes = readMoeFile('attempts', `${attempt.id}.json`);
+    expect(JSON.parse(closedBytes).phase).toBe('closed');
+    // A pre-rollout-style assignment (no attempt opened), released again: the
+    // close now runs over a task whose only record is already closed.
+    await h.state.updateTask('task-1', { assignedWorkerId: 'worker-a' });
+
+    await release({ taskId: 'task-1', workerId: 'worker-a' });
+
+    expect(readMoeFile('attempts', `${attempt.id}.json`)).toBe(closedBytes);
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
+  });
+
+  it('refuses a late generation-1 release after the same worker re-claimed as generation 2, writing nothing', async () => {
+    h.createTask({
+      id: 'task-G',
+      status: 'WORKING',
+      implementationPlan: [{ stepId: 'step-1', description: 'Pending fixture step', status: 'PENDING', affectedFiles: ['file.ts'] }],
+    });
+    h.createWorker({ id: 'worker-W' });
+    await h.state.load();
+    const claimN = await claimAs('worker-W', 'task-G');
+    const releaseN = {
+      taskId: 'task-G',
+      workerId: 'worker-W',
+      attemptId: claimN.attemptId,
+      generation: 1,
+      reason: 'Explicit handoff: runner restarting the seat on a fresh CLI.',
+      handoffNote: { whatIsDone: 'Read the plan.', whatRemains: 'Execute step-1.' },
+    };
+    await release({ ...releaseN });
+    const claimN1 = await claimAs('worker-W', 'task-G');
+    expect(claimN.generation).toBe(1);
+    expect(claimN1.generation).toBe(2);
+    const snapshot = () => ({
+      task: readMoeFile('tasks', 'task-G.json'),
+      worker: readMoeFile('workers', 'worker-W.json'),
+      attemptN: readMoeFile('attempts', `${claimN.attemptId}.json`),
+      attemptN1: readMoeFile('attempts', `${claimN1.attemptId}.json`),
+    });
+    const before = snapshot();
+
+    const stale = await release({ ...releaseN }).then(() => null, (err: unknown) => err);
+
+    expect(stale).toBeInstanceOf(MoeError);
+    expect((stale as MoeError).code).toBe(-32002);
+    expect((stale as MoeError).codeName).toBe('ATTEMPT_SUPERSEDED');
+    expect(snapshot()).toEqual(before);
+    expect(h.state.getTask('task-G')!.assignedWorkerId).toBe('worker-W');
+
+    // POSITIVE CONTROL: the CURRENT generation still releases, and closes its attempt.
+    await release({ ...releaseN, attemptId: claimN1.attemptId, generation: 2 });
+    expect(h.state.getTask('task-G')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-G')).toEqual([[1, 'worker-W', 'closed'], [2, 'worker-W', 'closed']]);
+  });
+
+  it('refuses a malformed attempt identity as invalid input without releasing anything', async () => {
+    seedHeldTask('task-1', 'worker-a');
+    await h.state.load();
+    const attempt = await openFor('task-1', 'worker-a');
+
+    await expect(release({ taskId: 'task-1', workerId: 'worker-a', attemptId: attempt.id, generation: 0 }))
+      .rejects.toMatchObject({ code: -32602, codeName: 'INVALID_INPUT' });
+    // Bounded before use: a refusal message echoes the presented id.
+    await expect(release({ taskId: 'task-1', workerId: 'worker-a', attemptId: 'x'.repeat(129) }))
+      .rejects.toMatchObject({ code: -32602, codeName: 'INVALID_INPUT' });
+
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBe('worker-a');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'running']]);
   });
 });

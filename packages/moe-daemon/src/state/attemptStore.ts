@@ -22,7 +22,8 @@
 // never expose an attempt that is not on disk. Unlike resourceStore this store
 // appends no activity row and emits no event: both would require editing the
 // existing ACTIVITY_EVENT_TYPES / StateChangeEvent unions, and there is no
-// consumer yet. Whoever wires attempts into claim/complete/release adds them.
+// consumer yet. Claim and release open and close attempts without either; add
+// both together with the first consumer (an attempt view on the board).
 //
 // Recovery is an idempotent re-open, not a file repair: writeEntity is an atomic
 // temp-file-and-rename, so a torn half-JSON is not reachable. The reachable
@@ -250,4 +251,37 @@ export async function setAttemptPhase(
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
   return updated;
+}
+
+/**
+ * Close every non-closed attempt of a task. This is the ONE close path: every
+ * site that takes a task's seat away (release_task, deregister, worker deletion,
+ * the startup purge, a claim evicting the previous owner) calls it, so the rules
+ * below exist once. Returns the records it closed, in generation order.
+ *
+ * - Idempotent: an exit trap and a purge can both fire for the same task, so a
+ *   second call finds nothing open and does nothing — no write, no error.
+ * - Tolerant: every task created before attempts existed has no record at all,
+ *   and releasing one must not start failing. That is simply an empty result.
+ * - ALL open attempts, not just currentAttempt(): the caller is giving the seat
+ *   up, so none may survive for the task, and currentAttempt() would name only
+ *   the highest if a restored backup ever left two open.
+ * - Never deletes: generations are allocated over every prior attempt, closed
+ *   ones included, so a closed record is the history that keeps the next
+ *   generation strictly greater. Each close goes through setAttemptPhase and so
+ *   keeps its write-then-publish order: a failed write throws with the attempt
+ *   still published as open, and the caller decides whether that is fatal.
+ *
+ * Like every mutation here, the caller must hold state.mutex.
+ */
+export async function closeOpenAttempts(
+  state: StateManager,
+  taskId: string
+): Promise<ExecutionAttempt[]> {
+  const closed: ExecutionAttempt[] = [];
+  for (const attempt of listAttempts(state, taskId)) {
+    if (!OPEN_PHASES.has(attempt.phase)) continue;
+    closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
+  }
+  return closed;
 }

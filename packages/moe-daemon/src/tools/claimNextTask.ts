@@ -1,7 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
-import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
+import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import { closeOpenAttempts, currentAttempt, openAttempt } from '../state/attemptStore.js';
+import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
@@ -21,6 +23,62 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   MEDIUM: 2,
   LOW: 3
 };
+
+/**
+ * Open the attempt for a claim whose assignment write has ALREADY succeeded,
+ * or adopt the one still open on a genuine resume. Three arms:
+ *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
+ *  2. ATTEMPT_ALREADY_OPEN on a resume — this worker held the seat before this
+ *     claim and the open attempt is its own: adopt it. A respawned CLI coming
+ *     back to its task is the same execution, not a second one.
+ *  3. ATTEMPT_ALREADY_OPEN otherwise: it belongs to a seat that was given up
+ *     without closing it (a crash between a release's two writes, or a path
+ *     that does not close yet), so close it through the shared helper and open
+ *     the successor generation.
+ * Any other failure propagates; the caller treats it as fatal to the claim.
+ */
+async function openClaimAttempt(
+  state: StateManager,
+  taskId: string,
+  workerId: string,
+  resumingOwnSeat: boolean
+): Promise<ExecutionAttempt> {
+  const params = {
+    taskId,
+    workerId,
+    // The claim knows the worker and the project, nothing more. A distinct
+    // runner identity and a per-attempt workspace arrive with the reattachment
+    // work; they are deliberately not invented here.
+    runnerId: workerId,
+    workspace: state.projectPath,
+  };
+  try {
+    return await openAttempt(state, params);
+  } catch (err: unknown) {
+    if (!(err instanceof MoeError && err.codeName === 'ATTEMPT_ALREADY_OPEN')) throw err;
+  }
+  const open = currentAttempt(state, taskId);
+  if (open && resumingOwnSeat && open.workerId === workerId) return open;
+  await closeOpenAttempts(state, taskId);
+  return openAttempt(state, params);
+}
+
+/**
+ * Best-effort compensation for a claim that could not record its attempt: hand
+ * back the assignment the claim just wrote, so the task is not left held by an
+ * execution the daemon has no record of. Its own try/catch, because a failed
+ * compensation must never mask the error that made it necessary.
+ */
+async function handBackUnrecordedClaim(state: StateManager, taskId: string, workerId: string): Promise<void> {
+  try {
+    await state.updateTask(taskId, { assignedWorkerId: null }, undefined, workerId);
+  } catch (err: unknown) {
+    logger.error(
+      { taskId, workerId, error: err },
+      'claim_next_task: could not hand back the assignment after its attempt failed to open'
+    );
+  }
+}
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -216,6 +274,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // Try each candidate task in priority order; fall through on concurrency conflicts
       let task = tasks[0];
       let claimed = false;
+      // The attempt this claim opened or adopted; stays null when no worker is named.
+      let claimedAttempt: ExecutionAttempt | null = null;
       // Set when a candidate is skipped ONLY because the claimer has no team.
       // Without it the drained loop falls through to the concurrent-claim tail
       // and reports a race on a board where nothing raced.
@@ -232,6 +292,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // (1) Owner is gone / marked DEAD — clear the dangling assignment so
             // the optimistic-concurrency guard lets us reassign.
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+            // Clearing the seat ends its attempt HERE, not at the reassignment
+            // below: the solo-claim check can still skip this row, and a row
+            // left unassigned must not keep an attempt running.
+            await closeOpenAttempts(state, candidate.id);
           } else if (candidate.assignedWorkerId && candidate.assignedWorkerId !== params.workerId) {
             // (2) Owner is present AND alive — only reachable on an explicit taskId
             // claim (the ranked filter excludes live-owned tasks). Take over THIS
@@ -246,6 +310,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             assertNoLiveLease(candidate, false, params.workerId);
             const incumbent = candidate.assignedWorkerId;
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+            // The evicted incumbent's execution is superseded from this point on.
+            await closeOpenAttempts(state, candidate.id);
             await state.touchWorker(incumbent, { status: 'IDLE', currentTaskId: null });
           }
 
@@ -274,6 +340,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             }
           }
 
+          // Read BEFORE the write: only a worker that already held this seat is
+          // resuming. Both eviction branches above cleared the assignment, so
+          // they never count — and after the write the cases look identical.
+          const resumingOwnSeat = state.getTask(candidate.id)?.assignedWorkerId === params.workerId;
           try {
             task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId }, undefined, params.workerId);
           } catch (err: unknown) {
@@ -288,6 +358,21 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               continue; // Winner already gone — the row is free again, keep looking.
             }
             throw err; // Unexpected error — propagate
+          }
+
+          // Open the attempt AFTER the assignment write, never before it: that
+          // write is an optimistic race, and an attempt opened by the loser would
+          // sit in phase running and make the WINNER's open fail with
+          // ATTEMPT_ALREADY_OPEN — the loser must leave nothing behind. A claim
+          // that cannot record its attempt fails outright, because handing out
+          // an execution the daemon has no record of is the silent state attempts
+          // exist to remove; first it hands back the seat it just took (a resume
+          // took nothing new, so there is nothing to hand back).
+          try {
+            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat);
+          } catch (err: unknown) {
+            if (!resumingOwnSeat) await handBackUnrecordedClaim(state, candidate.id, params.workerId);
+            throw err;
           }
 
           // Auto-register or update worker entity
@@ -442,6 +527,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           generalChannelId,
           priorHandoffCount: hasHandoffs ? task.priorHandoffs!.length : 0,
         },
+        // Beside `task`, never inside it: `task` mirrors the persisted row and
+        // the attempt is a record of its own. Callers present these two values
+        // to fenced tools (assertAttemptCurrent); absent when no worker is named.
+        ...(claimedAttempt
+          ? { attemptId: claimedAttempt.id, generation: claimedAttempt.generation }
+          : {}),
         ...(task.reopenCount > 0
           ? {
               reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`

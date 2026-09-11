@@ -27,6 +27,7 @@ import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
+import { closeOpenAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
@@ -265,6 +266,13 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
         }, 'WORKER_RELEASED');
       } catch (error) {
         logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
+        continue; // Still assigned: it keeps its seat, and so its attempt.
+      }
+      // The deleted worker's seat is given up, so its attempt ends too.
+      try {
+        await closeOpenAttempts(state, task.id);
+      } catch (error) {
+        logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released by worker deletion');
       }
     }
 
@@ -359,6 +367,16 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
           clearedAssignments++;
         } catch (error) {
           logger.error({ error, taskId: task.id }, 'Failed to clear orphan task assignedWorkerId during worker purge');
+        }
+        // Every purged seat is given up, so its attempt closes as well — even
+        // when the task write above failed, because the in-memory task is
+        // already unassigned. Its own try/catch for the same reason the write
+        // has one: this runs on every daemon start, and one unwritable attempt
+        // record must not abort startup for the rest of the fleet.
+        try {
+          await closeOpenAttempts(state, task.id);
+        } catch (error) {
+          logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released during worker purge');
         }
       }
     }

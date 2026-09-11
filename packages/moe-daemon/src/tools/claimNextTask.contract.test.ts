@@ -60,7 +60,11 @@ describe('moe.claim_next_task', () => {
     };
 
     expect(result.hasNext).toBe(true);
-    expect(Object.keys(result).sort()).toEqual(['chatHint', 'hasNext', 'nextAction', 'task'].sort());
+    // attemptId + generation are the claimed attempt's fencing identity: two
+    // scalars beside `task` (task-b6c48bf0), not a context payload.
+    expect(Object.keys(result).sort()).toEqual(
+      ['attemptId', 'chatHint', 'generation', 'hasNext', 'nextAction', 'task'].sort()
+    );
     expect(Object.keys(result.task).sort()).toEqual([
       'assignedWorkerId',
       'epicId',

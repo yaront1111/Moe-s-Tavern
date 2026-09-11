@@ -152,7 +152,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T11:11:13.568Z",
+  "updatedAt": "2026-09-11T11:11:19.112Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
@@ -218,6 +218,38 @@
       "treeId": "17deaf2be2cc7e786d6206380f9982817a78f31c",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "d408634bb768527ca0e0881af8386ac33ecb163c",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T10:41:02Z",
+      "paths": [
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-11T11:11:19.112Z",
+      "treeId": "7ddc9a8e318879d1b90d4cbb5623878a5a6c7b00",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-0d11e05fd60945029385c80e28da9e1f"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -229,14 +261,15 @@
     "packages/moe-daemon/src/tools/recordCandidate.test.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "docs/SCHEMA.md",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-010099ab@2026-09-11T10:03:31Z",
-    "at": "2026-09-11T10:07:07.929Z"
+    "kind": "completion",
+    "sessionId": "worker-e67b0dd2@2026-09-11T10:41:02Z",
+    "at": "2026-09-11T11:11:19.112Z"
   },
   "priorBlockedReason": "No verified task-bound wrapper delivery boundary for this session. Its supplied moe-codex-instructions-worker-53136.md (created 2026-09-11T10:10:55Z) explicitly says preflight had no claimable task; this CLI claimed the row only around 10:34Z after waiting. Existing task baseline is the PREVIOUS worker snapshot: at=2026-09-11T10:07:05Z head=792e4ced24dd2f720c289e874613a217def36266 landed=1. Read-only current wrapper inspection confirms scripts/moe-agent.ps1:4176 establishes baseline only under AutoClaim + preflightOk + preflightTaskId; :5015 runs postflight only for preflightTaskId. A mid-CLI claim does not bind those wrapper variables. Need a fresh correctly task-bound wrapper session, not a hand-created baseline or manual commit bypass.\n\nBoth source prerequisites are now DONE/landed=true/merged=true in get_context, and assertAttemptCurrent exists at enforcement.ts:148; the prior missing-guard blocker is resolved. No source edits, tests, or newly completed steps this session. All nine planned paths clean against measured HEAD 63ce15548ec89c5692c38b2c4792bf32bca36a4a on moe/work-2026-09-10. Step-1 remains COMPLETED; steps 2-7 remain PENDING. Resume at step-2 after fresh task preflight. Foreign WIP untouched. Current evidence added to existing Serena task handoff; governor notified and separate wrapper defect filed in chat. This block requires session relaunch, not a new source dependency.",
   "reviewStartedAt": "2026-09-11T11:11:13.568Z",
@@ -246,5 +279,12 @@
     "outputTail": "Test Files  2 passed (2)\nTests  57 passed (57)\nDuration  1.90s (tests 53%, transform 40%, import 7%)\nFINAL_NAMED_EXIT=0\n--- isolated full suite (HEAD 037473c + the 9 task files): npm.cmd test -> GATE_FULL_EXIT=0, Test Files 108 passed | 1 skipped (109), Tests 1409 passed | 6 skipped (1415); HEAD-only baseline 1352 passed; npx tsc --noEmit -p tsconfig.json -> EXIT=0",
     "reportedAt": "2026-09-11T11:11:13.568Z"
   },
-  "completionSummary": "Delivered the frozen Candidate record, its store and the moe.record_candidate tool. This slice deliberately stops at RECORDING.\n\nChanged files:\n- types/schema.ts: readonly `Candidate` {id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt}. Names follow the held-out contract in acceptance.test.ts. No updatedAt, no schemaVersion bump.\n- StateManager.ts: `candidates` map, loaded from .moe/candidates.\n- NEW state/candidateStore.ts: record, get, listForTask, listForAttempt, validate. There is NO update path, and a test pins the export list.\n  - Write order is writeEntity, then map.set.\n  - A same-id record that differs is refused with -32002 CANDIDATE_IMMUTABLE. A byte-identical re-record replays (duplicate:true) and writes nothing.\n  - The attempt must exist and belong to the task.\n  - The shas are runner-reported and checked for shape only (7-40 hex).\n- NEW tools/recordCandidate.ts, registered in index.ts, non-blocking. Order: validate, then TASK_NOT_FOUND, then assertAttemptCurrent BEFORE the write, then the store. No git or child process.\n- NEW tests: store 36, tool 21.\n- docs/SCHEMA.md and docs/MCP_SERVER.md: append-only sections.\n\nVerification (fresh):\n- The named vitest command: EXIT 0, 57/57.\n- tsc: EXIT 0. Both test files also compile via an extending tsconfig.\n- Full suite, isolated worktree at HEAD 037473c plus these 9 files: EXIT 0, 108 files, 1409 passed. The HEAD-only baseline was 1352, so the delta is +57 with 0 failures.\n- Shared-tree `npm test` has 2 failures in releaseTask.test.ts. Those are uncommitted WIP of task-b6c48bf0, not this task.\n\nMutations: 10 of 10 killed, each restore sha-verified. They cover the fence after the write (5 fail), same-id overwrite (9), map before write (1), registry entry removed (2, including registry.test), no id tiebreak, live object handed out, integrity check dropped (3), replay without comparing (7), blocking:true, and DEL.\n\nA defect found and fixed during self-review: raw control bytes had made candi"
+  "completionSummary": "Delivered the frozen Candidate record, its store and the moe.record_candidate tool. This slice deliberately stops at RECORDING.\n\nChanged files:\n- types/schema.ts: readonly `Candidate` {id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt}. Names follow the held-out contract in acceptance.test.ts. No updatedAt, no schemaVersion bump.\n- StateManager.ts: `candidates` map, loaded from .moe/candidates.\n- NEW state/candidateStore.ts: record, get, listForTask, listForAttempt, validate. There is NO update path, and a test pins the export list.\n  - Write order is writeEntity, then map.set.\n  - A same-id record that differs is refused with -32002 CANDIDATE_IMMUTABLE. A byte-identical re-record replays (duplicate:true) and writes nothing.\n  - The attempt must exist and belong to the task.\n  - The shas are runner-reported and checked for shape only (7-40 hex).\n- NEW tools/recordCandidate.ts, registered in index.ts, non-blocking. Order: validate, then TASK_NOT_FOUND, then assertAttemptCurrent BEFORE the write, then the store. No git or child process.\n- NEW tests: store 36, tool 21.\n- docs/SCHEMA.md and docs/MCP_SERVER.md: append-only sections.\n\nVerification (fresh):\n- The named vitest command: EXIT 0, 57/57.\n- tsc: EXIT 0. Both test files also compile via an extending tsconfig.\n- Full suite, isolated worktree at HEAD 037473c plus these 9 files: EXIT 0, 108 files, 1409 passed. The HEAD-only baseline was 1352, so the delta is +57 with 0 failures.\n- Shared-tree `npm test` has 2 failures in releaseTask.test.ts. Those are uncommitted WIP of task-b6c48bf0, not this task.\n\nMutations: 10 of 10 killed, each restore sha-verified. They cover the fence after the write (5 fail), same-id overwrite (9), map before write (1), registry entry removed (2, including registry.test), no id tiebreak, live object handed out, integrity check dropped (3), replay without comparing (7), blocking:true, and DEL.\n\nA defect found and fixed during self-review: raw control bytes had made candi",
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    "packages/moe-daemon/src/state/candidateStore.test.ts"
+  ]
 }
