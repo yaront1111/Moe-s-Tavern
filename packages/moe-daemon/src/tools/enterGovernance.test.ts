@@ -50,6 +50,15 @@ describe('moe.enter_governance', () => {
     return worker;
   }
 
+  /** Push a live record past the 120s presence window so the purge evicts it. */
+  function ageWorker(workerId: string): void {
+    const worker = state.getWorker(workerId)!;
+    state.workers.set(workerId, {
+      ...worker,
+      lastActivityAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    });
+  }
+
   async function bindWorkerToTeamRole(workerId: string, role: TeamRole): Promise<void> {
     const team = await state.createTeam({ name: `${role}s`, role });
     await state.addTeamMember(team.id, workerId);
@@ -72,6 +81,56 @@ describe('moe.enter_governance', () => {
     const tool = enterGovernanceTool(state);
     await expect(tool.handler({ workerId: 'ghost' }, state))
       .rejects.toThrow(/not found|NOT_FOUND/i);
+  });
+
+  it('re-enters governance after a daemon restart purged the worker record', async () => {
+    // The regression: purgeAllWorkers runs on every daemon (re)start. It
+    // deletes every worker record and empties team memberIds, tombstoning each
+    // evicted id on the team. A governor session that outlives the restart then
+    // could not get back in — enter_governance threw WORKER_NOT_FOUND, and it
+    // is the only entry point the governor wrapper calls.
+    writeWorker({ id: 'governor-1', status: 'GOVERNING', currentTaskId: null });
+    await state.load();
+    await bindWorkerToTeamRole('governor-1', 'governor');
+    const teamId = state.getTeamForWorker('governor-1')!.id;
+    // Age the record AFTER binding — addTeamMember refreshes lastActivityAt.
+    // The purge keeps a registration still heartbeating inside the presence
+    // window, so only a governor quiet past it is actually evicted: a seat
+    // parked in a long chat_wait with no heartbeat sidecar, or one caught by
+    // deregister / the DEAD prune.
+    ageWorker('governor-1');
+
+    await state.purgeAllWorkers();
+    expect(state.getWorker('governor-1')).toBeNull();
+    expect(state.getTeam(teamId)!.memberIds).toEqual([]);
+    expect(state.getTeam(teamId)!.formerMemberIds).toContain('governor-1');
+
+    const tool = enterGovernanceTool(state);
+    const result = await tool.handler({ workerId: 'governor-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('GOVERNING');
+    expect(state.getWorker('governor-1')!.status).toBe('GOVERNING');
+    // Durable membership is restored, not left as a solo, so the role gate
+    // still passes on the next re-entry.
+    expect(state.getTeam(teamId)!.memberIds).toContain('governor-1');
+    expect(state.getWorker('governor-1')!.teamId).toBe(teamId);
+  });
+
+  it('still refuses a purged NON-governor record', async () => {
+    // The tombstone must not become a way in for the wrong role: an architect
+    // evicted by the same purge is refused exactly as a live one is.
+    writeWorker({ id: 'architect-1', status: 'IDLE' });
+    await state.load();
+    await bindWorkerToTeamRole('architect-1', 'architect');
+    ageWorker('architect-1');
+    await state.purgeAllWorkers();
+
+    const tool = enterGovernanceTool(state);
+    await expect(tool.handler({ workerId: 'architect-1' }, state))
+      .rejects.toThrow(/governor-only|NOT_ALLOWED/i);
+    // No record may be conjured for a role that cannot govern.
+    expect(state.getWorker('architect-1')).toBeNull();
   });
 
   it('rejects architect (or any non-governor worker) with NOT_ALLOWED', async () => {
