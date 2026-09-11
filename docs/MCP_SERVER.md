@@ -2360,7 +2360,11 @@ The token is **command metadata beside `taskId`/`updates`, never a task field.**
 
 A malformed token produces the same shape with `code: -32602` and `codeName: "INVALID_INPUT"`, and no revision numbers in `context`.
 
+> **Two detail-key spellings — parse both.** `PLAN_REVISION_MISMATCH` carries `expectedPlanRevision` + `currentPlanRevision`. The *producer's* separate `PLAN_REVISION_EXHAUSTED` error (a required bump refused at `Number.MAX_SAFE_INTEGER`, see [`docs/SCHEMA.md`](SCHEMA.md)) carries `currentRevision` + `maxPlanRevision` — a different spelling for the same idea. It shipped first and downstream parsers already bind to it, so it was deliberately left alone rather than renamed. Only the mismatch pair crosses the `/ws` error-context allowlist; the exhaustion details stay daemon-side.
+
 Clients get the token from the `planRevision` returned by `moe.submit_plan` (see above) or from the task record in `STATE_SNAPSHOT`/`TASK_UPDATED`. Send back the revision that was **rendered and reviewed**, never a newer value re-read from a cache.
+
+End-to-end behaviour across both IDEs — a human reproduction checklist, the recovery paths, and what this deliberately does *not* fence — is in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
 
 ### `GET_METRICS` → `METRICS`
 
