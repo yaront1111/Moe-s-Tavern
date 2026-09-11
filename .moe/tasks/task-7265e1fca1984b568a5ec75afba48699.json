@@ -84,8 +84,8 @@
       "completedAt": "2026-09-11T14:03:22.834Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -110,12 +110,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:46.031Z",
-  "updatedAt": "2026-09-11T14:04:14.370Z",
+  "updatedAt": "2026-09-11T14:11:08.935Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T10:19:45.220Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-11T14:11:08.935Z",
+    "wallClockMs": 100283715
   },
   "contextFetchedBy": [
     "architect-6f3113ee",
@@ -198,6 +200,21 @@
       "treeId": "84c68b4890ace2f38debc190e1c740c020fcce49",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "af881225721bc638cab51e74ff9f8d68b5e087ba",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T13:40:42Z",
+      "paths": [
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T14:05:25.691Z",
+      "treeId": "bb7857f3672c0063c594435c972ca2f2ddd40fe9",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -211,9 +228,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T14:04:11Z",
-    "at": "2026-09-11T14:04:14.370Z"
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-11T13:40:42Z",
+    "at": "2026-09-11T14:05:25.691Z"
   },
   "workStartedAt": "2026-09-11T13:41:06.767Z",
   "reviewStartedAt": "2026-09-11T14:03:56.049Z",
@@ -223,5 +240,12 @@
     "outputTail": "GATE_EXIT=0\ndaemon vitest:  Test Files  110 passed | 1 skipped (111)\n                     Tests  1475 passed | 6 skipped (1481)\nvscode:         > moe-vscode@0.8.0 test  -> tests 113 / pass 113 / fail 0 / skipped 0\n                > moe-vscode@0.8.0 compile -> 0 'error TS' lines\nJetBrains (fresh --rerun, :test EXECUTED, BUILD SUCCESSFUL):\n                FILES=14 STALE=0 TESTS=186 FAILURES=0 ERRORS=0 SKIPPED=0\n                (PlanApprovalContractTest 18, PlanReviewApprovalStateTest 32)\ncollection proof: npx vitest list -> LIST_EXIT=0, 1351 collected, exactly 15 from planApproval.integration.test.ts\nnpx tsc --noEmit -p packages/moe-daemon/tsconfig.json -> EXIT=0\nThe 6 skipped daemon tests are the pre-existing held-out it.skip cases in src/delivery/acceptance.test.ts, untouched by this task.",
     "reportedAt": "2026-09-11T14:03:56.049Z"
   },
-  "completionSummary": "Final integration gate over the six delivered slices of plan-approval freshness. This parent added NO production code — it proves the feature works across layers and documents it.\n\nDELIVERED (4 paths, all mine):\n1. packages/moe-daemon/src/server/planApproval.integration.test.ts (NEW, 866 lines, 15 tests) — cross-layer only, zero duplication of any child matrix. Real http server on port 0, real StateManager over a temp project, real McpAdapter, genuine ws clients on BOTH /ws and /mcp, CONTROL mode; no private handler called, no two direct calls raced, frames matched by content not arrival order. Covers: a plugin reviewer's rendered revision invalidated by each of the THREE writers (submit_plan over /mcp, a real amend_plan_step over /mcp, another plugin client's UPDATE_TASK DoD edit) with the exact refusal contract and unchanged persisted bytes/assignment/activity, then a refresh that approves; the stale-token refusal on the UPDATE_TASK drag route; the one-bump rule end to end (both surfaces in one write = +1, byte-identical resubmit = +1, equal sanitized edit and comments-only = no bump, and the rendered token still approves after both); durability across a real daemon restart; a legacy stamp-less row approving with the key omitted and refusing 0 once a wire edit bumps it; a numeric-looking STRING token refused INVALID_INPUT with no revision leak; a forged planRevision riding inside a legitimate DoD edit (derived bump wins, forgery never persists); a reviewer that drops its socket mid-refusal; and a serialized amend-vs-approve race asserting BOTH consistent outcomes strictly.\n2. docs/PLAN_APPROVAL_FRESHNESS.md (NEW) — the one cross-client user-visible note: what changed, a three-layer map, deterministic by-hand reproduction for JetBrains and VS Code, a recovery table quoting the clients' actual message text, explicit boundaries, the error contract, and the DoD-to-test evidence map.\n3. docs/SCHEMA.md — ONE paragraph corrected: the producer section's closing Scope note"
+  "completionSummary": "Final integration gate over the six delivered slices of plan-approval freshness. This parent added NO production code — it proves the feature works across layers and documents it.\n\nDELIVERED (4 paths, all mine):\n1. packages/moe-daemon/src/server/planApproval.integration.test.ts (NEW, 866 lines, 15 tests) — cross-layer only, zero duplication of any child matrix. Real http server on port 0, real StateManager over a temp project, real McpAdapter, genuine ws clients on BOTH /ws and /mcp, CONTROL mode; no private handler called, no two direct calls raced, frames matched by content not arrival order. Covers: a plugin reviewer's rendered revision invalidated by each of the THREE writers (submit_plan over /mcp, a real amend_plan_step over /mcp, another plugin client's UPDATE_TASK DoD edit) with the exact refusal contract and unchanged persisted bytes/assignment/activity, then a refresh that approves; the stale-token refusal on the UPDATE_TASK drag route; the one-bump rule end to end (both surfaces in one write = +1, byte-identical resubmit = +1, equal sanitized edit and comments-only = no bump, and the rendered token still approves after both); durability across a real daemon restart; a legacy stamp-less row approving with the key omitted and refusing 0 once a wire edit bumps it; a numeric-looking STRING token refused INVALID_INPUT with no revision leak; a forged planRevision riding inside a legitimate DoD edit (derived bump wins, forgery never persists); a reviewer that drops its socket mid-refusal; and a serialized amend-vs-approve race asserting BOTH consistent outcomes strictly.\n2. docs/PLAN_APPROVAL_FRESHNESS.md (NEW) — the one cross-client user-visible note: what changed, a three-layer map, deterministic by-hand reproduction for JetBrains and VS Code, a recovery table quoting the clients' actual message text, explicit boundaries, the error contract, and the DoD-to-test evidence map.\n3. docs/SCHEMA.md — ONE paragraph corrected: the producer section's closing Scope note",
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/planApproval.integration.test.ts",
+    "docs/PLAN_APPROVAL_FRESHNESS.md"
+  ],
+  "completedAt": "2026-09-11T14:11:08.935Z",
+  "reviewCompletedAt": "2026-09-11T14:11:08.935Z",
+  "reviewSummary": "APPROVED. Zero production code; exactly the 4 planned paths. No forbidden patterns.\n\nGATE RE-RUN BY ME (PowerShell, exit codes outside pipes): daemon EXIT=0, 110 files, 1475 passed|6 skipped (pre-existing it.skip). Collection proven: focused run of the new file EXIT=0, 15/15. VS Code test+compile EXIT=0, 113/113, no 'error TS'. JetBrains gradlew test --rerun under the jetbrains-gradle lease (acquired+released) EXIT=0, :test EXECUTED, fresh XML 14 files/186 tests/0 failures/0 errors/0 skipped.\n\nRED PROOF TAKEN INDEPENDENTLY in a detached worktree + node_modules junction; shared tree never mutated. Baseline 15/15. Fence killed (taskStore.ts:473) = 8 failed/7 passed EXIT=1. Bump killed (derivePlanRevision returns current) = 10 failed/5 passed EXIT=1. Junction deleted before worktree removal; real node_modules intact.\n\nDoD1 SCHEMA.md:614 planRevision section + 36 measured submitPlan tests. DoD2 planApproval.test.ts 30 plus my run asserting exact values: -32002/PLAN_REVISION_MISMATCH, context deep-equal {taskId,expectedPlanRevision,currentPlanRevision}, byte-identical json, assignment unchanged, zero PLAN_APPROVED activity; malformed '3' -> -32602 with context exactly {taskId}; stamp-less legacy row approves with the key omitted. DoD3 PlanApprovalContractTest 18 + PlanReviewApprovalStateTest 32 green in my XML. DoD4 61 VS Code tests = claimed 28+33. DoD5 both gates green.\n\nCross-layer value real: two sockets, three writers, one-bump rule end to end, durability across restart, forged revision stripped, socket dropped mid-refusal, race with BOTH mutex outcomes asserted.\n\nDOCS AUDITED: every evidence-map count exact at runtime; every quoted UI string exists. SCHEMA fix corrects a claim falsified by the consumer landing; CAS child's MCP_SERVER section intact.\n\nCOMMITS: six children landing.merged true. Source in checkpoint 27390b5; completion af88122 is board-json-only (code already in its parent). git diff HEAD for packages/docs/plugins EMPTY."
 }
