@@ -14,22 +14,26 @@
     {
       "stepId": "step-1",
       "description": "VERIFY THE THREE CHILDREN LANDED, THEN CONFIRM WHAT IS LEFT. Read-only, no edits. This parent is the docs and integration gate over the original Definition of Done; it must not re-implement a single line of child work. (a) Prove each child landed by landing.merged true or `git log <branch> --grep \"Moe-Task: <id>\"`: task-0471536723384823995c88fe0fb58e15 (JetBrains presentation), task-435683c2df8f47e7b77a77dc51ba62e9 (JetBrains model and both parsers) and task-9d731a5e5eb14951a9d342e5976883b6 (VS Code detail, board and model). All three were unlanded on 2026-09-11, so re-measure; if any is missing, moe.report_blocked naming the specific ids rather than finishing their work here. (b) Run the two client-side Definition-of-Done checks as VERIFICATION, not as edits: `grep -rni budget moe-jetbrains/src/main` must return nothing, and `grep -rn \"task.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` must return nothing. Correct one line of the task prose while you are here: no MetricsPanel change is needed or wanted - the JetBrains remaining-versus-cap readout lives in TaskDetailDialog and the board badge, both owned by the first child. If a grep hit survives in a child's file, report it to that child rather than fixing it here. (c) Read the three live doc defects this parent DOES own, all of which still describe a removed feature as active: docs/CONFIGURATION.md line 168 says moe.submit_plan seeds an absent task budget from pacePerStepMs; docs/SCHEMA.md lines 180-181 repeat that seeding claim, line 437 presents the task budget field as a soft wall-clock cap, and lines 742-746 describe the daemon checking firstClaimAt plus the cap. packages/moe-daemon/src/types/schema.ts already contradicts all of it at lines 119 and 722-728 with DEPRECATED and ignored notes. (d) Note the two near-misses that must NOT be scrubbed: schema.ts line 740 speaks of a reopen budget, which is the live reopen cap, and the chat hop limit is likewise live. Record foreign dirty paths and preserve them.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "note": "READ-ONLY, no edits. Bound seat: baseline .git/moe/baseline/task-0d11e05f...tsv present (11:04:30Z, head=8d2ac40). (a) All 3 children DONE and landed, each an ancestor of HEAD 8d2ac40 and on origin/moe/work-2026-09-10: task-04715367 = 792e4ce feat (TaskDetailDialog.kt, TaskCard.kt, MoeBundle.properties) + 97f295b recovered wip (MoeDuration.kt, TaskTimingPresentationTest.kt); task-435683c2 = e09bcb6 feat [qa self-land] (Models.kt, MoeJson.kt, MoeProjectService.kt, MoeJsonTest.kt; e0ed8ca carried board only); task-9d731a5e = fe608c7 feat (board.js, TaskDetailPanel.ts, BoardViewProvider.ts, types/moe.ts, tests/task-time-budget.test.cjs). (b) DoD greps as verification: `grep -rni budget moe-jetbrains/src/main` exit 1 (no hit); `grep -rn \"task.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` exit 1; also case-insensitive `budget` over vscode src+media exit 1; `git grep` on HEAD for both exit 1. Prose correction confirmed: no MetricsPanel change needed. (c) Doc defects confirmed live: CONFIGURATION.md:168 (seeding + default/range); SCHEMA.md:180-181 (seeding comment + default), :437 (`budget?: TaskBudget; // Soft wall-clock cap`), :741-750 (TaskBudget interface doc says daemon checks firstClaimAt+wallClockMs, warns 80%/escalates 100%). Daemon reality verified: schema.ts:119/722-728 DEPRECATED notes are in HEAD; validators.ts:202-204 keeps pacePerStepMs in the settings allowlist as accepted-and-ignored; WebSocketServer.ts:73 lists 'budget' as a server-owned field clients cannot set; no seeding/checking code anywhere in daemon src (submitPlan.ts has no budget). (d) Near-misses to preserve: schema.ts:740 'reopen budget' (live cap), SCHEMA.md:218 chatMaxAgentHops, :375 maxReopens, :767 '### Reopen cap', CONFIGURATION.md:173 chatMaxAgentHops. CONTENTION: docs/SCHEMA.md holds peer task-4d7074c0's (worker-e67b0dd2, at final step-7) UNCOMMITTED +49-line Candidate section (hunks at ~977 and ~1420) and it is peer-declared; my edits are in disjoint hunks but whole-file landing would carry their bytes — I will do CONFIGURATION.md + test first and re-check whether the peer has landed SCHEMA.md before step 4. OUT OF SCOPE, noted for a follow-up card: docs/MCP_SERVER.md:273 (submit_plan budget.wallClockMs validation note), :279 (`budget` in submit_plan Returns) and :2058-2079 (a documented `moe.set_task_budget` tool that is NOT in getTools()) — also contested by peer task-4d7074c0. Foreign dirty paths preserved untouched: .moe/tasks/{0ad3744e,4d7074c0,aec72949,b6c48bf0,dd739724,e7f534f1}.json, docs/MCP_SERVER.md, docs/SCHEMA.md, daemon src/state/{StateManager,attemptStore,workerLifecycle,workerStore}.ts, src/tools/{claimNextTask(.contract).test,claimNextTask,index,releaseTask(.test)}.ts, src/types/schema.ts; untracked .moe/epics/epic-3b8eb56d..json, .moe/resources/, .moe/tasks/{808869c5,9e851d4e}.json, src/state/candidateStore(.test).ts, src/tools/recordCandidate(.test).ts.",
+      "startedAt": "2026-09-11T11:03:28.408Z",
+      "completedAt": "2026-09-11T11:08:45.431Z"
     },
     {
       "stepId": "step-2",
       "description": "RED FIRST: A DOC-CONTRACT GUARD THAT FAILS ON TODAY'S DOCS. Create packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, a vitest file that reads docs/CONFIGURATION.md and docs/SCHEMA.md off disk and asserts the documented contract matches the daemon's actual behavior. Resolve the repository root from import.meta.url through fileURLToPath the way src/tools/registry.test.ts resolves its own directory, and fail with a clear message if a file is missing rather than silently passing - that is this test's own error handling, and a guard that passes when it cannot find its input is worse than no guard. Anchor the assertions on specific terms instead of vague prose matching: every line mentioning pacePerStepMs, and every line describing the task time-budget field or its interface, must also carry a deprecation marker on the same line or in its immediately adjacent annotation, and no line may state that a submission SEEDS a budget or that the daemon CHECKS a cap. Add the positive half, which is what keeps this guard from becoming a blunt search-and-destroy: assert the chat hop limit and the reopen cap are still documented AND still unmarked as deprecated, so a later over-eager cleanup that scrubs live settings fails here. Run it now against unmodified docs - Windows `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts`, remembering npm.cmd if the PowerShell policy blocks the shim - and save the failing output. It must fail on the seeding sentence in CONFIGURATION.md, which is the recorded proof that the docs really did advertise a removed feature.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
-      ]
+      ],
+      "startedAt": "2026-09-11T11:08:54.504Z"
     },
     {
       "stepId": "step-3",
@@ -65,11 +69,11 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-de4739a8",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Human board unblock 2026-09-10, explicit operator decision after the risk was stated. Force-clearing the dependency wait on the three time-cap slices (0471536723, 435683c2, 9d731a5e), which are in PLANNING and have not landed. Architect note: dependsOn still gates WORKING-column claims, so this row can now be planned but not worked until those three reach DONE. Plan it against the slices' declared contracts, not against merged code.",
+  "reopenReason": "Governor clearing a session-scoped block. worker-2020d87c is an interactive Codex seat launched idle; the runtime assigned this task mid-session, so no per-task baseline exists (.git/moe/baseline/task-0d11e05f....tsv MISSING) and the wrapper would run no post-flight for it. The task itself is unblocked: all three children (task-04715367, task-435683c2, task-9d731a5e) are DONE and landed. Returning to WORKING-unassigned for a wrapper-bound seat. No source edits were made; step 1 was read-only and incomplete.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -84,15 +88,18 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:46.385Z",
-  "updatedAt": "2026-09-11T09:44:03.789Z",
+  "updatedAt": "2026-09-11T11:08:54.504Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T17:34:22.626Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-6f3113ee",
-    "architect-8b93cc67"
+    "architect-8b93cc67",
+    "worker-2020d87c",
+    "worker-de4739a8"
   ],
   "dependsOn": [
     "task-0471536723384823995c88fe0fb58e15",
@@ -104,8 +111,10 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "Oversized removal has been decomposed into three existing-module implementation slices with own regressions: task-0471536723384823995c88fe0fb58e15, task-435683c2df8f47e7b77a77dc51ba62e9, task-9d731a5e5eb14951a9d342e5976883b6. Children are BACKLOG and linked by dependencies (JetBrains UI -> JetBrains model/parser -> VS Code). This parent preserves original DoD and waits for their delivery before its own docs/doc-guard and final feature integration plan. Detailed allocation and exact future verification command are in the task comment. No source edits, plan submission, approval, builds or tests performed. This is a dependency wait, not completed work.",
-  "stepsCompleted": [],
+  "priorBlockedReason": "UNBOUND WRAPPER SESSION: claimed inside a CLI launched with no pre-flight task. Fresh check: D:/projexts/moes/.git/moe/baseline/task-0d11e05fd60945029385c80e28da9e1f.tsv is MISSING. Baseline/postflight are gated on preflightTaskId; current launch supplies none. Governor explicitly instructed this seat to block before edits if unbound. All three declared children are now DONE and landed per get_context; this is NOT a dependency wait. No source edits or tests performed; foreign docs/SCHEMA.md and daemon WIP preserved. Resume only after actual wrapper task-bound preflight; do not fabricate a baseline or hand-land. Step 1 read-only inspection started, not completed.",
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:44:03.742Z",
   "planningNotes": {
@@ -120,5 +129,6 @@
       "packages/moe-daemon/src/tools/registry.test.ts (the precedent for a test that reads repository files and asserts a contract)"
     ]
   },
-  "planApprovedAt": "2026-09-11T09:44:03.789Z"
+  "planApprovedAt": "2026-09-11T09:44:03.789Z",
+  "workStartedAt": "2026-09-11T11:03:28.408Z"
 }
