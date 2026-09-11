@@ -977,6 +977,48 @@ interface ResourceQueueEntry {
 
 ---
 
+## Candidate
+
+**File:** `.moe/candidates/{candidate-id}.json` (one file per candidate)
+
+The exact bytes a task is offering for delivery, frozen so that review and checks can bind to something immutable instead of to a moving working tree. The runner records a candidate through `moe.record_candidate` (contract in docs/MCP_SERVER.md), and only `packages/moe-daemon/src/state/candidateStore.ts` writes the file. The addition is purely additive, with no `schemaVersion` bump and no migration. A project that has never recorded a candidate has no `candidates/` directory and loads an empty collection.
+
+```typescript
+interface Candidate {
+  readonly id: string;             // "cand-<32 hex>" when the daemon generates it; a caller-supplied
+                                   // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly attemptId: string;      // The ExecutionAttempt (.moe/attempts/) that produced the bytes;
+                                   // must exist and belong to taskId when the candidate is recorded
+  readonly taskId: string;
+  readonly baseRevision: string;   // Runner-REPORTED commit sha (7-40 hex) the bytes were built on
+  readonly treeSha: string;        // Runner-REPORTED tree or commit sha (7-40 hex) naming the bytes
+  readonly deliveryTarget: string; // Where the runner intends to land them, e.g. "refs/heads/wave1-pilot"
+  readonly createdAt: string;      // ISO 8601, the daemon's clock at first record (never the caller's)
+}
+```
+
+**Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
+
+**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never runs git, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
+
+**Queries.** Candidates are listed per task or per attempt, ordered by `createdAt` and then `id`, so ties are deterministic.
+
+**Example:**
+
+```json
+{
+  "id": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "attemptId": "attempt-8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+  "taskId": "task-t1u2v3w4",
+  "baseRevision": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+  "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "deliveryTarget": "refs/heads/wave1-pilot",
+  "createdAt": "2026-09-11T03:00:00.000Z"
+}
+```
+
+---
+
 ## Chat Channel
 
 **File:** `.moe/channels/{channel-id}.json`
@@ -1419,6 +1461,13 @@ function generateId(prefix: string): string {
 - `settings.resources` updates **replace** the stored map (not a deep merge — removing a resource must be possible); unknown per-resource fields are rejected
 - `capacity` integer 1-100 (default 1); `maxLeaseMs` integer 60000-604800000 (1 min - 7 days; default 86400000 = 24h); `description` ≤500 chars
 - Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
+
+### Candidate
+- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op
+- `attemptId` must name an existing attempt of the same `taskId` (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`)
+- `baseRevision` and `treeSha` must be 7-40 hex characters. They are validated for shape only and never coerced
+- `deliveryTarget` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars
+- `createdAt` is always the daemon's clock; a caller cannot set it
 
 ---
 

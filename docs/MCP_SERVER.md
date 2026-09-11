@@ -112,6 +112,8 @@ All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-a
 
 Three tools are deliberately **guard-exempt** even though the proxy injects `workerId` into them: `moe.get_commit_scope`, `moe.record_commit` and `moe.declare_files`. The wrapper calls the first two **after** the CLI exits — by then QA may already own the REVIEW task, a seat-only `unblock_worker` may have left it unassigned, or the task may be `BLOCKED`/`DONE` — and a governor uses `declare_files` on tasks it never owns. They are allowed in every task status.
 
+`moe.record_candidate` is likewise exempt from the ownership guard and allowed in every task status, for the same post-`complete_task` reason. Instead, the **attempt** fence guards it: a caller whose attempt has been superseded cannot record (see its section).
+
 ---
 
 ## Tools (Implemented)
@@ -533,6 +535,50 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 **Errors:**
 - `taskId is required` / `Task not found: <taskId>`
 - `[INVALID_INPUT]` on a malformed `sha`, an unknown `outcome`/`kind`, or a missing `sessionId`/`role`
+
+---
+
+### moe.record_candidate
+
+**Runner-called.** Freezes the exact bytes a task is offering for delivery as an immutable `Candidate` (docs/SCHEMA.md `## Candidate`), so that review and checks can bind to fixed bytes instead of to a moving working tree. Each candidate is one file at `.moe/candidates/<id>.json`. This slice only records candidates; check runs, review binding and delivery receipts bind to them in later tasks.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,          // must exist
+  attemptId: string,       // the task's CURRENT execution attempt
+  generation?: number,     // optional fencing token; when supplied it must equal the current attempt's generation
+  id?: string,             // optional candidate id, [A-Za-z0-9_-]{1,128}. Supply one so a crash retry is idempotent;
+                           // when omitted the daemon generates "cand-<32 hex>"
+  baseRevision: string,    // /^[0-9a-f]{7,40}$/i: the commit the bytes were built on, as the runner observed it
+  treeSha: string,         // /^[0-9a-f]{7,40}$/i: the tree or commit naming the offered bytes, as the runner observed it
+  deliveryTarget: string,  // e.g. "refs/heads/wave1-pilot"; non-blank, no surrounding whitespace or control chars, ≤255 chars
+  workerId?: string        // caller (auto-injected by proxy); not stored on the candidate
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, candidate: Candidate, duplicate: boolean }
+// candidate: the stored record { id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt }
+// duplicate: true when an identical candidate already existed; it is returned unchanged and nothing is written
+```
+
+**Notes:**
+- **Fenced before anything is written.** The caller's `attemptId`, plus `generation` when supplied, goes through `assertAttemptCurrent`. A superseded or closed attempt is refused and leaves no candidate behind.
+- **Immutable.** A candidate is never edited, so a changed tree needs a **new** `id`. Re-recording an existing `id` with any field different is refused (`CANDIDATE_IMMUTABLE`).
+- **A byte-identical re-record is idempotent.** Re-recording an existing `id` with identical fields is safe: it returns the existing candidate (`duplicate: true`, original `createdAt`) and writes nothing. A runner that may retry after a crash should therefore choose the `id` itself and reuse it on the retry. If the daemon generated the id, a retry records a second candidate.
+- **The shas are runner-reported.** The daemon never runs git. It records `baseRevision` and `treeSha` exactly as reported and checks their shape only, and nothing in the record claims the daemon verified them.
+- `createdAt` is the daemon's clock. The tool emits no activity event, no chat line and no board broadcast, because nothing consumes one yet.
+- **No ownership or status gate.** The runner records after `complete_task`, when QA may already own the REVIEW task, so the attempt fence is the guard. The tool is not `blocking`, so dispatch serializes it under the state mutex like every other tool.
+
+**Errors.** Every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName`:
+- `-32002 ATTEMPT_SUPERSEDED`: `attemptId` or `generation` is not the task's current attempt (a newer attempt exists, or every attempt is closed)
+- `-32001 TASK_NOT_FOUND`: unknown `taskId`
+- `-32001 ATTEMPT_NOT_FOUND` / `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt does not exist, or belongs to another task. These are reachable only on a task with no attempt records, where the fence has nothing to compare against.
+- `-32002 CANDIDATE_IMMUTABLE`: the `id` already exists and a field differs. The message names the differing fields; record the change under a new id.
+- `-32602 INVALID_INPUT`: a malformed field, such as a bad sha shape, a blank or padded `deliveryTarget`, an invalid `id`, a `generation` that is not a positive integer, or non-object arguments
+- `-32602 MISSING_REQUIRED`: `taskId`, `attemptId`, `baseRevision`, `treeSha` or `deliveryTarget` is absent or `null`
 
 ---
 
