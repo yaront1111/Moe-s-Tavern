@@ -11,6 +11,7 @@ import com.moe.services.MoeProjectService
 import com.moe.services.MoeStateListener
 import com.moe.util.MoeBundle
 import com.moe.util.MoeDuration
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.time.Instant
 import com.intellij.openapi.ui.ComboBox
@@ -49,7 +50,9 @@ class TaskDetailDialog(
     private val reopenReasonField = JBTextArea(task.reopenReason ?: "")
     private var planScrollPane: JScrollPane? = null
     private var planContainer: JPanel? = null
+    private var blockerContainer: JPanel? = null
     private var stateListener: MoeStateListener? = null
+    private val log = Logger.getInstance(TaskDetailDialog::class.java)
 
     init {
         title = MoeBundle.message("moe.dialog.taskDetail", task.title)
@@ -58,7 +61,10 @@ class TaskDetailDialog(
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
                 val updated = state.tasks.find { it.id == task.id } ?: return
-                refreshPlanPanel(updated)
+                // One listener, two live sections. Neither refresh may take the
+                // dialog down: log and leave the last good content standing.
+                safeRefresh("plan panel") { refreshPlanPanel(updated) }
+                safeRefresh("blocker section") { refreshBlockerSection(updated) }
             }
             override fun onStatus(connected: Boolean, message: String) {}
         }
@@ -75,6 +81,15 @@ class TaskDetailDialog(
         val panel = JPanel(VerticalLayout(8))
         panel.border = JBUI.Borders.empty(4)
         panel.add(JBLabel(MoeBundle.message("moe.message.statusPrefix", task.status)))
+
+        // Blocker / attention section, directly under the status because "why
+        // did this stop" is the question a parked task raises. Live-updated
+        // through the same state listener as the plan panel.
+        val blockerWrapper = JPanel(BorderLayout())
+        blockerWrapper.isOpaque = false
+        blockerContainer = blockerWrapper
+        buildBlockerPanel(task)?.let { blockerWrapper.add(it, BorderLayout.CENTER) }
+        panel.add(blockerWrapper)
 
         panel.add(JBLabel(MoeBundle.message("moe.label.priority")))
         priorityCombo.selectedItem = task.priority
@@ -233,6 +248,125 @@ class TaskDetailDialog(
             }
             container.revalidate()
             container.repaint()
+        }
+    }
+
+    /**
+     * The read-only blocker/attention section, or null when the task is neither
+     * actively blocked nor flagged for human review.
+     *
+     * The cause, the clearance explanation and every caption come from
+     * [MoeBundle]. Every daemon-supplied string — the reason, the recorded
+     * prerequisite ids, the resource id, the source status and the timestamp —
+     * is rendered as LITERAL PLAIN TEXT in a read-only text area, never through
+     * a markup label: a blockedReason is arbitrary agent output, and a Swing
+     * label silently interprets a string that starts with an html tag.
+     *
+     * Display only. No unblock action, no retry, no navigation to the
+     * prerequisites, no network or state lookup.
+     */
+    private fun buildBlockerPanel(t: Task): JPanel? {
+        val detail = TaskBlockerPresentation.detail(t) ?: return null
+        // A task flagged for human review is not necessarily blocked, so the
+        // section is only titled "Blocker" when there really is a live block.
+        val titleKey = if (detail.cause != null) {
+            TaskBlockerPresentation.SECTION_TITLE_KEY
+        } else {
+            TaskBlockerPresentation.ATTENTION_BADGE_KEY
+        }
+        val section = JPanel(VerticalLayout(4)).apply {
+            isOpaque = false
+            border = BorderFactory.createTitledBorder(
+                JBUI.Borders.customLine(JBColor.border()),
+                MoeBundle.message(titleKey)
+            )
+        }
+
+        detail.cause?.let { cause ->
+            section.add(headline(MoeBundle.message(cause.badgeKey)))
+            section.add(explanation(MoeBundle.message(cause.clearanceKey)))
+
+            section.add(JBLabel(MoeBundle.message(TaskBlockerPresentation.REASON_LABEL_KEY)))
+            val reasonText = detail.reason
+                ?: detail.reasonFallbackKey?.let { MoeBundle.message(it) }
+                ?: ""
+            section.add(literalText(reasonText, 72))
+        }
+
+        // Independent of the block, and honoured on any status.
+        if (detail.needsHumanReview) {
+            section.add(headline(MoeBundle.message(TaskBlockerPresentation.ATTENTION_BADGE_KEY)))
+            section.add(explanation(MoeBundle.message(TaskBlockerPresentation.ATTENTION_CLEARS_KEY)))
+        }
+
+        if (detail.prerequisiteIds.isNotEmpty()) {
+            section.add(JBLabel(MoeBundle.message(TaskBlockerPresentation.PREREQUISITES_KEY)))
+            section.add(literalText(detail.prerequisiteIds.joinToString("\n"), 56))
+        }
+
+        val facts = buildList {
+            detail.resourceId?.let {
+                add(MoeBundle.message(TaskBlockerPresentation.RESOURCE_ID_KEY) + ": " + it)
+            }
+            detail.fromStatus?.let {
+                add(MoeBundle.message(TaskBlockerPresentation.FROM_STATUS_KEY) + ": " + it)
+            }
+            detail.blockedAt?.let {
+                add(MoeBundle.message(TaskBlockerPresentation.BLOCKED_AT_KEY) + ": " + it)
+            }
+        }
+        if (facts.isNotEmpty()) {
+            section.add(literalText(facts.joinToString("\n"), 56))
+        }
+
+        return section
+    }
+
+    private fun headline(text: String): JBLabel = JBLabel(text).apply {
+        font = font.deriveFont(Font.BOLD)
+    }
+
+    private fun explanation(text: String): JBLabel = JBLabel(text).apply {
+        foreground = JBColor.GRAY
+        font = JBUI.Fonts.smallFont()
+    }
+
+    /** Daemon-supplied content as literal plain text; never interpreted as markup. */
+    private fun literalText(text: String, preferredHeight: Int): JScrollPane {
+        val area = JBTextArea(text).apply {
+            lineWrap = true
+            wrapStyleWord = true
+            isEditable = false
+        }
+        val scroll = JScrollPane(area)
+        scroll.preferredSize = Dimension(520, preferredHeight)
+        scroll.border = JBUI.Borders.empty()
+        return scroll
+    }
+
+    /**
+     * Rebuild the blocker section from [updated]. An unblocked task clears its
+     * section without the dialog being reopened, because the rebuild simply
+     * finds no detail to show. Touches no editable form field.
+     */
+    private fun refreshBlockerSection(updated: Task) {
+        val container = blockerContainer ?: return
+        javax.swing.SwingUtilities.invokeLater {
+            safeRefresh("blocker section") {
+                container.removeAll()
+                buildBlockerPanel(updated)?.let { container.add(it, BorderLayout.CENTER) }
+                container.revalidate()
+                container.repaint()
+            }
+        }
+    }
+
+    /** A failed refresh is logged and swallowed; the last good content stays. */
+    private fun safeRefresh(what: String, refresh: () -> Unit) {
+        try {
+            refresh()
+        } catch (e: Exception) {
+            log.warn("Failed to refresh the $what for task ${task.id}", e)
         }
     }
 

@@ -1,6 +1,7 @@
 package com.moe.toolwindow.board
 
 import com.moe.model.Task
+import com.moe.toolwindow.TaskBlockerPresentation
 import com.moe.util.MoeBundle
 import com.moe.util.MoeDuration
 import com.intellij.notification.NotificationGroupManager
@@ -195,6 +196,37 @@ class TaskCard(
                 foreground = java.awt.Color.WHITE
                 background = red
                 toolTipText = concerns ?: "Plan critique returned 'block'"
+            })
+        }
+
+        // Blocker badges. Both answers come from the pure, headless-tested
+        // TaskBlockerPresentation rather than being re-derived here, so the
+        // JUnit coverage really covers what the user sees. Labels are MoeBundle
+        // keys only: a blockedReason is arbitrary agent-written text and belongs
+        // in the detail dialog, never in a card chip.
+        val blockerBadges = TaskBlockerPresentation.badges(task)
+        blockerBadges.cause?.let { cause ->
+            meta.add(JBLabel(MoeBundle.message(cause.badgeKey)).apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                foreground = java.awt.Color.WHITE
+                background = BoardStyles.statusColor("BLOCKED")
+                // The tooltip says what will clear it, which is the only
+                // actionable part of a parked task.
+                toolTipText = MoeBundle.message(cause.clearanceKey)
+            })
+        }
+        // Independent of the block: the daemon's own attention flag, normally
+        // set by the QA reject path on a REVIEW task.
+        if (blockerBadges.needsHumanReview) {
+            meta.add(JBLabel(MoeBundle.message(TaskBlockerPresentation.ATTENTION_BADGE_KEY)).apply {
+                isOpaque = true
+                border = JBUI.Borders.empty(2, 6)
+                font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+                foreground = java.awt.Color.WHITE
+                background = BoardStyles.statusColor("AWAITING_APPROVAL")
+                toolTipText = MoeBundle.message(TaskBlockerPresentation.ATTENTION_CLEARS_KEY)
             })
         }
 
