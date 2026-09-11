@@ -16,9 +16,10 @@ export type TaskStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'WORKING'
-  // Waiting on a shared-resource lease or a human. Not a board column of its
-  // own — the board display-maps BLOCKED into the WORKING column (matching
-  // the JetBrains plugin) and renders a BLOCKED badge on the card.
+  // Waiting on a shared-resource lease, on prerequisite tasks, or on a human.
+  // Not a board column of its own — the board display-maps BLOCKED into the
+  // WORKING column (matching the JetBrains plugin) and names the cause on the
+  // card chip (see blockCause in src/panels/TaskDetailPanel.ts).
   | 'BLOCKED'
   | 'REVIEW'
   | 'DONE'
@@ -270,6 +271,17 @@ export interface Task {
   priorHandoffs?: HandoffNote[];
   failedDodItems?: FailedDodEntry[];
   planCritiqueResult?: PlanCritiqueResult;
+
+  // Blocker / attention metadata. All optional and nullable, exactly as the
+  // daemon declares them (packages/moe-daemon/src/types/schema.ts) — the raw
+  // client passes the payload through untouched, so these only widen the type.
+  // needsHumanReview is independent of BLOCKED and is never inferred.
+  needsHumanReview?: boolean;
+  blockedReason?: string | null;
+  blockedOnTaskIds?: string[] | null;
+  blockedResourceId?: string | null;
+  blockedFromStatus?: TaskStatus | null;
+  blockedAt?: string | null;
 }
 
 export interface Worker {
