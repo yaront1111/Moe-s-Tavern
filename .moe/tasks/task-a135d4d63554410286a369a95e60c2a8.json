@@ -85,8 +85,8 @@
       "completedAt": "2026-09-11T10:26:38.058Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:50.402Z",
-  "updatedAt": "2026-09-11T10:28:16.873Z",
+  "updatedAt": "2026-09-11T10:34:29.397Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
@@ -112,7 +112,9 @@
     "firstClaimAt": "2026-09-11T09:53:19.967Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-11T10:34:29.397Z",
+    "wallClockMs": 2469430
   },
   "stepsCompleted": [
     "step-1",
@@ -168,13 +170,35 @@
       "treeId": "397a5c421ddc11ac528c7eee063d1591548bffbf",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7cdcf2e9f5d09097d62bcfd1e0661f25130cb0e4",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T10:03:19Z",
+      "paths": [
+        ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T10:29:55.592Z",
+      "treeId": "76c7c1da51239ff5cfe0b3c27e0d4dddaba19638",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T10:28:12Z",
-    "at": "2026-09-11T10:28:16.873Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-11T10:03:19Z",
+    "at": "2026-09-11T10:29:55.592Z"
+  },
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/__guard.tmp.ts",
+    "packages/moe-daemon/src/util/__attempt-tests.tmp.ts"
+  ],
+  "completedAt": "2026-09-11T10:34:29.397Z",
+  "reviewCompletedAt": "2026-09-11T10:34:29.397Z",
+  "reviewSummary": "Re-measured by QA.\n\nCOMMITS: code bytes in ac6c9dc (QA pre-flight recovery checkpoint). Worker completion 7cdcf2e (after reviewStartedAt) holds only board JSON. Both pushed. Tree identical for both files.\n\nDIFF: enforcement.ts +144/-0. Test +470/-2; only the 2 import lines removed, old tests byte-identical.\n\nDoD:\n1. Exported at enforcement.ts:148. Reads via attemptStore listAttempts :168 and currentAttempt :178. StateManager import is type-only; no runtime cycle.\n2. Gen 1 vs current gen 2 throws. Test:200 asserts code STATE_CONFLICT (-32002) AND codeName ATTEMPT_SUPERSEDED.\n3. Current gen/id passes. No identity (undefined/null/{}) keeps legacy tolerance; a throwing-state test proves the store is not consulted.\n4. Tests cover current, stale, future, absent, no-record, all-closed, cross-task, malformed.\n5. In packages/moe-daemon:\n- `npx vitest run src/util/enforcement.test.ts`: EXIT=0, 67/67.\n- `npm.cmd test`: EXIT=0, 1352 passed / 5 skipped (matches worker).\n- `npx tsc --noEmit`: EXIT=0.\n\nRED PROOF: 6 own mutations in an isolated worktree, baseline 67/67; all red:\n- `>=` compare: 2 failed\n- no-record tolerance dropped: 3\n- coercing validator: 5\n- OR for AND: 8\n- no-identity return dropped: 2\n- NOT_ALLOWED code: 10\nRestored to worker hash 2e265b3a. Worktree removed.\n\nRAILS: beside assertWorkerOwns, existing guards unchanged. No tool handler edited; zero callers outside enforcement.ts. Header says it fences daemon mutations only. No forbidden patterns."
 }
