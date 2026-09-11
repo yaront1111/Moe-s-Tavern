@@ -122,7 +122,7 @@
       "completedAt": "2026-09-11T13:35:07.138Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -151,17 +151,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:26:26.993Z",
-  "updatedAt": "2026-09-11T13:35:55.667Z",
+  "updatedAt": "2026-09-11T13:40:39.603Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:27:29.647Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T13:40:39.603Z",
+    "wallClockMs": 15189956
   },
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-31b9f5b1",
-    "worker-de4739a8"
+    "worker-de4739a8",
+    "qa-813933f7"
   ],
   "stepsCompleted": [
     "step-1",
@@ -199,7 +202,46 @@
     "moe-vscode/src/panels/PlanReviewPanel.ts",
     "moe-vscode/media/planReview.js",
     "moe-vscode/src/services/MoeDaemonClient.ts",
-    "moe-vscode/tests/plan-review.test.cjs"
+    "moe-vscode/tests/plan-review.test.cjs",
+    ".moe/tasks/task-1bf079020e504aaaa760a8faeddebbcd.json",
+    ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json"
   ],
-  "completionSummary": "VS Code Plan Review approval is now bound to the revision the webview actually rendered. 3 files: moe-vscode/src/panels/PlanReviewPanel.ts, moe-vscode/media/planReview.js, new moe-vscode/tests/plan-review.test.cjs.\n\nEVIDENCE. Gate run fresh from the repo root: GATE_EXIT=0, tests 113 / pass 113 / fail 0, 0 lines matching 'error TS'; both halves of the && confirmed by their npm banners in the log. Pre-task baseline on unchanged code was 80/80, so +33 with zero peer regressions. RED PROOF: the new test file against unchanged production code gave tests 33 / pass 4 / fail 29, EXIT=1 (the 4 already-green are backwards-compatibility guards). MUTATION PROOF, each applied as one exact replacement then reverted with a byte-identical diff check: truthiness on revision 0 -> 2 red; a one-argument approveTask(this.taskId) fallback -> 6 red; the old optimistic 'Plan approved' toast -> 6 red.\n\nHOW THE TOKEN IS SEEDED. getWebviewContent derives seedRevisionAttribute(task) from the SAME task object that just produced the DoD/steps/comments markup, so the token can never describe content other than what is on screen. Non-AWAITING_APPROVAL omits it; an ABSENT planRevision is a legacy record and seeds \"0\"; a non-negative safe integer seeds itself; anything else (null, '5', -1, 1.5, NaN) omits the attribute entirely rather than emitting it empty. It rides on <div class=\"review-container\" id=\"reviewRoot\" data-plan-revision=\"N\">, and the Approve button now ships `disabled` in the markup so the page is unapprovable between HTML load and script execution.\n\nHOW IT ADVANCES. The page owns `rendered` (revision of the content on screen, null until a COMPLETE render succeeded), `approvalPending`, `latched`, `approveEnabled`. The updateTask handler disables Approve FIRST, validates (object, status exactly AWAITING_APPROVAL, revision absent => 0 else a non-negative safe integer else refuse), renders inside try/catch, and only then moves the token. Same or first revision => record and re-enable unle"
+  "completionSummary": "VS Code Plan Review approval is now bound to the revision the webview actually rendered. 3 files: moe-vscode/src/panels/PlanReviewPanel.ts, moe-vscode/media/planReview.js, new moe-vscode/tests/plan-review.test.cjs.\n\nEVIDENCE. Gate run fresh from the repo root: GATE_EXIT=0, tests 113 / pass 113 / fail 0, 0 lines matching 'error TS'; both halves of the && confirmed by their npm banners in the log. Pre-task baseline on unchanged code was 80/80, so +33 with zero peer regressions. RED PROOF: the new test file against unchanged production code gave tests 33 / pass 4 / fail 29, EXIT=1 (the 4 already-green are backwards-compatibility guards). MUTATION PROOF, each applied as one exact replacement then reverted with a byte-identical diff check: truthiness on revision 0 -> 2 red; a one-argument approveTask(this.taskId) fallback -> 6 red; the old optimistic 'Plan approved' toast -> 6 red.\n\nHOW THE TOKEN IS SEEDED. getWebviewContent derives seedRevisionAttribute(task) from the SAME task object that just produced the DoD/steps/comments markup, so the token can never describe content other than what is on screen. Non-AWAITING_APPROVAL omits it; an ABSENT planRevision is a legacy record and seeds \"0\"; a non-negative safe integer seeds itself; anything else (null, '5', -1, 1.5, NaN) omits the attribute entirely rather than emitting it empty. It rides on <div class=\"review-container\" id=\"reviewRoot\" data-plan-revision=\"N\">, and the Approve button now ships `disabled` in the markup so the page is unapprovable between HTML load and script execution.\n\nHOW IT ADVANCES. The page owns `rendered` (revision of the content on screen, null until a COMPLETE render succeeded), `approvalPending`, `latched`, `approveEnabled`. The updateTask handler disables Approve FIRST, validates (object, status exactly AWAITING_APPROVAL, revision absent => 0 else a non-negative safe integer else refuse), renders inside try/catch, and only then moves the token. Same or first revision => record and re-enable unle",
+  "commits": [
+    {
+      "sha": "2114a5841ca250c0236d4e16d7bd039d6926b381",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T13:19:22Z",
+      "paths": [
+        ".moe/tasks/task-1bf079020e504aaaa760a8faeddebbcd.json",
+        ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json",
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T13:36:07.491Z",
+      "treeId": "3fdd13c7dcafa224cfed915e4b4b18fcbdb55a81",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/media/planReview.js",
+    "moe-vscode/tests/plan-review.test.cjs",
+    "moe-vscode/tests/plan-review-harness.cjs",
+    "moe-vscode/src/panels/PlanReviewPanel.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-11T13:19:22Z",
+    "at": "2026-09-11T13:36:07.491Z"
+  },
+  "completedAt": "2026-09-11T13:40:39.603Z",
+  "reviewCompletedAt": "2026-09-11T13:40:39.603Z",
+  "reviewSummary": "APPROVED. Commit 2114a58: exactly 3 in-scope files + 2 board records; MoeDaemonClient/TaskDetailPanel/BoardViewProvider untouched; worktree blobs hash-identical to HEAD.\n\nGATE RE-RUN BY QA in PowerShell (Bash `cmd /d /c` is a false green here): GATE_EXIT=0, both npm banners present, tests 113 / pass 113 / fail 0, 0 `error TS`. Baseline 80 -> 113, no peer regressions.\n\nOLD-BEHAVIOUR RED REPRODUCED INDEPENDENTLY: pre-change blobs via `git show 2114a58^:` (0 hits for expectedPlanRevision/reviewRoot) + new suite -> EXIT=1, tests 33 / pass 4 / fail 29. Restored, hash-verified.\n\nQA MUTATIONS (mine, not the worker's; reverted, diff-clean): latch guard `revision !== rendered` -> false = 31/2 red; `if (this.contentOutOfSync)` -> false = 32/1 red.\n\nDoD: (1) seed built in getWebviewContent from the SAME task object as dodHtml/stepsHtml; A asserts [[taskId,7]]; race B asserts pendingTimerCount()===1 (debounce truly unfired), sends 4, never 5. (2) applyRenderedTask disables first, validates (absent=>0 legacy, present-malformed=>null), renders in try/catch; changed revision latches with reopen notice; C/D cover same-rev re-enable, renderer throw, missing task, non-AWAITING_APPROVAL, malformed revision, omitted attribute. (3) handleApprove returns before approveTask on !isPlanRevision; 6 E cases assert 0 client calls AND empty arg-length list, so a one-arg legacy fallback fails; no currentState lookup makes the token. (4) optimistic toast+dispose deleted; F one call while pending; G send=false leaves panel open, no success toast; H correlated APPROVE_TASK+PLAN_REVISION_MISMATCH latches, other task/op inert (vs client :456, context allowlist :1067); disconnect clears pending. (5) J idempotent dispose, timer cleared, listeners released, post-dispose inert; K reopen at newer revision; I WORKING-while-pending the only success.\n\nRails: 0 hits for innerHTML/eval(/__proto__; createElement+textContent only; legacy token-free routes unchanged, boundary at parent task-7265e1fc."
 }
