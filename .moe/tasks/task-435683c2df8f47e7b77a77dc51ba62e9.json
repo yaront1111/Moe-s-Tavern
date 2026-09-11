@@ -116,7 +116,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:40:52.755Z",
-  "updatedAt": "2026-09-11T10:31:15.045Z",
+  "updatedAt": "2026-09-11T10:32:41.691Z",
   "contextFetchedBy": [
     "architect-0dc7194c",
     "architect-8b93cc67",
@@ -169,7 +169,8 @@
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
     ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
     ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
-    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json"
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+    ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json"
   ],
   "completionSummary": "Retired the deprecated task time-budget from JetBrains task parsing. The client Task model and BOTH parser paths now ignore any legacy `budget` payload, and every live metric and limit is kept.\n\nChanges (4 owned files):\n- Models.kt: deleted the TaskBudget data class and the Task.budget property. The shared comment now reads \"Schema additions for the metrics surface\".\n- MoeJson.kt: pure deletion of 14 lines. Removed the import, the private parseTaskBudget helper, and the `budget =` assignment in private parseTasks (the parseState path) and in public parseTask (the single-task path). getLongOrNull stays with 3 live callers. No helper or its permissiveness changed.\n- MoeProjectService.kt: comment-only. The daemon startup retry comment now says \"short retry window\". Retry and timing code is untouched.\n- MoeJsonTest.kt: 5 new tests. Existing tests are byte-unchanged. The new tests never import or construct the removed type; they compare whole parsed Task values.\n  - A populated legacy value does not change parseTask or parseState, and the two paths agree.\n  - Absent, null, {}, populated, string, number and array shapes all parse identically through both paths.\n  - Live data survives every shape: TaskMetrics durations and counters, reopenCount, step data, comments, identity, handoffs, critique, size warnings, verification and review summary.\n  - Control: a malformed legacy value plus wrong-typed unrelated fields still yields the historical defaults through both paths.\n\nEvidence:\n- Old code went red: 3 of 10 tests failed on unequal Tasks, where the only difference was the budget field.\n- After the removal, the full gate shows 109 tests, 0 failures, across 11 classes.\n- Both grep and ripgrep find no case-insensitive 'budget' match in moe-jetbrains/src/main.\n- Persisted data is safe: the plugin never serializes a Task back to the daemon.\n- Nothing under packages/moe-daemon was touched.\n\nUnblocks task-e7f534f147b74650ba06c2b98c022afb, which adds blocker-metadata fields to the",
   "commits": [
@@ -277,14 +278,30 @@
       ],
       "pushed": false,
       "message": "QA self-land (qa.md fallback, governor ruling 2026-09-10): worker completion e0ed8ca carried only the board record; all 4 source paths were held as contested (skip-untouched) by dependency-gated peers task-e7f534f1 / task-0ad3744e, neither started (all steps PENDING, no commits). Path recipe: every changed line is this task's (budget model/parser removal, retry-window comment, 5 appended MoeJsonTest tests). Landed via private index + commit-tree + update-ref CAS on parent ac6c9dc, shared index refreshed for the 4 paths only. Not pushed by QA; the next wrapper push carries it."
+    },
+    {
+      "sha": "a5d037df0f4bb834adb4253ba1908096a7a83224",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T10:17:33Z",
+      "paths": [
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T10:32:41.690Z",
+      "treeId": "0ced590f4270a3a9eeff35f50a7bd58351d97f8b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
+    "kind": "checkpoint",
     "sessionId": "qa-813933f7@2026-09-11T10:17:33Z",
-    "at": "2026-09-11T10:30:24.178Z"
+    "at": "2026-09-11T10:32:41.690Z"
   },
   "completedAt": "2026-09-11T10:31:15.045Z",
   "reviewCompletedAt": "2026-09-11T10:31:15.045Z",
