@@ -36,6 +36,17 @@ Deep-dive material trimmed out of `qa.md`. Read this on demand; it is not loaded
 
 **Why — measured 2026-09-06.** In that measurement, one completion in three reached REVIEW with its bytes only in the dirty tree. A wrapper lands a row only when its CLI process exits on that row, so a session that hopped to another row, or an interactive seat that never exits, can never fire it — an unbounded wait strands those rows forever. Per the governor ruling, `docs/roles/qa.md` (269d3fe, 2026-09-06) supersedes `docs/skills/moe-qa-loop/SKILL.md` (bf3f8fa, 2026-08-29) on this point, and qa.md's path recipe stays canonical. This is the interim rule until the Wave 1 finalize/candidate work lands.
 
+## A task whose code spans several commits
+
+**Do not assume the newest commit is the whole diff.** Audit from the task's recorded commit ledger — every `task.commits` entry, `checkpoint` and `rescue` as well as `completion` — and judge the landed bytes against the task's baseline, not against the completion commit alone. `git log --all --oneline --grep 'Moe-Task: <taskId>'` is the cross-check; read `Moe-Kind:` in each body rather than the `feat`/`wip` subject prefix.
+
+**Two situations where a split is legitimate**, both leaving a near-empty `feat(...)` completion whose bytes already landed in an earlier `wip(...) ... recovered` checkpoint:
+
+1. **A genuine crash.** The previous session died (window close, SIGKILL, a box reboot) without landing. The next pre-flight of that task lands its baseline as `MOE_CHECKPOINT_RECOVERED`, and the work continues on top. That recovery path is deliberate — it exists because of the 2026-08-28 lost-code incident.
+2. **A cross-host skip.** The owner's live-session marker was written on a host or pid namespace this seat cannot probe (a WSL seat and a Windows seat sharing the checkout through a mount). The wrapper prints `MOE_CHECKPOINT_SKIPPED_LIVE_OWNER ... reason=foreign-host` and refuses to recover; the bytes land later, from a seat that can see that process.
+
+**What is NOT legitimate any more:** a `role=qa ... recovered` checkpoint carrying a worker's whole implementation while the worker's own completion holds only a board record. That was the live-owner race fixed on 2026-09-11; the wrapper now stands down with `MOE_CHECKPOINT_SKIPPED_LIVE_OWNER ... reason=live` instead. Seeing it again means the guard regressed — reject and say so.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. When you find a recurring pattern or a subtle gap the tests didn't catch, `write_memory` a `gotcha-<area>` note (or `edit_memory` an existing one) so the next agent avoids it. Rejection `issues` you record on the task are already visible to the worker via `get_handoff_history`; use Serena memory for the broader, cross-task lesson.

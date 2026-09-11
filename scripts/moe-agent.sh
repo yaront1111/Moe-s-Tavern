@@ -126,6 +126,16 @@ cleanup_temp() {
     if [ "$(type -t teardown_rescue)" = "function" ]; then
         teardown_rescue || true
     fi
+    # Drop this session's live-session marker. This is the union of BOTH
+    # abnormal exit paths -- the INT/TERM trap ends in `exit 0`, which fires
+    # this EXIT trap -- so a Ctrl+C, a window close through SIGTERM or a
+    # `set -e` abort all clear the claim here. Leaving one behind would
+    # suppress the next seat's legitimate crash recovery until a human deleted
+    # the file. (A hard SIGKILL still runs nothing; there the marker's own
+    # process probe is what reports it dead.)
+    if [ "$(type -t live_marker_remove)" = "function" ]; then
+        live_marker_remove "${PREFLIGHT_TASK_ID:-}" || true
+    fi
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. This is best-effort and never blocks exit. There is
     # NO idle-timeout fallback for hard crashes where this trap never runs: the
@@ -2224,6 +2234,191 @@ baseline_mark_landed() {
     return 0
 }
 
+# ---- live-session marker ----------------------------------------------------
+# `<gitdir>/moe/baseline/<taskId>.live`, a sibling of the per-task baseline,
+# written by the pre-flight that takes that baseline and removed by every exit
+# that ends this session's ownership of the task.
+#
+# It exists because the recovery predicate ("a baseline that never reached a
+# completed landing") is true in TWO different worlds: the previous session
+# crashed, and the previous session is STILL RUNNING and about to commit. On
+# 2026-09-11 the second world cost two tasks their completion diffs -- a QA
+# seat claimed a REVIEW task inside the window between complete_task and the
+# worker wrapper's post-flight, and its pre-flight landed the live worker's
+# whole implementation as a `role=qa ... recovered` checkpoint. The marker is
+# the only local fact that discriminates them: is the process that wrote it
+# still running in this checkout.
+#
+# One header line, same shape as the baseline header:
+#   #moe-live v1 task=<id> pid=<n> host=<h> ns=<n> worker=<id> session=<sid> start=<tok>
+# `start` is a per-process start token, which is what makes the probe safe
+# against process-id REUSE on a long-lived box. `ns` names the pid NAMESPACE
+# the id belongs to: a Git Bash pid is invisible to PowerShell's Get-Process
+# and vice versa, and a WSL seat and a Windows seat share this checkout through
+# a mount with the SAME host name -- without it a foreign-namespace id would be
+# probed against the wrong process table and a live owner could read as dead,
+# which is the byte-loss direction. Twin: the ps1 Get-MoeLiveMarkerPath family.
+live_marker_path() {
+    printf '%s/moe/baseline/%s.live' "$MOE_GITDIR" "$1"
+}
+
+live_marker_ns() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) printf 'msys' ;;
+        *) printf 'posix' ;;
+    esac
+}
+
+live_marker_host() {
+    hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+# proc_start_token PID -- a stable per-process start token, or '' when this
+# platform does not expose one cheaply. /proc/<pid>/stat field 22 (starttime in
+# clock ticks) is present on Linux, on WSL and on MSYS/Git Bash; the comm field
+# can contain spaces and parentheses, so the fields are counted after the LAST
+# ')'. MSYS `ps` has no `-o`, so there is deliberately no second source: an
+# empty token degrades the probe to identity alone, which the probe documents.
+proc_start_token() {
+    [ -r "/proc/$1/stat" ] || return 0
+    sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}' | tr -d '[:space:]'
+}
+
+# live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
+# Best-effort by design: a marker that cannot be written is a warning and the
+# session proceeds. The marker prevents a misattributed commit; refusing to run
+# without one would be strictly worse than the defect it prevents.
+MOE_LIVE_MARKER_LINE=""
+live_marker_write() {
+    local tid="$1" f dir line
+    MOE_LIVE_MARKER_LINE=""
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    f="$(live_marker_path "$tid")"
+    dir="$(dirname "$f")"
+    mkdir -p "$dir" 2>/dev/null || {
+        echo -e "${YELLOW}[WARN]${NC} [attribution] could not create $dir for the live-session marker of $tid -- a peer's pre-flight may recover this session's work as a checkpoint."
+        return 0
+    }
+    line="$(printf '#moe-live v1 task=%s pid=%s host=%s ns=%s worker=%s session=%s start=%s' \
+        "$tid" "$$" "$(live_marker_host)" "$(live_marker_ns)" "${WORKER_ID:-}" "${MOE_SID:-}" "$(proc_start_token "$$")")"
+    if printf '%s\n' "$line" > "$f.tmp.$$" 2>/dev/null && mv -f "$f.tmp.$$" "$f" 2>/dev/null; then
+        MOE_LIVE_MARKER_LINE="$line"
+    else
+        rm -f "$f.tmp.$$" 2>/dev/null || true
+        echo -e "${YELLOW}[WARN]${NC} [attribution] could not write the live-session marker for $tid -- a peer's pre-flight may recover this session's work as a checkpoint."
+    fi
+    return 0
+}
+
+# live_marker_remove TASKID -- drop OUR claim. Only ours: a byte-identical
+# match against the line this session wrote. A peer that claimed the same task
+# after us owns the file, and deleting its marker would re-arm the exact theft
+# this whole mechanism prevents.
+live_marker_remove() {
+    local tid="$1" f
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    [ -n "$MOE_LIVE_MARKER_LINE" ] || return 0
+    f="$(live_marker_path "$tid")"
+    [ -f "$f" ] || return 0
+    if [ "$(head -n1 "$f" 2>/dev/null)" = "$MOE_LIVE_MARKER_LINE" ]; then
+        rm -f "$f" 2>/dev/null || true
+        MOE_LIVE_MARKER_LINE=""
+    fi
+    return 0
+}
+
+# live_marker_clear TASKID -- unconditional delete, ignoring ownership. Only
+# two callers may use it: the DONE/ARCHIVED prune (the task is over -- nothing
+# left to protect) and the `stale` branch of the recovery gate (the owner is
+# PROVEN gone). Never call it on a live owner. Twin: Clear-MoeLiveMarkerFile.
+live_marker_clear() {
+    [ -n "${1:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    rm -f "$(live_marker_path "$1")" 2>/dev/null || true
+    return 0
+}
+
+# proc_alive PID -- 0 when that id belongs to a running process. /proc is
+# authoritative where it exists (Linux, WSL and MSYS/Git Bash all have it), so
+# an absent /proc/<pid> is a definitive "gone" and the crash path keeps working
+# unchanged. `kill -0` is the fallback elsewhere; it answers EPERM for another
+# user's process, which reads as gone -- acceptable because a marker is only
+# ever written by a seat running as the same user in the same checkout.
+proc_alive() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ] || return 1
+    if [ -d /proc ]; then
+        [ -d "/proc/$1" ] && return 0
+        return 1
+    fi
+    kill -0 "$1" 2>/dev/null && return 0
+    return 1
+}
+
+# live_marker_state TASKID -- sets MOE_LIVE_STATE to exactly one of:
+#   none    no marker, or one we cannot parse -> recover (this is also every
+#           task already in flight when this change lands)
+#   self    our own process wrote it -> recover (the idle/resume paths re-enter
+#           the pre-flight for a task this session already holds)
+#   live    someone else's process is RUNNING and still matches its recorded
+#           start token -> stand down
+#   foreign the marker belongs to a host or pid namespace we cannot probe from
+#           here -> stand down and say so; refusing to steal is recoverable by
+#           a human, a wrong recovery is not
+#   stale   the owner's process is gone, or the id was recycled (start token
+#           mismatch) -> delete the marker and recover, exactly as before
+# Also sets MOE_LIVE_OWNER_* for the caller's message. It ASSIGNS rather than
+# echoing (the ps1 twin returns the state as a value) precisely so callers do
+# not wrap it in `$(...)`: that subshell would discard every MOE_LIVE_OWNER_*
+# assignment and the operator line would come out with empty fields.
+MOE_LIVE_STATE="none"
+MOE_LIVE_OWNER_PID=""
+MOE_LIVE_OWNER_HOST=""
+MOE_LIVE_OWNER_NS=""
+MOE_LIVE_OWNER_WORKER=""
+MOE_LIVE_OWNER_START=""
+live_marker_state() {
+    local tid="$1" f line now_tok
+    MOE_LIVE_STATE="none"
+    MOE_LIVE_OWNER_PID=""; MOE_LIVE_OWNER_HOST=""; MOE_LIVE_OWNER_NS=""
+    MOE_LIVE_OWNER_WORKER=""; MOE_LIVE_OWNER_START=""
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    f="$(live_marker_path "$tid")"
+    [ -f "$f" ] || return 0
+    line="$(head -n1 "$f" 2>/dev/null)" || line=""
+    case "$line" in '#moe-live v1 '*) : ;; *) return 0 ;; esac
+    MOE_LIVE_OWNER_PID=$(printf '%s' "$line" | sed -n 's/.* pid=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_HOST=$(printf '%s' "$line" | sed -n 's/.* host=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_NS=$(printf '%s' "$line" | sed -n 's/.* ns=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_WORKER=$(printf '%s' "$line" | sed -n 's/.* worker=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_START=$(printf '%s' "$line" | sed -n 's/.* start=\([^ ]*\).*/\1/p')
+    case "$MOE_LIVE_OWNER_PID" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$MOE_LIVE_OWNER_HOST" != "$(live_marker_host)" ] || [ "$MOE_LIVE_OWNER_NS" != "$(live_marker_ns)" ]; then
+        MOE_LIVE_STATE="foreign"; return 0
+    fi
+    if [ "$MOE_LIVE_OWNER_PID" = "$$" ]; then MOE_LIVE_STATE="self"; return 0; fi
+    proc_alive "$MOE_LIVE_OWNER_PID" || { MOE_LIVE_STATE="stale"; return 0; }
+    # Same id, different process: a recycled id is not the owner. When either
+    # side has no token the probe is identity-only (documented in
+    # proc_start_token) and a running id counts as the owner -- the safe side.
+    now_tok="$(proc_start_token "$MOE_LIVE_OWNER_PID")" || now_tok=""
+    if [ -n "$MOE_LIVE_OWNER_START" ] && [ -n "$now_tok" ] && [ "$MOE_LIVE_OWNER_START" != "$now_tok" ]; then
+        MOE_LIVE_STATE="stale"; return 0
+    fi
+    MOE_LIVE_STATE="live"
+    return 0
+}
+
+# live_marker_foreign_live TASKID -- 0 when SOMEONE ELSE still holds the task's
+# bytes (running here, or on a host/namespace we cannot probe). Callers use it
+# to stand down without duplicating the state machine.
+live_marker_foreign_live() {
+    live_marker_state "$1"
+    case "$MOE_LIVE_STATE" in
+        live|foreign) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # commit_scope PHASE TASKID OUT -- moe.get_commit_scope, with the disk fallback
 # (own record + every other .moe/tasks/*.json; policy forced undeclared=never,
 # peersActive=true) when the daemon cannot answer. Sets MOE_SCOPE_FALLBACK.
@@ -3972,13 +4167,18 @@ PYEOF
         } <<< "$parsed" 2>/dev/null || true
     fi
     bp="$(baseline_path "$tid")"
+    # A task that is over (or gone) has no bytes left to protect, so its
+    # live-session marker goes with its baseline -- otherwise a hard-killed
+    # session would leave one behind under <gitdir>/moe/baseline/ forever.
     if [ "${scope_notfound:-0}" = "1" ]; then
         echo -e "${YELLOW}[WARN]${NC} [attribution] task $tid not found in the daemon or on disk -- dropping its baseline."
         baseline_delete "$tid"
+        live_marker_clear "$tid"
         return 0
     fi
     if [ "$scope_status" = "DONE" ] || [ "$scope_status" = "ARCHIVED" ]; then
         baseline_delete "$tid"
+        live_marker_clear "$tid"
         return 0
     fi
     local status="${scope_status:-$status_hint}"
@@ -3988,7 +4188,41 @@ PYEOF
     # 3. Recovery: a baseline that never reached a completed landing means the
     # previous session ended without one (Ctrl+C, window close, crash, lookup
     # failure, CAS exhaustion). Land it as a checkpoint now.
+    # The predicate above is true for a crashed session AND for one still
+    # running and about to commit. Ask the live-session marker which it is
+    # before touching anything. Four outcomes; each one is load-bearing:
+    #   none/self -> recover exactly as before (no marker is every task already
+    #                in flight when this landed; self is the idle/resume paths
+    #                re-entering the pre-flight for a task we ourselves hold)
+    #   live      -> stand down: the owner is running and WILL land these bytes
+    #   foreign   -> stand down: the owner is on a host or pid namespace we
+    #                cannot probe from here (a WSL seat and a Windows seat
+    #                sharing this checkout through a mount). Refusing to steal
+    #                is recoverable by a human; recovering across a boundary we
+    #                cannot probe is not.
+    #   stale     -> the owner crashed, or its id was recycled: drop the marker
+    #                and recover, unchanged. This is the 2026-08-28 lost-code
+    #                path and it must not weaken.
+    local live_state="none"
     if [ -f "$bp" ] && ! baseline_landed "$tid"; then
+        live_marker_state "$tid"
+        live_state="$MOE_LIVE_STATE"
+    fi
+    case "$live_state" in
+        live)
+            echo -e "${YELLOW}[attribution]${NC} MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$tid pid=$MOE_LIVE_OWNER_PID host=$MOE_LIVE_OWNER_HOST worker=$MOE_LIVE_OWNER_WORKER reason=live"
+            echo -e "${YELLOW}[attribution]${NC} $tid is still held by a RUNNING session -- leaving its baseline and its dirty paths untouched so that session can land them itself."
+            ;;
+        foreign)
+            echo -e "${YELLOW}[attribution]${NC} MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$tid pid=$MOE_LIVE_OWNER_PID host=$MOE_LIVE_OWNER_HOST worker=$MOE_LIVE_OWNER_WORKER reason=foreign-host"
+            echo -e "${YELLOW}[attribution]${NC} the live-session marker for $tid was written on $MOE_LIVE_OWNER_HOST/$MOE_LIVE_OWNER_NS, whose process ids are not visible here -- not recovering. Delete $(live_marker_path "$tid") by hand if that session is known to be gone."
+            ;;
+        stale)
+            echo -e "${BLUE}[attribution]${NC} the session that held $tid (pid=$MOE_LIVE_OWNER_PID) is gone -- dropping its stale marker and recovering its work."
+            live_marker_clear "$tid"
+            ;;
+    esac
+    if [ -f "$bp" ] && ! baseline_landed "$tid" && [ "$live_state" != "live" ] && [ "$live_state" != "foreign" ]; then
         echo -e "${BLUE}[info]${NC} lingering baseline for $tid -- landing the previous session's work before this one starts."
         LAND_KIND="checkpoint"; LAND_TASK_ID="$tid"; LAND_TITLE="$title"; LAND_STATUS="$status"; LAND_REOPEN=0
         LAND_CLI_EXIT=0; LAND_RECOVERED=true; LAND_GATE_FAILED=false; LAND_POLICY_OVERRIDE=""
@@ -4073,6 +4307,16 @@ PYEOF
     if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0; then
         MOE_BASELINE_PATH="$bp"
         echo -e "${BLUE}[attribution]${NC} baseline written for $tid (${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing)"
+        # Claim the bytes this baseline arms: a session gets both or neither.
+        # This runs on the launch path AND the resume path (a resumed session
+        # is exactly as live as a fresh one). A marker already held by a LIVE
+        # peer is left alone -- overwriting it would hand the next seat a dead
+        # owner to steal from once we exit.
+        if live_marker_foreign_live "$tid"; then
+            echo -e "${BLUE}[attribution]${NC} leaving the live-session marker of $tid to its current owner (${MOE_LIVE_OWNER_WORKER:-?} pid=${MOE_LIVE_OWNER_PID:-?})."
+        else
+            live_marker_write "$tid"
+        fi
     else
         echo -e "${YELLOW}[WARN]${NC} [attribution] could not write the baseline for $tid under $MOE_GITDIR/moe/baseline -- measured attribution is off for this session."
     fi
@@ -6126,6 +6370,11 @@ except Exception:
         # not run a second pass. Same as the ps1 twin's unconditional
         # $moeLandingDone after its landing selection.
         MOE_LANDING_DONE=true
+        # ...and this session no longer holds the task's bytes, so drop the
+        # claim beside the baseline prune. On a rescue/refusal the baseline is
+        # deliberately KEPT for the next pre-flight to recover -- which only
+        # works if the marker is gone. Same as the ps1 twin.
+        live_marker_remove "$PREFLIGHT_TASK_ID"
     fi
     # Session-ended chat line (carries commit=<sha|none> kind=<k> paths=<n>).
     # Best-effort -- any RPC failure does not block loop continuation.

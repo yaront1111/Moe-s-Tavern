@@ -1881,6 +1881,166 @@ function Set-MoeBaselineLanded([string]$GitDir, [string]$TaskId) {
     Write-MoeBaseline $p $TaskId $bl.Head $bl.B $bl.U 1 | Out-Null
 }
 
+# ---- live-session marker ----------------------------------------------------
+# `<gitdir>/moe/baseline/<taskId>.live`, a sibling of the per-task baseline,
+# written by the pre-flight that takes that baseline and removed by every exit
+# that ends this session's ownership of the task.
+#
+# It exists because the recovery predicate ("a baseline that never reached a
+# completed landing") is true in TWO different worlds: the previous session
+# crashed, and the previous session is STILL RUNNING and about to commit. On
+# 2026-09-11 the second world cost two tasks their completion diffs — a QA seat
+# claimed a REVIEW task inside the window between complete_task and the worker
+# wrapper's post-flight, and its pre-flight landed the live worker's whole
+# implementation as a `role=qa ... recovered` checkpoint. The marker is the
+# only local fact that discriminates them: is the process that wrote it still
+# running in this checkout.
+#
+# One header line, same shape as the baseline header:
+#   #moe-live v1 task=<id> pid=<n> host=<h> ns=<n> worker=<id> session=<sid> start=<tok>
+# `start` is a per-process start token, which is what makes the probe safe
+# against process-id REUSE on a long-lived box. `ns` names the pid NAMESPACE
+# the id belongs to: a Git Bash pid is invisible to Get-Process and vice versa,
+# and a WSL seat and a Windows seat share this checkout through a mount with
+# the SAME host name — without it a foreign-namespace id would be probed
+# against the wrong process table and a live owner could read as dead, which is
+# the byte-loss direction. Twin: the sh live_marker_* family.
+function Get-MoeLiveMarkerPath([string]$GitDir, [string]$TaskId) {
+    # The id reaches a path join: whitelist, never sanitise (same rule as
+    # Get-MoeBaselinePath, whose sibling this is).
+    if (-not $TaskId -or ($TaskId -notmatch '^[A-Za-z0-9_.-]+$')) { return '' }
+    return (Join-Path $GitDir "moe/baseline/$TaskId.live")
+}
+
+function Get-MoeLiveMarkerHost { return ([string]$env:COMPUTERNAME).ToLowerInvariant() }
+function Get-MoeLiveMarkerNs { return 'win32' }
+
+# A stable per-process start token, or '' when it cannot be read (a protected
+# process, or one that exited between the lookup and the property read). An
+# empty token degrades the probe to identity alone — see Get-MoeLiveMarkerState.
+function Get-MoeProcStartToken([int]$ProcId) {
+    try {
+        $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
+        if ($null -eq $p) { return '' }
+        return ([string]$p.StartTime.ToUniversalTime().Ticks)
+    } catch { return '' }
+}
+
+# Claim the task's dirty bytes for THIS session. Best-effort by design: a
+# marker that cannot be written is a warning and the session proceeds. The
+# marker prevents a misattributed commit; refusing to run without one would be
+# strictly worse than the defect it prevents. Twin: live_marker_write.
+$script:MoeLiveMarkerLine = ''
+function Write-MoeLiveMarker([string]$GitDir, [string]$TaskId, [string]$Sid) {
+    $script:MoeLiveMarkerLine = ''
+    $f = Get-MoeLiveMarkerPath $GitDir $TaskId
+    if (-not $f) { return }
+    try {
+        $dir = Split-Path -Parent $f
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $line = "#moe-live v1 task=$TaskId pid=$PID host=$(Get-MoeLiveMarkerHost) ns=$(Get-MoeLiveMarkerNs) worker=$WorkerId session=$Sid start=$(Get-MoeProcStartToken $PID)"
+        # Per-process temp name (like the sh twin's `$f.tmp.$$`): two seats
+        # claiming the same task in the same instant must not collide on it.
+        $tmp = "$f.tmp.$PID"
+        [System.IO.File]::WriteAllText($tmp, ($line + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $tmp -Destination $f -Force
+        $script:MoeLiveMarkerLine = $line
+    } catch {
+        Remove-Item -LiteralPath "$f.tmp.$PID" -Force -ErrorAction SilentlyContinue
+        Write-Host "[WARN] [attribution] could not write the live-session marker for ${TaskId}: $_ — a peer's pre-flight may recover this session's work as a checkpoint." -ForegroundColor Yellow
+    }
+}
+
+# Drop OUR claim. Only ours: a byte-identical match against the line this
+# session wrote. A peer that claimed the same task after us owns the file, and
+# deleting its marker would re-arm the exact theft this mechanism prevents.
+# Twin: live_marker_remove.
+function Remove-MoeLiveMarker([string]$GitDir, [string]$TaskId) {
+    if (-not $script:MoeLiveMarkerLine) { return }
+    $f = Get-MoeLiveMarkerPath $GitDir $TaskId
+    if (-not $f -or -not (Test-Path -LiteralPath $f)) { return }
+    try {
+        if ((Get-MoeLiveMarkerFirstLine $f) -eq $script:MoeLiveMarkerLine) {
+            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+            $script:MoeLiveMarkerLine = ''
+        }
+    } catch {}
+}
+
+# Unconditional delete, ignoring ownership. Only two callers may use it: the
+# DONE/ARCHIVED prune (the task is over — nothing left to protect) and the
+# `stale` branch of the recovery gate (the owner is PROVEN gone). Never call it
+# on a live owner. Guards the empty path a rejected task id produces, because
+# Remove-Item -LiteralPath '' is a binding error -ErrorAction cannot swallow.
+# Twin: live_marker_clear.
+function Clear-MoeLiveMarkerFile([string]$GitDir, [string]$TaskId) {
+    $f = Get-MoeLiveMarkerPath $GitDir $TaskId
+    if (-not $f) { return }
+    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+}
+
+function Get-MoeLiveMarkerFirstLine([string]$Path) {
+    try {
+        foreach ($l in [System.IO.File]::ReadAllLines($Path)) { return $l }
+    } catch { return '' }
+    return ''
+}
+
+# Get-MoeLiveMarkerState — exactly one of:
+#   none    no marker, or one we cannot parse -> recover (this is also every
+#           task already in flight when this change lands)
+#   self    our own process wrote it -> recover (the idle/resume paths re-enter
+#           the pre-flight for a task this session already holds)
+#   live    someone else's process is RUNNING and still matches its recorded
+#           start token -> stand down
+#   foreign the marker belongs to a host or pid namespace we cannot probe from
+#           here -> stand down and say so; refusing to steal is recoverable by
+#           a human, a wrong recovery is not
+#   stale   the owner's process is gone, or the id was recycled (start token
+#           mismatch) -> delete the marker and recover, exactly as before
+# Also sets $script:MoeLiveOwner for the caller's message. Twin: live_marker_state.
+$script:MoeLiveOwner = $null
+function Get-MoeLiveMarkerState([string]$GitDir, [string]$TaskId) {
+    $script:MoeLiveOwner = $null
+    $f = Get-MoeLiveMarkerPath $GitDir $TaskId
+    if (-not $f -or -not (Test-Path -LiteralPath $f)) { return 'none' }
+    $line = Get-MoeLiveMarkerFirstLine $f
+    if ($line -notlike '#moe-live v1 *') { return 'none' }
+    $o = @{ ProcId = ''; MarkerHost = ''; Ns = ''; Worker = ''; Start = '' }
+    if ($line -match ' pid=(\S+)')     { $o.ProcId = $matches[1] }
+    if ($line -match ' host=(\S+)')    { $o.MarkerHost = $matches[1] }
+    if ($line -match ' ns=(\S+)')      { $o.Ns = $matches[1] }
+    if ($line -match ' worker=(\S+)')  { $o.Worker = $matches[1] }
+    if ($line -match ' start=(\S+)')   { $o.Start = $matches[1] }
+    if ($o.ProcId -notmatch '^\d+$') { return 'none' }
+    $script:MoeLiveOwner = $o
+    if ($o.MarkerHost -ne (Get-MoeLiveMarkerHost) -or $o.Ns -ne (Get-MoeLiveMarkerNs)) { return 'foreign' }
+    if ([int]$o.ProcId -eq $PID) { return 'self' }
+    $proc = $null
+    try { $proc = Get-Process -Id ([int]$o.ProcId) -ErrorAction SilentlyContinue }
+    catch {
+        # The probe failed to ANSWER (a dead id returns $null instead). Treat
+        # that as ALIVE: a needless stand-down is recoverable by a human, a
+        # wrong recovery is the byte-loss class this exists to prevent.
+        return 'live'
+    }
+    if ($null -eq $proc) { return 'stale' }
+    # Same id, different process: a recycled id is not the owner. When either
+    # side has no token the probe is identity-only and a running id counts as
+    # the owner — the safe side.
+    $now = ''
+    try { $now = ([string]$proc.StartTime.ToUniversalTime().Ticks) } catch { return 'live' }
+    if ($o.Start -and $now -and $o.Start -ne $now) { return 'stale' }
+    return 'live'
+}
+
+# $true when SOMEONE ELSE still holds the task's bytes (running here, or on a
+# host/namespace we cannot probe). Twin: live_marker_foreign_live.
+function Test-MoeLiveMarkerForeignLive([string]$GitDir, [string]$TaskId) {
+    $s = Get-MoeLiveMarkerState $GitDir $TaskId
+    return ($s -eq 'live' -or $s -eq 'foreign')
+}
+
 # ASSERTED / PLANNED tiers of ONE task record, exactly as the daemon's
 # get_commit_scope derives them (completeTask.ts semantics for asserted).
 function Get-MoeTaskDeclaredSets($Task) {
@@ -3333,14 +3493,19 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
     $scope = Get-MoeCommitScope $TaskId 'preflight' $Sid
     $out.Scope = $scope
     $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
+    # A task that is over (or gone) has no bytes left to protect, so its
+    # live-session marker goes with its baseline — otherwise a hard-killed
+    # session would leave one behind under <gitdir>/moe/baseline/ forever.
     if (-not $scope.Found) {
         Write-Host "[WARN] task $TaskId not found by moe.get_commit_scope or on disk — dropping its baseline." -ForegroundColor Yellow
         Remove-MoeBaseline $baselinePath
+        Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
         $out.Skip = $true
         return $out
     }
     if ($scope.Status -eq 'DONE' -or $scope.Status -eq 'ARCHIVED') {
         Remove-MoeBaseline $baselinePath
+        Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
         $out.Skip = $true
         return $out
     }
@@ -3350,7 +3515,35 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
     # a landing (committed/nothing/refused); replaying a "recovered" checkpoint
     # from it would only re-land board-state noise on every poll.
     $blPrev = Read-MoeBaseline $baselinePath
-    if ($blPrev -and -not $blPrev.Landed) {
+    # The predicate above is true for a crashed session AND for one still
+    # running and about to commit. Ask the live-session marker which it is
+    # before touching anything. Four outcomes; each one is load-bearing:
+    #   none/self -> recover exactly as before (no marker is every task already
+    #                in flight when this landed; self is the idle/resume paths
+    #                re-entering the pre-flight for a task we ourselves hold)
+    #   live      -> stand down: the owner is running and WILL land these bytes
+    #   foreign   -> stand down: the owner is on a host or pid namespace we
+    #                cannot probe from here (a WSL seat and a Windows seat
+    #                sharing this checkout through a mount). Refusing to steal
+    #                is recoverable by a human; recovering across a boundary we
+    #                cannot probe is not.
+    #   stale     -> the owner crashed, or its id was recycled: drop the marker
+    #                and recover, unchanged. This is the 2026-08-28 lost-code
+    #                path and it must not weaken.
+    $liveState = 'none'
+    if ($blPrev -and -not $blPrev.Landed) { $liveState = Get-MoeLiveMarkerState $Git.GitDir $TaskId }
+    $owner = $script:MoeLiveOwner
+    if ($liveState -eq 'live') {
+        Write-Host "[attribution] MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$TaskId pid=$($owner.ProcId) host=$($owner.MarkerHost) worker=$($owner.Worker) reason=live" -ForegroundColor Yellow
+        Write-Host "[attribution] $TaskId is still held by a RUNNING session — leaving its baseline and its dirty paths untouched so that session can land them itself." -ForegroundColor Yellow
+    } elseif ($liveState -eq 'foreign') {
+        Write-Host "[attribution] MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$TaskId pid=$($owner.ProcId) host=$($owner.MarkerHost) worker=$($owner.Worker) reason=foreign-host" -ForegroundColor Yellow
+        Write-Host "[attribution] the live-session marker for $TaskId was written on $($owner.MarkerHost)/$($owner.Ns), whose process ids are not visible here — not recovering. Delete $(Get-MoeLiveMarkerPath $Git.GitDir $TaskId) by hand if that session is known to be gone." -ForegroundColor Yellow
+    } elseif ($liveState -eq 'stale') {
+        Write-Host "[attribution] the session that held $TaskId (pid=$($owner.ProcId)) is gone — dropping its stale marker and recovering its work." -ForegroundColor Cyan
+        Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
+    }
+    if ($blPrev -and -not $blPrev.Landed -and $liveState -ne 'live' -and $liveState -ne 'foreign') {
         Write-Host "[attribution] a previous session of task $TaskId ended without landing (baseline present) — recovering its changes now." -ForegroundColor Yellow
         $rec = Invoke-MoeLanding -Kind 'checkpoint' -TaskId $TaskId -Git $Git -Settings $Settings -Title $Title -Status $Status -ReopenCount $scope.ReopenCount -CliExit 0 -Reason 'recovered' -Sid $Sid
         $out.Recovered = $rec
@@ -3402,6 +3595,16 @@ function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [str
         $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD')
         if ($h.Rc -eq 0 -and $h.Out.Count -gt 0) { $head = ($h.Out -join '').Trim() }
         Write-MoeBaseline $baselinePath $TaskId $head $B $uLocal | Out-Null
+        # Claim the bytes this baseline arms: a session gets both or neither.
+        # This runs on the launch path AND the resume path (a resumed session
+        # is exactly as live as a fresh one). A marker already held by a LIVE
+        # peer is left alone — overwriting it would hand the next seat a dead
+        # owner to steal from once we exit.
+        if (Test-MoeLiveMarkerForeignLive $Git.GitDir $TaskId) {
+            Write-Host "[attribution] leaving the live-session marker of $TaskId to its current owner ($($script:MoeLiveOwner.Worker) pid=$($script:MoeLiveOwner.ProcId))." -ForegroundColor Cyan
+        } else {
+            Write-MoeLiveMarker $Git.GitDir $TaskId $Sid
+        }
 
         # K = dirty paths that are neither known-mine nor tool config / .moe.
         $foreign = 0
@@ -5167,6 +5370,11 @@ $mentionsJson
         # (committed, parked on a rescue ref, refused, or nothing to land): the
         # teardown rescue in the outer finally must not run a second pass.
         $moeLandingDone = $true
+        # ...and this session no longer holds the task's bytes, so drop the
+        # claim beside the baseline prune. On a rescue/refusal the baseline is
+        # deliberately KEPT for the next pre-flight to recover — which only
+        # works if the marker is gone. Same as the sh twin.
+        if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId }
     }
     # Session-ended chat line carries the landing summary, so it runs AFTER
     # the landing; the loop `break` for gate/peel failures happens after it.
@@ -5184,6 +5392,15 @@ $mentionsJson
     # is SKIPPED on console-window close / SIGKILL (nothing runs; the
     # persisted baseline is the recovery there).
     try { Invoke-MoeTeardownRescue } catch {}
+    # Drop this session's live-session marker. Measured on Windows PowerShell
+    # 5.1 (see the CancelKeyPress note at the top), THIS finally is what
+    # actually runs on Ctrl+C, on a terminating error and on an `exit 1` after
+    # the claim — the console event handlers are inert — so it is the union of
+    # every abnormal exit path the process still observes. Leaving a marker
+    # behind would suppress the next seat's legitimate crash recovery until a
+    # human deleted the file. (A console-window close / SIGKILL runs nothing;
+    # there the marker's own process probe is what reports it dead.)
+    try { if ($moeGit) { Remove-MoeLiveMarker $moeGit.GitDir $preflightTaskId } } catch {}
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. Best-effort and idempotent (Invoke-MoeDeregister
     # no-ops if a Ctrl+C / window-close handler already fired). There is NO
