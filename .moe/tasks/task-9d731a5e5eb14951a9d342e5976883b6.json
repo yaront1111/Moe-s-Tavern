@@ -130,7 +130,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:41:38.049Z",
-  "updatedAt": "2026-09-11T11:02:49.647Z",
+  "updatedAt": "2026-09-11T11:03:23.559Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:41:00.939Z",
     "plannedStepCount": 6,
@@ -181,7 +181,9 @@
     "moe-vscode/src/panels/TaskDetailPanel.ts",
     "moe-vscode/src/types/moe.ts",
     "moe-vscode/src/providers/BoardViewProvider.ts",
-    "moe-vscode/tests/task-time-budget.test.cjs"
+    "moe-vscode/tests/task-time-budget.test.cjs",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
   ],
   "completionSummary": "Retired the legacy task time-cap presentation in VS Code. Touched exactly 5 files.\n- media/board.js: budgetSuffix is now elapsedSuffix, and budgetHtml is now elapsedHtml. The cap read, the ratio and the ✓⚠✗ marks are gone. The badge is '[<elapsed>]' with the title 'Wall-clock: <elapsed>', and its class changed from task-budget to task-elapsed. The guard is now `!firstClaimAt`, so a recorded wallClockMs without firstClaimAt still shows no badge. The elapsed derivation is byte-identical: recorded value first, otherwise firstClaimAt to doneAt or now, with the isNaN guard and Math.max(0).\n- BoardViewProvider.ts: the selector is renamed to .task-elapsed with the same declarations.\n- TaskDetailPanel.renderMetrics: removed the budget read, the budget term in the empty-section guard and the 'Budget remaining' KPI. usedMs stays for the Wall-clock KPI, and a cap-only task now renders no Metrics section.\n- types/moe.ts: removed TaskBudget and Task.budget.\n- NEW tests/task-time-budget.test.cjs has 11 node:test tests. They run the REAL renderTaskCard (board.js in vm), TaskDetailPanel.createOrShow HTML and the BoardViewProvider stylesheet. Stubs are strict and throw loudly; timers and panels are disposed in finally.\n- Coverage: the output with each of 13 legacy cap shapes (populated, zero, null, undefined, {}, non-numeric, negative, string, number, array) matches the output with no cap. There is a duration/timestamp table (now, doneAt, recorded, recorded without a first claim, unparseable, future, inverted, negative) and a class/selector agreement check. A rich task pins chips, KPIs, critique, failed DoD, handoffs and escaping.\nRed evidence:\n- Step 2 in the repo: 19 tests / 6 fail, all AssertionError on rendered output ('[10m/1h ✓]', 'Budget remaining 50m / 1h', the cap-only Metrics heading, .task-budget).\n- The final file against HEAD sources in a scratch dir outside the repo: 11/11 AssertionError, 0 harness errors.\n- Mutation run on the new code: 10/10 killed.\nChecks: `grep -rn",
   "commits": [
@@ -217,6 +219,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "d607ec2534699b09535c5fd35f0b0a76c1a82d62",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T10:57:53Z",
+      "paths": [
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T11:03:23.559Z",
+      "treeId": "e91823c96c9e7c038486b5acfe735f42f9df6c90",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -229,9 +247,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-de4739a8@2026-09-11T10:31:27Z",
-    "at": "2026-09-11T10:57:49.708Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T10:57:53Z",
+    "at": "2026-09-11T11:03:23.559Z"
   },
   "completedAt": "2026-09-11T11:02:49.647Z",
   "reviewCompletedAt": "2026-09-11T11:02:49.647Z",
