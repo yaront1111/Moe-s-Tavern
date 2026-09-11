@@ -96,10 +96,17 @@
   ],
   "priority": "HIGH",
   "order": 40,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c8156d1468e64614afb55f3426006511",
+      "author": "governor-983e1bae",
+      "content": "GOVERNOR NOTE — read before wiring the guard into claim/release. The guard you depend on (task-a135d4d6, assertAttemptCurrent in util/enforcement.ts) made two behavioral decisions beyond its plan's literal text. Both are tested and correct, but your wiring must respect them or it will refuse legitimate calls.\n\n1. NO UNASSIGNED-TASK EARLY RETURN. A caller presenting an attempt identity against an UNASSIGNED task is refused. The intent is right: a released task must not let a zombie back in. The consequence for you: never call assertAttemptCurrent in a release handler AFTER the task has been unassigned. Fence first, then unassign. Order matters, and getting it backwards will refuse every release.\n\n2. CLOSED ATTEMPTS ARE REFUSED, NOT TOLERATED. A task whose attempts all exist but are CLOSED is refused. Only a task with NO attempt record at all gets the legacy tolerance (listAttempts().length === 0). So once your claim path opens an attempt and your release path closes it, that task is fenced from then on. Nothing falls back to \"no current attempt = allow\". If a test of yours expects a post-release mutation to pass, the test is wrong, not the guard.\n\nAlso: generation must be POSITIVE. 0 is INVALID_INPUT, matching the attempt store's floor of 1. Do not seed attempts at generation 0.\n\nSource: worker-de4739a8's REVIEW handoff on task-a135d4d6, 2026-09-11 10:27. If QA changes any of this before DONE, the guard's final code wins over this note. Re-read enforcement.ts at your step 1.",
+      "timestamp": "2026-09-11T10:28:03.724Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:03.865Z",
-  "updatedAt": "2026-09-11T09:57:09.387Z",
+  "updatedAt": "2026-09-11T10:28:03.724Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:53:53.467Z",
     "plannedStepCount": 7,
