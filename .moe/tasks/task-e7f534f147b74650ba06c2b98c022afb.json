@@ -16,8 +16,63 @@
     "Update both JetBrains Task parser paths; do not refactor unrelated parsing behavior or reintroduce retired task time-cap fields.",
     "No shared build-output deletion, broad staging, or edits to foreign WIP."
   ],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Confirm the worker's wrapper baseline and refresh prerequisite landing before modifying the three owned paths. task-435683c2df8f47e7b77a77dc51ba62e9 is shared-file sequencing, not a runtime requirement: accept get_context.epicSiblings entry landing.merged=true or git log on the current integration branch with --grep 'Moe-Task: task-435683c2df8f47e7b77a77dc51ba62e9'. As of 2026-09-11 that prerequisite is still PLANNING with landing.merged false and no task-tagged commit, and the retired budget field is still present at MoeJson.kt:330/491 and Models.kt:168 - so re-measure rather than trusting this note. If neither landing form is present, report the dependency wait through Moe rather than edit ahead of the retirement. Read the landed Task, parseState -> parseTasks, parseTask and all MoeJsonTest tests; preserve the retirement regressions and live metrics. Record foreign dirty paths in the step note, but do not treat unrelated work in progress as a stop condition or touch or stage it. Own only these three existing files; no new files, daemon, UI, service, build-script or settings edits.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add JUnit 4 red-first fixture coverage in MoeJsonTest only, preserving all pre-existing methods unchanged. Use real JsonParser input, MoeJson.parseState with a tasks array, and MoeJson.parseTask for every fixture; assert task count, identity and exact values, not merely equality of two possibly broken parsers. For a compilable pre-model red, inspect the actual parsed Task through GsonBuilder().serializeNulls().create().toJsonTree rather than referencing the six absent properties: assert every new key exists and equals its independent expected JsonElement. Named tests: (1) populated blocker metadata survives snapshot and update - BLOCKED, needsHumanReview true, a multiline Unicode reason, ordered duplicate dependency ids, a resource id, blockedFromStatus and an offset or fractional timestamp preserved exactly. (2) A Gson round trip preserves blocker metadata: serialize each parsed Task, deserialize back to Task, compare all six fields by JSON and by Task equality, and feed the resulting object back through both production parsers. (3) Missing and explicit null metadata use the false and null defaults and retain the otherwise valid task. (4) Wrong metadata kinds are ignored independently: each string field rejects a number, boolean, object and array; the attention flag rejects the strings true and false, a number, object and array; the dependency list rejects every non-array shape. Keep valid companion fields and task identity intact, including a snapshot carrying a second valid task. (5) Dependency arrays retain only real JSON strings in original order including duplicates, empty and whitespace strings; an empty or all-invalid array yields an empty list, while an omitted, null or wrong-shape array yields null. (6) Successive populated BLOCKED then WORKING payloads, once with the metadata omitted and once with explicit false and null, produce fresh cleared tasks through both entry points, and the earlier parsed object is asserted unchanged. (7) Attention is independent of status, reason and critique: REVIEW with the flag true is preserved; BLOCKED with a human-sounding reason but no flag stays false; supplied blocker strings remain data even on a non-BLOCKED status, including empty and unknown strings and a blockedAt that is not a date. Add one narrow legacy-control assertion showing a numeric title still parses as the string 42 and a string-valued hasPendingQuestion still follows the existing permissive helper, so this task's strictness is visibly scoped to the new fields. Error handling is the point of this step: every malformed shape has an asserted outcome and none of them may drop the parent task. Before implementation, coordinate exclusive shared Gradle use, then run the focused class and record an expected ASSERTION failure for field loss - not an unresolved symbol, compilation or environment failure. Windows from the repository root: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest; exit $LASTEXITCODE. Unix: (cd moe-jetbrains && ./gradlew test --tests com.moe.util.MoeJsonTest). Load test-driven-development for this step. No shared output deletion.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Append six immutable defaulted properties to the END of the landed Task constructor, preserving existing parameter ordering and every existing call site: needsHumanReview: Boolean = false; blockedReason: String? = null; blockedOnTaskIds: List<String>? = null; blockedResourceId: String? = null; blockedFromStatus: String? = null; blockedAt: String? = null. Add only a short display-data comment if it helps. Do not restore retired time-cap types or fields, do not alter TaskMetrics, and do not add any status-derived behavior. The constructor defaults plus the Gson fixtures from the preceding step are what establish backward compatibility without changing a single existing constructor call.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Map all six properties in BOTH Task constructor calls: the private parseTasks used by parseState (around line 299) and the public parseTask used for individual task messages (around line 464). Reuse the existing getStrictBooleanOrDefault(obj, \"needsHumanReview\", false) unchanged - it already honours only a real JSON boolean. Introduce narrowly scoped private helpers getStrictStringOrNull and getStrictStringListOrNull for these new fields ONLY, because the existing getStringListOrNull accepts any primitive and would turn a numeric 42 into the id string \"42\". Scalar error handling: a missing, null or non-primitive value, or a primitive whose isString is false, returns null; read asString only after the kind guard. Array error handling: a missing, null or non-array value returns null; for a real array make one mapNotNull pass accepting only elements that are a primitive with isString true, keeping every valid string verbatim and in order, so an empty array and an all-invalid array both yield an empty list. Use the strict string helper for blockedReason, blockedResourceId, blockedFromStatus and blockedAt, and the strict list helper for blockedOnTaskIds. Do not trim, normalize, sort, deduplicate, validate status vocabularies, parse dates, infer the attention flag, or carry metadata over from a prior payload. The kind guards are what stop malformed metadata from throwing or dropping its parent task - do not add a broad task-level catch. Leave every unrelated helper and its callers exactly as they are; do not unify or refactor the two parsers and do not change snapshot or single-task id behavior. Add one concise comment on the new strict helpers explaining the primitive-coercion trap they exist to avoid. No documentation file is needed in this data-only slice; record the contract in the completion summary and handoff note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "One final regression gate over the whole JetBrains package, because the Definition of Done requires it even though this task is not epic-final. Serialize shared Gradle execution first: check Moe resource and peer coordination, agree the same task-keyed resource id with any other active JetBrains builder, acquire it through Moe before running and release it on success or failure; follow the report_blocked resource nextAction if queued, and never cancel another task's process or delete caches or build output. From the repository root on Windows run EXACTLY: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE . On macOS or Linux: (cd moe-jetbrains && ./gradlew test). Require a fresh exit 0, actual :test execution, newly written JUnit XML, positive executed test and class counts and zero failures or errors; report skipped counts separately. Record the exact command, exit code, output tail and counts for the verification argument of complete_task. A cached UP-TO-DATE result is NOT fresh execution: if you hit one, inside the same exclusive slot run the focused MoeJsonTest selection with a task-local --rerun, then rerun the exact unfiltered command above, since the changed test filter invalidates the final test inputs - and verify real execution. Do not substitute that supplemental command for the exact completion command. On a compilation, test or interprocess failure keep the real exit code and output, diagnose without changing unrelated code, and rerun after fixing what you own or report the real blocker. Every previous parser test and any landed retirement test must remain unchanged and green. No daemon or VS Code gate is relevant here because neither is touched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review and QA handoff, scoped to these three paths. Load adversarial-self-review and read the owned diff against the landed baseline: both parser mappings are present; real boolean and string kinds are enforced for the new metadata ONLY; omitted, null, empty, all-invalid, negative-number and large-array inputs are all safe; the list pass stays linear and preserves order and duplicates; repeated and interleaved parses share no state; an earlier parsed Task is never mutated; REVIEW attention stays independent of BLOCKED; a freshly cleared payload cannot inherit prior data; and a supplied string is never reinterpreted as policy. Confirm legacy permissiveness, metrics, the retired-field removal and every prior test are untouched, and that no foreign work in progress was edited or staged. Confirm you hold both the exact assertion-red evidence for the old field-dropping behavior and the fresh final green evidence; a build failure is not a regression red and stale XML is not a new test run. If the review changes owned code, refresh the same final verification evidence before completing. Report every actually created or modified path in complete_step.modifiedFiles, empty for read-only steps. Record the contract, the prerequisite landing evidence, the commands and counts, all three modified paths and any caveats in the completion summary and handoff. Finish through complete_task with verification so QA receives delivered work; never mark implementation complete by blocking, and do no self-approval, broad staging, foreign-file commits, UI or lifecycle work, or whole-epic documentation sweep.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -40,17 +95,34 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:20.514Z",
-  "updatedAt": "2026-09-10T18:28:29.165Z",
+  "updatedAt": "2026-09-11T09:34:40.408Z",
   "metrics": {
-    "firstClaimAt": "2026-09-10T18:21:49.963Z"
+    "firstClaimAt": "2026-09-10T18:21:49.963Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-0dc7194c"
+    "architect-0dc7194c",
+    "architect-8b93cc67"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Required human REPL approach confirmation before submit_plan has not been received. A complete six-step three-file draft and live exploration are preserved in Serena task-task-e7f534f147b74650ba06c2b98c022afb-handoff and the latest task comment. Confirmation requested: six defaulted model fields, strict new-field-only mappings in both parsers, exact preservation/default/malformed/clearing JUnit fixtures; empty actual dependency arrays remain [], absent/null/wrong-shape arrays become null; no UI/lifecycle edits. This is a human-confirmation wait, not a dependency wait or completed work. No source edits, tests, plan submission or approval occurred.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:34:40.343Z",
+  "planningNotes": {
+    "approachesConsidered": "This is the six-step, three-file draft architect-0dc7194c produced read-only on 2026-09-10, preserved in Serena memory and in task comment comment-aa0af508ff194d198d98cd1dc70c1191. It was never submitted: that session blocked on a human confirmation in the terminal that no one answered, with no blockedOnTaskIds and no resource, so nothing would ever have auto-cleared it. The governor ruled the block invalid because this project runs in TURBO, where plans auto-approve and a per-plan keyboard confirmation contradicts the configured policy. I re-verified every structural claim in the draft against the live files before submitting rather than forwarding it on trust, and the claims hold. Substantive alternatives already rejected in that draft and still rejected here: changing the shared permissive getters, which would alter unrelated fields; merging the two parsers, which differ in scope and id defaults; and pushing malformed-data policy into a global Gson configuration. Tests deliberately inspect serialized production parser output so they compile against the old model and fail on real field loss before any implementation exists.",
+    "codebaseInsights": "Re-verified live on 2026-09-11 against branch moe/work-2026-09-10, confirming the prior architect's read: Task at Models.kt:144-178 carries no blocker or attention fields and still holds the pre-retirement budget field at line 168. MoeJson.parseTasks (line 299, used by parseState) and MoeJson.parseTask (line 464, used for single-task messages) construct Task independently, so both need the mapping. getStrictBooleanOrDefault at line 104 already honours only a real JSON boolean and carries a comment explaining why Gson's asBoolean cannot be trusted - reuse it as-is. The permissive counterparts are the trap this task must avoid: getStringListOrNull accepts any primitive and reads asString, so a numeric 42 silently becomes the id string \"42\"; getBooleanOrDefault routes a JSON string through Boolean.parseBoolean. Hence strict helpers scoped to the six new fields only, leaving every existing field's permissiveness exactly as it is. MoeMessageDispatcher routes STATE_SNAPSHOT to parseState and TASK_UPDATED/TASK_CREATED to parseTask, replacing matching tasks rather than merging fields, so no dispatcher change is needed and a cleared payload really must clear. Gradle uses Gson 2.14.0 with JUnit 4.13.2 and useJUnit. The prerequisite task-435683c2df8f47e7b77a77dc51ba62e9 is still PLANNING with landing.merged false and no task-tagged commit, which gates editing the shared files but not planning.",
+    "risks": "Guard ONLY the new metadata. Do not repair unrelated malformed entries in the task array and do not infer or hide metadata from status, reason text or a critique result. Gson omits nulls by default, which would make the default-value tests vacuous - serializeNulls plus explicit key-existence assertions is what catches absence on the old model. Keep three array outcomes distinct: a real empty array and an all-invalid array both yield an empty list, while omitted, null and non-array yield null; collapsing those is the most likely wrong implementation. The shared file set moves under the time-cap retirement work, so re-read the landed state before editing and preserve whatever landed in the meantime along with any foreign work in progress. Gradle output is shared infrastructure on this box: serialize it through the Moe resource protocol, never delete a peer's cache, and treat an UP-TO-DATE result as no test run at all. The red proof must be an assertion failure, not a compile error, or it proves nothing about field dropping.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:34:40.408Z"
 }
