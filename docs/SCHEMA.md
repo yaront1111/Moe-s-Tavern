@@ -177,8 +177,10 @@ interface ProjectSettings {
     autoCritique?: boolean;
   };
 
-  // moe.submit_plan seeds task.budget.wallClockMs = stepCount * pacePerStepMs when no explicit budget is passed; an existing budget is never overwritten.
-  pacePerStepMs?: number; // default: 900000 (15 min/step)
+  // DEPRECATED — accepted and ignored. Fed the removed task time-budget feature
+  // (80%/100% warn + escalate). moe.submit_plan no longer reads it and writes no
+  // task time budget. Still accepted so an existing project.json keeps loading.
+  pacePerStepMs?: number;
 
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
@@ -434,7 +436,9 @@ interface Task {
 
   // Governance / metrics
   metrics?: TaskMetrics;                        // Lifecycle counters
-  budget?: TaskBudget;                          // Soft wall-clock cap
+  budget?: unknown;                             // DEPRECATED legacy TaskBudget field (shape below),
+                                                // ignored by the daemon; typed unknown so old task
+                                                // records round-trip without reviving a contract
   pendingPlanCritique?: PendingPlanCritique;    // Set by submit_plan in CONTROL mode
   planCritiqueResult?: PlanCritiqueResult;      // Set by submit_plan_critique
 
@@ -739,9 +743,14 @@ interface TaskMetrics {
 }
 
 /**
- * Soft wall-clock budget. The daemon checks `firstClaimAt + wallClockMs` on
- * every WORKING-path tool call and posts a one-shot warning at 80% then an
- * escalation at 100% to `#governors`. No hard kill — purely advisory.
+ * DEPRECATED — the legacy shape of `Task.budget`, kept here only so anyone
+ * reading an old on-disk task record can decode it. The daemon no longer
+ * constructs, reads or enforces it: the wall-clock warn feature (a one-shot
+ * 80% warning then a 100% escalation to `#governors`) was removed because its
+ * clock measured calendar time from the first claim, so it counted BLOCKED
+ * time and fired a false "escalate or wrap up" on any transition out of a long
+ * park. `Task.budget` is typed `unknown` today; a legacy record carrying this
+ * shape still loads untouched, and nothing writes it.
  */
 interface TaskBudget {
   wallClockMs?: number;
