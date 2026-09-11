@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatChannel } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 import { releaseWorkerTasks } from '../state/workerLifecycle.js';
+import { healTeamMembership, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import { logger } from '../util/logger.js';
 
 const GOVERNANCE_DUTIES = [
@@ -31,22 +32,51 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
         throw missingRequired('workerId');
       }
 
+      // Resolve membership through the eviction tombstone as well as the live
+      // record. Every daemon (re)start purges all worker records and empties
+      // team memberIds, so a governor mid-session loses both — and unlike every
+      // other role it has no way back: architects, workers and qa re-register
+      // through the wrapper's claim_next_task pre-flight (which heals via
+      // healTeamMembership), while the governor wrapper calls enter_governance
+      // exactly once at spawn. Looking the worker up and throwing therefore
+      // ended governance for the rest of the session. See
+      // util/teamMembershipHeal.ts.
       const worker = state.getWorker(params.workerId);
-      if (!worker) {
+      const team = resolveEffectiveTeam(state, params.workerId);
+      if (!worker && !team) {
         throw notFound('Worker', params.workerId);
       }
 
       // Role gate: only governors may enter governance mode. Architects plan,
       // workers code, qa verifies. Call moe.claim_next_task for your role
       // instead — architects on an empty PLANNING queue get a wait_for_task
-      // nextAction.
-      const team = state.getTeamForWorker(params.workerId);
+      // nextAction. The tombstone is durable state written by the purge, not
+      // caller input, so honouring it here does not widen who may govern.
       if (team?.role !== 'governor') {
         throw notAllowed(
           'enter_governance',
           'enter_governance is governor-only. Architects plan (use moe.claim_next_task with statuses:["PLANNING"], then moe.wait_for_task when empty); workers code; qa verifies. Join a governor team to govern.'
         );
       }
+
+      // Rebuild the record the purge deleted, then restore durable membership.
+      // healTeamMembership needs the record to exist and is a quiet no-op when
+      // membership is already live, so an ordinary re-entry emits no join.
+      if (!worker) {
+        await state.createWorker({
+          id: params.workerId,
+          type: 'CLAUDE',
+          projectId: state.project!.id,
+          epicId: '',
+          currentTaskId: null,
+          status: 'IDLE'
+        });
+        logger.info(
+          { workerId: params.workerId, teamId: team.id },
+          'enter_governance rebuilt a purged governor record from its team tombstone'
+        );
+      }
+      await healTeamMembership(state, params.workerId);
 
       // Hold the state mutex so concurrent enter_governance calls don't
       // double-broadcast or race on the worker update. We also re-check the
