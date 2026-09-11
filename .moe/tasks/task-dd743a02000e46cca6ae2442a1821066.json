@@ -131,8 +131,8 @@
       "completedAt": "2026-09-11T09:35:39.864Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -160,12 +160,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:23:52.742Z",
-  "updatedAt": "2026-09-11T09:36:31.050Z",
+  "updatedAt": "2026-09-11T09:41:36.232Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T19:43:57.705Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-11T09:41:36.232Z",
+    "wallClockMs": 50258527
   },
   "contextFetchedBy": [
     "architect-fa3e53b1",
@@ -274,6 +276,21 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "48267af533514dfa84ee72eb4c47a19d92cde9be",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T09:32:29Z",
+      "paths": [
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-11T09:36:47.758Z",
+      "treeId": "18f9069f074b5df67eddd9191e076946b295f6cd",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -290,8 +307,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "completion",
-    "sessionId": "worker-f2b3ac93@2026-09-11T09:22:33Z",
-    "at": "2026-09-11T09:36:31.050Z"
+    "sessionId": "worker-e67b0dd2@2026-09-11T09:32:29Z",
+    "at": "2026-09-11T09:36:47.758Z"
   },
   "stepsCompleted": [
     "step-1",
@@ -342,5 +359,8 @@
     "packages/moe-daemon/src/state/taskStore.ts",
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/state/StateManager.ts"
-  ]
+  ],
+  "completedAt": "2026-09-11T09:41:36.232Z",
+  "reviewCompletedAt": "2026-09-11T09:41:36.232Z",
+  "reviewSummary": "All 6 DoD items verified against the cumulative diff 58e0546..HEAD, not the worker summary. Exactly the 5 planned files, 915 insertions, no drift. Completion commit ed4c8b7 confirmed; the 4 source files landed earlier in checkpoint 748f363, so that commit alone looks doc-only. RE-RAN: npm.cmd --prefix packages/moe-daemon test -> 104 files / 1249 tests passed EXIT=0 (exit captured separately); tsc --noEmit EXIT=0. RED PROOF REPRODUCED INDEPENDENTLY: worktree at pre-change 58e0546, node_modules junctioned, new test against OLD code -> 20 failed | 10 passed (30), EXIT=1, matching the recorded red. DoD1 matched/omitted/legacy-0 approve with PLAN_APPROVED + planApprovedAt. DoD2 stale N-1 and newer N+1 both throw STATE_CONFLICT -32002 / PLAN_REVISION_MISMATCH (kills the < mutant); refusal leaves byte-identical json, unchanged status/updatedAt/assignment/revision, zero publications, unchanged activity length; SPEED timer survival proven behaviorally, and the diff confirms validation precedes cancelSpeedModeTimeout and updateTask. DoD3 all 8 malformed tokens refuse -32602 INVALID_INPUT, no coercion or fallback; an unrelated plain Error keeps message+operation with no code/codeName and context keys exactly [taskId], so field/reason never leak. DoD4 both routes forward the token inside withMutex; denylist strips planRevision and expectedPlanRevision, proven by 3 WS regressions (forged 999 never persisted; a token inside updates neither rescues a stale top-level one nor acts as the token). DoD5 serialized race over real ws dispatch: revision 1->2, rendered 1 refused, current 2 approves. No private handler called; store assertions use state.runExclusive. DoD6 docs cover both shapes, omission-vs-null, legacy 0, the mismatch ERROR frame, and the absence of moe.approve_task. Rails held, forbidden-pattern scan clean. Known limit: a SPEED callback already queued behind the mutex can still auto-approve after a refusal."
 }

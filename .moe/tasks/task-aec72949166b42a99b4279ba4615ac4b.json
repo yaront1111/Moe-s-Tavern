@@ -17,13 +17,72 @@
     "Do not add a sixth board column; BLOCKED stays display-mapped into Working.",
     "Keep the cause badge derived from a pure, headless-testable function so JUnit can assert it without an IDE fixture."
   ],
-  "implementationPlan": [],
-  "status": "BLOCKED",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE PARSER PREREQUISITE, THEN EXPLORE. Read-only, no edits. (a) Prove task-e7f534f147b74650ba06c2b98c022afb landed: epicSiblings landing.merged true, or `git log <branch> --grep \"Moe-Task: task-e7f534f147b74650ba06c2b98c022afb\"` finds a commit, AND `grep -n \"needsHumanReview\\|blockedReason\\|blockedOnTaskIds\" moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt` shows all six fields on Task. That prerequisite is WORKING with an approved three-file plan as of 2026-09-11, so re-measure; if it has not landed, moe.report_blocked naming its id rather than adding the fields here - this task owns UI, not the model. (b) Read the delivered field types and note the three distinct empty shapes its parser produces, because the presentation logic branches on them: an omitted, null or wrong-shape dependency array parses to null, while a real empty array and an all-invalid array parse to an empty list. (c) Read the seams you will edit. board/TaskCard.kt builds a row of meta chips through a private `chip(text, subtle)` helper at line 328, with existing examples at lines 89-190 - the new badge follows that pattern, and BoardStyles.kt:30 already carries an orange BLOCKED palette, so the generic status marker exists and what is missing is the specific cause. TaskDetailDialog.kt subscribes one MoeStateListener in its init block at lines 54-61 whose onState calls only refreshPlanPanel, and removes it in dispose at 64-66 - reuse that listener and that disposal, do not add a second subscription. (d) Record foreign dirty paths in the step note and preserve them. Own only the five files in this plan; no daemon, schema, VS Code, board-column or lifecycle changes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "CREATE THE PURE PRESENTATION FUNCTION AND ITS MESSAGE KEYS. New file moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt containing a headless object with no Swing and no IntelliJ imports, so JUnit can assert it with no IDE fixture - that is an explicit task rail. Declare the data types at TOP LEVEL in that file, never inside a companion object, because a classifier nested in a companion is not importable as Outer.Inner and has already cost this repo a failed build. Types: `enum class BlockCause { RESOURCE_WAIT, DEPENDENCY_WAIT, EXTERNAL_BLOCK }`; a badges result carrying a nullable cause plus an independent needsHumanReview flag; and a detail result carrying the cause, the reason, the recorded prerequisite ids, the resource id, blockedFromStatus, blockedAt and the attention flag. THE RULES, which mirror daemon behavior rather than inventing policy. A cause is derived ONLY while status equals BLOCKED; for every other status the cause is null and no active-block detail is offered, so leftover metadata on a task that has moved on can never render as a live block. Within BLOCKED the order is fixed: a non-blank blockedResourceId gives RESOURCE_WAIT, else a list holding at least one non-blank id gives DEPENDENCY_WAIT, else EXTERNAL_BLOCK. Resource wins because the daemon's dependency auto-unblock deliberately skips resource-waiting rows and the lease grant clears all block metadata, so a row carrying both is really waiting on the lease. needsHumanReview is fully independent: it is honoured whenever the flag is true, including on REVIEW and on a task that is not blocked at all, and it is NEVER inferred from status, from the reason text or from a critique result. Error handling, all of it returning a value rather than throwing, because this runs inside paint and refresh paths: a missing or blank reason yields a localized fallback; blank and whitespace-only prerequisite ids are filtered out while the remaining ids keep their recorded order and duplicates; blockedAt is passed through exactly as sent with no date parsing; no input shape may throw. Add the message keys to moe-jetbrains/src/main/resources/messages/MoeBundle.properties: one short badge label per cause, one attention badge label, one clearance explanation per cause phrased as what will clear it - prerequisites reaching a finished state for a dependency wait, a lease grant for a resource wait, a person for an external block - a reason-missing fallback, and a heading for the prerequisite list. Word the prerequisite list as the ids the task RECORDED as waited on, not as unfinished work, because the daemon also treats archived and deleted ids as satisfied.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "COVER THE PRESENTATION WITH HEADLESS JUNIT. New file moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt, JUnit 4 in the style of the existing MetricsPanelTest - plain assertions against the production function, no IDE fixture, no daemon. Assert exact enum values and exact strings, never bare truthiness. Cases: each of the three causes in isolation; a BLOCKED task carrying a resource id AND prerequisite ids AND the attention flag resolves to RESOURCE_WAIT with attention still true, which is the precedence proof; a BLOCKED task with neither a resource nor usable ids is an EXTERNAL_BLOCK; an ordinary task with no metadata has a null cause and no attention. Empty and missing shapes: a null dependency list, a real empty list, a list of only blank strings, and a blank or whitespace resource id each fall through to the next branch correctly. Staleness: a WORKING or REVIEW task still carrying populated blocker fields yields a null cause and no active-block detail, while its attention flag survives - then walk a single task through BLOCKED, WORKING and REVIEW and assert attention persists until the flag itself clears. Data fidelity: prerequisite ids keep their recorded order and duplicates, a multiline reason and a very long reason survive verbatim, and a missing or blank reason yields the localized fallback. Add a guard test that loads /messages/MoeBundle.properties from the test classpath with java.util.Properties and asserts every key the presentation can emit is defined, so a missing localization fails the build instead of shipping a raw placeholder. Run the focused class - Windows from the repository root `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.TaskBlockerPresentationTest; exit $LASTEXITCODE`, Unix `(cd moe-jetbrains && ./gradlew test --tests com.moe.toolwindow.TaskBlockerPresentationTest)` - and require green with nonzero counts. Coordinate exclusive Gradle use before running.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "RENDER THE CAUSE BADGE ON THE BOARD CARD. Edit moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt only. Ask the presentation object for the badges and add at most two chips to the existing meta row using the private chip helper at line 328, following the reopen and handoff badge examples: one chip naming the block cause, rendered only when the presentation returns a cause, and one independent attention chip when the flag is true. Both labels come from MoeBundle, never from a string literal and never from daemon-supplied text - a blockedReason is arbitrary agent-written content and belongs in the detail dialog, not in a card chip. Colour them from the existing BoardStyles palette rather than introducing new colour constants; the BLOCKED entry at BoardStyles.kt:30 is already the right orange. Change nothing else about the card: no new board column, no layout rework, no change to drag behavior, click handling, the status chip, the budget badge or any existing chip. The card must ask the tested function for its answer rather than re-deriving the cause inline, or the JUnit coverage proves nothing about what the user actually sees.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "SHOW THE CAUSE, REASON AND PREREQUISITES IN TASK DETAIL. Edit moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt only. Add one read-only blocker section that appears only when the presentation reports a cause or the attention flag, showing the localized cause label and its clearance explanation, the reason text, the recorded prerequisite ids, and the resource id and blockedFromStatus and blockedAt when present. Render every daemon-supplied string as LITERAL PLAIN TEXT: use a read-only wrapping text area or a plain-text label, and do not build a markup string around reason or id content the way the comment renderer in PlanReviewDialog does - a blockedReason is arbitrary agent output and must never be interpreted as markup. Refresh it live through the EXISTING listener: the onState block at lines 55-60 currently calls only refreshPlanPanel, so have it also refresh this section from the updated task, which means an unblocked task clears its blocker section without the dialog being reopened. Do not add a second listener, do not recreate editors or input components on refresh, and leave the existing dispose at lines 64-66 as the single removal point. Error handling: a task that vanished from the state still returns early exactly as today, and a refresh that throws must not take the dialog down - log and leave the last good content. No new actions, no unblock or retry button, no navigation to prerequisite tasks and no network or state lookup; this slice is display only, which is an explicit task rail.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "RED PROOF, FULL GATE, ADVERSARIAL REVIEW AND HANDOFF. (a) The presentation is a new file, so prove the old behavior by mutation rather than by running new tests against an empty tree, restoring the checkout after each and re-verifying with a separate git status call: delete the status gate so stale metadata renders a live block, which must break the staleness cases; swap the resource and dependency branches, which must break the precedence case; tie the attention flag to status instead of reading it, which must break the independent-attention and REVIEW cases; and drop the blank-id filter, which must break the all-blank-ids case. Name which test fails for each. (b) Run the full module gate fresh, after all five files are final. Windows from the repository root, exactly: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE . Unix: (cd moe-jetbrains && ./gradlew test). Acquire the shared Gradle slot through the Moe resource protocol first and release it either way; never cancel a peer's build or delete a shared cache. Require exit 0, real :test execution with freshly written JUnit XML and nonzero counts - an UP-TO-DATE result is not a test run - and confirm every pre-existing test, including the parser tests delivered by the prerequisite, is unchanged and passing. (c) Adversarially review the diff: is the cause ever derived outside BLOCKED; does a row carrying both a resource and prerequisites really resolve to the resource; can attention ever be inferred rather than read; is any daemon-supplied string interpreted as markup anywhere; does the card ask the tested function rather than re-deriving inline; does the detail section clear on live unblock without a reopen; is there still exactly one listener added and removed; and did anything outside the five owned files change. (d) Complete through moe.complete_task with the exact command, exit code and counts, listing every modified path in modifiedFiles. The completion summary MUST name task-c6e2eca5e19f4aaf9323f02aefadb29a as the already-filed VS Code parity follow-up, which is what the sixth Definition-of-Done item requires, and must state plainly that no VS Code work was done here and no daemon or lifecycle behavior changed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human board unblock 2026-09-10, explicit operator decision after the risk was stated. Force-clearing the dependency wait on task-e7f534f147b74650ba06c2b98c022afb (JetBrains blocker model/parser contract), which is in PLANNING and has not landed. Architect note: dependsOn still gates WORKING-column claims, so this row can be planned but not worked until that prerequisite reaches DONE. Plan against the prerequisite's declared model/parser contract; comment-bf233f58c85a4e2c8e235a8de0087fb6 maps the original DoD and file ownership.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -38,21 +97,41 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:36:06.133Z",
-  "updatedAt": "2026-09-10T18:03:27.671Z",
+  "updatedAt": "2026-09-11T09:37:07.306Z",
   "metrics": {
-    "firstClaimAt": "2026-09-10T17:53:49.085Z"
+    "firstClaimAt": "2026-09-10T17:53:49.085Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-6f3113ee"
+    "architect-6f3113ee",
+    "architect-8b93cc67"
   ],
   "dependsOn": [
     "task-e7f534f147b74650ba06c2b98c022afb"
   ],
-  "blockedReason": "Oversized JetBrains blocker visibility was decomposed at the model/UI boundary. Parent now depends on task-e7f534f147b74650ba06c2b98c022afb (three-file model/parser/JUnit contract, currently BACKLOG); after it lands the parent is a five-file JetBrains UI and feature-integration slice. A separately filed VS Code follow-up depends on this parent and must not be a reverse dependency. Task comment comment-bf233f58c85a4e2c8e235a8de0087fb6 maps all original DoD, file ownership, measured resource/dependency/human semantics, live-refresh/error handling/tests and exact future verification command. REPL approach confirmation was requested and has not been received; do not treat this breakdown as plan approval. No source edits, implementation-plan submission, tests, build or delivery were performed. This is a prerequisite wait, not completed work.",
-  "blockedOnTaskIds": [
-    "task-e7f534f147b74650ba06c2b98c022afb"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-09-10T18:03:27.671Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Oversized JetBrains blocker visibility was decomposed at the model/UI boundary. Parent now depends on task-e7f534f147b74650ba06c2b98c022afb (three-file model/parser/JUnit contract, currently BACKLOG); after it lands the parent is a five-file JetBrains UI and feature-integration slice. A separately filed VS Code follow-up depends on this parent and must not be a reverse dependency. Task comment comment-bf233f58c85a4e2c8e235a8de0087fb6 maps all original DoD, file ownership, measured resource/dependency/human semantics, live-refresh/error handling/tests and exact future verification command. REPL approach confirmation was requested and has not been received; do not treat this breakdown as plan approval. No source edits, implementation-plan submission, tests, build or delivery were performed. This is a prerequisite wait, not completed work.",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:37:07.223Z",
+  "planningNotes": {
+    "approachesConsidered": "Deriving the badge inline in TaskCard - rejected by a task rail and by testability: the board card cannot be asserted without an IDE fixture, so the rule lives in a pure function the card merely consumes. Adding a sixth board column for BLOCKED - rejected by a task rail; BLOCKED stays display-mapped into Working. Showing a dependency wait as 'waiting on N unfinished tasks' - rejected: the daemon counts archived and deleted ids as satisfied, so a count would lie; list the recorded ids instead. Inferring attention from status or from reason text - rejected: it is an independent daemon flag and guessing it would produce a badge the daemon never asked for. Doing VS Code parity here - rejected: the sixth Definition-of-Done item allows a follow-up, and task-c6e2eca5e19f4aaf9323f02aefadb29a is already filed for it, so this stays a five-file JetBrains slice. Rendering reason and ids through a markup label the way the plan review comment list does - rejected on safety: a blockedReason is arbitrary agent-written text and must stay literal.",
+    "codebaseInsights": "This plan is the design architect-6f3113ee worked out read-only on 2026-09-10 and recorded in comment-bf233f58c85a4e2c8e235a8de0087fb6. It was never submitted because that session stopped on an unanswered terminal question; the human then force-cleared the dependency wait. I re-verified its structural claims against the live files before submitting rather than forwarding them on trust, and they hold. A generic BLOCKED marker already exists - BoardStyles.kt:30 carries an orange palette - so the real gap is the specific cause, the reason text and the attention flag, not the absence of any status styling. TaskCard builds its meta row from a private chip(text, subtle) helper at line 328 with reopen, handoff, plan-size and critique badges as precedent, so the new badge is an addition to an established pattern rather than new machinery. TaskDetailDialog already owns exactly one MoeStateListener whose onState refreshes only the plan panel, plus a matching removal in dispose, so the blocker section hooks into that rather than adding a subscription. The precedence rule mirrors the daemon: dependency auto-unblock skips resource-waiting rows and the lease grant clears all block metadata, so a row carrying both is genuinely waiting on the lease. Dependencies are also satisfied by DONE, ARCHIVED or a deleted id, which is why the detail view lists the ids the task recorded rather than claiming each is unfinished. needsHumanReview is normally set by the QA reject path on a REVIEW task, which is exactly why it must render independently of BLOCKED.",
+    "risks": "The prerequisite parser task is WORKING, not landed; step 1 blocks rather than adding the model fields here. Three empty shapes must stay distinguishable once that parser lands - a null list, a real empty list and a list of only blank ids - and collapsing them is the likeliest wrong implementation. Stale metadata is the subtle correctness trap: a task that has left BLOCKED often still carries its blocker fields, and rendering those as a live block would be worse than showing nothing, so the status gate is load-bearing and is one of the required mutation proofs. Attention must survive that gate while the cause does not. Do not interpret any daemon-supplied string as markup anywhere in the detail view. Reuse the existing listener and disposal - a second subscription would leak and would double-refresh. Gradle output is shared infrastructure on this box: serialize it through the Moe resource protocol, never clean a peer's cache, and treat an UP-TO-DATE result as no test run. Finally, keep the diff to the five owned files: the board, the detail dialog and the bundle are all touched by other in-flight cards, so re-read them before editing and preserve whatever landed in the meantime.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt (new, the pure headless rule)",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt (new)",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt (chip helper at 328, existing badge examples 89-190)",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt (single listener added at 54-61, removed at 64-66; onState refreshes only the plan panel today)",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/BoardStyles.kt:30 (existing orange BLOCKED palette)",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt (the six fields arrive from the prerequisite task)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:37:07.306Z"
 }

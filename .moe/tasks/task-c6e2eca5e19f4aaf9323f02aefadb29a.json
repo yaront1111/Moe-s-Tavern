@@ -17,8 +17,66 @@
     "Keep task detail live updates; do not refresh the entire webview and discard unsaved edits.",
     "Reuse existing styles to keep the independently reviewed slice within five files; preserve foreign WIP."
   ],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY BOTH PREREQUISITES, THEN READ THE CONTRACT YOU MUST COPY. Read-only, no edits. (a) Prove the JetBrains parent task-aec72949166b42a99b4279ba4615ac4b landed - epicSiblings landing.merged true, or `git log <branch> --grep \"Moe-Task: task-aec72949166b42a99b4279ba4615ac4b\"` - and that the VS Code time-cap retirement task-9d731a5e5eb14951a9d342e5976883b6 landed too, since it moves the same types, board and detail panel files. Both were unlanded as of 2026-09-11, so re-measure; if either is missing, moe.report_blocked naming the specific id. A task rail says JetBrains ships first and this slice COPIES its confirmed semantics rather than choosing its own. (b) Read the landed moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt and its test, and write its three rules into the step note verbatim, because every case in this task must match them: a cause exists only while status is BLOCKED; within BLOCKED a non-blank resource id wins over a non-empty list of non-blank prerequisite ids, which wins over a plain external block; and the human-review flag is independent, honoured on any status including REVIEW and never inferred from status, reason text or a critique result. Note the wording it chose for the prerequisite list, which presents ids as RECORDED rather than as unfinished, because the daemon also counts finished, archived and deleted ids as satisfied. (c) Read the three seams you will edit. media/board.js line 886-890 already renders one generic chip with a hardcoded title for every BLOCKED card - that hardcoded string is the exact defect. src/panels/TaskDetailPanel.ts builds the initial markup. media/taskDetail.js registers one message listener at line 187 whose updateTask branch at 189 is where live refresh belongs. Read tests/metrics-view.test.cjs for the established convention: node:test plus node:vm, transpiling the real TypeScript source and executing the production script rather than reimplementing its logic. Confirm .chip-blocked, .chip-question and .chip-critique already exist in src/providers/BoardViewProvider.ts around lines 500-520 and reuse them - do not add a style or provider file. (d) Record foreign dirty paths and preserve them. Own only the five files named in this plan; no daemon, no new column, no transport parser, no new framework.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST. Create moe-vscode/tests/task-blocker-visibility.test.cjs following the metrics-view convention exactly - node:test, node:assert/strict, node:vm, and the TypeScript transpile helper for panel sources - and write the first failing cases against UNMODIFIED source: a BLOCKED task carrying prerequisite ids must render a dependency-specific label, and one carrying a resource id must render a resource-specific label. Today board.js emits the same generic chip with its hardcoded title for both, so these fail on the old behavior, which is what the epic rail requires and what no mutation proof can substitute for. Run `npm --prefix moe-vscode test` from the repository root and save the red output; it must be an assertion failure about the rendered label, not a module-resolution or transpile error. Keep the two existing test files untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/task-blocker-visibility.test.cjs"
+      ],
+      "newFiles": [
+        "moe-vscode/tests/task-blocker-visibility.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "TYPE THE SIX FIELDS AND PLACE THE CANONICAL RULE. In moe-vscode/src/types/moe.ts extend the Task interface (around line 246-276) with six OPTIONAL members matching daemon nullability: needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt. All optional, so every existing construction site and fixture keeps compiling and the raw daemon client keeps passing payload fields through untouched - do not add or change any transport parser. In the same file export one small pure function that returns the block cause for a task, implementing the three rules copied in step 1, plus a companion that reports whether the attention flag is set. Putting it here is a deliberate trade-off worth stating: the two webview scripts are plain browser files with no bundler, so they cannot import it and must carry their own copy - a sixth shared module would break the five-file scope this slice was split to respect. The mitigation is enforced in step 6: one shared fixture table drives the TypeScript function AND both script copies, and any drift between them fails a test. Error handling in all copies: a missing, null or wrong-typed field must yield no cause rather than throwing or inventing a wait; a blank or whitespace resource id falls through to the dependency branch; blank ids are filtered before the list is judged non-empty; blockedAt is never parsed as a date.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "MAKE THE BOARD CHIP NAME THE CAUSE. Edit moe-vscode/media/board.js only. Replace the single hardcoded BLOCKED chip at lines 886-890 with a cause-specific one driven by a copy of the rule from step 3, and add an independent attention chip whenever the human-review flag is true - including on a task that is not blocked, which is the common case since the flag normally arrives on a REVIEW task. Reuse the existing .chip-blocked class for the cause and .chip-question or .chip-critique styling for attention rather than introducing new classes. The visible label and the title text both name the cause and what will clear it: prerequisites reaching a finished state for a dependency wait, a lease grant for a resource wait, a person for an external block. Keep BLOCKED display-mapped into the Working column exactly as today - the displayStatus helper at line 16, the dirty-column comparison around 485 and the drag guards around 1015-1035 are all untouched, and no column is added. Every interpolated value goes through the existing escapeHtml helper; daemon-supplied reason text does NOT belong on a card chip at all, only in the detail view. Change nothing else in the file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/board.js"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "SHOW CAUSE, REASON AND PREREQUISITES IN TASK DETAIL, AND REFRESH THEM LIVE. Two coupled files whose output must agree. In moe-vscode/src/panels/TaskDetailPanel.ts add the initial read-only blocker section to the generated markup: the cause label and its clearance sentence, the reason text, every recorded prerequisite id, and the resource id, blockedFromStatus and blockedAt when present, each interpolated through the panel's existing escaping helper. The section renders only when there is a cause or the attention flag is set, and a missing or blank reason shows a neutral fallback rather than an empty element. In moe-vscode/media/taskDetail.js extend the updateTask branch of the existing message listener at lines 187-189 to refresh that section from the updated task and to CLEAR it when the task leaves BLOCKED, while leaving the attention indicator up until the flag itself clears. Two hard constraints, both task rails. First, touch only the blocker section's own nodes: the handler must never rewrite the whole view or reassign the title, description or Definition-of-Done inputs, because a human may be mid-edit and those keystrokes would vanish. Second, write live reason and id content with DOM text nodes - create elements and set textContent - never by assembling a markup string at update time, because a blockedReason is arbitrary agent-written text. Error handling: an update carrying absent, null or wrong-typed metadata clears the section instead of throwing, and a task id that does not match is ignored exactly as today. No new actions, no unblock or retry control, no navigation to prerequisite tasks, no network lookup and no state mutation while rendering.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "COMPLETE THE TEST MATRIX, RUN THE GATE, REVIEW, HAND OFF. (a) Finish moe-vscode/tests/task-blocker-visibility.test.cjs so it exercises all three production surfaces through the vm convention: real board.js rendering, the transpiled TaskDetailPanel initial output, and the real taskDetail.js update handler. Cases: all four labels - dependency wait, resource wait, external block, awaiting human review; attention on a non-BLOCKED REVIEW task; a task carrying a resource id AND prerequisite ids AND the flag resolving to the resource cause with attention still shown, which is the precedence proof; null, missing and wrong-typed metadata producing no cause and no thrown error; blank and whitespace-only resource ids and all-blank id lists falling through correctly; ids preserved in recorded order including duplicates; a multiline and a hostile-looking reason surviving as literal text in both the initial markup and the live update, asserted on the escaped output and on the text node rather than by eye; a BLOCKED to WORKING update clearing the section while attention persists until its flag clears; and an update leaving a partly-typed title, description and Definition-of-Done input untouched. Add the drift guard: one shared fixture table driven through the exported TypeScript function and both webview copies, asserting identical causes, so the three copies cannot diverge silently. (b) Run the gate fresh from the repository root. Windows PowerShell, exactly: npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE . macOS or Linux: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Require exit 0, nonzero test counts, the new file actually collected, and the two pre-existing test files plus any landed time-cap retirement tests unchanged and passing. (c) Adversarially review the diff: is a cause ever derived outside BLOCKED; does a row with both a resource and prerequisites really resolve to the resource; is attention ever inferred rather than read; can any daemon-supplied string reach the page as markup in either the initial render or the live update; does the update handler touch anything beyond its own section; does the section really clear on unblock; did BLOCKED stay mapped into Working with no new column; and did anything outside the five owned files change. (d) Complete through moe.complete_task with the exact command, exit code and counts, listing every modified path, linking the JetBrains parent task-aec72949166b42a99b4279ba4615ac4b as the contract this copies, and stating plainly that no daemon or lifecycle behavior changed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/task-blocker-visibility.test.cjs",
+        "moe-vscode/media/board.js",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/types/moe.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,5 +93,32 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:08.571Z",
-  "updatedAt": "2026-09-10T18:21:27.096Z"
+  "updatedAt": "2026-09-11T09:39:26.350Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:37:28.204Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-8b93cc67"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:39:26.278Z",
+  "planningNotes": {
+    "approachesConsidered": "Adding a sixth shared module so the cause rule lives in one place - rejected: this slice was split out specifically to stay at five independently reviewable files, and the webview scripts could not import it anyway without introducing a bundler, which is explicitly out of scope. The chosen mitigation is a test-enforced drift guard over one shared fixture table. Re-deriving the precedence from first principles - rejected by a task rail: JetBrains ships first and this copies its confirmed semantics, so step 1 reads the landed Kotlin rule and transcribes it. Re-rendering the whole detail webview on update - rejected: it discards unsaved edits, which is its own task rail. Building the live reason text as a markup string the way the initial render does - rejected: a blockedReason is arbitrary agent output, so live updates go through DOM text nodes and only the initial render interpolates, through the existing escaping helper. Showing a dependency wait as a count of unfinished prerequisites - rejected: the daemon counts finished, archived and deleted ids as satisfied, so a count would be false; list the recorded ids instead.",
+    "codebaseInsights": "The defect is concrete and one line wide: board.js:889 emits the same chip with the same hardcoded title for every BLOCKED card, so a dependency wait, a resource wait and an external block are indistinguishable even though the daemon sends enough to tell them apart. A generic marker therefore already exists and the styles are already defined - what is missing is the specific cause, the reason and the independent attention flag. VS Code has no bundler: media/board.js and media/taskDetail.js are plain browser scripts loaded by their providers, so they cannot import from src/types/moe.ts. That is why the cause rule ends up in three places and why the test file carries an explicit drift guard driving one fixture table through all three. The existing test convention is strong enough to make that honest: tests/metrics-view.test.cjs transpiles the real panel source and runs it in a vm, so tests execute production code rather than a copy of its arithmetic, which is also what makes a genuine red possible before any implementation exists. board.js already builds markup with escapeHtml and uses createElement plus textContent for dynamic pieces, so the safe pattern is established rather than invented here. taskDetail.js owns exactly one message listener, and its updateTask branch is where live refresh belongs - the whole view must not be re-rendered, because the detail view holds editable title, description and Definition-of-Done inputs a human may be mid-edit in.",
+    "risks": "Both prerequisites were unlanded when this plan was written, and the time-cap retirement moves the same types, board and detail files - re-read all three before editing and preserve whatever landed in the meantime rather than reintroducing a retired surface. The three copies of the cause rule are the main long-term hazard; without the drift guard they will diverge on the first change, so that test is not optional. Stale metadata is the subtle correctness trap: a task that has left BLOCKED often still carries its blocker fields, and rendering those as a live block is worse than rendering nothing, so the status gate is load-bearing - while attention must survive it. Keep three empty shapes distinguishable: absent, a real empty list, and a list of only blank ids. Never let daemon-supplied text reach the page as markup in either render path. The update handler must touch only its own nodes or unsaved keystrokes vanish. Finally, the red in step 2 must be an assertion failure about the rendered label - a transpile or module-resolution error proves nothing about the old behavior.",
+    "keyFiles": [
+      "moe-vscode/src/types/moe.ts (Task interface at 246-276; also hosts the canonical cause function)",
+      "moe-vscode/media/board.js (generic BLOCKED chip with a hardcoded title at 886-890; displayStatus mapping at 16; escapeHtml used throughout; drag guards 1015-1035)",
+      "moe-vscode/src/panels/TaskDetailPanel.ts (initial markup)",
+      "moe-vscode/media/taskDetail.js (single message listener at 187, updateTask branch at 189)",
+      "moe-vscode/tests/task-blocker-visibility.test.cjs (new)",
+      "moe-vscode/tests/metrics-view.test.cjs (the node:test + node:vm + TypeScript-transpile convention to copy)",
+      "moe-vscode/src/providers/BoardViewProvider.ts (existing .chip-blocked / .chip-question / .chip-critique styles around 500-520)",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt (the contract this slice copies)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:39:26.350Z"
 }
