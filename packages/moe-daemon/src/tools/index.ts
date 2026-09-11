@@ -23,6 +23,7 @@ import { archiveEpicTool } from './archiveEpic.js';
 import { searchTasksTool } from './searchTasks.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
+import { finalizeAttemptTool } from './finalizeAttempt.js';
 import { deleteTaskTool } from './deleteTask.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
@@ -112,6 +113,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     archiveTaskTool(state),
     archiveEpicTool(state),
     claimNextTaskTool(state),
+    finalizeAttemptTool(state),
     deleteTaskTool(state),
     qaApproveTool(state),
     qaRejectTool(state),

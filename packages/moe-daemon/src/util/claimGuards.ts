@@ -28,16 +28,57 @@ export const CLAIM_LOST_RACE = 'CLAIM_LOST_RACE';
 /** The row's current step is IN_PROGRESS and its holder is alive. */
 export const STEP_LEASE_HELD = 'STEP_LEASE_HELD';
 /**
- * The claimer still holds an attempt in the `finalizing` phase. complete_task
- * hands the task to QA but deliberately leaves that attempt OPEN, because the
- * bytes are only landed once the session exits and the wrapper commits them —
- * so the seat is NOT free until the boundary is acknowledged, and starting the
- * next task now would open a second one across the first.
+ * An attempt is still in the `finalizing` phase. complete_task hands the task to
+ * QA but deliberately leaves that attempt OPEN, because the bytes are only
+ * landed once the session exits and the wrapper commits them — so the boundary
+ * is NOT closed until moe.finalize_attempt acknowledges it. Two callers refuse
+ * on it, with deliberately different scopes: claim_next_task refuses THIS
+ * WORKER's next claim (starting task B would open a second attempt across the
+ * first), and qa_approve refuses an approval of THAT TASK (a fast QA would
+ * otherwise reach DONE before the runner had landed a byte).
  *
- * Unlike every name above it this one is RETURNED, never thrown: a wrapper must
- * read it as retryable and come back, not as a fatal error.
+ * THROWN, and the retryable rail is carried by `context.retryable: true` rather
+ * than by the shape of the response. A wrapper reads that flag to decide the
+ * refusal is non-fatal — it must not infer intent from whether the call threw,
+ * because over the MCP wire every refusal is a thrown error anyway (and
+ * MoeError.context is not forwarded, so the message names the attempt too).
  */
-export const CLAIM_ATTEMPT_FINALIZING = 'CLAIM_ATTEMPT_FINALIZING';
+export const ATTEMPT_FINALIZING = 'ATTEMPT_FINALIZING';
+
+/** The attempt fields a finalizing refusal names. Looked up by each caller. */
+export interface FinalizingAttemptRef {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly taskId: string;
+  /** The seat that opened the attempt — not necessarily the refused caller. */
+  readonly workerId: string;
+}
+
+/**
+ * The refusal both holds raise. A STATE_CONFLICT, not a permission failure: the
+ * caller is entitled to do this, just not yet.
+ *
+ * Takes the attempt fields as arguments rather than a StateManager on purpose —
+ * this module has no state import today and must stay a pure guard module, so
+ * the lookup stays in each caller.
+ */
+export function attemptFinalizingRefusal(attempt: FinalizingAttemptRef): MoeError {
+  return new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Worker ${attempt.workerId} still holds attempt ${attempt.attemptId} (generation ` +
+      `${attempt.generation}) on task ${attempt.taskId} in phase finalizing: its bytes are not ` +
+      'landed yet. Close the boundary with moe.finalize_attempt, then retry — this is a ' +
+      'RETRYABLE refusal (context.retryable), NOT a fatal error.',
+    {
+      attemptId: attempt.attemptId,
+      generation: attempt.generation,
+      taskId: attempt.taskId,
+      workerId: attempt.workerId,
+      retryable: true,
+    },
+    ATTEMPT_FINALIZING
+  );
+}
 
 /**
  * The actor recorded when a release carries no caller id.

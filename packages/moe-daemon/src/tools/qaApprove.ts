@@ -3,6 +3,8 @@ import type { StateManager } from '../state/StateManager.js';
 import type { TaskCommit } from '../types/schema.js';
 import { missingRequired, notFound, invalidState, invalidInput } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { listAttempts } from '../state/attemptStore.js';
+import { attemptFinalizingRefusal } from '../util/claimGuards.js';
 
 /** Upper bound on the approval summary — mirrors qa_reject's reason cap. */
 const MAX_SUMMARY_CHARS = 2000;
@@ -40,6 +42,29 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
 
       if (task.status !== 'REVIEW') {
         throw invalidState('Task', task.status, 'REVIEW');
+      }
+
+      // The artifact boundary. complete_task hands the task to QA but leaves its
+      // attempt open in `finalizing`, because the wrapper only lands the bytes
+      // after the CLI exits — so an approval arriving in the same second would
+      // drive DONE over work that has not landed anywhere. Refuse until
+      // moe.finalize_attempt closes it.
+      //
+      // Scoped by TASK, never by worker: the IDE/human approval path carries no
+      // workerId at all (and the WORKING->REVIEW handoff already cleared
+      // assignedWorkerId), so a worker-scoped lookup would leave exactly the
+      // fast-QA race open on the one path that matters most.
+      //
+      // Fires HERE, before every mutation, every touchWorker and every chat
+      // side effect, so a refused approval moves not one byte.
+      const finalizing = listAttempts(state, task.id).find((a) => a.phase === 'finalizing');
+      if (finalizing) {
+        throw attemptFinalizingRefusal({
+          attemptId: finalizing.id,
+          generation: finalizing.generation,
+          taskId: finalizing.taskId,
+          workerId: finalizing.workerId,
+        });
       }
 
       assertWorkerOwns(task, params.workerId);

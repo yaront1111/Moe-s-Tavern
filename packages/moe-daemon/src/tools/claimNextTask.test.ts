@@ -10,6 +10,7 @@ import { computeDiskStateSignature } from '../util/diskState.js';
 import { releaseTaskTool } from './releaseTask.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { closeOpenAttempts, listAttempts, openAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { MoeError } from '../util/errors.js';
 import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../types/schema.js';
 
 // Mocked so the flag logic is tested without a git binary; the real subprocess
@@ -1032,8 +1033,10 @@ describe('moe.claim_next_task — execution attempts', () => {
 // OPEN in the `finalizing` phase instead of closing it, because the wrapper
 // only lands the bytes after the CLI exits. Until that boundary is
 // acknowledged the seat is not free, so a coding claim from the SAME worker is
-// refused — by RETURN, never by throw: a task rail requires a wrapper reading
-// this to treat it as retryable rather than fatal.
+// refused. The refusal is THROWN: task-d72d8cc6 reshaped it from the returned
+// object this suite originally pinned, because the held-out acceptance case
+// requires a MoeError. The retryable rail now travels in context.retryable, so
+// a wrapper reads that flag instead of the response shape.
 // =============================================================================
 describe('moe.claim_next_task — finalizing attempt refusal', () => {
   const h = new ToolTestHarness();
@@ -1076,29 +1079,34 @@ describe('moe.claim_next_task — finalizing attempt refusal', () => {
   it('refuses a coding claim while that worker has an attempt finalizing', async () => {
     const held = await finalizingAttemptFor('worker-1');
 
-    // Awaited directly: a throw here fails the test, which is the point — the
-    // refusal is retryable, and the throwing refusals in this tool are reserved
-    // for genuine races.
-    const refused = await claim({ workerId: 'worker-1' });
+    // Thrown, not returned: the same identity the held-out acceptance case
+    // pins. `retryable` in the context is what tells a wrapper to come back
+    // rather than escalate — the throw itself carries no such meaning.
+    const refused = await claim({ workerId: 'worker-1' }).then(
+      () => { throw new Error('expected a MoeError refusal, but the claim resolved'); },
+      (err: unknown) => err
+    );
 
-    expect(refused.hasNext).toBe(false);
-    expect(refused.code).toBe('CLAIM_ATTEMPT_FINALIZING');
-    expect(refused.finalizingAttempt).toEqual({
+    expect(refused).toBeInstanceOf(MoeError);
+    const err = refused as MoeError;
+    expect(err.code).toBe(-32002);
+    expect(err.codeName).toBe('ATTEMPT_FINALIZING');
+    expect(err.context).toEqual({
       attemptId: held.id,
       generation: held.generation,
       taskId: 'task-1',
+      workerId: 'worker-1',
+      retryable: true,
     });
-    expect(typeof refused.message).toBe('string');
-    // The acknowledgement tool is a sibling task and does not exist yet, so the
-    // hint carries a reason and names no tool it cannot honour.
-    expect(refused.nextAction).not.toHaveProperty('tool');
-    expect(typeof (refused.nextAction as { reason?: unknown }).reason).toBe('string');
+    // The message must name the attempt: MoeError.context is NOT forwarded over
+    // the MCP wire, so the message is all a remote caller sees.
+    expect(err.message).toContain(held.id);
   });
 
   it('changes no task owner when it refuses a worker holding a finalizing attempt', async () => {
     await finalizingAttemptFor('worker-1');
 
-    await expect(claim({ workerId: 'worker-1' })).resolves.toMatchObject({ hasNext: false });
+    await expect(claim({ workerId: 'worker-1' })).rejects.toThrow(/finalizing/);
 
     // The refusal fires before ranking and before the assignment write.
     expect(h.state.getTask('task-2')!.assignedWorkerId).toBeNull();
@@ -1128,10 +1136,10 @@ describe('moe.claim_next_task — finalizing attempt refusal', () => {
 
   it('claims successfully once the finalizing attempt reaches the closed phase', async () => {
     const held = await finalizingAttemptFor('worker-1');
-    const refused = await claim({ workerId: 'worker-1' });
-    expect(refused.hasNext).toBe(false);
+    await expect(claim({ workerId: 'worker-1' })).rejects.toThrow(/finalizing/);
 
-    // The retry the refusal promises.
+    // The retry the refusal promises — moe.finalize_attempt is what performs
+    // this close in production.
     await setAttemptPhase(h.state, held.id, 'closed');
     const retried = await claim({ workerId: 'worker-1' });
 

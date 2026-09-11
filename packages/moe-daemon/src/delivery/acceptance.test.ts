@@ -1017,7 +1017,7 @@ describe('Wave 1 acceptance: fast QA cannot finish before candidate preparation'
   // on today's code complete_task flips A to REVIEW and a QA that answers in the
   // same second drives it to DONE — and the same worker claims the next task —
   // while the runner has not yet landed a single byte for A.
-  it.skip('refuses qa_approve and the next claim until the attempt is finalized', async () => {
+  it('refuses qa_approve and the next claim until the attempt is finalized', async () => {
     const h = new ToolTestHarness();
     h.init();
     try {

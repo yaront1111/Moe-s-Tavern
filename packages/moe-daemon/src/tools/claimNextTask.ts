@@ -7,7 +7,7 @@ import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
-import { assertNoLiveLease, claimLostRace, CLAIM_ATTEMPT_FINALIZING } from '../util/claimGuards.js';
+import { assertNoLiveLease, claimLostRace, attemptFinalizingRefusal } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
@@ -179,38 +179,22 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           //
           // Fires HERE, beside the one-task-per-worker check and before any
           // ranking, eligibility scan or assignment write, so a refused claim
-          // can never have changed an owner. RETURNED, never thrown: a task
-          // rail requires a wrapper to treat this as retryable, and the
-          // throwing refusals in this file are reserved for genuine races.
+          // can never have changed an owner. THROWN: the held-out acceptance
+          // case for this boundary requires a MoeError, and the retryable rail
+          // now travels in context.retryable rather than in the response shape.
           // Scoped to this worker by construction — another worker's
-          // finalizing attempt is none of this caller's business.
+          // finalizing attempt is none of this caller's business (qa_approve's
+          // hold is the task-scoped one).
           const finalizing = listAttempts(state).find(
             (a) => a.workerId === params.workerId && a.phase === 'finalizing'
           );
           if (finalizing) {
-            return {
-              hasNext: false,
-              code: CLAIM_ATTEMPT_FINALIZING,
-              finalizingAttempt: {
-                attemptId: finalizing.id,
-                generation: finalizing.generation,
-                taskId: finalizing.taskId,
-              },
-              message:
-                `Worker ${params.workerId} still holds attempt ${finalizing.id} (generation ` +
-                `${finalizing.generation}) on task ${finalizing.taskId} in phase finalizing: its ` +
-                'bytes are not landed yet, so no new task may be started. This is a ' +
-                'retryable refusal, NOT a fatal error.',
-              nextAction: {
-                reason:
-                  `End this session so the wrapper can land task ${finalizing.taskId}; retry this ` +
-                  'claim afterwards rather than escalating. Be aware that NOTHING acknowledges the ' +
-                  'boundary yet: the attempt is closed by the next claim of ' +
-                  `${finalizing.taskId} (normally QA picking it up for review). A deregister, a ` +
-                  'release or a daemon restart does NOT clear it — all three key on an assignment ' +
-                  'the completed task no longer has.'
-              }
-            };
+            throw attemptFinalizingRefusal({
+              attemptId: finalizing.id,
+              generation: finalizing.generation,
+              taskId: finalizing.taskId,
+              workerId: finalizing.workerId,
+            });
           }
         }
 

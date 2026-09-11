@@ -438,6 +438,50 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 ---
 
+### moe.finalize_attempt
+
+**Runner-called.** Closes a task's execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. `complete_task` hands the task to QA but deliberately leaves the attempt **open** in `finalizing`, because the bytes are only landed after the session exits and the wrapper commits them. This tool is the acknowledgement of that artifact boundary, and closing the attempt is what lifts the two holds the open attempt imposes.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,           // task the attempt belongs to
+  attemptId: string,        // the attempt to close, as returned by moe.claim_next_task
+  generation?: number,      // fencing token from the same claim; when supplied it must equal the current attempt's
+  outcome: 'landed' | 'nothing-to-commit' | 'rescued' | 'failed',   // what the runner's landing actually did
+  landedRevision?: string,  // /^[0-9a-f]{40}$/i — REQUIRED when outcome is 'landed', refused as a bare ref name
+  workerId?: string,        // worker seat that held the attempt (auto-injected by proxy)
+  runnerId?: string         // wrapper/runner session reporting the landing
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, attemptId, taskId, generation, phase: "closed", outcome, landedRevision, message }
+// landedRevision is null when the runner reported no landing
+```
+
+**Notes:**
+- **The runner declares the bytes final, not the CLI's exit.** That is the whole point of an explicit operation: an interactive TUI seat stays open long after the work is landed, and a provider mode without one-shot semantics has no exit to infer anything from. Both would otherwise be stuck with an attempt nothing ever closes.
+- **Closing lifts BOTH finalizing holds** — `moe.claim_next_task` refuses that worker's next task while it holds a finalizing attempt, and `moe.qa_approve` refuses that task's approval while the task has one. Neither hold depends on anything except the presence of a finalizing attempt, so this call is the deterministic way out of both.
+- **Both holds refuse with `-32002` / `ATTEMPT_FINALIZING`, and that refusal is NOT fatal.** Its `MoeError.context` carries `{ attemptId, generation, taskId, workerId, retryable: true }`. Note that **`context` is not forwarded over the MCP wire** (a wire refusal carries `{ code, message, data: { tool, codeName } }` only), so a remote caller keys on `codeName === 'ATTEMPT_FINALIZING'` — or on the message, which names the attempt and says the refusal is retryable. Finalize the attempt and retry; do not escalate.
+- **Fenced.** `attemptId`, plus `generation` when supplied, goes through `assertAttemptCurrent`, so a superseded attempt is refused by name and closes nothing.
+- **Idempotent.** A retry after a lost response is safe: when the attempt is already `closed` the call returns the same successful response and **writes nothing at all** — no second record, no touched `lastPhaseAt`, a byte-identical `.moe/attempts/<id>.json`. The already-closed answer is deliberately evaluated *before* the fence (the fence resolves the current attempt through a helper that ignores closed attempts, and would otherwise refuse the retry as superseded); it is not a fencing bypass, because closing an already-closed attempt changes nothing and every open case still goes through the guard.
+- **Only a `finalizing` attempt may be closed here.** A `running` attempt is refused — closing it would hand the seat back with nothing landed, which is the exact race the hold exists to stop. `reconciling` belongs to the recovery slice.
+- **The outcome is reported, not recorded.** `outcome` and `landedRevision` are echoed back but are **not** persisted: nothing is added to the `ExecutionAttempt` schema for them, and no activity event or board broadcast is emitted. A durable delivery record is `moe.record_delivery_receipt`'s job in the receipt slice. The daemon never runs git, so it has verified neither value — it checks `landedRevision`'s shape only.
+- Not `blocking`, so dispatch serializes it under the state mutex like every other tool. There is no ownership or status gate: the runner finalizes after `complete_task`, when QA may already own the REVIEW task, so the attempt fence is the guard.
+
+**Errors.** Every refusal writes nothing. JSON-RPC code, then `MoeError.codeName`:
+- `-32001 TASK_NOT_FOUND`: unknown `taskId`
+- `-32001 ATTEMPT_NOT_FOUND`: unknown `attemptId`
+- `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt exists but belongs to another task
+- `-32002 ATTEMPT_SUPERSEDED`: `attemptId`/`generation` is not the task's current attempt
+- `-32002 ATTEMPT_NOT_FINALIZING`: the attempt is open but in another phase
+- `-32602 INVALID_INPUT`: an outcome outside the vocabulary, a `landedRevision` that is not 40 hex characters, or a `generation` that is not a positive integer
+- `-32602 MISSING_REQUIRED`: `taskId`, `attemptId` or `outcome` is absent, or `landedRevision` is absent with `outcome: 'landed'`
+
+---
+
 ### moe.get_commit_scope
 
 **Wrapper-called; not for agents.** Returns everything the agent wrapper's post-flight needs to attribute dirty paths to one task: the task's ASSERTED and PLANNED path tiers, every other live task's declared paths (PEER), which peers are active, the DENY/BOARD lists and the resolved commit policy. State-only — the daemon never runs git; the wrapper joins this with its own `git status` snapshot and the persisted per-task baseline (`<gitdir>/moe/baseline/<taskId>.tsv`). Attribution rules and codes: `docs/CONFIGURATION.md` → `autoCommit`, `docs/TROUBLESHOOTING.md` → `MOE_ATTR_*`.
@@ -841,6 +885,8 @@ When `taskId` is provided the priority/order ranking is bypassed — you get the
 **Dependency gating (WORKING claims only):** a task whose `dependsOn` targets are not all `DONE`/`ARCHIVED` is excluded from `WORKING`-status claims — it is not offered for execution until its prerequisites land, and an explicit-`taskId` claim of such a task is refused too (re-claiming a task you already hold stays allowed — the resume path). `PLANNING` (and `REVIEW`) claims are unaffected: a task may be planned before its prerequisites finish. A missing/deleted id counts as satisfied, so a removed prerequisite can never wedge its dependents. `moe.list_tasks` rows carry `dependsOnUnmet` so a withheld row is explainable, and `moe.set_task_dependencies` (architect/governor) edits a mis-declared list. This gate *prevents* build-order blocks; a dependency discovered mid-flight goes through `moe.report_blocked { blockedOnTaskIds }` instead, which the same auto-unblock machinery clears.
 
 **One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
+
+**Finalizing hold:** a worker that still holds an execution attempt in the `finalizing` phase cannot claim its next task — the call is **refused with a thrown `-32002` / `ATTEMPT_FINALIZING`** (not a `hasNext: false` answer), raised beside the one-task-per-worker check and before any ranking or assignment write, so a refused claim never changes an owner. `complete_task` leaves that attempt open on purpose: the wrapper only lands the bytes after the CLI exits, so starting task B now would open a second attempt across the first. The refusal is retryable, not fatal (`context.retryable: true`; over the wire, key on `codeName`), and `moe.finalize_attempt` is what clears it. The hold is scoped to the calling worker — another worker's finalizing attempt is not this caller's business.
 
 **BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason`, `blockedResourceId` and `blockedOnTaskIds` (each present only when set on the task), and `nextAction` points at `moe.release_task` instead of `get_context`, spelling out the two workable exits: end the session and let the wrapper idle (the resource grant / dependency auto-unblock / a human clears it), or `moe.release_task { taskId }` to hand the task back with its `blockedReason` intact and free the slot for other work — never re-enter `wait_for_task` hoping for different work (nothing else is claimable while the hold stands). Note that an assignee-reported **non-resource** `report_blocked` frees the seat at report time, so a BLOCKED hold is the resource-block (hold+idle) shape or a third-party (workerId-less) block on an assigned task — an assignee-reported non-resource BLOCKED task is unassigned and simply not offered. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); a set `blockedOnTaskIds` means it auto-unblocks when every listed task is DONE/ARCHIVED; neither set means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
 
@@ -1479,6 +1525,7 @@ The summary is persisted on the task as `reviewSummary`.
 ```
 
 **Notes:**
+- **Finalizing hold (a hard refusal, unlike the commit gate).** While the task has an execution attempt in the `finalizing` phase, approval is refused with `-32002` / `ATTEMPT_FINALIZING` before any mutation — no DONE write, no worker touch, no chat line, a byte-identical task file. The bytes are not landed yet, so DONE would be premature. The hold is scoped **by task, not by worker**, because the IDE/human approval path carries no `workerId` at all and the REVIEW handoff has already cleared `assignedWorkerId`. It is lifted by `moe.finalize_attempt`, and its `context.retryable` is `true` — retry after the runner finalizes rather than escalating. See `moe.finalize_attempt`.
 - **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
 - **Approval always lands** — the gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
