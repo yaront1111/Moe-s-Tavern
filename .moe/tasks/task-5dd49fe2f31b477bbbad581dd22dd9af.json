@@ -102,8 +102,8 @@
       "completedAt": "2026-09-11T12:33:28.611Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -118,7 +118,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:19.867Z",
-  "updatedAt": "2026-09-11T12:34:59.081Z",
+  "updatedAt": "2026-09-11T12:40:11.413Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "worker-010099ab",
@@ -128,7 +128,9 @@
     "firstClaimAt": "2026-09-11T12:10:22.989Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T12:40:11.413Z",
+    "wallClockMs": 1788424
   },
   "stepsCompleted": [
     "step-1",
@@ -192,13 +194,31 @@
       "treeId": "1952e881b23a24870cc55104d54bdff75742644b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "22fa911fad723425f98849bfd9ca1593b9ed5b31",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T12:22:50Z",
+      "paths": [
+        ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T12:35:07.923Z",
+      "treeId": "2c7eb00aaee49c5ea7ee7477852b0582ca8d851e",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T12:34:55Z",
-    "at": "2026-09-11T12:34:59.081Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-11T12:22:50Z",
+    "at": "2026-09-11T12:35:07.923Z"
+  },
+  "completedAt": "2026-09-11T12:40:11.413Z",
+  "reviewCompletedAt": "2026-09-11T12:40:11.413Z",
+  "reviewSummary": "APPROVED. Re-ran myself: gate `npx vitest run src/tools/completeTask.test.ts src/tools/claimNextTask.test.ts` exit 0, 69/69; `npm test` exit 0, 1460 passed|6 skipped; `tsc --noEmit` exit 0. COMMITS: source is in e7e172a; 22fa911 is the completion commit, board state only (its \"5 skipped\" = source already committed in e7e172a). Read both — the code IS on the branch. Diff = the 5 planned files, no drift, no forbidden patterns. DoD1: completeTask.ts:149-152 setAttemptPhase(...,'finalizing'), never imports closeOpenAttempts, after every assertion and before the single updateTask; test asserts the exact phase string AND the on-disk record, so a \"not closed\" pass is impossible. DoD2: nextAction ternary, finalizing arm carries only `reason`; test asserts absence of `tool`/`args`. DoD3: CLAIM_ATTEMPT_FINALIZING returned not thrown, carries finalizingAttempt{attemptId,generation,taskId}, fires before ranking/assignment; a test awaits it directly so a throw fails the suite, another proves no owner changed. DoD4: enforcement.ts untouched; the 20 pre-existing completeTask cases stay green. I ADDED TWO CHECKS: leaving wait_for_task unguarded is SAFE (waitForTask.ts never assigns, so the assignment write is solely in the guarded claim path); the not-fatal rail holds behaviourally (moe-agent.ps1:3796 special-cases only hasNext:false+alreadyAssigned, so this refusal takes the idle path, burning no resume attempt). CONFIRMED THE WORKER'S CORRECTION OF THE PLAN: release/deregister/purge do NOT clear a finalizing attempt — workerLifecycle.ts:146, workerStore.ts:273/377, releaseTask.ts:338 all select by assignedWorkerId, cleared by the REVIEW write; only claimNextTask.ts:62 closes it, when QA claims the task, and the refusal message now says so. ACCEPTED DEAD END (sibling task-d72d8cc6): a completed seat is refused later claims until its task is claimed; a pinned MOE_WORKER_ID has no escape. FOLLOW-UP: MCP_SERVER.md documents neither `finalizing` nor the new code."
 }
