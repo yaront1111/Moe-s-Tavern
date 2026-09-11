@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T10:33:42.842Z",
+  "updatedAt": "2026-09-11T10:33:46.270Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
@@ -173,7 +173,40 @@
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
     "packages/moe-daemon/src/providers/codexDescriptor.ts",
     "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
-    "docs/plans/2026-09-11-provider-registry-spike.md"
+    "docs/plans/2026-09-11-provider-registry-spike.md",
+    ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+    ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
   ],
-  "completionSummary": "RECOMMENDATION: AGAINST starting a staged migration of launch policy into a typed provider registry now. FOR one narrow prerequisite first: a print-argv mode in both wrappers, then re-decide. Reason #1 of 4: a migration cannot be verified today, because neither wrapper can print its real argv, so text presence is the ceiling. Full note: docs/plans/2026-09-11-provider-registry-spike.md.\n\nEVIDENCE: codex transcribed into a typed descriptor. It has 31 shared facts, 13 divergent and 3 unsupported, so 29.5% diverge on the provider picked as the easy case. Five divergences change behaviour:\n1. The MOE_DAEMON_HOST post-discovery TOML upsert exists only in bash.\n2. For the moe MCP server, PowerShell hardcodes command=\"node\", while bash resolves the command and may omit args.\n3. The PowerShell 7.3-and-older quote guard rewrites prompt bytes.\n4. Bash escapes TOML values with json.dumps; PowerShell interpolates them raw.\n5. The two wrappers validate the startup timeout differently.\nCodex has no tool event stream the wrappers parse, so a codex seat can never reach the TOOL attribution tier. Resume is wrapper-level, so it is not a provider property.\n\nFILES: packages/moe-daemon/src/providers/providerDescriptor.ts (types, provisional location, no importer outside src/providers) and codexDescriptor.ts (codex only, pure data). providerDescriptor.contract.test.ts holds 20 vitest tests collected by the normal suite. The docs/plans note is the fourth file.\n\nDoD CAVEAT: \"reproduces current argv and config\" is proven as literal presence at the codex branches of both scripts, not as argv equality. No dry-run mode exists, as the plan anticipated. Presence is site-scoped because whole-file matching missed a mutation: 22 of 65 literals also occur in grok's writer and elsewhere. The site-scoped test catches that mutation and 3 descriptor corruptions. parity-check.sh has the same whole-file exposure.\n\nLAUNCHERS: byte-identical, git diff empty. parity-check PASS. postflight PASS with 25 scenari"
+  "completionSummary": "RECOMMENDATION: AGAINST starting a staged migration of launch policy into a typed provider registry now. FOR one narrow prerequisite first: a print-argv mode in both wrappers, then re-decide. Reason #1 of 4: a migration cannot be verified today, because neither wrapper can print its real argv, so text presence is the ceiling. Full note: docs/plans/2026-09-11-provider-registry-spike.md.\n\nEVIDENCE: codex transcribed into a typed descriptor. It has 31 shared facts, 13 divergent and 3 unsupported, so 29.5% diverge on the provider picked as the easy case. Five divergences change behaviour:\n1. The MOE_DAEMON_HOST post-discovery TOML upsert exists only in bash.\n2. For the moe MCP server, PowerShell hardcodes command=\"node\", while bash resolves the command and may omit args.\n3. The PowerShell 7.3-and-older quote guard rewrites prompt bytes.\n4. Bash escapes TOML values with json.dumps; PowerShell interpolates them raw.\n5. The two wrappers validate the startup timeout differently.\nCodex has no tool event stream the wrappers parse, so a codex seat can never reach the TOOL attribution tier. Resume is wrapper-level, so it is not a provider property.\n\nFILES: packages/moe-daemon/src/providers/providerDescriptor.ts (types, provisional location, no importer outside src/providers) and codexDescriptor.ts (codex only, pure data). providerDescriptor.contract.test.ts holds 20 vitest tests collected by the normal suite. The docs/plans note is the fourth file.\n\nDoD CAVEAT: \"reproduces current argv and config\" is proven as literal presence at the codex branches of both scripts, not as argv equality. No dry-run mode exists, as the plan anticipated. Presence is site-scoped because whole-file matching missed a mutation: 22 of 65 literals also occur in grok's writer and elsewhere. The site-scoped test catches that mutation and 3 descriptor corruptions. parity-check.sh has the same whole-file exposure.\n\nLAUNCHERS: byte-identical, git diff empty. parity-check PASS. postflight PASS with 25 scenari",
+  "commits": [
+    {
+      "sha": "445a63243681961522fb0c447650dcd59c8237a2",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T10:33:42Z",
+      "paths": [
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+        "docs/plans/2026-09-11-provider-registry-spike.md",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.ts"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T10:33:46.270Z",
+      "treeId": "7301102a35e79963fb1a9b64f7d3e650973bd270",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T10:33:42Z",
+    "at": "2026-09-11T10:33:46.270Z"
+  }
 }
