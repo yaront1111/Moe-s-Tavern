@@ -21,11 +21,12 @@
     {
       "stepId": "step-1",
       "description": "VERIFY THE PARSER PREREQUISITE, THEN EXPLORE. Read-only, no edits. (a) Prove task-e7f534f147b74650ba06c2b98c022afb landed: epicSiblings landing.merged true, or `git log <branch> --grep \"Moe-Task: task-e7f534f147b74650ba06c2b98c022afb\"` finds a commit, AND `grep -n \"needsHumanReview\\|blockedReason\\|blockedOnTaskIds\" moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt` shows all six fields on Task. That prerequisite is WORKING with an approved three-file plan as of 2026-09-11, so re-measure; if it has not landed, moe.report_blocked naming its id rather than adding the fields here - this task owns UI, not the model. (b) Read the delivered field types and note the three distinct empty shapes its parser produces, because the presentation logic branches on them: an omitted, null or wrong-shape dependency array parses to null, while a real empty array and an all-invalid array parse to an empty list. (c) Read the seams you will edit. board/TaskCard.kt builds a row of meta chips through a private `chip(text, subtle)` helper at line 328, with existing examples at lines 89-190 - the new badge follows that pattern, and BoardStyles.kt:30 already carries an orange BLOCKED palette, so the generic status marker exists and what is missing is the specific cause. TaskDetailDialog.kt subscribes one MoeStateListener in its init block at lines 54-61 whose onState calls only refreshPlanPanel, and removes it in dispose at 64-66 - reuse that listener and that disposal, do not add a second subscription. (d) Record foreign dirty paths in the step note and preserve them. Own only the five files in this plan; no daemon, schema, VS Code, board-column or lifecycle changes.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
-      ]
+      ],
+      "startedAt": "2026-09-11T11:04:38.492Z"
     },
     {
       "stepId": "step-2",
@@ -82,7 +83,7 @@
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Human board unblock 2026-09-10, explicit operator decision after the risk was stated. Force-clearing the dependency wait on task-e7f534f147b74650ba06c2b98c022afb (JetBrains blocker model/parser contract), which is in PLANNING and has not landed. Architect note: dependsOn still gates WORKING-column claims, so this row can be planned but not worked until that prerequisite reaches DONE. Plan against the prerequisite's declared model/parser contract; comment-bf233f58c85a4e2c8e235a8de0087fb6 maps the original DoD and file ownership.",
+  "reopenReason": "Governor clearing a session-scoped block. worker-d4da0745 is an interactive Codex seat (no -CodexExec) launched idle; it was assigned this task mid-session, so no per-task baseline exists (BASELINE_MISSING) and the wrapper would run no post-flight for it. The task itself is unblocked: its dependency task-e7f534f1 is DONE. No source edits were made. Returning to WORKING-unassigned for a wrapper-bound seat.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -97,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:36:06.133Z",
-  "updatedAt": "2026-09-11T09:37:07.306Z",
+  "updatedAt": "2026-09-11T11:05:20.580Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T17:53:49.085Z",
     "plannedStepCount": 6,
@@ -105,7 +106,8 @@
   },
   "contextFetchedBy": [
     "architect-6f3113ee",
-    "architect-8b93cc67"
+    "architect-8b93cc67",
+    "worker-d4da0745"
   ],
   "dependsOn": [
     "task-e7f534f147b74650ba06c2b98c022afb"
@@ -115,7 +117,7 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "Oversized JetBrains blocker visibility was decomposed at the model/UI boundary. Parent now depends on task-e7f534f147b74650ba06c2b98c022afb (three-file model/parser/JUnit contract, currently BACKLOG); after it lands the parent is a five-file JetBrains UI and feature-integration slice. A separately filed VS Code follow-up depends on this parent and must not be a reverse dependency. Task comment comment-bf233f58c85a4e2c8e235a8de0087fb6 maps all original DoD, file ownership, measured resource/dependency/human semantics, live-refresh/error handling/tests and exact future verification command. REPL approach confirmation was requested and has not been received; do not treat this breakdown as plan approval. No source edits, implementation-plan submission, tests, build or delivery were performed. This is a prerequisite wait, not completed work.",
+  "priorBlockedReason": "Missing task-specific wrapper pre-flight/landing binding. This CLI launched with no pre-flight task per C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-codex-instructions-worker-81708.md, then claimed this row through wait_for_task. Fresh read-only check: D:\\projexts\\moes\\.git\\moe\\baseline\\task-aec72949166b42a99b4279ba4615ac4b.tsv is absent (BASELINE_MISSING); HEAD d607ec2534699b09535c5fd35f0b0a76c1a82d62. scripts/moe-agent.ps1:5015 requires $AutoClaim and $preflightTaskId before post-flight. Governor explicitly directed unbound seats to stop before edits. No source edits, staging, tests, builds or completed steps; foreign WIP untouched. Parser prerequisite is DONE and landed per current get_context; this is an external wrapper blocker, not a dependency wait. Resume only with actual task-specific pre-flight baseline and landing ownership.",
   "stepsCompleted": [],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:37:07.223Z",
@@ -133,5 +135,6 @@
       "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt (the six fields arrive from the prerequisite task)"
     ]
   },
-  "planApprovedAt": "2026-09-11T09:37:07.306Z"
+  "planApprovedAt": "2026-09-11T09:37:07.306Z",
+  "workStartedAt": "2026-09-11T11:04:38.492Z"
 }
