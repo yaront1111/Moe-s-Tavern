@@ -27,7 +27,7 @@ import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
-import { closeOpenAttempts } from './attemptStore.js';
+import { closeOpenAttempts, listAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
@@ -305,22 +305,54 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
 }
 
 /**
- * Purge all workers at startup. Since the daemon is (re)starting,
- * no workers are connected yet — all existing files are guaranteed stale.
- * Any remaining task assignments are orphaned after the purge, so clear them
- * explicitly with activity events to make the tasks claimable.
+ * Worker seats that still own a non-closed attempt, so the startup purge can
+ * spare them.
+ *
+ * The WORKER RECORD is what survives a restart, deliberately: it is the stable
+ * identity, persisted separately from the attempt, so a reattaching runner
+ * finds the same seat it left rather than a seat rebuilt out of an attempt
+ * file. The attempt only says which seats to keep.
+ *
+ * Reads the attempt phase and nothing else. Never lastActivityAt, never any
+ * other idle signal — a quiet build is not evidence of a dead worker, so
+ * silence must never decide whether a seat is spared.
+ */
+function workersHoldingOpenAttempts(state: StateManager): Set<string> {
+  const held = new Set<string>();
+  for (const attempt of listAttempts(state)) {
+    if (attempt.phase === 'closed') continue;
+    held.add(attempt.workerId);
+  }
+  return held;
+}
+
+/**
+ * Purge stale workers at startup. Since the daemon is (re)starting, a worker
+ * record is stale UNLESS its seat still owns a non-closed attempt — which after
+ * reconcileRunningAttempts means an execution the daemon has lost sight of but
+ * has NOT established is gone. Those seats are spared whole: file, map entry,
+ * currentTaskId, and their task left WORKING and assigned, because destroying
+ * them would hand live work to a second worker while the first is still
+ * running (the exact restart-during-a-long-build failure).
+ *
+ * Every other worker keeps the original behaviour exactly — deleted, and its
+ * orphaned assignment released with activity events so the task is claimable.
+ * That is the legacy path for every project that predates attempts, where no
+ * attempt record exists at all.
  */
 export async function purgeAllWorkers(state: StateManager): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const workersDir = path.join(state.moePath, 'workers');
+    const spared = workersHoldingOpenAttempts(state);
     let deletedCount = 0;
 
-    // Delete all worker files from disk
+    // Delete stale worker files from disk, sparing the held seats.
     try {
       if (fs.existsSync(workersDir)) {
         const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
         for (const file of files) {
           try {
+            if (spared.has(path.basename(file, '.json'))) continue;
             const workerFile = path.join(workersDir, file);
             // Suppress the watcher echo so our own delete doesn't re-trigger load().
             state.fileWatcher?.ignorePath(workerFile);
@@ -335,8 +367,12 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
       logger.error({ error }, 'Failed to read workers directory during purge');
     }
 
-    // Clear workers map
+    // Clear the map, then restore the spared seats unchanged. Rebuilding from
+    // the surviving map entries (rather than re-reading the files) keeps the
+    // record byte-identical: the hold must not rewrite what it protects.
+    const heldWorkers = Array.from(state.workers.values()).filter((w) => spared.has(w.id));
     state.workers.clear();
+    for (const worker of heldWorkers) state.workers.set(worker.id, worker);
 
     // Clear assignedWorkerId references that are now orphaned.
     let clearedAssignments = 0;
@@ -381,15 +417,21 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
       }
     }
 
-    // Clear stale memberIds from teams; all worker records have been purged.
-    // Each cleared id is tombstoned so a returning worker rejoins its own team
-    // instead of coming back as a solo — see util/teamMembershipHeal.ts.
+    // Clear the memberIds of the purged workers from teams. Each cleared id is
+    // tombstoned so a returning worker rejoins its own team instead of coming
+    // back as a solo — see util/teamMembershipHeal.ts. A SPARED seat never left
+    // its team, so it stays a member and is not tombstoned: its identity has to
+    // survive whole, and a spared worker with no team would be re-derived into
+    // the wrong role on its next claim. When every member is spared there is
+    // nothing to write at all, which keeps the record byte-identical.
     for (const team of state.teams.values()) {
       if (team.memberIds.length === 0) continue;
+      const evicted = team.memberIds.filter((id) => !spared.has(id));
+      if (evicted.length === 0) continue;
       const updated = {
         ...team,
-        memberIds: [],
-        formerMemberIds: withEvictionTombstones(team, team.memberIds),
+        memberIds: team.memberIds.filter((id) => spared.has(id)),
+        formerMemberIds: withEvictionTombstones(team, evicted),
         updatedAt: new Date().toISOString()
       };
       state.teams.set(team.id, updated);

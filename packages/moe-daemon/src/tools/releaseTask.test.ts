@@ -984,27 +984,43 @@ describe('attempt closing on the release paths', () => {
     expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
   });
 
+  /** A task pointing at a worker with NO record — the dangling assignment the purge releases. */
+  function seedDanglingTask(taskId: string, workerId: string, overrides: Partial<Task> = {}): void {
+    h.createTask({ id: taskId, status: 'WORKING', assignedWorkerId: workerId, ...overrides });
+  }
+
   it('the startup purge closes the attempt of every task it releases, over records loaded from disk', async () => {
     // index.ts runs load() and THEN purgeAllWorkers(); mirror that order over
     // records a previous daemon run persisted.
+    //
+    // A worker whose RECORD survives and owns a non-closed attempt is now
+    // SPARED — its task is held for it rather than released, so its attempt is
+    // never reached (state/workerStore.test.ts owns that rule). What the purge
+    // still releases, and therefore still closes, is a DANGLING assignment: a
+    // task pointing at a worker with no record at all, where no seat is left to
+    // hold the row for.
     seedHeldTask('task-1', 'worker-a');
-    seedHeldTask('task-2', 'architect-b', { status: 'PLANNING', order: 2 });
+    seedDanglingTask('task-2', 'architect-b', { status: 'PLANNING', order: 2 });
     persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
     persistAttempt({ id: 'attempt-2', taskId: 'task-2', workerId: 'architect-b', generation: 3, phase: 'running' });
     await h.state.load();
 
     await h.state.purgeAllWorkers();
 
-    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    // Held: the seat exists and still owns an open attempt.
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBe('worker-a');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'running']]);
+    // Released, and its attempt closed with it — on disk, not just in the map.
     expect(h.state.getTask('task-2')!.assignedWorkerId).toBeNull();
-    expect(attemptsOf('task-1')).toEqual([[1, 'worker-a', 'closed']]);
     expect(attemptsOf('task-2')).toEqual([[3, 'architect-b', 'closed']]);
     expect(JSON.parse(readMoeFile('attempts', 'attempt-2.json')).phase).toBe('closed');
   });
 
   it('the startup purge survives an attempt it cannot close: one bad record never aborts startup', async () => {
-    seedHeldTask('task-1', 'worker-a');
-    seedHeldTask('task-2', 'worker-b', { order: 2 });
+    // Both dangling, so both seats are genuinely released and both attempts are
+    // reached; a surviving worker record would spare its seat instead.
+    seedDanglingTask('task-1', 'worker-a');
+    seedDanglingTask('task-2', 'worker-b', { order: 2 });
     persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
     persistAttempt({ id: 'attempt-2', taskId: 'task-2', workerId: 'worker-b', generation: 1, phase: 'running' });
     await h.state.load();
@@ -1024,7 +1040,9 @@ describe('attempt closing on the release paths', () => {
   });
 
   it('the startup purge closes the attempt even when the task write fails: the seat is gone in memory', async () => {
-    seedHeldTask('task-1', 'worker-a');
+    // Dangling, so the purge actually releases it; a surviving worker record
+    // would be spared and this path never entered.
+    seedDanglingTask('task-1', 'worker-a');
     persistAttempt({ id: 'attempt-1', taskId: 'task-1', workerId: 'worker-a', generation: 1, phase: 'running' });
     await h.state.load();
     const realWrite = h.state.writeEntity.bind(h.state);

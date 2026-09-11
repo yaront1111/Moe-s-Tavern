@@ -16,6 +16,7 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
+import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
 import { logger } from './util/logger.js';
 import { VERSION } from './util/version.js';
@@ -498,6 +499,11 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     port = await findAvailablePort(preferredPort || DEFAULT_PORT, host);
     state = new StateManager({ projectPath });
     await state.load();
+    // state.load() above populates state.attempts, so both passes below see the
+    // previous daemon's executions. Order matters: reconcile FIRST, so the
+    // purge can see which seats still own a non-closed attempt and spare them
+    // instead of yanking a task away from a CLI that is still running.
+    await state.mutex.runExclusive(() => reconcileRunningAttempts(state));
     await state.purgeAllWorkers(); // Layer 1 - clean stale workers from previous run
     // Backfill missing TaskMetrics from the activity log. Idempotent — only
     // fills fields that are currently undefined; never overwrites.

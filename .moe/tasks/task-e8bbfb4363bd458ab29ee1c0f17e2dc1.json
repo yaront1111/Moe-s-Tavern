@@ -1,0 +1,110 @@
+{
+  "id": "task-e8bbfb4363bd458ab29ee1c0f17e2dc1",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Tell first-run operators that a codex seat is interactive and lands nothing until it is closed",
+  "description": "DOCS ONLY. Measured on 2026-09-11 against the current working tree.\n\nThe first-run path offers codex as a one-line swap and says nothing about how a codex seat actually behaves. README.md line ~148 (inside the collapsed \"Launch agents from external terminals\" block) says only: \"These examples use Claude Code. For Codex, add `-Command codex` on Windows or `--command codex` on macOS/Linux.\" docs/GETTING_STARTED.md repeats it twice, at line 31 for the installer and line 85 for the launch commands. Neither mentions two facts an operator hits within minutes.\n\nFACT 1 - a codex seat is INTERACTIVE for every role by default. scripts/moe-agent.sh line 394 states it outright (\"Codex is interactive (TUI) for every role unless --codex-exec opts the seat\"), and the PowerShell twin resolves -CodexExec the same way. So a first-run operator who follows the quick start gets a terminal UI, not the headless one-shot loop the rest of the quick start implicitly describes.\n\nFACT 2 - a terminal-UI seat lands its commits only when the operator CLOSES the UI. The wrapper's post-flight is what makes the completion or checkpoint commit, and it runs after the CLI exits. So a codex seat left open finishes its task on the board while nothing is committed, which reads exactly like the auto-commit being broken. This is the practical trap, and the quick start is where it needs saying, because the quick start explicitly tells the reader to \"review the changed files and recorded commit in Git\".\n\nFACT 3 - an asymmetry in the flag reference. docs/DEVELOPMENT.md line 174 documents `-GrokExec` / `--grok-exec`, including that it exists for roles that default to the interactive TUI. There is NO corresponding `-CodexExec` / `--codex-exec` entry, even though the flag exists in both wrappers (bash help text at scripts/moe-agent.sh line 299) and codex has the same TUI default.\n\nWHAT IS ALREADY FINE - do not duplicate it. docs/CONFIGURATION.md line 55 covers MOE_CODEX_SANDBOX, its danger-full-access default, the measured reasons for that default, the pinned tools-approval mode on the moe and serena servers, and that --full-auto is never passed. docs/TROUBLESHOOTING.md lines 291-343 cover the same ground plus the Windows sandbox failure. Those are the right homes for the detail. This card adds a short first-run warning and one missing flag entry, and links to those pages rather than restating them.\n\nScope: README.md, docs/GETTING_STARTED.md, docs/DEVELOPMENT.md (3 files). No script, no behaviour, no test change - nothing here alters what any wrapper executes.\n\nNOT IN SCOPE: changing the codex TUI default (that was reverted to interactive deliberately on 2026-09-07 and is not being relitigated here), adding a --yolo flag to codex (codex has none; --full-auto was removed in codex-cli 0.147 and parity-check fails on its reintroduction), and restating the sandbox or approval detail that CONFIGURATION.md already owns.\n\nVerification: npm run lint from the repository root (bash script, so Git Bash on Windows) must exit 0, and a grep must show each of the three files naming the codex exec flag. There is no docs test harness, so state plainly in the completion summary that the remaining check is a human read.",
+  "definitionOfDone": [
+    "README.md's launch section states that a codex seat runs the interactive terminal UI by default and that such a seat commits nothing until the operator closes it, and names the -CodexExec / --codex-exec flag as the unattended alternative.",
+    "docs/GETTING_STARTED.md carries the same warning wherever it currently offers codex as a swap (around lines 31 and 85), phrased once and cross-referenced rather than duplicated in both places.",
+    "docs/DEVELOPMENT.md documents -CodexExec / --codex-exec in the same flag-reference style as the existing -GrokExec / --grok-exec entry at line 174, closing that asymmetry.",
+    "The sandbox, approval-policy and --full-auto detail already in docs/CONFIGURATION.md line 55 and docs/TROUBLESHOOTING.md is LINKED, not restated; no contradiction is introduced between the four documents.",
+    "No script, no test and no behaviour changed: git diff touches only the three documentation files.",
+    "npm run lint exits 0, and the command plus a grep showing the flag named in all three files is recorded in the completion verification."
+  ],
+  "taskRails": [
+    "Documentation only: do not change the codex TUI default, any wrapper argv, or any test.",
+    "Do not restate what docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md already own; link to them.",
+    "Do not claim codex has a yolo flag. It does not, and --full-auto is rejected by codex-cli 0.147+ and guarded by parity-check."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RE-MEASURE THE FOUR CLAIMS, THEN READ WHAT YOU MUST NOT DUPLICATE. Read-only, no edits. Every line number below was measured on 2026-09-11 and these files move, so confirm each before editing. (a) README.md line 145, inside the collapsed 'Launch agents from external terminals' block: 'These examples use Claude Code. For Codex, add -Command codex on Windows or --command codex on macOS/Linux.' (b) docs/GETTING_STARTED.md around line 31 (installer, offering codex and gemini) and around line 85 (launch commands, 'To use Codex, add -Command codex or --command codex'). (c) docs/DEVELOPMENT.md line 173 documents -Command / --command with the four CLI choices, and line 174 documents -GrokExec / --grok-exec including the detail that it exists for roles defaulting to the interactive terminal UI. There is no -CodexExec entry. Note while you are there that --gemini-exec and -Interactive are also absent from that reference; those are REAL gaps but they are NOT this card's scope, so leave them and say so in the completion summary rather than widening. (d) Confirm the behaviour you are about to document, from the source rather than from this plan: scripts/moe-agent.sh around line 394 states codex is interactive for every role unless --codex-exec opts the seat in, and the bash help text around line 299 carries the flag. (e) Read docs/CONFIGURATION.md line 55 and docs/TROUBLESHOOTING.md lines 291-343 in full. They already own the sandbox modes, the full-access default and its measured reasons, the pinned tools-approval mode and the fact that --full-auto is never passed. Your job is to LINK to them. Anything you find yourself retyping from those two pages belongs in a link instead.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "ADD THE FIRST-RUN WARNING TO README.md. Extend the existing sentence at line 145 so an operator choosing codex learns three things in the place they actually decide: a codex seat runs the interactive terminal UI for every role by default; such a seat does not commit anything until the operator closes it, because the launcher makes its commit after the CLI exits; and -CodexExec on Windows or --codex-exec elsewhere is the unattended alternative that lands a commit per task. The second point is the one that earns its place here and it should be the emphasis, because the quick start tells the reader a few lines earlier to 'review the changed files and recorded commit in Git' - which is exactly the check that looks broken when a terminal-UI seat is still open. Frame it as what the operator will SEE, not as an internal mechanism: the task reaches Done on the board while Git shows nothing yet. Keep it to two or three sentences inside the existing collapsed block; this is a first-run page and a wall of caveats there is its own failure. Link the sandbox and approval detail to docs/CONFIGURATION.md rather than restating any of it. Do not describe codex as having a yolo mode, and do not name the bypass-approvals flag - whether Moe should ever offer that is a separate decision and this card must not pre-empt it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "README.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "SAY IT ONCE IN docs/GETTING_STARTED.md. That file offers codex in two places, around line 31 for installation and around line 85 for launching. Write the warning ONCE, at the launch site around line 85 where it is actionable, and from the installer mention at line 31 point forward to it rather than repeating it - a duplicated caveat in a first-run guide ages into two versions that disagree. Match the README wording closely enough that a reader moving between the two pages does not wonder whether they describe different behaviour, without copying it verbatim into a third place. Same constraints as the README: link the sandbox and approval detail rather than restating it, no yolo framing, no bypass flag.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/GETTING_STARTED.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "CLOSE THE FLAG-REFERENCE ASYMMETRY IN docs/DEVELOPMENT.md. Add a -CodexExec / --codex-exec entry in the same shape and register as the -GrokExec / --grok-exec entry at line 174, placed beside it. It should say that the flag forces the codex CLI headless for a seat, that codex seats are interactive for every role by default so this is the only route to headless, that per-task landing needs it, and that the sandbox for that headless launch is chosen by MOE_CODEX_SANDBOX - with a link to docs/CONFIGURATION.md for the modes and the default rather than repeating them. One sentence of error handling belongs here because it is the flag reference and the failure is specific: if the installed codex rejects the wrapper's argv, the seat stops with MOE_CLI_ARGV_REJECTED and a chat escalation instead of relaunch-looping, and MOE_DISABLE_ARGV_PROBE=1 skips that check. Leave --gemini-exec and -Interactive alone; they are genuinely missing too, but adding them is scope this card did not agree to.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, REVIEW, HAND OFF. (a) Run npm run lint from the repository root - it is a bash script, so Git Bash on Windows - and require exit 0. It lints role docs rather than these three files, so treat a failure as a signal that something unrelated moved rather than as feedback on your edit, and diagnose before re-running. (b) Record a grep showing each of the three files now names the codex exec flag, and a git diff --stat proving the change touches only those three files: no script, no test, no wrapper argv, which is the first task rail. (c) Read all four documents together and check they agree - README, GETTING_STARTED, DEVELOPMENT and CONFIGURATION - since the failure mode of a docs change is not a broken build but two pages that quietly contradict each other. Confirm you restated nothing that CONFIGURATION.md or TROUBLESHOOTING.md already owns, that no page now claims codex has a yolo mode, and that the bypass-approvals flag appears nowhere. (d) Be honest about the epic rail requiring a test that fails on the old behaviour: there is no documentation test harness in this repository and this card does not add one, so that rail cannot be satisfied with an automated red here. State that plainly in the completion summary along with what WAS verified - the lint run, the greps, the diff scope and a human read - so QA judges it on the evidence that exists rather than rejecting on a rail no docs change can meet. Also name the deliberately untouched gaps: --gemini-exec and -Interactive are still absent from the flag reference. Complete through moe.complete_task with all three modified paths listed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "README.md",
+        "docs/GETTING_STARTED.md",
+        "docs/DEVELOPMENT.md"
+      ]
+    }
+  ],
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Operator instruction: promote and plan. Dependency-free docs card filed after a live probe of codex-cli 0.154.0; nothing here waits on another delivery.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 8,
+  "comments": [
+    {
+      "id": "comment-60304b0b4955446d9c57150cac6786d1",
+      "author": "architect-8b93cc67",
+      "content": "VERIFIED AGAINST THE INSTALLED CLI, 2026-09-11. codex-cli 0.154.0. This supersedes the third task rail, which is too absolute.\n\n`codex exec --help` reports:\n\n    -s, --sandbox <SANDBOX_MODE>\n        [possible values: read-only, workspace-write, danger-full-access]\n\nSo `danger-full-access` is real and is one of exactly three accepted values. The wrapper's default is a genuine flag value, not an invention, and `MOE_CODEX_SANDBOX` is a real dial the operator can turn down to `workspace-write` or `read-only`.\n\n`--full-auto` returns zero matches in the exec help, confirming the repository's claim that codex-cli 0.147 removed it and that the wrapper is right never to pass it.\n\nTHE CORRECTION. codex 0.154.0 DOES carry a bypass-everything flag, present both at top level and under exec:\n\n    --dangerously-bypass-approvals-and-sandbox\n        Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY\n        DANGEROUS. Intended solely for running in environments that are externally sandboxed\n\nThat is codex's actual yolo-equivalent. So the accurate statement is: codex has no flag NAMED yolo, but it does have this one, and the wrapper deliberately does not use it. The wrapper instead relies on `exec` implying an approval policy of never, plus `--sandbox danger-full-access`. The practical difference is worth a sentence somewhere: the bypass flag removes both the approval plumbing and the sandbox dial, whereas the wrapper's spelling keeps `MOE_CODEX_SANDBOX` meaningful so an operator can still restrict a seat.\n\nTreat the third rail as amended to: do not claim codex has a `--yolo` flag, and do not introduce `--dangerously-bypass-approvals-and-sandbox` as part of a documentation card. Whether the wrapper should ever offer it is a separate decision with a separate card, and this docs task must not make it.\n\nAlso worth documenting if it is cheap: `--approve-for-me` is new in this version and routes approvals through automatic review under the workspace-write sandbox. Not required by this card's Definition of Done; mention it only if it fits the flag reference naturally.\n\nBoard note, not a defect to repair by hand: this row came back `createdBy: WORKER` even though an architect workerId was supplied. Same quirk recorded on the 2026-09-10 decomposition cards.",
+      "timestamp": "2026-09-11T18:37:54.518Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-11T18:37:11.023Z",
+  "updatedAt": "2026-09-11T21:24:57.983Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-11T21:22:13.076Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T21:23:36.358Z",
+  "planningNotes": {
+    "approachesConsidered": "Repeating the warning at both codex mentions in GETTING_STARTED.md - rejected: duplicated caveats in a first-run guide drift apart, so it is written once at the launch site and referenced from the installer mention. Restating the sandbox and approval detail in the first-run pages so a reader need not click through - rejected by a task rail and on merit: CONFIGURATION.md line 55 is dense, measured and maintained, and a simplified copy of it would be wrong within a release. Changing the codex terminal-UI default so the quick start becomes accurate without a warning - firmly out of scope: that default was chosen deliberately by the operator on 2026-09-07 and this card documents the world rather than arguing with it. Naming the bypass-approvals flag that the live probe turned up - rejected for now: it is real and it is codex's yolo-equivalent, but whether Moe should ever offer it is a separate decision with its own card, and a documentation task must not make it by implication. Fixing the --gemini-exec and -Interactive gaps in the same pass - rejected as unagreed scope; they are named in the completion summary instead so someone can file them.",
+    "codebaseInsights": "Measured on 2026-09-11, then re-probed against the installed codex-cli 0.154.0 with a help call that makes no model request. The sandbox flag accepts exactly read-only, workspace-write and danger-full-access, so the wrapper's full-access default is a real value and MOE_CODEX_SANDBOX is a genuine dial; --full-auto returns zero matches, confirming the 0.147 removal still holds. The reference documentation is in good shape: CONFIGURATION.md line 55 and TROUBLESHOOTING.md 291-343 cover the sandbox modes, the measured reasons for the default, the pinned tools-approval mode and the never-passed --full-auto thoroughly. What is missing is entirely in the first-run path, which offers codex as a one-line swap and says nothing about how a codex seat behaves. Two facts an operator meets within minutes are absent: a codex seat is the interactive terminal UI for every role by default, and such a seat commits nothing until it is closed, because the launcher's post-flight is what makes the commit and it runs after the CLI exits. That second one matters because the quick start explicitly tells the reader to go and check the recorded commit in Git a few lines earlier. Separately, the flag reference in DEVELOPMENT.md documents -GrokExec but has no -CodexExec entry even though codex has the same terminal-UI default and the flag exists in both wrappers.",
+    "risks": "The honest problem with this card is the epic rail requiring a test that fails on the old behaviour. There is no documentation test harness here and this card does not add one, so the rail cannot be met with an automated red - the plan says so explicitly and tells the worker to surface it in the completion summary, because the alternative is QA rejecting a correct change on a rail no docs edit can satisfy. The real failure mode for a documentation change is not a broken build but two pages that quietly disagree, which is why the final step reads all four documents together rather than checking the diff alone. Keep the first-run warning short: this is the page a new operator reads while already confused, and a paragraph of caveats there does its own damage. Do not let the wording imply codex has a yolo mode, and keep the bypass flag out entirely. Finally, these line numbers will drift - other cards are editing the README and the docs tree this week - so step 1 re-measures rather than trusting the numbers written here.",
+    "keyFiles": [
+      "README.md line 145 (the codex swap sentence, inside the collapsed launch block)",
+      "docs/GETTING_STARTED.md around lines 31 and 85 (the two places codex is offered)",
+      "docs/DEVELOPMENT.md lines 173-174 (the -Command entry and the -GrokExec entry the new codex entry should mirror)",
+      "docs/CONFIGURATION.md line 55 and docs/TROUBLESHOOTING.md lines 291-343 (already own the sandbox and approval detail - link, never restate)",
+      "scripts/moe-agent.sh line 394 (codex is interactive for every role unless --codex-exec) and line 299 (the flag in the help text)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T21:23:36.423Z",
+  "contextFetchedBy": [
+    "worker-2020d87c"
+  ],
+  "blockedReason": "UNBOUND WRAPPER SESSION, verified before edits. This CLI's original launch context explicitly had no pre-flight task; task was claimed later inside wait_for_task. Fresh expected baseline D:/projexts/moes/.git/moe/baseline/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.tsv is MISSING. Current scripts/moe-agent.ps1 still gates baseline/postflight on preflightTaskId, so this session cannot attest task-bound delivery. No docs/source edits, lint/tests, staging, commits, or baseline fabrication; all five steps remain pending. Requires an actual wrapper task-bound relaunch (prefer -CodexExec), not another conversation turn. This is a seat/provenance blocker, not a task dependency or implementation failure.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-09-11T21:24:57.983Z"
+}

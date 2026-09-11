@@ -35,6 +35,7 @@ import type { StateManager } from './StateManager.js';
 import type { ExecutionAttempt, ExecutionAttemptPhase } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
+import { logger } from '../util/logger.js';
 
 /** Shared with the Kotlin/JSON clients' Long; an allocation past this fails closed. */
 export const MAX_ATTEMPT_GENERATION = Number.MAX_SAFE_INTEGER;
@@ -251,6 +252,49 @@ export async function setAttemptPhase(
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
   return updated;
+}
+
+/**
+ * Park every `running` attempt in `reconciling`, and report what moved.
+ *
+ * WHAT `reconciling` MEANS, exactly: the daemon has LOST SIGHT of this
+ * execution — it restarted, and the process it was watching is outside its
+ * knowledge now — so it holds the task until a runner proves which process it
+ * is talking about. That is NOT a belief that the process is alive, and it is
+ * not a belief that it is dead either. It is the absence of both. Nothing here
+ * consults lastActivityAt or any other idle signal, because a silent build is
+ * not evidence of a dead worker: the phase records ignorance, not a verdict.
+ *
+ * Called once at daemon startup, BEFORE purgeAllWorkers, so the purge can see
+ * which seats still own an execution and spare them. Only `running` moves:
+ * `finalizing` belongs to a complete_task that is still landing its bytes and
+ * has its own hold, and `closed` is terminal history.
+ *
+ * Goes through setAttemptPhase like every other mutation, so the store keeps
+ * its one write-then-publish ordering and a failed write leaves the attempt
+ * published as it was. Caller must hold state.mutex.
+ *
+ * Per-attempt try/catch for the same reason purgeAllWorkers has one: this runs
+ * on EVERY daemon start, and one unwritable record must not abort startup for
+ * the whole fleet. A record that fails to move stays `running`, which is still
+ * non-closed — so its seat is still spared, its task is still held, and a
+ * runner reattaching to it still succeeds. Swallowing here fails in the safe
+ * direction; throwing would brick the daemon over one bad file.
+ */
+export async function reconcileRunningAttempts(state: StateManager): Promise<ExecutionAttempt[]> {
+  const reconciled: ExecutionAttempt[] = [];
+  for (const attempt of listAttempts(state)) {
+    if (attempt.phase !== 'running') continue;
+    try {
+      reconciled.push(await setAttemptPhase(state, attempt.id, 'reconciling'));
+    } catch (error) {
+      logger.error(
+        { error, attemptId: attempt.id, taskId: attempt.taskId },
+        'Failed to park a running attempt in reconciling during startup; its task stays held'
+      );
+    }
+  }
+  return reconciled;
 }
 
 /**

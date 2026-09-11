@@ -482,6 +482,49 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 ---
 
+### moe.reattach_attempt
+
+**Runner-called.** Reattaches a runner to its own execution attempt after a daemon restart, moving the attempt from `reconciling` back to `running` and ending the hold on its task. A restarted daemon cannot see the processes the previous one was watching, so it parks every `running` attempt in `reconciling` and **holds** the task instead of releasing it; this tool is how that hold ends in the good case.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,            // task the attempt belongs to
+  workerId: string,          // worker seat that owns the attempt (auto-injected by proxy)
+  runnerId: string,          // wrapper/runner session driving the process
+  attemptId: string,         // the attempt to reattach, as returned by moe.claim_next_task
+  generation: number,        // fencing token from the same claim
+  processStartedAt: string,  // the process start time EXACTLY as recorded on the attempt
+  host: string               // the host EXACTLY as recorded on the attempt
+}
+```
+All seven are required; `additionalProperties` is `false`.
+
+**Returns:**
+```typescript
+{ success: true, attemptId, taskId, generation, phase: "running", message }
+```
+
+**Notes:**
+- **A daemon restart now holds, it does not purge.** This is a deliberate change from the old purge-everything startup. On every start the daemon moves each `running` attempt to `reconciling` *before* the worker purge, and the purge then **spares** any worker seat that owns a non-closed attempt: its record stays on disk and in the map with its `currentTaskId` intact, and its task stays `WORKING` and assigned rather than being routed through the release path. Previously a restart mid-build deleted the worker and handed live work to the next claimant.
+- **`reconciling` means the daemon has lost sight of the execution — not that it thinks the process is alive, and not that it thinks it is dead.** It is the absence of both. Nothing in the hold consults `lastActivityAt` or any other idle signal, in either direction: a quiet build is not evidence of a dead worker.
+- **All four identity elements must match exactly**: the attempt id, the `generation`, the recorded `processStartedAt` and the recorded `host`. `processStartedAt` is compared as the **exact stored string**, never parsed to a date — a re-serialised spelling of the same instant is refused, because parsing would silently widen the match. An attempt that recorded no `processStartedAt`/`host` can never be matched.
+- **What a match does and does not prove.** Matching narrows **which process** the runner means: it rules out a reused pid, a stale session and another machine. It is **not** evidence that the process is alive — the daemon never probes a process, and nothing may treat these values as proof of liveness. What the match buys is that the seat is not handed to a stranger while its owner may still be mid-build.
+- **Two refusals, both by name.** A wrong identity is `-32002` / **`ATTEMPT_IDENTITY_MISMATCH`**. A *competing* claim on a held task — `moe.claim_next_task` from any worker other than the holder — is `-32002` / **`ATTEMPT_RECONCILING`**, raised before any ranking, eligibility scan or assignment write, so a refused claim never changes an owner. Unlike the finalizing hold, this one is scoped **by task, not by caller**: the whole point is to stop a *different* worker taking a task whose owner is still out there. It is retryable (`context.retryable: true`), and since `MoeError.context` is not forwarded over the wire, the message names the attempt; key on `codeName`.
+- **Idempotent.** Reattaching an already-`running` attempt is a successful no-op that writes nothing — a byte-identical `.moe/attempts/<id>.json`, no touched `lastPhaseAt` — so a retry after a lost response is safe.
+- **Writes only the attempt.** The task and the worker record are deliberately left alone: the hold's whole claim is that neither was ever disturbed, and writing them here would create a second source of truth for an ownership that never changed.
+- Not `blocking`, so dispatch serializes it under the state mutex like every other tool.
+
+**Errors.** Every refusal writes nothing and leaves the task, worker and attempt files byte-identical. JSON-RPC code, then `MoeError.codeName`:
+- `-32001 ATTEMPT_NOT_FOUND`: unknown `attemptId`
+- `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt exists but belongs to another task
+- `-32002 ATTEMPT_IDENTITY_MISMATCH`: the `generation`, `processStartedAt` or `host` differs from the recorded one, or the attempt recorded neither hint
+- `-32002 ATTEMPT_NOT_REATTACHABLE`: the attempt is `closed` (terminal history, seat already given up) or `finalizing` (its bytes are still landing — call `moe.finalize_attempt` instead)
+- `-32602 INVALID_INPUT`: a blank field, or a `generation` that is not a positive integer
+- `-32602 MISSING_REQUIRED`: any of the seven parameters is absent
+
+---
+
 ### moe.get_commit_scope
 
 **Wrapper-called; not for agents.** Returns everything the agent wrapper's post-flight needs to attribute dirty paths to one task: the task's ASSERTED and PLANNED path tiers, every other live task's declared paths (PEER), which peers are active, the DENY/BOARD lists and the resolved commit policy. State-only — the daemon never runs git; the wrapper joins this with its own `git status` snapshot and the persisted per-task baseline (`<gitdir>/moe/baseline/<taskId>.tsv`). Attribution rules and codes: `docs/CONFIGURATION.md` → `autoCommit`, `docs/TROUBLESHOOTING.md` → `MOE_ATTR_*`.
@@ -1429,6 +1472,8 @@ List all registered workers with presence derived from `lastActivityAt`. **Displ
 ### moe.deregister_worker
 
 Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING stays WORKING-unassigned, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
+
+The daemon-restart purge is no longer unconditional: a worker that owns a non-closed execution attempt is **spared**, so its identity — the worker record, its map entry and its `currentTaskId` — survives the restart and its task is held rather than released (see `moe.reattach_attempt`). Every worker with no attempt, or only closed ones, is purged exactly as before.
 
 **Parameters:**
 ```typescript
