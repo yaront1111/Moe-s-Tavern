@@ -723,12 +723,11 @@ export class TaskDetailPanel implements vscode.Disposable {
 
     private renderMetrics(task: Task): string {
         const metrics = task.metrics;
-        const budget = task.budget;
         const handoffs = task.priorHandoffs || [];
         const failedDod = task.failedDodItems || [];
         const critique = task.planCritiqueResult;
 
-        if (!metrics && !budget && handoffs.length === 0 && failedDod.length === 0 && !critique) {
+        if (!metrics && handoffs.length === 0 && failedDod.length === 0 && !critique) {
             return '';
         }
 
@@ -760,10 +759,6 @@ export class TaskDetailPanel implements vscode.Disposable {
         }
         if (metrics?.rejectCount != null) {
             kpis.push(kpi('Rejects', String(metrics.rejectCount)));
-        }
-        if (budget?.wallClockMs != null) {
-            const remaining = Math.max(0, budget.wallClockMs - (usedMs ?? 0));
-            kpis.push(kpi('Budget remaining', `${humaniseDuration(remaining)} / ${humaniseDuration(budget.wallClockMs)}`));
         }
         if (kpis.length > 0) {
             parts.push(`<div class="kpi-row">${kpis.join('')}</div>`);

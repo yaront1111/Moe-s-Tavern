@@ -806,12 +806,10 @@
             return seconds + 's';
         }
 
-        function budgetSuffix(task) {
-            var budget = task.budget;
+        function elapsedSuffix(task) {
             var metrics = task.metrics;
-            var capMs = budget && budget.wallClockMs;
             var firstClaimAt = metrics && metrics.firstClaimAt;
-            if (capMs == null && !firstClaimAt) { return ''; }
+            if (!firstClaimAt) { return ''; }
 
             var usedMs = metrics && metrics.wallClockMs;
             if (usedMs == null && firstClaimAt) {
@@ -824,30 +822,17 @@
             }
             usedMs = usedMs == null ? 0 : usedMs;
 
-            var ratio = capMs && capMs > 0 ? usedMs / capMs : 0;
-            var mark = '✓';            // ✓ green
-            if (capMs == null) {
-                mark = '';
-            } else if (ratio > 1.0) {
-                mark = '✗';            // ✗ red
-            } else if (ratio >= 0.8) {
-                mark = '⚠';            // ⚠ yellow
-            }
-            var text = capMs != null
-                ? humaniseDurationMs(usedMs) + '/' + humaniseDurationMs(capMs)
-                : humaniseDurationMs(usedMs);
-            var label = '[' + text + (mark ? ' ' + mark : '') + ']';
-            var tooltip = capMs != null
-                ? 'Budget: used ' + humaniseDurationMs(usedMs) + ' of ' + humaniseDurationMs(capMs)
-                : 'Wall-clock: ' + humaniseDurationMs(usedMs);
-            return '  <span class="task-budget" title="' + escapeHtml(tooltip) + '">' + escapeHtml(label) + '</span>';
+            var text = humaniseDurationMs(usedMs);
+            var label = '[' + text + ']';
+            var tooltip = 'Wall-clock: ' + text;
+            return '  <span class="task-elapsed" title="' + escapeHtml(tooltip) + '">' + escapeHtml(label) + '</span>';
         }
 
         function renderTaskCard(task, epics, columnStatus) {
             const taskId = escapeHtml(task.id);
             const titleText = escapeHtml(task.title || '');
             const taskStatus = escapeHtml(task.status || '');
-            const budgetHtml = budgetSuffix(task);
+            const elapsedHtml = elapsedSuffix(task);
 
             // Description preview (first ~120 chars)
             let descHtml = '';
@@ -968,7 +953,7 @@
                      data-status="${taskStatus}"
                      data-drag="task">
                     <div class="task-title-row">
-                        <div class="task-title">${titleText}${budgetHtml}</div>
+                        <div class="task-title">${titleText}${elapsedHtml}</div>
                         ${navHtml}
                     </div>
                     ${descHtml}

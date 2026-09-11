@@ -198,12 +198,6 @@ export interface TaskMetrics {
   doneAt?: string;
 }
 
-export interface TaskBudget {
-  wallClockMs?: number;
-  warnedAt?: string;
-  escalatedAt?: string;
-}
-
 export interface HandoffNote {
   from?: string;
   to?: string;
@@ -273,7 +267,6 @@ export interface Task {
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
   metrics?: TaskMetrics;
-  budget?: TaskBudget;
   priorHandoffs?: HandoffNote[];
   failedDodItems?: FailedDodEntry[];
   planCritiqueResult?: PlanCritiqueResult;

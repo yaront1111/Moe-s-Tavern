@@ -520,7 +520,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             color: #fff;
             font-weight: bold;
         }
-        .task-budget {
+        .task-elapsed {
             font-size: 10px;
             color: var(--vscode-descriptionForeground);
             font-weight: normal;
