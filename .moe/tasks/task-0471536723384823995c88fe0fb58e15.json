@@ -123,8 +123,8 @@
       "completedAt": "2026-09-11T09:58:48.869Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -143,12 +143,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:40:02.958Z",
-  "updatedAt": "2026-09-11T09:59:41.271Z",
+  "updatedAt": "2026-09-11T10:04:19.558Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:33:56.838Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T10:04:19.558Z",
+    "wallClockMs": 1822720
   },
   "contextFetchedBy": [
     "architect-2d25447a",
@@ -254,17 +256,58 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "792e4ced24dd2f720c289e874613a217def36266",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T09:43:11Z",
+      "paths": [
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T10:00:34.605Z",
+      "treeId": "3f98d01aa18deb9735afff4306119d11db1979fc",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+          "taskId": "task-aec72949166b42a99b4279ba4615ac4b"
+        },
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+          "taskId": "task-aec72949166b42a99b4279ba4615ac4b"
+        },
+        {
+          "path": "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+          "taskId": "task-247fdf296ff2445daae8e057c0608f51"
+        }
+      ],
+      "pushed": true
     }
   ],
   "unattributedPaths": [
-    "packages/moe-daemon/src/providers/codexDescriptor.ts",
     "packages/moe-daemon/src/tools/enterGovernance.test.ts",
     "packages/moe-daemon/src/tools/enterGovernance.ts"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T09:59:36Z",
-    "at": "2026-09-11T09:59:41.271Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-11T09:43:11Z",
+    "at": "2026-09-11T10:00:34.605Z"
+  },
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeDuration.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt"
+  ],
+  "completedAt": "2026-09-11T10:04:19.558Z",
+  "reviewCompletedAt": "2026-09-11T10:04:19.558Z",
+  "reviewSummary": "APPROVED. Re-ran the gate myself under the jetbrains-gradle lease: `gradlew.bat -p moe-jetbrains test` returned `:test UP-TO-DATE` (0 executed), so I forced a fresh task-local `--rerun`: BUILD SUCCESSFUL exit 0. Freshly written XML (13:01:34+03:00): classes=11 tests=104 failures=0 errors=0 skipped=0, TaskTimingPresentationTest=22 — matches the worker's counts. Diff vs 950364d is exactly the five owned paths (+614/-147); Models.kt/MoeJson.kt byte-identical (compat for task-435683c2), no other test or peer file touched. DoD1/2: whole-value equality of ElapsedPresentation and MetricsPresentation across 11 legacy budget shapes (null/{}/primitive/array/0/negative/small/exhausted/huge/warnedAt+escalatedAt) at fixed Instant 10:10Z; a budget-only task is null on BOTH surfaces. Red proved from source, not narration: at 950364d the card rendered on cap-without-firstClaim, labelled \"used / cap\", coloured by ratio, used a \"Budget: \" tooltip, detail added the budgetRemaining KPI, and MoeBundle.properties:193 defined moe.metrics.budgetRemaining, which the new classpath Properties assertion requires absent. DoD3: card still needs a parseable firstClaimAt (null even with wallClockMs 120000, and for blank/whitespace/malformed), recorded-duration precedence, doneAt stop, malformed doneAt falls back to now, future/inverted clamp to 0s. DoD4: KPI order steps/files/wall-clock/reopens/rejects with \"-\" placeholders, explicit-zero and task-level reopen fallback, plus critique, size warnings, verification body, review summary, grouped failed-DoD counts and ordered handoffs, all from the helper both real Swing builders consume. DoD5: grep over the four owned files shows no budget wording or key reference. FLAG: no completion commit — 97f295b carried only MoeDuration.kt + the test; the three main files stay dirty, attribution marked them CONTESTED against task-aec72949166b42a99b4279ba4615ac4b and task-247fdf296ff2445daae8e057c0608f51 (both WORKING)."
 }
