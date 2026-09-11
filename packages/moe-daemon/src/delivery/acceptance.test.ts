@@ -1618,7 +1618,7 @@ describe('Wave 1 acceptance: restarting only the daemon during a long build pres
   // tsx CLI), never a StateManager reload. It never infers death from an old
   // lastActivityAt and never waits for a reconcile timeout: a quiet build is not
   // evidence of a dead worker.
-  it.skip(
+  it(
     'holds the task for its live owner through an abrupt daemon kill and restart',
     async () => {
       const h = new ToolTestHarness();
