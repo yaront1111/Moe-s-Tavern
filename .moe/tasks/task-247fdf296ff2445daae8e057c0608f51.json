@@ -109,8 +109,8 @@
       "completedAt": "2026-09-11T12:48:18.100Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -132,12 +132,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:25:04.295Z",
-  "updatedAt": "2026-09-11T12:49:11.225Z",
+  "updatedAt": "2026-09-11T12:56:02.087Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:25:54.505Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T12:56:02.087Z",
+    "wallClockMs": 12607582
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
@@ -204,13 +206,36 @@
       "treeId": "ad5c5cafce76d783ffea720ea19b3bdddf8e0ad0",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5f0dc0ee1e2f0aa0eb10807968f8d9a04e0e8214",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T12:32:36Z",
+      "paths": [
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T12:49:36.905Z",
+      "treeId": "cfd70cc53015189eab117fb1c61275c60415dfac",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-11T12:49:08Z",
-    "at": "2026-09-11T12:49:11.225Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-11T12:32:36Z",
+    "at": "2026-09-11T12:49:36.905Z"
+  },
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+  ],
+  "completedAt": "2026-09-11T12:56:02.087Z",
+  "reviewCompletedAt": "2026-09-11T12:56:02.087Z",
+  "reviewSummary": "VERIFIED by re-run. Diff = commit da59ba9: exactly the 4 scoped files + own board JSON.\n\nGATE (mine, jetbrains-gradle lease): `gradlew.bat test --rerun` in moe-jetbrains EXIT 0; all 14 TEST-*.xml newer than my start 15:52:12 (stale=0) = 14 classes / 186 tests / 0 failures / 0 errors / 0 skipped; PlanReviewApprovalStateTest 32; peer suites green.\n\nRED-ON-OLD RE-DERIVED BY ME: 4 mutations, each restored + md5-verified; AssertionError, not compile error. (1) click sends the snapshot revision, no click-time stale check -> red `a click racing ahead of the state callback still refuses the newer revision`:73 (load-bearing); (2) onStateUpdate after the comments-equality return -> red `the dialog folds state into the machine before the comment early return`:436; (3) PENDING guard deleted -> red `two clicks produce exactly one send`:258 + concurrency:399; (4) approve closes on send -> red `the approve action sends without closing the dialog`:469.\n\nDoD: Send quotes only capturedRevision, reopen re-captures; a new revision carrying identical comments latches approve off with the close-and-reopen notice, folded before the comments return and outside the debounce, while comment-only updates stay usable; distinct block keys for missing task, moved status, unusable revision (null and out-of-range; 0 legacy-approvable) and disconnected; second click -> IN_FLIGHT; send failure and daemon ERROR return to READY, never FINISHED; FINISHED only from PENDING observing WORKING, the only close(OK_EXIT_CODE); onDisposed first in dispose. Four other entry points untouched. Rails held.\n\nNoted, not blocking: 18 peer moe.blocker.* bundle lines ride along (pre-existing debris, consumed by that peer's landed code); residual pre-existing race - `task` is reassigned on the daemon thread while the DoD/steps panels read it on the EDT, so a plan mutation in the few-ms construction window could capture N+1 after rendering N (follow-up card). task.commits holds only checkpoint da59ba9."
 }
