@@ -14,13 +14,54 @@
     "Add the guard beside assertWorkerOwns; do not change or weaken the existing ownership guards.",
     "No tool handler is edited in this task."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE STORE LANDED AND READ ITS REAL API. Read-only, no edits. (a) Prove task-c97afcd55d7d41d08b9730e214b648dd landed - landing.merged true, or `git log <branch> --grep \"Moe-Task: task-c97afcd55d7d41d08b9730e214b648dd\"`. It was WORKING at three of six steps on 2026-09-11, so re-measure; if it has not landed, moe.report_blocked naming its id rather than adding a second source of attempt truth here. (b) Read packages/moe-daemon/src/state/attemptStore.ts as delivered and write its ACTUAL exported names and signatures into the step note. Do not assume a helper called currentAttempt exists just because the plan for that task proposed one - the guard must bind to what shipped. Specifically establish: how to obtain the current attempt for a task id, what it returns when the task has no attempt at all, whether the generation is a plain number, and which phases count as open. (c) Read packages/moe-daemon/src/util/enforcement.ts, which is only 155 lines and worth reading whole. Note that every existing guard is a pure function over a Task with no StateManager dependency, so this new one changes the module's shape by needing the store - import StateManager as a TYPE ONLY so the import is erased at compile time and no runtime cycle is created. Note also the exact legacy-tolerance idiom the module already uses: assertWorkerOwns returns early when the task is unassigned, and returns after a deprecation warning when the caller supplies no worker id. The new guard must mirror that shape rather than inventing a different one. (d) Read src/util/enforcement.test.ts for the existing test style and fixtures.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST. Add the new cases to packages/moe-daemon/src/util/enforcement.test.ts, preserving every existing test unchanged. They will not compile until the next step adds the export, so write them against the intended signature and treat the compile failure as the starting point rather than as the red evidence - the meaningful red comes from the mutation proofs in step 4. Cases, each asserting exact values: a caller carrying generation N against a task whose current attempt is generation N+1 throws, and the assertion checks BOTH the numeric error code and the exact codeName string, because several codes share a number in this codebase and a name-only or number-only assertion proves little. A caller carrying the current generation passes. A caller carrying a generation HIGHER than the current one also throws - a caller from the future is as wrong as one from the past, and this case is what kills a less-than comparison masquerading as a correct implementation. A caller supplying the current attempt id passes; a different attempt id throws. A caller supplying both an id and a generation that disagree with each other throws without consulting anything else. A caller supplying no attempt identity at all keeps the existing legacy tolerance and does not throw, which the Definition of Done requires explicitly. A task with no attempt record at all keeps that tolerance too, even when the caller supplies an identity - see the reasoning in the next step. Malformed identity is refused rather than coerced: a generation that is null, a string, a boolean, fractional, negative or outside the safe-integer range raises the invalid-input error, never a silent pass and never a fall-through to the legacy branch. Finally, one control proving the rails held: the existing ownership and context guards behave exactly as before, including their own omitted-worker tolerance.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "IMPLEMENT THE GUARD BESIDE THE OTHERS. Add assertAttemptCurrent to packages/moe-daemon/src/util/enforcement.ts, placed next to assertWorkerOwns and leaving every existing guard untouched - a task rail. Signature takes the StateManager, the Task, the caller's attempt identity as an optional object holding an optional attempt id and an optional generation, and the usual optional tool name for the message. Order of decisions, and each of them is deliberate. First, no identity supplied - the argument absent, or present with neither field - returns immediately under the same legacy tolerance the module already grants an omitted worker id, warning the same way; callers that predate attempts must keep working. Second, validate any supplied generation before using it: a non-negative safe integer or nothing, refusing anything else as invalid input with no coercion, matching how the plan-revision work handled untrusted revision tokens. Third, read the current attempt from the store using the API recorded in step 1. If the task has NO attempt record at all, return under the legacy tolerance even though an identity was supplied - a task that never opened an attempt cannot have superseded anybody, and refusing here would break every task that predates the rollout the moment the sibling wiring task starts calling this guard. Log it so the case is visible. Fourth, compare: a supplied attempt id must equal the current attempt's id, and a supplied generation must EQUAL the current generation - not be less than it - so both a stale and an impossible future caller are refused by the same expression. When both fields are supplied they must also agree with each other. Any mismatch throws a MoeError carrying a stable codeName of ATTEMPT_SUPERSEDED over the existing state-conflict numeric code, with context limited to the task id, the current attempt id and generation, and what the caller presented. Use the state-conflict code rather than the not-allowed code the ownership guard uses, because a superseded attempt is a state race, not a permission failure - and record that choice in a comment so a later reader does not 'fix' it. Error handling note for the header comment: this guard fences DAEMON mutations only. It cannot stop a superseded CLI from writing files in a shared workspace, which the epic notes state explicitly, so the comment must not imply it prevents that.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "MUTATION RED, THEN THE FULL SUITE. The guard is new code, so establish the red by mutation, restoring the checkout after each and re-verifying with a separate git status call rather than trusting the edit, and never mutating anything outside your own two files in this shared checkout. Perform at least these four and name the test that fails for each: change the comparison from equality to less-than, which must break the higher-than-current case; drop the no-identity early return, which must break the legacy-tolerance case and would have broken every existing caller; drop the no-attempt-record tolerance, which must break that case and is the change most likely to be made by accident; and make the generation validator coerce instead of refuse, which must break the malformed-input cases. Then run npx vitest run src/util/enforcement.test.ts and require green with nonzero counts, followed by the full daemon suite from the repository root with npm.cmd on Windows, requiring exit 0 and counts no lower than before. The vitest output here is buried in logger noise, so filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Also run npx tsc --noEmit -p tsconfig.json and require exit 0; note that the config excludes test files, so the new cases are transpiled by vitest rather than type-checked there, and that a type-only StateManager import must not have introduced a runtime cycle - if the suite shows an import-order failure, that is the cause.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL REVIEW AND HANDOFF. Read the diff as an attacker. Can a superseded caller get through by omitting one of the two identity fields, by supplying a generation as a numeric string, or by targeting a task whose attempt record is missing - and is that last case a deliberate documented tolerance rather than an accident? Is the comparison genuinely an equality, so a caller claiming a generation beyond the current one is also refused? Did any existing guard change behaviour, including its own omitted-worker tolerance, which a task rail forbids? Is the StateManager import type-only, so no runtime cycle exists between the enforcement helpers and the state layer? Does the error carry a stable name and a context limited to the task and the two identities, leaking nothing else? Confirm no tool handler was edited, which is the other task rail - wiring belongs to the sibling attempt-lifecycle task, and this task exists precisely to keep that one small. Confirm the header comment does not overclaim: this fences daemon mutations, and it cannot stop a superseded external process from writing to a shared workspace. Then complete through moe.complete_task with the recorded commands, exit codes and counts plus the mutation proofs, listing both modified paths in modifiedFiles, and state in the summary which sibling is expected to call this guard and what that task will need to pass it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator instruction 2026-09-11: promote the three attempt-chain roots out of human-gated BACKLOG so an idle architect seat can plan them. dependsOn (task-c97afcd5, the ExecutionAttempt store, currently WORKING at 3 of 6 steps) continues to gate any WORKING claim; planning is not dependency-gated.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -31,5 +72,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:50.402Z",
-  "updatedAt": "2026-09-10T17:59:50.402Z"
+  "updatedAt": "2026-09-11T09:54:55.282Z",
+  "contextFetchedBy": [
+    "architect-2d25447a",
+    "architect-8b93cc67"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:53:19.967Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:54:55.164Z",
+  "planningNotes": {
+    "approachesConsidered": "Extending assertWorkerOwns to also consider the attempt - rejected by a task rail and on its own merits: the existing guard is called by many handlers with a worker id and no attempt identity, and widening it would change behaviour for all of them. Refusing when a task has no attempt record even though the caller supplied an identity - rejected: the sibling wiring task will meet tasks that predate the rollout, and a guard that refuses those would either break them or force that task to grow special cases, defeating the purpose of landing the guard separately. Comparing with less-than so only older generations are refused - rejected and explicitly tested against: a caller claiming a generation beyond the current one is just as wrong, and equality is the expression that catches both. Making the caller pass the attempt record itself rather than an identity - rejected: the whole point is that a superseded caller holds a stale token, so the guard must resolve the current truth from the store rather than trust what it was handed. Coercing a numeric string generation - rejected: untrusted identity is validated, never coerced, consistent with the revision-token handling already shipped.",
+    "codebaseInsights": "Measured live on 2026-09-11. enforcement.ts is small and uniform: every guard today is a pure function over a Task with no state dependency, and each one grants the same two legacy tolerances - return early when the task is unassigned, and return after a deprecation warning when the caller omits its worker id. The new guard is the first in this module to need the state handle, which is why the StateManager import must be type-only: erased at compile time, so no runtime cycle can form between the enforcement helpers and the state layer. The prerequisite store is in flight rather than landed, and its exported names are not settled - the plan for that task proposed a currentAttempt helper, but the guard must bind to whatever actually shipped, which is why step 1 records the real API before anything is written. The error-code choice is a judgement worth stating: assertWorkerOwns raises the not-allowed code because a wrong owner is a permission problem, whereas a superseded attempt is a state race, so this guard uses the state-conflict code with a stable ATTEMPT_SUPERSEDED name, matching how the plan-revision compare-and-swap named its mismatch. Several codes share a number in this codebase, so every test assertion must check the number AND the name.",
+    "risks": "The prerequisite is not landed, so step 1 must block rather than guess its API; binding to proposed names that did not ship is the single likeliest way this task wastes a worker's session. The no-attempt-record tolerance is the second hazard - it looks like a hole and will tempt a reviewer or a later editor to remove it, so it needs a comment explaining that removing it breaks every task predating the rollout, plus a test that fails when it goes. Use equality, not an ordering comparison. Keep the StateManager import type-only or risk a runtime import cycle that will surface as a confusing suite-wide failure. Do not touch any existing guard or any tool handler - both are task rails, and the whole reason this guard lands alone is to keep the wiring task small. Finally, do not let the header comment overclaim: the epic notes are explicit that a generation fences daemon mutations only and cannot stop a superseded external process from writing to a shared workspace, and that caveat must not be softened here, because later slices will inherit whatever this comment says.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/enforcement.ts (155 lines; assertWorkerOwns at 37, assertContextFetched at 56, assertAllStepsCompleted at 75, assertVerificationEvidence at 113)",
+      "packages/moe-daemon/src/util/enforcement.test.ts (142 lines; existing style and fixtures)",
+      "packages/moe-daemon/src/state/attemptStore.ts (the prerequisite; read its DELIVERED exports, do not assume the proposed names)",
+      "packages/moe-daemon/src/util/errors.ts (MoeError takes an explicit codeName, so ATTEMPT_SUPERSEDED needs no enum member)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:54:55.282Z"
 }

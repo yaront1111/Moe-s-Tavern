@@ -10,13 +10,66 @@
     "./gradlew test green and moe-vscode npm test green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "status": "BLOCKED",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE THREE CHILDREN LANDED, THEN CONFIRM WHAT IS LEFT. Read-only, no edits. This parent is the docs and integration gate over the original Definition of Done; it must not re-implement a single line of child work. (a) Prove each child landed by landing.merged true or `git log <branch> --grep \"Moe-Task: <id>\"`: task-0471536723384823995c88fe0fb58e15 (JetBrains presentation), task-435683c2df8f47e7b77a77dc51ba62e9 (JetBrains model and both parsers) and task-9d731a5e5eb14951a9d342e5976883b6 (VS Code detail, board and model). All three were unlanded on 2026-09-11, so re-measure; if any is missing, moe.report_blocked naming the specific ids rather than finishing their work here. (b) Run the two client-side Definition-of-Done checks as VERIFICATION, not as edits: `grep -rni budget moe-jetbrains/src/main` must return nothing, and `grep -rn \"task.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` must return nothing. Correct one line of the task prose while you are here: no MetricsPanel change is needed or wanted - the JetBrains remaining-versus-cap readout lives in TaskDetailDialog and the board badge, both owned by the first child. If a grep hit survives in a child's file, report it to that child rather than fixing it here. (c) Read the three live doc defects this parent DOES own, all of which still describe a removed feature as active: docs/CONFIGURATION.md line 168 says moe.submit_plan seeds an absent task budget from pacePerStepMs; docs/SCHEMA.md lines 180-181 repeat that seeding claim, line 437 presents the task budget field as a soft wall-clock cap, and lines 742-746 describe the daemon checking firstClaimAt plus the cap. packages/moe-daemon/src/types/schema.ts already contradicts all of it at lines 119 and 722-728 with DEPRECATED and ignored notes. (d) Note the two near-misses that must NOT be scrubbed: schema.ts line 740 speaks of a reopen budget, which is the live reopen cap, and the chat hop limit is likewise live. Record foreign dirty paths and preserve them.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST: A DOC-CONTRACT GUARD THAT FAILS ON TODAY'S DOCS. Create packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, a vitest file that reads docs/CONFIGURATION.md and docs/SCHEMA.md off disk and asserts the documented contract matches the daemon's actual behavior. Resolve the repository root from import.meta.url through fileURLToPath the way src/tools/registry.test.ts resolves its own directory, and fail with a clear message if a file is missing rather than silently passing - that is this test's own error handling, and a guard that passes when it cannot find its input is worse than no guard. Anchor the assertions on specific terms instead of vague prose matching: every line mentioning pacePerStepMs, and every line describing the task time-budget field or its interface, must also carry a deprecation marker on the same line or in its immediately adjacent annotation, and no line may state that a submission SEEDS a budget or that the daemon CHECKS a cap. Add the positive half, which is what keeps this guard from becoming a blunt search-and-destroy: assert the chat hop limit and the reopen cap are still documented AND still unmarked as deprecated, so a later over-eager cleanup that scrubs live settings fails here. Run it now against unmodified docs - Windows `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts`, remembering npm.cmd if the PowerShell policy blocks the shim - and save the failing output. It must fail on the seeding sentence in CONFIGURATION.md, which is the recorded proof that the docs really did advertise a removed feature.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "CORRECT docs/CONFIGURATION.md. Rewrite the pacePerStepMs row at line 168 so it describes what the daemon actually does today: the setting is retained for compatibility and is ignored, and no task time budget is seeded from it, because the warn feature it fed was removed. Keep the row rather than deleting it - the key can still appear in a real project file, so a reader who finds it needs to learn it does nothing, which a silent deletion would not tell them. Mark it clearly deprecated using whatever convention the surrounding table already uses, and drop the default and range presentation that implies a live tunable. Change nothing else in the file: every other setting row, and in particular the chat hop limit and the reopen cap, stay exactly as they are, since those are live and the guard test now asserts they remain unmarked. No behavior change and no daemon edit in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "CORRECT docs/SCHEMA.md. Three edits, all of the same kind. At lines 180-181 remove the claim that a submission seeds the task budget from pacePerStepMs and mark the field deprecated and ignored, matching the wording chosen for CONFIGURATION.md so the two documents agree. At line 437 change the task budget member's annotation from presenting a soft wall-clock cap to stating it is a deprecated legacy field the daemon ignores, and keep the member documented, because legacy records on disk and older clients on the wire still carry it and a reader needs to know it is accepted but inert. At lines 742-746 rewrite the interface description so it no longer says the daemon checks firstClaimAt plus the cap - that check was removed - while still describing the legacy shape for anyone reading an old record. Do not touch the daemon's own DEPRECATED notes in packages/moe-daemon/src/types/schema.ts, do not change any persisted data or wire compatibility, and do not touch the planRevision section a sibling task added. Leave the reopen and chat limits alone.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN THE WHOLE FEATURE GATE FRESH, AFTER THE DOCS ARE FINAL. From the repository root on Windows, exactly: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE . On macOS or Linux: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Also run the full daemon suite once, not just the focused doc guard, so the new test file is proven to be collected by the normal run rather than only by an explicit path. Require exit 0 everywhere with nonzero counts from each suite. Acquire the shared Gradle slot through the Moe resource protocol before the JetBrains leg and release it either way; never cancel a peer's build or clean a shared cache, and treat an UP-TO-DATE Gradle result as no test run. Daemon vitest output on this box is buried in logger noise, so filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Record the exact commands, exit codes and counts for the verification argument of complete_task. An unrun leg or a missing toolchain is an honest incomplete gate, to be reported rather than smoothed over.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL REVIEW OVER THE WHOLE REMOVAL, THEN HAND OFF. Review the three child diffs plus this docs diff as one feature. Confirm or fix: no case-insensitive occurrence of the retired term survives anywhere in moe-jetbrains/src/main, and no reference to the retired type or field survives in the VS Code sources; live elapsed wall-clock display survives in BOTH clients, including the derivation from firstClaimAt and its unparseable-timestamp guards, and neither client gained a badge where it previously showed none; chat hop limits and reopen caps are untouched in code and still documented as live; the daemon's schema notes, persisted data and wire compatibility are unchanged, so an old record carrying the legacy field still loads; the two documents now agree with each other and with the daemon's actual behavior; and the guard test would fail again if either document regressed, which you can check by reverting one sentence in a scratch copy rather than in the shared checkout peers are working in. Map each of the four original Definition-of-Done items to named evidence: the two client greps from step 1, the compile and test legs from step 5, and the corrected documents. Then complete through moe.complete_task with the fresh verification evidence, the saved red output from step 2, and every modified path in modifiedFiles. State plainly in the summary that the client removals were delivered by the three children and that this task contributed the documentation correction and the standing guard against its regression.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human board unblock 2026-09-10, explicit operator decision after the risk was stated. Force-clearing the dependency wait on the three time-cap slices (0471536723, 435683c2, 9d731a5e), which are in PLANNING and have not landed. Architect note: dependsOn still gates WORKING-column claims, so this row can now be planned but not worked until those three reach DONE. Plan it against the slices' declared contracts, not against merged code.",
   "createdBy": "HUMAN",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -31,25 +84,41 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T09:15:46.385Z",
-  "updatedAt": "2026-09-10T17:42:33.867Z",
+  "updatedAt": "2026-09-11T09:44:03.789Z",
   "metrics": {
-    "firstClaimAt": "2026-09-10T17:34:22.626Z"
+    "firstClaimAt": "2026-09-10T17:34:22.626Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
-    "architect-6f3113ee"
+    "architect-6f3113ee",
+    "architect-8b93cc67"
   ],
   "dependsOn": [
     "task-0471536723384823995c88fe0fb58e15",
     "task-435683c2df8f47e7b77a77dc51ba62e9",
     "task-9d731a5e5eb14951a9d342e5976883b6"
   ],
-  "blockedReason": "Oversized removal has been decomposed into three existing-module implementation slices with own regressions: task-0471536723384823995c88fe0fb58e15, task-435683c2df8f47e7b77a77dc51ba62e9, task-9d731a5e5eb14951a9d342e5976883b6. Children are BACKLOG and linked by dependencies (JetBrains UI -> JetBrains model/parser -> VS Code). This parent preserves original DoD and waits for their delivery before its own docs/doc-guard and final feature integration plan. Detailed allocation and exact future verification command are in the task comment. No source edits, plan submission, approval, builds or tests performed. This is a dependency wait, not completed work.",
-  "blockedOnTaskIds": [
-    "task-0471536723384823995c88fe0fb58e15",
-    "task-435683c2df8f47e7b77a77dc51ba62e9",
-    "task-9d731a5e5eb14951a9d342e5976883b6"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-09-10T17:42:33.866Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Oversized removal has been decomposed into three existing-module implementation slices with own regressions: task-0471536723384823995c88fe0fb58e15, task-435683c2df8f47e7b77a77dc51ba62e9, task-9d731a5e5eb14951a9d342e5976883b6. Children are BACKLOG and linked by dependencies (JetBrains UI -> JetBrains model/parser -> VS Code). This parent preserves original DoD and waits for their delivery before its own docs/doc-guard and final feature integration plan. Detailed allocation and exact future verification command are in the task comment. No source edits, plan submission, approval, builds or tests performed. This is a dependency wait, not completed work.",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:44:03.742Z",
+  "planningNotes": {
+    "approachesConsidered": "Deleting the pacePerStepMs row and the legacy field from the documents outright - rejected: the key can still appear in a real project file and the field still appears in legacy records and older client payloads, so a reader needs to be told it is accepted and inert rather than left to wonder why it is undocumented. Writing the guard as a blunt search for the retired word - rejected: it would fire on the live reopen cap and require carve-outs that rot; anchoring on pacePerStepMs and on the specific field and interface, plus asserting the live settings stay unmarked, is both stricter and safer. Putting the guard in a client test suite - rejected: the contract being asserted is the daemon's behavior versus its documentation, and the daemon suite already has a precedent for tests that read repository files. Finishing any client removal here if a child fell short - rejected: it would duplicate child work, break the file scope and weaken their tests; report the gap to the child instead.",
+    "codebaseInsights": "Measured live on 2026-09-11, and the defect is exactly as the breakdown described: the daemon's own schema marks the task time-budget fields deprecated and ignored, while both documents still describe the feature as active. CONFIGURATION.md:168 states that a plan submission seeds an absent task budget from pacePerStepMs and presents a default and a valid range, which reads as a live tunable. SCHEMA.md repeats the seeding claim at 180-181, annotates the field as a soft wall-clock cap at 437, and at 742-746 says the daemon checks firstClaimAt plus the cap - a check that no longer exists. Two near-misses must survive the cleanup: schema.ts:740 refers to a reopen budget, which is the live reopen cap, and the chat hop limit is also live, so a blunt search-and-destroy over the word would damage real documentation. That is why the guard test has a positive half asserting both remain documented and unmarked. One correction to the task prose, already noted by the breakdown: MetricsPanel needs no edit - the JetBrains remaining-versus-cap readout lives in TaskDetailDialog and the board badge, and both belong to the first child. This parent verifies the client greps rather than performing any client edit, so its own diff is two documents and one new test.",
+    "risks": "All three children were unlanded when this plan was written, so step 1 must block rather than proceed on assumption - and the parent must never finish a child's removal itself. The guard test is the piece most likely to be built wrong in two opposite ways: too loose and it passes on the current docs, too blunt and it condemns the live reopen and chat settings; the red run in step 2 proves the first, and the positive assertions prove the second. Do not touch the daemon's schema notes, persisted data or wire compatibility - an old record carrying the legacy field must still load. docs/SCHEMA.md is contended: a sibling added a planRevision section to it, so re-read before editing and leave that section alone. Gradle output is shared infrastructure - serialize it and treat an UP-TO-DATE result as no test run. Run the full daemon suite once as well as the focused file, or a test that is never collected by the normal run will look green while guarding nothing. Finally, the two documents must agree with each other after the edit, not just each be individually defensible.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts (new, parent-owned doc-contract guard)",
+      "docs/CONFIGURATION.md:168 (pacePerStepMs row still describes seeding a task budget)",
+      "docs/SCHEMA.md:180-181, :437, :742-746 (seeding claim, soft-cap annotation, and an interface описание saying the daemon checks the cap)",
+      "packages/moe-daemon/src/types/schema.ts:119 and :722-728 (the DEPRECATED and ignored notes that the docs currently contradict - keep them untouched)",
+      "packages/moe-daemon/src/tools/registry.test.ts (the precedent for a test that reads repository files and asserts a contract)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:44:03.789Z"
 }

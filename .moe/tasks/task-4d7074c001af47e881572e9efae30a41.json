@@ -15,13 +15,85 @@
     "Candidates are immutable; never add an update path.",
     "The daemon records the sha the runner reports and never shells out to git itself."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE TWO PREREQUISITE CONTRACTS AND READ THE PATTERNS. Read-only, no edits. (a) Prove the ExecutionAttempt store landed - task-c97afcd55d7d41d08b9730e214b648dd, by landing.merged or a Moe-Task trailer commit - and write its ACTUAL exported names and signatures into the step note, since a candidate is keyed to an attempt and this task must bind to what shipped rather than to what was proposed. (b) Check whether the fencing guard task-a135d4d63554410286a369a95e60c2a8 has landed too. The Definition of Done requires record_candidate to be fenced by assertAttemptCurrent, so if that guard is not yet exported from util/enforcement.ts, moe.report_blocked naming it - this tool cannot honestly satisfy its own acceptance criteria without it, and writing a private substitute would create the second fencing implementation the epic is trying to avoid. (c) Read state/resourceStore.ts for the persistence idiom every Wave 1 store must copy: stateless functions taking the state handle first, mutations under the state mutex, and writeEntity before map.set before activity before emit. Read state/persistence.ts around line 323 and note that writeEntity already validates the id against traversal, creates the directory itself and writes atomically through a temp file and rename. (d) Read src/tools/recordCommit.ts as the closest existing analogue - a tool that records a fact the runner observed, with careful input reading and no git execution of its own - and src/tools/index.ts lines 77-89 for the ToolDefinition shape plus the import-and-array registration at lines 64 and 152. Note that a non-blocking tool is already serialized under the global state mutex by the dispatch layer, so this tool must NOT set blocking. (e) Read the existing docs/SCHEMA.md and docs/MCP_SERVER.md section conventions so the documentation steps match house style.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "DECLARE THE RECORD AND GIVE IT A HOME. In packages/moe-daemon/src/types/schema.ts add an exported Candidate interface carrying id, attemptId, taskId, baseRevision, the tree or commit sha the runner reported, the intended delivery target, and createdAt. Document two things in the comment because they are the whole point of the record. First, immutability: a candidate names a fixed set of bytes, so a changed tree produces a NEW candidate with a new id rather than an edit to this one - there is deliberately no updatedAt field, and adding one later would be a design regression. Second, provenance: the sha is what the runner REPORTED, not something the daemon observed, because an epic rail keeps git entirely out of the daemon - so the field name and comment must not imply the daemon verified it. Keep the addition purely additive with no schemaVersion bump and no migration, matching how the plan-revision and attempt records were added. Then wire the collection into packages/moe-daemon/src/state/StateManager.ts with the two minimal edits the store needs: a candidates map declared beside the existing resources and attempts maps, and one loadEntities call in load over the candidates directory, which tolerates a missing directory so a project that has never recorded one loads empty.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "WRITE THE STORE, WITH NO UPDATE PATH AT ALL. Create packages/moe-daemon/src/state/candidateStore.ts as stateless exported functions taking the StateManager first, mirroring resourceStore, with a header comment stating that callers hold the state mutex. Functions: recordCandidate, getCandidate, listCandidatesForTask and listCandidatesForAttempt - and deliberately NO update or patch function, which is a task rail. Not merely 'do not call it': the function must not exist, so a later caller cannot find one to misuse. recordCandidate persists with writeEntity BEFORE touching the map, so a failed write leaves no candidate visible anywhere. Its rules: reject a record whose id already exists with a named immutability error, UNLESS every field of the incoming record is identical to the stored one, in which case return the stored record unchanged - that single exception is what makes a retry after a crash idempotent rather than a spurious failure, and it is not a mutation because nothing changes. A same-id record differing in ANY field is the error case, and the error message must say plainly that a changed tree needs a new candidate. Validate inputs rather than coercing them: the attempt id, task id, base revision, sha and delivery target are non-blank strings, and the sha matches a hexadecimal shape with a sensible length bound - reuse the shape recordCommit.ts already uses rather than inventing a second one. Error handling throughout uses MoeError with an explicit stable codeName so callers can branch on a name, reusing an existing numeric code rather than adding an enum member. The two list functions filter the in-memory map and return in a deterministic order - createdAt then id, so a tie cannot make test output flaky.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADD THE TOOL AND REGISTER IT. Create packages/moe-daemon/src/tools/recordCandidate.ts exporting a recordCandidateTool factory in the ToolDefinition shape, following src/tools/recordCommit.ts for input reading and result shape. Do NOT set blocking - the dispatch layer already serializes every non-blocking tool under the global state mutex, and marking this one blocking would remove exactly the serialization the store's write path assumes. The handler: read and validate the inputs, resolve the task and refuse a missing one with the existing not-found helper, then call assertAttemptCurrent from util/enforcement.ts BEFORE writing anything, so a superseded attempt cannot record a candidate - that ordering is the Definition of Done item, and doing the write first and checking after would satisfy the letter of it while leaving the hole open. Then delegate to the store; do not re-implement any store rule in the handler. The tool records the sha the caller reported and never shells out to git, which is both a task rail and an epic rail - there must be no child process anywhere in this file. Register it in packages/moe-daemon/src/tools/index.ts with an import beside the recordCommit import and an entry in the returned array; an unregistered tool is silently invisible to MCP, and the existing registry test asserts every exported tool factory is registered, so a missed registration fails the suite rather than shipping quietly. Keep the input schema honest about what is optional and give each field a description a runner author can act on.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/recordCandidate.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "TEST BOTH LAYERS. Create packages/moe-daemon/src/state/candidateStore.test.ts and packages/moe-daemon/src/tools/recordCandidate.test.ts using ToolTestHarness, matching the file split the verification command names. Store tests: a recorded candidate round-trips and is queryable by task and by attempt, with a deterministic order across several candidates; a second record with the same id and any differing field is refused by name and leaves the persisted bytes byte-identical; a byte-identical re-record returns the stored record and writes no second file, which is the crash-retry case; a changed tree recorded under a NEW id succeeds and both candidates remain queryable, which is the rail that a change yields a new record rather than an edit; blank or malformed inputs including a bad sha shape are refused without writing; durability in the style of resourceStore.durability.test.ts, where an injected writeEntity failure leaves both the accessor and the candidates directory empty; and a fresh StateManager over the same directory loads the candidates after a restart. Tool tests: the tool is present in getTools by name; a call from the current attempt records and returns the candidate; a call carrying a superseded attempt identity is refused by the fencing guard and writes NOTHING, asserted on the directory rather than only on the thrown error; a call for an unknown task is refused; and malformed input is refused with the invalid-input error rather than coerced. Assert exact codes and exact codeName strings everywhere - several codes share a number in this codebase, so a number-only assertion proves little. Run npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts and require green with nonzero counts.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "DOCUMENT THE RECORD AND THE TOOL. In docs/SCHEMA.md add a Candidate section following the conventions of the neighbouring record sections, covering every field, the immutability rule with the explicit statement that a changed tree yields a new candidate, the fact that the sha is runner-reported rather than daemon-observed, and the storage location of one file per candidate. In docs/MCP_SERVER.md add a record_candidate section in the tool list covering the arguments, the success result, and every refusal a caller can hit by name: a superseded attempt, an unknown task, an immutability violation on a same-id record that differs, and invalid input. Say plainly that a byte-identical re-record is idempotent and returns the existing candidate, because a runner author retrying after a crash needs to know that is safe. Both documents are contended - sibling tasks are editing them for plan revisions and approval wiring - so re-read the landed text immediately before editing and add your section rather than restructuring theirs. No behaviour change in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "MUTATION RED, FULL GATE, ADVERSARIAL REVIEW, HANDOFF. (a) These are new files, so establish the red by mutation, restoring the checkout after each and re-verifying with a separate git status call, never mutating anything outside your own files in this shared checkout. Perform at least four and name the failing test for each: move the fencing call to after the write, which must break the superseded-attempt case that asserts nothing was written; relax the immutability check so a same-id record overwrites, which must break the refusal and byte-identical-bytes cases; set the map before writeEntity, which must break the injected-failure case; and remove the registry entry, which must break both the tool-present test and the existing registry completeness test. (b) Run the named verification, then the full daemon suite from the repository root with npm.cmd on Windows, requiring exit 0 and counts no lower than before; filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Run npx tsc --noEmit -p tsconfig.json and require exit 0, remembering the config excludes test files. (c) Adversarially review: does any code path mutate a stored candidate; does the file genuinely contain no update function rather than merely not calling one; can a superseded attempt write anything at all; is there any child process or git invocation anywhere in the new files, which both a task rail and an epic rail forbid; does the sha field's naming and documentation avoid implying the daemon verified it; is the tool left non-blocking so it stays serialized; and did anything outside the nine declared files change. (d) Complete through moe.complete_task with the recorded commands, exit codes and counts plus the mutation proofs, listing every modified path, and note in the summary which siblings consume this record next - the check-run and review-binding tasks - and that this slice deliberately stops at recording.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator instruction 2026-09-11: promote the three attempt-chain roots out of human-gated BACKLOG so an idle architect seat can plan them. dependsOn (task-c97afcd5, the ExecutionAttempt store) continues to gate any WORKING claim; planning is not dependency-gated.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -32,5 +104,36 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-10T18:01:27.252Z"
+  "updatedAt": "2026-09-11T09:56:36.978Z",
+  "contextFetchedBy": [
+    "architect-2d25447a",
+    "architect-8b93cc67"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:54:58.086Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 9
+  },
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:56:36.918Z",
+  "planningNotes": {
+    "approachesConsidered": "Providing an update or patch function on the store 'for completeness' - rejected by a task rail and structurally: the function must not exist, so a later caller cannot find one, which is stronger than a convention not to call it. Treating a byte-identical re-record as an immutability violation - rejected: a runner retrying after a crash would then be unable to make progress, and returning the stored record changes nothing, so it is not a mutation; the refusal is reserved for a same-id record that actually differs. Having the daemon confirm the reported sha - rejected by both an epic rail and a task rail: the daemon is state-only and never runs git, so the field records what the runner said and the documentation must say so rather than implying verification. Implementing a private staleness check inside the tool instead of using assertAttemptCurrent - rejected: it would create a second fencing implementation, which is precisely what the sibling guard task exists to prevent; if that guard has not landed, this task blocks. Marking the tool blocking - rejected: blocking is reserved for tools that park for minutes, and setting it would remove the mutex serialization the store relies on. Splitting the card to get under the file-count warning - considered and rejected: the record, its store, the tool that writes it and the documentation are one coherent acceptance unit, and separating them would leave an unrecordable record.",
+    "codebaseInsights": "Measured live on 2026-09-11. The infrastructure this task needs already exists and should not be rebuilt: writeEntity validates the entity id against traversal, creates the kind directory itself and writes atomically through a temp file and rename, so the new candidates directory needs no scaffolding and a torn file is not the failure mode to design for - the real one is a record on disk with nothing following it, which is why a byte-identical re-record must be idempotent. loadEntities tolerates a missing directory. The ToolDefinition shape is name, description, inputSchema, handler and an optional blocking flag, and its comment is explicit that every non-blocking tool is already serialized under the global state mutex - so this tool must NOT set blocking, because the store's write path assumes that serialization. recordCommit.ts is the right model to copy: it records what the wrapper observed, has careful input readers, and contains no git execution, which is exactly the posture an epic rail demands of the daemon. registry.test.ts already asserts every exported tool factory appears in getTools, so forgetting the registration fails the suite rather than shipping an invisible tool. Two documents in scope are contended by sibling tasks editing them for plan revisions and approval wiring, so the doc step must add rather than restructure.",
+    "risks": "Nine distinct files trips the plan-size warning; that is honest here rather than scope creep, because the Definition of Done requires the store, the registered tool, tests for both layers and both documents. Two prerequisites are unlanded: the attempt store is in flight and the fencing guard was only just planned, so step 1 must verify BOTH and block on the guard specifically, since the Definition of Done names it. The likeliest wrong implementation is checking the fence after the write rather than before, which passes a naive test that only asserts a thrown error - so the superseded case must assert the candidates directory is untouched. The second is a same-id overwrite slipping through as a convenience. Keep the ordering of writeEntity before map.set or a crash exposes a candidate that is not durable. Do not add a schemaVersion bump or a migration, which an epic rail forbids. Both documents are being edited by siblings right now: re-read immediately before editing. Finally, no child process and no git invocation may appear anywhere in the new files - that is the rail most likely to be violated by someone trying to be helpful about validating the sha.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/resourceStore.ts (the persistence idiom every Wave 1 store copies)",
+      "packages/moe-daemon/src/state/persistence.ts:323 writeEntity (validates the id, creates the directory, atomic temp-and-rename write) and :38 loadEntities",
+      "packages/moe-daemon/src/state/attemptStore.ts (prerequisite; read its DELIVERED exports)",
+      "packages/moe-daemon/src/util/enforcement.ts (assertAttemptCurrent arrives from the sibling fencing task)",
+      "packages/moe-daemon/src/tools/recordCommit.ts (closest analogue: a tool recording a fact the runner observed, with no git of its own)",
+      "packages/moe-daemon/src/tools/index.ts:77-89 ToolDefinition, :64 and :152 the import-and-array registration",
+      "packages/moe-daemon/src/tools/registry.test.ts (asserts every exported tool factory is registered, so a missed registration fails the suite)",
+      "packages/moe-daemon/src/state/resourceStore.durability.test.ts (the failure-injection style)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:56:36.978Z"
 }

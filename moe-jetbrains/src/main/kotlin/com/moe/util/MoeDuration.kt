@@ -4,8 +4,8 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * Lightweight duration formatting helpers used by the budget badge and
- * metrics surfaces. Kept small and dependency-free so it can be called
+ * Lightweight duration formatting helpers used by the elapsed-time badge
+ * and metrics surfaces. Kept small and dependency-free so it can be called
  * from EDT-sensitive render paths without imposing locale-specific work.
  */
 object MoeDuration {

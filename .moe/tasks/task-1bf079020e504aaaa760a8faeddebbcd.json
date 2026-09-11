@@ -15,8 +15,71 @@
     "No optimistic approval success or unsafe HTML injection.",
     "Keep unrelated legacy approval routes unchanged and document their compatibility boundary at the parent."
   ],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE DELIVERED CLIENT CONTRACT AND SEAMS (read-only, no edits). This slice sits on top of the VS Code wire slice, so confirm it rather than trusting this plan text: `git log --oneline --grep 'Moe-Task: task-34dba87e4e1948bcba69e85f3f34bfd3'` and `grep -n 'expectedPlanRevision' moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/types/moe.ts`. Read the delivered `approveTask` signature (expected: an optional second parameter that is forwarded when valid, omitted when absent, and refused locally when malformed) and the delivered error event payload (expected: operation, code, codeName and an allowlisted context carrying taskId and the two revision numbers). If either differs, follow the DELIVERED shape and say so in the step note. Then re-read the two files you will change. In src/panels/PlanReviewPanel.ts: the constructor at line 180 renders initial HTML from `findTask()` and subscribes only to `onStateChanged`; `debouncedUpdate` at line 100 waits 200ms, silently ignores a missing task and discards the result of `postMessage`; `handleWebviewMessage` at line 114 calls the legacy one-argument approval and, on a mere successful SEND, shows 'Plan approved' and disposes; `dispose()` at line 560 is not idempotent and calls `panel.dispose()`, which re-enters through `onDidDispose`. In media/planReview.js: the approve click posts `{ type: 'approve' }` with no revision and latches a module-level flag that is never reset, and the `updateTask` listener re-renders from whatever task arrives with no record of what was rendered. Confirm the renderers build nodes with createElement and textContent — that safe pattern is mandatory and must not be replaced by markup assignment. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING TEST FILE FIRST AND CAPTURE RED PROOF. Create moe-vscode/tests/plan-review.test.cjs using the node:test plus transpileModule plus vm convention already established in tests/metrics-view.test.cjs, and execute BOTH production artifacts: transpile src/panels/PlanReviewPanel.ts and run it in a vm context, and separately run the raw media/planReview.js (plain JS, no transpile) in its own context with a fake document whose getElementById returns stub elements exposing addEventListener, textContent, appendChild, getAttribute, classList and disabled. Wire a real bridge between them: the webview context's `acquireVsCodeApi().postMessage` feeds the panel's captured onDidReceiveMessage handler, and the panel's `webview.postMessage` feeds the webview context's window message listener, so every assertion crosses script to panel to client exactly as production does. Stub vscode (createWebviewPanel returning a fake panel with an html setter, reveal, dispose, onDidDispose and a postMessage returning a resolvable promise; window.showInformationMessage / showWarningMessage / showErrorMessage / showInputBox recorded; EventEmitter recording listeners), and a fake client recording every `approveTask` call with its full argument list. Install a controllable setTimeout/clearTimeout in the panel context with a `flushTimers()` helper so the 200ms debounce is deterministic and never wall-clock. Tests: (A) the initial render seeds the token from the exact task used to build the HTML and a click reaches the client as `approveTask(taskId, N)` with N exactly as rendered; (B) the race — render at N, deliver a state change carrying N+1 but do NOT flush the debounce, click Approve, and assert the client received N and never N+1, then flush and assert the webview latched with the reopen notice and Approve disabled; (C) a complete successful re-render at the same revision re-enables Approve, while one at a different revision latches it; (D) each of render failure (a stub that throws while building the steps), a missing task, a non-AWAITING_APPROVAL status and a malformed revision leaves Approve disabled and posts no approve message at all; (E) a webview approve message with a missing or malformed token is refused by the panel and `approveTask` is never called at all, asserted on call count AND argument length so a one-argument legacy fallback fails the test; (F) repeated clicks while an approval is pending produce at most one client call; (G) `approveTask` returning false leaves the panel undisposed with no success toast, and a later same-revision render restores Approve; (H) a correlated error naming this task and the mismatch code name latches the panel with visible feedback, no success toast and no disposal, while an error for a different task or a different operation changes nothing; (I) the task flipping to WORKING while an approval is pending is the ONLY path that reports success and disposes, exactly once; (J) disposal clears the debounce timer, disposes every listener, is idempotent under the re-entrant onDidDispose path, and a post-dispose approve message does nothing; (K) reopening after disposal builds a fresh panel seeded at the newer revision with Approve enabled. Run `npm --prefix moe-vscode test` and SAVE the failing output — the epic rail requires a test that fails on the old behavior.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/plan-review.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MAKE THE WEBVIEW OWN THE RENDERED TOKEN. In media/planReview.js replace the permanently latching `actionSent` flag with explicit state: the revision actually rendered (null until a complete render has succeeded), a pending flag, and a latched flag. On load, read the seeded revision from the data attribute the panel emits in the initial HTML (next step) and treat a missing or non-numeric attribute as no token, leaving Approve disabled; a value of 0 is a legitimate token and must enable Approve, so never use a truthiness check on it. Rewrite the updateTask listener as a strict sequence with real error handling: first disable Approve, then validate the incoming task (present, status AWAITING_APPROVAL, and a revision that is either absent, meaning effective 0, or a non-negative safe integer — a present but malformed value is NOT legacy and must disable), then render title, description, definition of done, steps and comments inside a try/catch so any renderer throwing leaves Approve disabled rather than approving content the human never saw. Only after the whole render completes: if no revision had been rendered before, record it and enable Approve; if it equals the previously rendered revision, clear the temporary failure notice and re-enable Approve unless latched or pending; if it DIFFERS, set the latched flag, show a persistent 'plan changed, reopen to review' notice and leave Approve disabled — this is the reviewed-content rule the user chose, so a changed plan forces a deliberate fresh review while a transport hiccup does not. Handle two new inbound messages from the panel: one that reports a failure, latching on a stale refusal and only temporarily disabling on a transport or delivery failure, and one that reports the task is gone, which disables Approve unconditionally. The approve click posts the rendered revision alongside the type and refuses to post when latched, pending or holding no token. Build every node with createElement and textContent exactly as the file does today; do not introduce markup assignment anywhere. Re-run the focused suite.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "SEED THE TOKEN INTO THE INITIAL HTML AND FORWARD IT UNCHANGED. In src/panels/PlanReviewPanel.ts, inside `getWebviewContent`, derive the seed from the SAME task object that builds the definition-of-done and steps markup, so the token can never describe different content than the page shows: an absent revision field is a legacy record and seeds 0, a non-negative safe integer seeds its own value, and anything else seeds nothing at all. Emit it as a data attribute on a container element, escaped through the existing helper, and omit the attribute entirely for the malformed case so the script starts disabled. Widen the webview message type so an approve message carries an optional revision, and rewrite the approve branch of `handleWebviewMessage`: validate the supplied token as a non-negative safe integer and, when it is missing or malformed, report the failure to the user, tell the webview the attempt failed and return WITHOUT calling the approval method at all — falling back to the one-argument legacy call here would approve a plan nobody reviewed and is the single worst outcome this task exists to prevent. A valid token is forwarded verbatim as the second argument. Never read `currentState` or any cached task to produce, replace or second-guess the token; the webview is the only source and the daemon is the only authority on staleness, so a click carrying an older revision is sent as-is and refused server side. Leave the reject, prompt-reject and comment branches exactly as they are. Re-run the focused suite; groups A, B and E must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "REPLACE OPTIMISTIC SUCCESS WITH AUTHORITATIVE COMPLETION. Still in src/panels/PlanReviewPanel.ts, delete the branch that announces 'Plan approved' and disposes on a merely successful send. Track the pending approval revision on the panel; a send that returns true only marks it pending and tells the webview so, while a send that returns false clears it, warns the user and reports a transport failure to the webview — no path may claim approval succeeded. Subscribe to the client error event and act only on errors correlated to this task and the approve operation, using the task identifier the daemon now returns in the allowlisted context: a stale mismatch code name reports a stale failure so the webview latches, any other correlated error reports a plain failure, and an uncorrelated error is ignored entirely. Subscribe to connection changes so a drop while pending clears the pending state and surfaces a transport failure instead of leaving the panel waiting forever. In the debounced update, stop silently ignoring a missing task — tell the webview the task is gone — and stop discarding the result of posting to the webview: handle its promise with real error handling, and when delivery fails or rejects, record it and refuse every subsequent approve message until a later delivery succeeds, because the panel then knows the page is showing content it could not refresh. The one and only success path is authoritative: when the update carries this task in WORKING status while an approval is pending, announce approval and dispose. Make `dispose()` idempotent with a guard flag so the re-entrant path through onDidDispose cannot run it twice, keep clearing the debounce timer and disposing every listener, and make sure a disposed panel can neither post nor accept an approve message. Re-run the focused suite; every group must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "RUN THE FULL GATE WITH RECORDED EVIDENCE. From the repo root run, on Windows, `cmd /d /c \"npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\"`, and elsewhere the same two npm commands joined by a logical and. Capture the exit code separately from any filtered output, because a grep pipeline hides it on this box. Require exit 0 from both, a nonzero node:test pass count strictly greater than the count before this task, and zero compile errors. If the sibling wire slice has not landed yet, the compile is what will catch a signature mismatch on the second approval argument — treat that as a real blocker and report it rather than loosening the call. If anything unrelated fails, diagnose it before proceeding rather than re-running. Keep the exact command, exit code and counts for the `verification` argument of moe.complete_task, and keep the earlier red output as the fails-on-old-code proof the epic rail demands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Re-read the whole diff as an attacker and confirm each of these or fix it: a rendered revision of 0 survives every check, since a truthiness test would silently disable approval on exactly the legacy rows this feature targets; a click queued while a newer plan sits undelivered in the debounce still sends the rendered revision and never the newer one; no code path reads cached state to manufacture or replace the token; a missing or malformed token can never reach the one-argument legacy call; a render that throws part way leaves approval disabled rather than bound to half-shown content; the latch really distinguishes a plan change from a transport hiccup, per the recovery behavior the user chose; repeated clicks, a disconnected client, a failed send, a failed delivery to the page and a correlated stale refusal all leave the panel open with visible feedback and no success claim; only an authoritative WORKING status for this task finishes the approval; disposal is idempotent, clears the timer, releases every listener and leaves nothing able to send; and every node is still built with createElement and textContent. Confirm the file count is exactly the three in scope, with no drift into the board or detail approval routes, the daemon, JetBrains or Wave 1. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and summarize for QA: how the token is seeded and advanced, the exact refusal and latch rules, the single authoritative success path, and the boundary that the other legacy approval routes deliberately keep sending no token and are documented at the parent task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/media/planReview.js",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,15 +98,40 @@
       "author": "architect-2d25447a",
       "content": "Claimed after the user confirmed/submitted the JetBrains wire plan and requested the next task. Read-only exploration covers actual PlanReviewPanel, external planReview.js, existing node:test/transpileModule/VM harness, client events and prerequisite contract. The two current defects are direct: script clicks omit the revision and panel invokes the legacy one-argument approveTask, then optimistically reports approval/disposes. Updates debounce 200ms, ignore missing tasks and ignore postMessage's Thenable result; disposal lacks an idempotent guard. Proposed scope remains exactly panel + script + new tests/plan-review.test.cjs. One direct REPL question is pending before final plan submission: keep open while pending, close only on authoritative WORKING for same task/revision, require reopen after stale/render/transport failure? No board BLOCKED state, source changes or tests. Predecessor task-34dba87e is PLANNING/unlanded; it owns optional-token client/error-context bridge. Governor request acknowledged: finish this held plan, then explicitly prioritize root task-04715367 (then task-435683c2 if appropriate) instead of global HIGH-first claiming.",
       "timestamp": "2026-09-11T09:32:27.062Z"
+    },
+    {
+      "id": "comment-ebc122cf41db4557aba11de73011b82f",
+      "author": "architect-2d25447a",
+      "content": "HUMAN APPROACH CONFIRMED in REPL on this follow-up: 'confirm and next task'. This confirms the preceding recovery proposal: keep panel open while approval is pending; close only on authoritative WORKING for same task and revision; stale/render/transport failures preserve visible feedback and require explicit reopen. Fresh get_context now assigns this row to architect-31b9f5b1, so architect-2d25447a did NOT submit or replace ownership. New owner should use the confirmed approach and Serena decision-vscode-plan-review-binding (verified code seams, edge cases, exact gate, seven-phase outline), refreshing current rails/bytes. No need to re-ask this already-confirmed recovery choice. No source changes/test runs/delivery are claimed.",
+      "timestamp": "2026-09-11T09:33:56.702Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:26:26.993Z",
-  "updatedAt": "2026-09-11T09:32:27.062Z",
+  "updatedAt": "2026-09-11T09:44:52.137Z",
   "metrics": {
-    "firstClaimAt": "2026-09-11T09:27:29.647Z"
+    "firstClaimAt": "2026-09-11T09:27:29.647Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
-    "architect-2d25447a"
-  ]
+    "architect-2d25447a",
+    "architect-31b9f5b1"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:44:52.083Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Posting the seed revision to the webview as a message after load — rejected: it races the first render and the page would briefly hold an enabled Approve with no token; a data attribute written into the same HTML string that renders the steps is race-free by construction. (2) Having the panel compare the clicked token against its cached task and refuse locally — rejected as the primary rule: the task allows either, but a local pre-check makes the cache a second authority, and the rail says cache freshness is not rendered freshness; the rendered token is sent as-is and the daemon refuses it. The panel still refuses a malformed or missing token, which is a validity check, not a freshness check. (3) Letting the webview re-enable Approve after any successful re-render — the user was asked in the REPL and chose split behavior: a revision change latches with a reopen notice, while a transport or render failure recovers on the next successful same-revision render. (4) Latching on every failure, matching JetBrains literally — rejected by the same answer: a momentary disconnect should not force a reopen. (5) Keeping the optimistic toast and disposing on a successful send — rejected outright; it is the defect, since a send only means bytes left the socket. (6) Reworking the 200ms debounce — out of scope and unnecessary once the token is bound to rendered content.",
+    "codebaseInsights": "moe-vscode has no vitest; `npm test` is `node --test tests/*.test.cjs` and `npm run compile` is `tsc -p ./` over src only, so the .cjs test is never type-checked while the compile guards the panel. tests/metrics-view.test.cjs is the working template for executing production code through transpileModule plus vm, and media/planReview.js is plain browser JS that needs no transpile at all — run it directly in a vm with a fake document. PlanReviewPanel is a per-task singleton held in a static map keyed by task id, so reopening after disposal genuinely rebuilds it. The constructor renders initial HTML from `findTask()` and subscribes ONLY to onStateChanged; the error and connection events already exist on the client and are simply unused here. `debouncedUpdate` waits 200ms, returns early on a missing task and drops the promise `postMessage` returns. `handleWebviewMessage` is the whole bridge surface and already wraps everything in try/catch with an error toast. `dispose()` deletes the map entry, clears the timer, disposes the list and then calls `panel.dispose()`, which re-enters through the onDidDispose subscription — it terminates only because the disposables array was already emptied, which is why an explicit guard is worth adding. Both the panel and the script render through createElement and textContent; the panel additionally escapes interpolated strings in its initial HTML through a module-scoped helper.",
+    "risks": "Revision 0 is the legacy value and the one most likely to be dropped by a truthiness check, in the data attribute, in the script and in the panel validation — assert it at all three. A data attribute read back is a string, so parse and validate it rather than comparing loosely. Omitting the attribute and emitting it empty are different states in the DOM; pick omission for malformed and test for it. If delivery to the page fails the panel cannot disable anything remotely, so the gate has to live in the panel itself — that is the only enforceable reading of the delivery-failure requirement. An uncorrelated daemon error must not latch this panel, which means checking both the operation and the task id from the allowlisted context the sibling slice delivers. The success path must key on authoritative WORKING state for this task, not on the absence of an error, or a silent daemon leaves a false success. Disposal must be idempotent because onDidDispose re-enters. Do not touch the board or detail approval routes, the daemon, JetBrains or Wave 1, and do not claim this slice fixes approval freshness on its own: the other legacy routes still send no token by design.",
+    "keyFiles": [
+      "moe-vscode/src/panels/PlanReviewPanel.ts",
+      "moe-vscode/media/planReview.js",
+      "moe-vscode/tests/metrics-view.test.cjs",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/package.json"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:44:52.137Z"
 }
