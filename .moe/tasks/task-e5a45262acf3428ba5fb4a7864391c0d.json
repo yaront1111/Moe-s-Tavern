@@ -1,0 +1,35 @@
+{
+  "id": "task-e5a45262acf3428ba5fb4a7864391c0d",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Keep a live worker's completion bytes out of the next seat's recovery checkpoint",
+  "description": "DEFECT, observed twice on 2026-09-11, both with evidence in git.\n\nWhen a worker calls complete_task, the task flips to REVIEW immediately, but the worker's CLI keeps running for a while and its wrapper post-flight (which makes the feat/fix completion commit) only runs when the session exits. A QA seat can claim the REVIEW task inside that window. The QA wrapper's pre-flight then finds the task's per-task baseline (<gitdir>/moe/baseline/<taskId>.tsv, kept until DONE and shared by every seat in the checkout) plus dirty paths, treats them as a crashed session's leftovers, and lands them as a recovery checkpoint. The worker was not crashed. It was about to commit those bytes itself. When it exits, its completion commit finds almost nothing left.\n\nEVIDENCE\ntask-a135d4d6 (assertAttemptCurrent guard):\n- REVIEW at 10:27:44, qa-8db40c97 claimed at 10:28:12.\n- ac6c9dc  wip(task-a135d4d6) [status=REVIEW role=qa cli-exit=0] recovered, landed 10:28:16. Contains the ENTIRE implementation: util/enforcement.ts +144, util/enforcement.test.ts +472, plus two board JSONs.\n- 7cdcf2e  feat(task-a135d4d6), the worker's completion commit, landed 10:29:55. Contains ONLY .moe/tasks/task-a135d4d6....json.\ntask-435683c2 (JetBrains time-cap parser removal): same shape. 5a7d27a is a role=qa recovered wip at REVIEW, and e0ed8ca feat contains only its own board JSON.\n\nWHY IT MATTERS (no bytes are lost, everything is on the branch and pushed)\n1. CLAUDE.md tells QA to audit with git show on the completion commit. For these tasks that shows zero code. A careful reviewer either rejects work that is fine or approves without having seen the diff.\n2. qa_approve's NO-COMPLETION-COMMIT gate does NOT fire, because a completion commit exists after reviewStartedAt. It is just empty. The soft gate is satisfied by a commit that proves nothing.\n3. History lies. The feat commit for a feature contains no feature, and the code is attributed to role=qa under a wip subject. scripts/analyze-task-metrics.mjs --commits buckets it as wip.\n\nIt is systematic, not a one-off: it fires whenever QA claims faster than the worker's CLI exits. Both REVIEW handoffs today hit it.\n\nNOT PRESCRIBING THE FIX. Directions the architect should weigh, each with a real cost:\n(a) Recovery runs only when the task's previous holder is gone (missing from the worker map or DEAD), not whenever a baseline and dirty paths exist. Needs a liveness signal the wrapper can read.\n(b) The worker lands its completion commit BEFORE complete_task makes the task visible to QA. Cleanest invariant, biggest behavior change.\n(c) The pre-flight recovery skips a task that entered REVIEW within a short grace window. Simplest to write, and a timing heuristic that will be wrong under load.\nWhatever is chosen, a genuine crash must still be recovered exactly as today. The recovery path exists because of the 2026-08-28 lost-code incident, and weakening it is worse than this defect.",
+  "definitionOfDone": [
+    "Reproduced first: a regression case in the launcher postflight harness (scripts/tests/postflight.sh and its .ps1 sibling) in which a second seat's pre-flight runs against a task whose worker has reached REVIEW but not yet exited, and which fails on the current code by showing the implementation paths landing in the second seat's recovery checkpoint.",
+    "After the fix, in that race the worker's completion commit contains the task's implementation paths, and the second seat's pre-flight lands no recovery checkpoint for them.",
+    "A genuine crash is still recovered unchanged: a case where the previous holder is gone (missing or DEAD) still lands its dirty bytes as a recovery checkpoint on the next pre-flight, and that existing behavior's tests still pass.",
+    "The fix is implemented identically in scripts/moe-agent.ps1 and scripts/moe-agent.sh, and bash scripts/tests/parity-check.sh passes.",
+    "Both postflight harnesses pass, run sequentially with MOE_POSTFLIGHT_TIMEOUT_SEC=180, and the command and result are recorded in the completion verification.",
+    "docs/roles/qa.md or the moe-qa-loop skill states how to audit a task whose code spans several commits, if the chosen fix does not make the completion commit self-contained in every case."
+  ],
+  "taskRails": [
+    "Both launchers or neither: moe-agent.ps1 and moe-agent.sh must change together.",
+    "Never weaken crash recovery to fix this; a lost-byte regression is strictly worse than a misattributed commit.",
+    "Pathspec-only staging stays: no git add -A or -u, and no bare git commit against the shared index.",
+    "Planning and design review first: this is the landing path, so the plan goes to the human before a worker implements it."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-11T10:31:29.268Z",
+  "updatedAt": "2026-09-11T10:31:29.268Z"
+}
