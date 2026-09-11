@@ -19,58 +19,89 @@
     {
       "stepId": "step-1",
       "description": "VERIFY THE UI PREREQUISITE IS GONE BEFORE DELETING WHAT IT CONSUMED. Read-only, no edits. (a) Prove task-0471536723384823995c88fe0fb58e15 landed: epicSiblings landing.merged true, or `git log <branch> --grep \"Moe-Task: task-0471536723384823995c88fe0fb58e15\"`. It was still PLANNING on 2026-09-11, so re-measure. (b) Independently confirm no consumer is left, because a stale reader is what turns this removal into a compile break: `grep -rn \"task.budget\\|TaskBudget\" moe-jetbrains/src/main` must return only the three lines this task owns - the data class at Models.kt:115-119, the property at Models.kt:168, and MoeJson.kt's import at line 22, helper at 357 and the two call sites at 330 and 491. Today board/TaskCard.kt also reads task.budget at 357-392 through its buildBudgetBadge helper; if those are still present, the prerequisite has not landed and you must moe.report_blocked naming its id rather than deleting the badge yourself - that badge belongs to the prerequisite. (c) Note two facts that keep this removal clean: getLongOrNull at MoeJson.kt:77 has four other callers in the metrics parsers, so it stays; and MoeJsonTest.kt currently contains no budget reference at all, so there is no existing test to rewrite, only new ones to add. (d) Record foreign dirty paths and preserve them. Own only the four named files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
-      ]
+      ],
+      "note": "Read-only verification, no edits.\n\n(a) PREREQUISITE LANDED. `git log moe/work-2026-09-10 --grep \"Moe-Task: task-0471536723384823995c88fe0fb58e15\"` returns 3 commits, including completion 792e4ce `feat(task-0471...)`: Retire task time-cap presentation in JetBrains. Serena memory task-task-0471536723384823995c88fe0fb58e15-handoff records QA approval by qa-8db40c97 (104 tests, 0 failures).\n\n(b) NO CONSUMER LEFT. `grep -rn \"task.budget\\|TaskBudget\" moe-jetbrains/src/main` returns exactly the 7 lines this task owns, all in the two planned files:\n  Models.kt:115 (data class TaskBudget), :168 (val budget)\n  MoeJson.kt:22 (import), :330 (parseTasks call site), :357 (helper decl), :361 (constructor inside helper), :491 (parseTask call site)\nTaskCard.kt has ZERO hits — buildBudgetBadge is gone, replaced by elapsedPresentation/buildElapsedBadge. TaskDetailDialog.kt has zero hits. Not blocked; safe to delete.\n\nCase-insensitive `grep -rni budget moe-jetbrains/src/main` adds exactly the two comment leftovers the plan predicted: Models.kt:166 (\"Schema additions for budget + metrics surface\") and MoeProjectService.kt:190 (\"keep the original short budget before declaring failure\"). Nothing outside the four owned files.\n\n(c) TWO FACTS CONFIRMED, with one plan correction. getLongOrNull is defined at MoeJson.kt:77 and called at 351 (parseTaskMetrics.wallClockMs), 362 (the budget helper being deleted), 438 and 443 (both avgWallClockMs in the aggregate-metrics parsers). So THREE callers survive the deletion, not four as the plan stated — the plan counted the budget call site itself. Either way the helper is not orphaned and stays. MoeJsonTest.kt (223 lines, 5 tests, all parseState-based) contains no budget reference, so nothing existing needs rewriting. The test sourceset's only `TaskBudget` string is a doc comment at TaskTimingPresentationTest.kt:24 explaining fixtures are built via MoeJson.parseTask, never a TaskBudget constructor — a comment, not a compile dependency, so the type deletion cannot break that suite.\n\nAlso verified for step 2: MoeJson.parseTask(obj: JsonObject) is public at :464; Task/TaskMetrics/ImplementationStep are all data classes, so whole-object structural equality is usable as the central assertion.\n\n(d) FOREIGN DIRTY PATHS, preserved untouched: .moe/tasks/*.json (9 modified + 3 untracked board records), .moe/epics/epic-3b8eb56d..., .moe/resources/, docs/plans/2026-09-11-provider-registry-spike.md, packages/moe-daemon/src/providers/. All four owned paths are clean (`git status --porcelain moe-jetbrains/` empty). Branch moe/work-2026-09-10.",
+      "startedAt": "2026-09-11T10:04:58.833Z",
+      "completedAt": "2026-09-11T10:05:49.317Z"
     },
     {
       "stepId": "step-2",
       "description": "RED FIRST, WITHOUT NAMING THE TYPE YOU ARE ABOUT TO DELETE. Add regressions to moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt, preserving every existing test unchanged. The central assertion is an equality one: build two JSON payloads identical except that one carries a populated legacy time-budget object, parse both through MoeJson.parseState and again through MoeJson.parseTask, and assert the two resulting Task values are equal. That fails on today's code, which populates the field from one payload and not the other, and it passes once the field is gone - a genuine red on the old behavior, which the epic rail requires. Crucially, write it WITHOUT importing or constructing the legacy type: compare parsed Task objects, never the removed class, so the same test compiles before and after the removal. Add the shape variants around it - the legacy key absent, explicitly null, and malformed as a string, a number and an array - each asserting the same equality and, in the same assertions, that the live data survives untouched: TaskMetrics durations, reopenCount, step data, comments and identity. Add one control that keeps error handling honest for unrelated malformed input: a task whose legacy field is malformed AND whose unrelated fields include a wrong-typed value still parses into a usable task through both paths, proving this removal did not make the parser brittle. Coordinate exclusive shared Gradle use, then run the focused class - Windows from the repository root `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest; exit $LASTEXITCODE`, Unix `(cd moe-jetbrains && ./gradlew test --tests com.moe.util.MoeJsonTest)` - and save the failing output. It must be an assertion failure about unequal tasks, not a compile error.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "RED PROVEN on old code — assertion failures about unequal Task values, not compile errors.\n\nAdded to MoeJsonTest.kt (existing 5 tests byte-unchanged; file 223 -> 463 lines, LF-only). The type being deleted is never imported or constructed — every assertion compares whole parsed Task data-class values, so the same file compiles before and after removal.\n- helpers: parseTask(json) -> MoeJson.parseTask; parseSnapshotTask(json) -> parseState(...).tasks.single(); liveTaskJson(legacyField) = one rich task (identity, dod, rails, comments, full TaskMetrics, handoff, failed DoD, critique, size warnings, verification, review summary, one step) with the legacy key spliced in verbatim; malformedTaskJson(legacyField) = same identity with wrong-typed unrelated fields.\n- legacyTimeBudgetShapes: null, {}, {wallClockMs}, fully populated {wallClockMs,warnedAt,escalatedAt}, \"45m\" string, 42 number, [] array. Absent = the baseline payload.\n- 5 new tests: (1) populated legacy value does not change parseTask; (2) same via parseState, plus cross-path equality single==snapshot; (3) every shape parses identically to the absent baseline through BOTH paths; (4) live runtime data survives every shape incl. absent — metrics durations/counters, reopenCount, step data, comments, identity, supplements; (5) CONTROL: malformed legacy value + wrong-typed unrelated fields (order string, reopenCount string, dod string, taskRails number, comments string, metrics string, implementationPlan object) still yields a usable task with the historical defaults, and both paths agree.\n\nCommand (Windows, repo root, under jetbrains-gradle lease, released after):\n  & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest; exit $LASTEXITCODE\nResult: compileTestKotlin OK; `10 tests completed, 3 failed`; BUILD FAILED; EXIT=1. JUnit XML: tests=10 failures=3 errors=0 skipped=0 (saved to %TEMP%\\moejson-red-TEST.xml).\nFailing — each diff isolated to one field:\n- \"a populated legacy time budget does not change the parsed task\": expected budget=null, was budget=TaskBudget(wallClockMs=600000, warnedAt=2026-09-11T10:05:00.000Z, escalatedAt=2026-09-11T10:09:00.000Z)\n- \"a populated legacy time budget does not change the snapshot task\": same diff through parseState\n- \"every legacy time budget shape parses identically through both paths\": first fails at `single-task parse changed for \"budget\": {}` — expected budget=null, was TaskBudget(wallClockMs=null, warnedAt=null, escalatedAt=null). Old code builds an empty object even for {}.\nTests (4) and (5) pass on old code by design; they are preservation controls, not reds.\n\nSelf-caught on the first run: my control spliced wrong-typed overrides BEFORE the canonical fields, so Gson's last-duplicate-key-wins silently restored order=3.5 (`expected:<0.0> but was:<3.5>`). That was a test bug, not a parser finding. Fixed by giving the control its own payload with no duplicate keys, then re-ran for the clean 3-failure red above. Side note: that first run printed a jansi `OutOfMemoryError: Java heap space` from Gradle's \"cleanup\" thread; it did not affect test execution and did not recur.\n\nFile-size note: the test file is 463 lines, past the 300-line guideline. The single-class test layout and the plan's in-file scope made that unavoidable. The growth is fixture JSON plus five tests.",
+      "startedAt": "2026-09-11T10:05:53.903Z",
+      "completedAt": "2026-09-11T10:10:33.180Z"
     },
     {
       "stepId": "step-3",
       "description": "REMOVE THE MODEL SURFACE. In moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt delete the TaskBudget data class at lines 115-119 and the `budget` property at line 168 from Task, and reword the surface comment at line 166 so it no longer names the removed concept - it currently reads as a shared comment for two fields, and the metrics half must survive while the wording loses the legacy term entirely, since a later step greps case-insensitively for it. Change nothing else in the file: HandoffNote, TaskMetrics, FailedDodItem, PlanCritiqueResult, planSizeWarnings, verification and reviewSummary all stay exactly as they are, and no parameter ordering moves except by the one deletion. Removing a defaulted property cannot break a named-argument call site, and the parser is the only place that passed it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Model surface removed from Models.kt. `git diff` shows 1 insertion and 8 deletions:\n- deleted the whole `data class TaskBudget(wallClockMs, warnedAt, escalatedAt)` block plus its trailing blank line (6 lines);\n- deleted `val budget: TaskBudget? = null,` from Task (sat between metrics and priorHandoffs);\n- reworded the shared comment \"// Schema additions for budget + metrics surface (rendered when present)\" to \"// Schema additions for the metrics surface (rendered when present)\". The metrics half survives and the legacy term is gone.\nNothing else in the file moved. HandoffNote, TaskMetrics, FailedDodItem, PlanCritiqueResult, TaskVerification, planSizeWarnings, verification and reviewSummary are byte-identical, and parameter order only changes by the one deletion. Positional-arg safety was verified by grep: the only two `Task(` constructors in main and test are MoeJson.kt:310 (parseTasks) and :471 (parseTask). Both use named arguments, and no `.copy(` anywhere passes the removed field.\n\nModule intentionally does not compile between this step and step-4 (MoeJson still imports and constructs the type). No Gradle run here; step-4 removes the parser surface and re-runs.\n\nLINE-ENDING FINDING (re-listing MoeJsonTest.kt): core.autocrlf=true, so working copies are CRLF while blobs are LF. Git Bash `grep -c $'\\r'` reported 0 CR on these files, a false negative. Python byte counts show CRLF. My step-2 append had bare LF, which left MoeJsonTest.kt mixed (222 CRLF + 241 LF). I normalized it to all-CRLF (463 CRLF, 0 bare LF). Content is unchanged, and `git diff --stat` shows 240 insertions, 0 deletions for the test file, so every pre-existing line is byte-identical. Committed blobs normalize to LF either way. Models.kt edit done CRLF-aware (276 CRLF, 0 bare LF).",
+      "startedAt": "2026-09-11T10:10:37.436Z",
+      "completedAt": "2026-09-11T10:11:36.389Z"
     },
     {
       "stepId": "step-4",
       "description": "REMOVE THE PARSER SURFACE FROM BOTH PATHS. In moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt delete the import at line 22, the private parseTaskBudget helper at lines 357-370, and BOTH assignments - line 330 inside the private parseTasks used by parseState, and line 491 inside the public parseTask used for single-task messages. Both matter: leaving either behind would not compile, and forgetting that there are two Task constructors is the classic miss in this file. Do NOT touch getLongOrNull at line 77 - it still has four callers in the task-metrics and aggregate-metrics parsers. Leave every other helper, its permissiveness and its callers exactly as they are; this is a deletion, not a parser refactor, and unrelated malformed JSON must keep behaving as it does today. Re-run the focused test class from the previous step: the equality regressions must now pass, because an unknown JSON key is simply ignored.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "note": "Parser surface removed from BOTH paths in MoeJson.kt. Pure deletion: `git diff` shows 14 lines removed, 0 added.\n- import `com.moe.model.TaskBudget` (was :22)\n- `budget = parseTaskBudget(obj),` inside private parseTasks, the parseState path (was :330)\n- the whole private `parseTaskBudget(obj: JsonObject): TaskBudget?` helper and its trailing blank line (was :357-367)\n- `budget = parseTaskBudget(obj),` inside public parseTask, the single-task path (was :491)\nAn in-script assert checked that `budget` appears nowhere in the file, case-insensitive, before writing. The file stays all-CRLF (656 CRLF, 0 bare LF).\n\nUntouched on purpose: getLongOrNull (now :76) keeps its 3 live callers — :349 parseTaskMetrics.wallClockMs, :425 and :430 avgWallClockMs in parseMetricsAggregate. getStringOrNull and every other helper keep their permissiveness and callers. No parser refactor. An unknown `budget` key in a payload is now simply ignored by both Task constructors.\n\nGREEN, under the jetbrains-gradle lease (released after):\n  & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest; exit $LASTEXITCODE\ncompileKotlin and compileTestKotlin re-ran (not UP-TO-DATE). `> Task :test` executed. BUILD SUCCESSFUL, EXIT=0.\nFresh XML TEST-com.moe.util.MoeJsonTest.xml, timestamp 2026-09-11T10:12:04Z: tests=10 failures=0 errors=0 skipped=0. All 5 pre-existing tests plus the 5 new ones pass, including the three that were red in step-2.",
+      "startedAt": "2026-09-11T10:11:39.733Z",
+      "completedAt": "2026-09-11T10:12:23.821Z"
     },
     {
       "stepId": "step-5",
       "description": "CLEAR THE LAST TEXTUAL LEFTOVER AND PROVE IT. In moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt line 190, reword the retry comment that currently reads \"keep the original short budget before declaring failure\" so it describes the retry window without the legacy term - the sentence is about a waiting period, not a task time cap. This is comment-only: do not touch scheduleRetryAttempt, the attempt counter, the delay, publishStatus or any startup timing behavior, which the task scope explicitly excludes. Then run the guard the parent will run: `grep -rni budget moe-jetbrains/src/main` must return nothing at all. If it reports a leftover in a file outside these four, that belongs to the UI prerequisite - report it rather than widening this task's scope to fix it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "Comment-only edit in MoeProjectService.kt:190. `git diff` shows one changed line: \"keep the original short budget before declaring failure\" became \"keep the original short retry window before declaring failure\". The sentence describes the waiting period for an external or not-yet-written daemon, not a task time cap. Unchanged: publishStatus, scheduleRetryAttempt(maxAttempts, delayMs, attempt + 1), the attempt counter, the delay and all startup timing. File stays all-CRLF (604 CRLF, 0 bare LF).\n\nGUARD, the one the parent will run: `grep -rni budget moe-jetbrains/src/main` printed nothing, grep-exit=1 (no match). A second independent check with ripgrep, case-insensitive over the same directory, also found no matches. That covers kotlin/ and resources/ (MoeBundle.properties included). No leftover outside the four owned files. The prerequisite's own files (TaskCard.kt, TaskDetailDialog.kt, MoeBundle.properties, MoeDuration.kt) are already clean.",
+      "startedAt": "2026-09-11T10:12:27.177Z",
+      "completedAt": "2026-09-11T10:12:42.955Z"
     },
     {
       "stepId": "step-6",
       "description": "FULL GATE, ADVERSARIAL REVIEW, HANDOFF. (a) Acquire the shared Gradle slot through the Moe resource protocol and run the gate fresh from the repository root - Windows exactly `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE`, Unix `(cd moe-jetbrains && ./gradlew test)` - then release the slot either way. Require exit 0, real :test execution with freshly written JUnit XML and nonzero counts; an UP-TO-DATE result is not a test run, so re-run with a task-local rerun and then the exact unfiltered command again. Every pre-existing test must pass unchanged, and a task rail forbids weakening the UI prerequisite's presentation tests to get there - if one of them fails, that is a real finding, not something to edit away. Never cancel a peer's build or delete a shared cache. (b) Adversarially review the deletion: are BOTH parser call sites gone; does the model still carry metrics, handoffs, critique, plan-size warnings, verification and review summary; is getLongOrNull still present with its four callers; did any unrelated helper's permissiveness change; does an unknown legacy key in a payload still parse cleanly rather than throwing; is the case-insensitive grep genuinely clean across all of src/main; and did the service edit stay comment-only with startup retry behavior untouched. Confirm the daemon's own legacy-field deprecation notes and persisted task data were not touched - they are explicitly out of scope. (c) Complete through moe.complete_task with the exact command, exit code and counts, the saved red output from step 2 as the fails-on-old-behavior evidence, and every modified path in modifiedFiles. Note in the summary that this unblocks task-e7f534f147b74650ba06c2b98c022afb, which adds the blocker metadata fields to these same two files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
-      ]
+      ],
+      "note": "(a) FULL GATE, under the jetbrains-gradle lease (released after):\n  & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE\nAttempt 1 at 13:12:54+03: EXIT=1, \"FAILURE: Build failed with an exception. Could not receive a message from the daemon.\" ENVIRONMENTAL, not a test result. The gradlew CLIENT JVM runs with the wrapper default -Xmx64m and printed `Exception in thread \"cleanup\" java.lang.OutOfMemoryError: Java heap space at ... JansiLoader.cleanup(JansiLoader.java:113)`. Jansi's cleanup lists java.io.tmpdir, and %TEMP% currently holds 722,014 top-level entries. The daemon log ~/.gradle/daemon/9.7.1/daemon-62532.out.log proves the daemon was healthy: it finished the build, then logged \"Could not write message Success[...BuildActionResult] to '/127.0.0.1:61829'\" (the client socket was gone) and marked the build Canceled. The step-2 red run printed the same OOM but survived, so this is a race that grows with TEMP size.\nAttempt 2 at 13:14:42+03: identical command, with GRADLE_OPTS=-Xmx512m set only for that PowerShell invocation (process-scoped; GRADLE_OPTS and JAVA_OPTS were empty before). EXIT=0, BUILD SUCCESSFUL. compileKotlin/compileTestKotlin UP-TO-DATE, `> Task :test` EXECUTED (not UP-TO-DATE). All 11 JUnit XML files were freshly written, timestamps 10:14:44.576Z-10:14:45.431Z, inside the run window. Totals: classes=11 tests=109 failures=0 errors=0 skipped=0, which is the prerequisite's recorded 104 plus these 5. TaskTimingPresentationTest=22 tests, unchanged from the prerequisite's QA record, and its file was not edited. MoeJsonTest=10. Owned-file mtimes are all at or before 13:12:31, before the gate started.\nNothing deleted or cleaned. No peer build cancelled. TEMP left untouched: it is shared and deleting from it is not this task's call.\n\n(b) ADVERSARIAL REVIEW, read-only:\n- Both parser call sites are gone. `TaskBudget|parseTaskBudget` has 0 hits in src/main. Each live helper (parseTaskMetrics, parseHandoffs, parseFailedDodItems, parsePlanCritiqueResult, parseVerification) is still referenced once per Task constructor. The \"planSizeWarnings\" and \"reviewSummary\" keys are still read in both constructors.\n- The model still carries metrics, priorHandoffs, failedDodItems, planCritiqueResult, planSizeWarnings, verification and reviewSummary (Models.kt:161-170).\n- getLongOrNull is present with 3 callers (:349, :425, :430). The plan said four because it counted the deleted call.\n- No helper was edited, and permissiveness is unchanged, proven by the malformed-field control test.\n- An unknown legacy key is ignored cleanly for null, {}, a populated object, a string, a number and an array.\n- `grep -rni budget moe-jetbrains/src/main` finds nothing, confirmed by ripgrep too.\n- The service edit is comment-only (1 line).\n- Persisted data is safe: the plugin never serializes a Task back. Its only gson calls are fromJson to JsonObject/DaemonInfo plus project.json and registry writes. Nothing can drop a stored field on write-back.\n- Nothing under packages/moe-daemon was touched by me, so the daemon's deprecation notes and data are intact.\n- Concurrency: MoeJson is stateless, so it does not apply.\nResidual notes:\n- The test sourceset keeps one doc-comment mention of the old type name at TaskTimingPresentationTest.kt:24. That file is prerequisite-owned and the rail says do not weaken it, so it was left alone. It is not in src/main.\n- MoeJsonTest.kt is 463 lines, past the 300-line guideline, because of fixture JSON.\n- Foreign dirty paths appeared mid-task and were preserved: packages/moe-daemon/src/util/enforcement.ts, enforcement.test.ts and src/delivery/.\n- OUT OF SCOPE, for parent task-0d11e05f: VS Code still models and renders the field. It is in moe-vscode/src/types/moe.ts:201 and :276, TaskDetailPanel.ts:726-766 (a \"Budget remaining\" KPI) and the BoardViewProvider.ts:523 CSS. That is not trivial, so it belongs in a follow-up card.",
+      "startedAt": "2026-09-11T10:12:47.610Z",
+      "completedAt": "2026-09-11T10:16:27.517Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": null,
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-813933f7",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -85,17 +116,27 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:40:52.755Z",
-  "updatedAt": "2026-09-11T09:40:59.055Z",
+  "updatedAt": "2026-09-11T10:17:33.020Z",
   "contextFetchedBy": [
     "architect-0dc7194c",
-    "architect-8b93cc67"
+    "architect-8b93cc67",
+    "worker-85674160",
+    "qa-813933f7"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T09:39:28.223Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6
   },
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:40:58.995Z",
   "planningNotes": {
@@ -110,5 +151,20 @@
       "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt:252-260 and 352-392 (the consumer the PREREQUISITE removes, not this task)"
     ]
   },
-  "planApprovedAt": "2026-09-11T09:40:59.055Z"
+  "planApprovedAt": "2026-09-11T09:40:59.055Z",
+  "workStartedAt": "2026-09-11T10:04:58.833Z",
+  "reviewStartedAt": "2026-09-11T10:17:32.716Z",
+  "verification": {
+    "command": "$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 2s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nJUnit XML (all 11 files freshly written 2026-09-11T10:14:44.576Z-10:14:45.431Z, inside the run window): classes=11 tests=109 failures=0 errors=0 skipped=0. MoeJsonTest=10 (5 existing + 5 new), TaskTimingPresentationTest=22 (prerequisite, unchanged), MoeDaemonSupervisorTest=15, MoeProjectInitializerTest=17, TerminalAgentLauncherTest=20, MoeSettingsDialogTest=8, MoeProjectConnectionTest=5, MetricsPanelTest=4, CreateTaskDialogTest=3, MoeProjectRegistryTest=3, MoeProjectServiceTest=2.\n\nGRADLE_OPTS note: the plan's exact command without it failed once (EXIT=1, 'Could not receive a message from the daemon') because the gradlew client JVM (-Xmx64m) OOMs in JansiLoader.cleanup listing a 722K-entry %TEMP%. The daemon log shows the build completed and the client socket was gone. That is environmental, and the process-scoped client heap is the only difference.\n\nRED on old code (step-2, focused MoeJsonTest before removal): '10 tests completed, 3 failed', EXIT=1, compile OK, all AssertionError. Each diff is the legacy field alone: expected budget=null, was budget=TaskBudget(wallClockMs=600000, warnedAt=..., escalatedAt=...) in parseTask and in parseState; the shapes test fails at '\"budget\": {}', giving TaskBudget(null,null,null).",
+    "reportedAt": "2026-09-11T10:17:32.716Z"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+  ],
+  "completionSummary": "Retired the deprecated task time-budget from JetBrains task parsing. The client Task model and BOTH parser paths now ignore any legacy `budget` payload, and every live metric and limit is kept.\n\nChanges (4 owned files):\n- Models.kt: deleted the TaskBudget data class and the Task.budget property. The shared comment now reads \"Schema additions for the metrics surface\".\n- MoeJson.kt: pure deletion of 14 lines. Removed the import, the private parseTaskBudget helper, and the `budget =` assignment in private parseTasks (the parseState path) and in public parseTask (the single-task path). getLongOrNull stays with 3 live callers. No helper or its permissiveness changed.\n- MoeProjectService.kt: comment-only. The daemon startup retry comment now says \"short retry window\". Retry and timing code is untouched.\n- MoeJsonTest.kt: 5 new tests. Existing tests are byte-unchanged. The new tests never import or construct the removed type; they compare whole parsed Task values.\n  - A populated legacy value does not change parseTask or parseState, and the two paths agree.\n  - Absent, null, {}, populated, string, number and array shapes all parse identically through both paths.\n  - Live data survives every shape: TaskMetrics durations and counters, reopenCount, step data, comments, identity, handoffs, critique, size warnings, verification and review summary.\n  - Control: a malformed legacy value plus wrong-typed unrelated fields still yields the historical defaults through both paths.\n\nEvidence:\n- Old code went red: 3 of 10 tests failed on unequal Tasks, where the only difference was the budget field.\n- After the removal, the full gate shows 109 tests, 0 failures, across 11 classes.\n- Both grep and ripgrep find no case-insensitive 'budget' match in moe-jetbrains/src/main.\n- Persisted data is safe: the plugin never serializes a Task back to the daemon.\n- Nothing under packages/moe-daemon was touched.\n\nUnblocks task-e7f534f147b74650ba06c2b98c022afb, which adds blocker-metadata fields to the"
 }
