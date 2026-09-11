@@ -132,7 +132,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:25:37.487Z",
-  "updatedAt": "2026-09-11T13:14:17.956Z",
+  "updatedAt": "2026-09-11T13:14:22.304Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:26:02.737Z",
     "plannedStepCount": 7,
@@ -180,7 +180,42 @@
   "filesModified": [
     "moe-vscode/src/types/moe.ts",
     "moe-vscode/src/services/MoeDaemonClient.ts",
-    "moe-vscode/tests/plan-approval-client.test.cjs"
+    "moe-vscode/tests/plan-approval-client.test.cjs",
+    ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json",
+    ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
   ],
-  "completionSummary": "VS Code wire bridge for plan revisions. Exactly 3 files: src/types/moe.ts, src/services/MoeDaemonClient.ts, tests/plan-approval-client.test.cjs (new).\n\nAPPROVE_TASK WIRE SHAPE (exact frames, pinned by tests that parse the JSON handed to the socket):\n- supplied token: {\"type\":\"APPROVE_TASK\",\"payload\":{\"taskId\":\"task-1\",\"expectedPlanRevision\":7}} — forwarded unchanged, verified for 7 and Number.MAX_SAFE_INTEGER.\n- explicit 0: {\"payload\":{\"taskId\":\"task-1\",\"expectedPlanRevision\":0}} — zero survives. The legacy gate is `=== undefined`, never a truthiness check, because 0 is exactly the effective revision of a legacy row.\n- omitted / explicit undefined: {\"payload\":{\"taskId\":\"task-1\"}} with the property GENUINELY ABSENT, not null and not undefined-valued. The payload literal never writes the key. This is the whole compatibility contract for the four call sites I did not touch (PlanReviewPanel.ts:119, TaskDetailPanel.ts:262 and :340, BoardViewProvider.ts:107 — note the plan text's 136/214 were stale line numbers).\n\nLOCAL REFUSAL: a supplied token is accepted only when `typeof === 'number' && Number.isSafeInteger(v) && v >= 0`. No numeric conversion anywhere — coercion is the silent fallback this task exists to prevent. A malformed token (null, '3', true, 3.5, -1, MAX_SAFE_INTEGER+1, NaN, Infinity — all eight tested) logs, fires onError with operation APPROVE_TASK and a message naming the value and its typeof, returns false, and sends NOTHING AT ALL. In particular there is no fallback to the token-free frame: that would hand the daemon an unchecked approval for a plan nobody reviewed. The `typeof` guard is live, not dead code — untyped webview postMessage fields reach this method. `sendMessage`'s boolean is returned verbatim, so disconnected, no-socket and throwing-socket all report false with no false success.\n\nERROR PROMOTION: onError's payload is widened additively to { operation?, message, code?, codeName?, context? }; there are currently no external onError subscribers"
+  "completionSummary": "VS Code wire bridge for plan revisions. Exactly 3 files: src/types/moe.ts, src/services/MoeDaemonClient.ts, tests/plan-approval-client.test.cjs (new).\n\nAPPROVE_TASK WIRE SHAPE (exact frames, pinned by tests that parse the JSON handed to the socket):\n- supplied token: {\"type\":\"APPROVE_TASK\",\"payload\":{\"taskId\":\"task-1\",\"expectedPlanRevision\":7}} — forwarded unchanged, verified for 7 and Number.MAX_SAFE_INTEGER.\n- explicit 0: {\"payload\":{\"taskId\":\"task-1\",\"expectedPlanRevision\":0}} — zero survives. The legacy gate is `=== undefined`, never a truthiness check, because 0 is exactly the effective revision of a legacy row.\n- omitted / explicit undefined: {\"payload\":{\"taskId\":\"task-1\"}} with the property GENUINELY ABSENT, not null and not undefined-valued. The payload literal never writes the key. This is the whole compatibility contract for the four call sites I did not touch (PlanReviewPanel.ts:119, TaskDetailPanel.ts:262 and :340, BoardViewProvider.ts:107 — note the plan text's 136/214 were stale line numbers).\n\nLOCAL REFUSAL: a supplied token is accepted only when `typeof === 'number' && Number.isSafeInteger(v) && v >= 0`. No numeric conversion anywhere — coercion is the silent fallback this task exists to prevent. A malformed token (null, '3', true, 3.5, -1, MAX_SAFE_INTEGER+1, NaN, Infinity — all eight tested) logs, fires onError with operation APPROVE_TASK and a message naming the value and its typeof, returns false, and sends NOTHING AT ALL. In particular there is no fallback to the token-free frame: that would hand the daemon an unchecked approval for a plan nobody reviewed. The `typeof` guard is live, not dead code — untyped webview postMessage fields reach this method. `sendMessage`'s boolean is returned verbatim, so disconnected, no-socket and throwing-socket all report false with no false success.\n\nERROR PROMOTION: onError's payload is widened additively to { operation?, message, code?, codeName?, context? }; there are currently no external onError subscribers",
+  "commits": [
+    {
+      "sha": "0b542d6877e1cee0322696f7ce29ca91ebafb4ad",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T13:14:18Z",
+      "paths": [
+        ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T13:14:22.304Z",
+      "treeId": "45d9f257d9670dfd0efdde277ddc3911f48fd912",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-vscode/src/services/MoeDaemonClient.ts",
+          "taskId": "task-1bf079020e504aaaa760a8faeddebbcd"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T13:14:18Z",
+    "at": "2026-09-11T13:14:22.304Z"
+  }
 }
