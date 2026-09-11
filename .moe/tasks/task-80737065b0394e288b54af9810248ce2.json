@@ -12,13 +12,62 @@
     "Wrapper remains the only git actor; do not compensate with agent-side manual baselines or commits.",
     "Preserve live peer ownership and dirty paths; do not relax attribution to bypass the missing boundary."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CONFIRM THE DEFECT AT ALL FOUR SITES. Read-only, no edits. The bug is already located; verify it rather than re-deriving it. In scripts/moe-agent.ps1: the taskless prompt block that begins '# Pre-flight Complete: no claimable task' tells the CLI to call wait_for_task, then claim, then get_context - so the claim happens INSIDE the CLI; the baseline block immediately after it is guarded by AutoClaim and preflightOk and preflightTaskId, so no baseline is taken; and the post-flight block near line 5012 is guarded by AutoClaim and preflightTaskId, so no landing runs. In scripts/moe-agent.sh the same three sites are the taskless prompt near line 5015, the pre-flight landing guard near line 5098, and the session-ended guard near line 1893. Net effect: a session that claims in-CLI edits code with no baseline and lands nothing, which is the reproduction two workers hit on 2026-09-11. Write the exact line numbers you actually find into the step note, because these files are long and other cards are editing them. (b) Read scripts/tests/taskless-handoff.test.mjs completely before planning any edit to the wrappers. It renders the REAL taskless prompt blocks out of both scripts by slicing between literal boundary strings - in PowerShell between the dynamicContext initialisation and the '# -------- Pre-flight baseline' comment, in bash between DYNAMIC_CONTEXT and the '# -------- Pre-flight landing: recovery' comment. Those marker comments are load-bearing: move or reword one and the harness stops finding its boundaries. It already runs in CI beside agent-runtime.test.mjs, so it is the regression home and no new test file is needed. (c) Read scripts/tests/parity-check.sh: it extracts every code matching the MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_ and MOE_ATTRIBUTION_ prefixes from both wrappers and fails on any asymmetry. Naming the new refusal inside the MOE_COMMIT_REFUSED_ family therefore gets cross-wrapper symmetry enforced for free and needs no parity-check edit - prefer that over inventing a new prefix. (d) Note that this task is epic-final, so its landing runs the full quality gate; keep the diff tight.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST, IN THE EXISTING HARNESS. Add cases to scripts/tests/taskless-handoff.test.mjs, leaving every existing case untouched. They must fail against the current wrappers, which is what the epic rail requires. Assert on the rendered taskless block and on the guard expressions, not on a transcription of them: the taskless prompt must no longer instruct the CLI to claim a task - a session that may edit code is only ever launched with a task already bound - and the guard that decides whether a baseline is taken must no longer be the sole gate that silently skips the whole delivery path when no task was claimed at pre-flight. Add the chat-only case explicitly: when the wrapper wakes for a routed mention rather than a task, the prompt it renders must tell that session to answer the mention and NOT to claim or edit, since it has no baseline by design. Add the adoption case: a session that began with no task but ends holding one must produce the named refusal rather than silence. Cover both wrappers for every case, because the harness already renders both and a fix that lands in only one is the failure mode this repository has hit before. Run `node --test scripts/tests/taskless-handoff.test.mjs` and save the red output; it must be an assertion failure about the rendered content, not a boundary-slicing error - if you get the latter, you moved a marker comment and must put it back.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "MOVE THE WAIT AND THE CLAIM BACK INTO THE WRAPPER, IN BOTH SCRIPTS AT ONCE. Edit scripts/moe-agent.ps1 and scripts/moe-agent.sh in lockstep - same behaviour, same operator-visible strings, same code names - because a one-sided fix fails parity-check and leaves half the fleet broken. Replace the taskless launch for claiming roles with a wrapper-side wait: call wait_for_task through the existing RPC helper with the role's statuses instead of rendering a prompt that asks the CLI to do it. Three outcomes. When it reports a task, claim it in the wrapper, populate the same task id, title and pre-flight-ok variables the normal path sets, and fall through to the EXISTING baseline block and the existing launch - no new baseline code, no second landing path, because the whole point is that a claiming session rejoins the machinery that already works. When it reports a routed mention, launch a chat-only session whose prompt says to read and answer the mention and explicitly not to claim a task or edit files; that session legitimately has no baseline. When it times out, loop and wait again, reusing the wrapper's existing relaunch loop rather than adding a second one. Leave the governor path alone: a taskless state is normal for that role, it does not claim, and its existing prompt stays as it is. Preserve the marker comments the regression harness slices on. Error handling: a failed or unreachable wait_for_task must back off and retry rather than falling through to launching an unbound CLI, because that fallback is exactly the hole being closed - and it must not burn the resume budget, which tracks a held task, not an idle wait.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADD THE ADOPTION BOUNDARY AS A LOUD REFUSAL, IN BOTH SCRIPTS. The wrapper-side wait closes the supported paths, but a chat-only or governor session could still end up holding a task - an agent that ignores its prompt, or a future launch path nobody has written yet - and today that ends in silence. In the post-flight of a session that launched WITHOUT a task, look up whether the worker now holds one. If it does not, behave exactly as today. If it does and the working tree is clean, say so and exit quietly. If it does and the tree is dirty, refuse to land and emit a named code in the existing MOE_COMMIT_REFUSED_ family so scripts/tests/parity-check.sh enforces it in both wrappers automatically, print an operator line naming the task and the fact that no pre-edit baseline exists, and post one @governors chat line. Do NOT invent a baseline and do NOT stage the tree - both are explicitly forbidden by the task rails, and with no baseline the wrapper genuinely cannot separate this session's bytes from a peer's work in progress or from dirt that predated it. Be honest about the consequence in the operator line and in the completion summary: those bytes stay in the working tree unlanded, and because the next session of that task will snapshot them as pre-existing, a human must deal with them - that residual risk is why the wrapper-side wait is the real fix and this guard is only the alarm. Keep both wrappers byte-parallel in wording.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN EVERY GATE, THEN A REAL CANARY. (a) `node --test scripts/tests/taskless-handoff.test.mjs scripts/tests/agent-runtime.test.mjs` - the exact pair CI runs - must pass with nonzero counts. (b) `bash scripts/tests/parity-check.sh` and its PowerShell twin must both pass, which is what proves the two wrappers stayed in lockstep including the new refusal code. (c) `bash scripts/tests/postflight.sh` and `scripts/tests/postflight.ps1`, run SEQUENTIALLY on an otherwise quiet box with MOE_POSTFLIGHT_TIMEOUT_SEC=180 - the default per-wrapper sixty seconds flakes while the fleet runs its own suites and the heartbeat-sidecar check fails first. Never pipe a harness through grep with pipefail set, which turns a real failure into a silent exit code. (d) The canary the Definition of Done requires: launch one real wrapper seat against a board state with no claimable task for that role, let it wait, let a task appear, and confirm from the evidence rather than from the console - a per-task baseline file exists under the git directory BEFORE any edit, the session lands with a task-scoped commit, and moe.get_context for that task shows the commit recorded with path-specific attribution. Capture the task id, the baseline path and the resulting sha. If a canary is impossible in the current environment, say so plainly in the completion summary rather than reporting an untested fix as verified. (e) Record every command, exit code and count for the verification argument of complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL REVIEW AND HANDOFF. Read the diff as an attacker of your own fix. Is there ANY remaining path where a CLI that can edit code launches without a task bound and therefore without a baseline - including a failed or timed-out wait, an RPC error, a role misconfiguration, or the resume path? Does the chat-only session's prompt genuinely forbid claiming, and does its post-flight refuse to land rather than silently skipping? Are the two wrappers identical in behaviour and in every operator-visible string, proven by parity-check rather than by reading? Did the marker comments the regression harness slices on survive unchanged? Is the wrapper still the only git actor, with no agent-side baseline or commit anywhere in the diff, and is attribution unrelaxed - no whole-tree staging, no widened path set, peers' dirty paths untouched? Does the idle wait avoid consuming the resume budget, which exists for a held task rather than for waiting? Does anything here reintroduce an idle-based auto-release, which an epic rail forbids and which this change must not smuggle in by treating a waiting seat as dead? Confirm the diff is the three declared files. This task is epic-final, so its landing runs the full quality gate - make sure the tree is clean of unrelated churn before you finish. Complete through moe.complete_task with the gate evidence and the canary evidence, listing every modified path, and state the residual risk plainly: a taskless session that adopts a task still leaves its bytes unlanded by design, because no baseline exists to attribute them safely.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/taskless-handoff.test.mjs"
+      ]
+    }
+  ],
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator instruction 2026-09-11, same narrow class approved earlier: promote a DEPENDENCY-FREE card out of human-gated BACKLOG so an idle architect seat can plan it. This row has no dependsOn at all, so nothing is being planned ahead of an undelivered contract.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -26,8 +75,35 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:36:05.147Z",
-  "updatedAt": "2026-09-11T10:41:48.756Z",
+  "updatedAt": "2026-09-11T12:13:46.197Z",
   "contextFetchedBy": [
-    "worker-6dd2f337"
-  ]
+    "worker-6dd2f337",
+    "architect-8b93cc67",
+    "worker-53c83cb5"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T12:10:23.686Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T12:12:34.818Z",
+  "planningNotes": {
+    "approachesConsidered": "Detecting the in-CLI claim after the fact and taking a baseline then - rejected outright: by the time the wrapper notices, edits have already happened, so the snapshot would record this session's own work as pre-existing, which is worse than no baseline. Hand-creating a baseline for an adopted task - rejected by a task rail and by the same reasoning. Staging the whole tree when a taskless session ends dirty - rejected by a task rail; it would sweep up peer work in progress and dirt that predated the session. Leaving the idle CLI to claim but teaching post-flight to land anything it finds - rejected for the same attribution reason. That leaves the option the task description names first and which is also the structurally correct one: keep the waiting and the claiming in the wrapper so a session that can edit code is only ever launched with a task already bound, and let the existing baseline and landing machinery run unchanged. The routed-mention case is the one legitimate taskless launch, so it gets a chat-only session that is told not to claim or edit, and the adoption guard remains as a loud alarm for any path nobody anticipated.",
+    "codebaseInsights": "Verified live on 2026-09-11. The defect is a three-site asymmetry rather than a subtle race: the taskless prompt instructs the CLI to wait, claim and fetch context itself, while both the baseline block and the post-flight landing block are gated on a task id that pre-flight never set. So the one session that is most likely to start editing from a cold start is precisely the one with no snapshot of what was already dirty and no landing at the end, and it fails silently - there is no error, just nothing. Two facts shape the fix. First, scripts/tests/taskless-handoff.test.mjs already executes the real prompt-building blocks out of both scripts rather than a fixture, and it finds them by slicing between literal marker comments, so those comments are load-bearing and the harness is the natural regression home with no new file needed. Second, parity-check extracts four MOE_ code families from both wrappers and fails on any asymmetry, so naming the new refusal inside the MOE_COMMIT_REFUSED_ family gets cross-wrapper enforcement for free and avoids editing the parity harness at all. The wrapper already owns a relaunch loop and an RPC helper, so moving the wait inside it reuses machinery rather than adding any.",
+    "risks": "Both wrappers must change together or parity-check fails and half the fleet keeps the bug - this repository has shipped one-sided wrapper changes before. The marker comments that taskless-handoff.test.mjs slices on are easy to disturb while editing nearby; a boundary error in that harness looks like a test bug and is actually an edit mistake. The wrapper-side wait must not fall through to launching an unbound CLI when the daemon is unreachable, since that fallback IS the hole. It must also not burn the resume budget, which counts attempts at a HELD task, and must not be mistaken for an idle-based auto-release, which an epic rail forbids. Be honest about the residual: an adopted task's bytes stay unlanded by design, and the next session will treat them as pre-existing, so the guard escalates to a human rather than pretending to recover them. Environment quirks for the gates: run the two postflight harnesses sequentially on a quiet box with MOE_POSTFLIGHT_TIMEOUT_SEC=180, and never pipe a harness through grep with pipefail set. This task is epic-final, so its landing runs the full quality gate - keep the diff to the three files and the tree free of unrelated churn.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1 (taskless prompt block '# Pre-flight Complete: no claimable task'; baseline guard on AutoClaim + preflightOk + preflightTaskId immediately after it; post-flight guard on AutoClaim + preflightTaskId near line 5012)",
+      "scripts/moe-agent.sh (same three sites: taskless prompt near 5015, pre-flight landing guard near 5098, session-ended guard near 1893)",
+      "scripts/tests/taskless-handoff.test.mjs (regression home; renders the REAL prompt blocks from both wrappers by slicing on literal marker comments; already in CI beside agent-runtime.test.mjs)",
+      "scripts/tests/parity-check.sh and parity-check.ps1 (extract MOE_COMMIT_, MOE_ATTR_, MOE_CHECKPOINT_, MOE_ATTRIBUTION_ code families from both wrappers and fail on asymmetry)",
+      "scripts/tests/postflight.sh and postflight.ps1 (launcher harness; honour MOE_POSTFLIGHT_TIMEOUT_SEC)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T12:12:34.904Z",
+  "blockedReason": "This newly claimed task is the idle-launch binding repair, but this session itself still lacks the mandatory pre-edit boundary. Fresh read-only proof: task-specific .git/moe/baseline/task-80737065b0394e288b54af9810248ce2.tsv is ABSENT; live wrapper PID 55244 started 2026-09-11 10:43:48Z with -Role worker -Command codex -Team moes, no -CodexExec; original temp prompt explicitly says no claimable task at preflight. The user asked next-task in the SAME TUI, not a new wrapper session. Current scripts confirm PS taskless instruction at 4160/4163, baseline guard 4176, postflight guard 5015; bash taskless block 5015, baseline guard 5098, postflight guard 5831 (session-ended guard 1893). This in-CLI claim cannot update that running wrapper's original task binding. Implementing would violate this task's own prohibition on manual baselines/commits and risk unlanded bytes. Branch moe/work-2026-09-10; HEAD d48d6d077d62b4cd5bff304caa3aba4c0cad14c9. All three owned paths are clean. No source edits, tests, build, git mutation, or step completion performed. Governor notified; six outage-held rows and peer WIP untouched. A fresh wrapper that claims this already-approved row before launching its CLI can implement it safely without first fixing the bug. Restore to claimable only for that bound seat.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-09-11T12:13:46.197Z"
 }

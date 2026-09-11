@@ -14,13 +14,68 @@
     "Do not weaken or bypass the existing verification-evidence validation in util/enforcement.ts.",
     "The refusal must be retryable and clearly worded; a wrapper reading it must not treat it as a fatal error."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE PREREQUISITE WIRING AND THE TWO SEAMS (read-only, no edits). The attempt lifecycle sibling task-b6c48bf029bf4170a603a91c12451df7 was already implemented in the working tree at planning time, so confirm what actually landed before building on it: `git log --oneline --grep 'Moe-Task: task-b6c48bf029bf4170a603a91c12451df7'` and read the attempt imports at the top of src/tools/claimNextTask.ts. Expect `closeOpenAttempts`, `currentAttempt` and `openAttempt` from state/attemptStore.js, an attempt opened AFTER the assignment write, and the claim result carrying flat `attemptId` and `generation` keys. Mirror that naming; do not invent a nested attempt object. Read src/tools/completeTask.ts end to end — it is only 183 lines. Note the ordering that matters: every assertion (`assertWorkerOwns`, `assertAllStepsCompleted`, `assertVerificationEvidence`, the branch policy check) runs BEFORE `updateTask` precisely so a rejection leaves the task untouched in WORKING, the single `updateTask` to REVIEW implicitly clears `assignedWorkerId` on the WORKING-to-REVIEW handoff (there is no explicit unassign line here, which is why the sibling's release-path closing never fires on this tool), `touchWorker` then idles the worker, and the returned nextAction currently points at `moe.wait_for_task` — the exact invitation this task must remove. Read src/util/claimGuards.ts for the refusal vocabulary already in use (`STEP_LEASE_HELD`, `CLAIM_LOST_RACE`, `RELEASE_NOT_ASSIGNEE`) and note the module is deliberately pure, importing no StateManager. Finally, find the existing one-task-per-worker refusal in claimNextTask.ts that returns `hasNext:false` with `alreadyAssigned`: that non-throwing shape is the retryable idiom wrappers already handle, and a task rail requires the new refusal to be retryable rather than fatal. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING CASES FIRST AND CAPTURE RED PROOF. Extend the two test files named in this task's verification command, reusing the ToolTestHarness fixtures those files already use. In src/tools/completeTask.test.ts add: completing a task whose attempt is open leaves that attempt present and moves it to the finalizing phase, asserted as the exact phase string rather than as not-closed; the same call's returned nextAction names no tool that claims or waits for another task, asserted by checking the tool field is absent rather than by matching a message; the response surfaces the finalizing attempt id and generation using the same flat key names the claim result uses; a task with NO attempt at all (a row predating the feature) completes exactly as it does today with no error handling path triggered; and a completion that fails validation writes no phase change, proven by asserting the attempt is still in the running phase after the rejection. In src/tools/claimNextTask.test.ts add: a worker holding a finalizing attempt is refused with `hasNext:false`, a stable code name and a payload naming that attempt's id, generation and task, and crucially throws nothing, since a task rail requires the refusal to be retryable and not fatal; the refusal happens before any assignment, proven by asserting no task changed owner; a worker whose only attempts are closed claims normally; a finalizing attempt belonging to a DIFFERENT worker does not block this one; and once that attempt reaches the closed phase the same worker claims successfully, which is the retry the refusal promises. Run `npx vitest run src/tools/completeTask.test.ts src/tools/claimNextTask.test.ts` from packages/moe-daemon and SAVE the failing output — the epic rail requires a test that fails on the old behavior. Existing assertions in these files that pin the old `moe.wait_for_task` nextAction must be UPDATED to the new contract, never deleted or loosened.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "HOLD THE ATTEMPT IN FINALIZING INSTEAD OF LEAVING IT RUNNING. In src/tools/completeTask.ts, after every existing assertion passes and BEFORE the `updateTask` that moves the task to REVIEW, look up the task's current attempt with `currentAttempt` and, when one exists, move it to the finalizing phase through the store's `setAttemptPhase`. The ordering is the whole point and needs a comment saying so: the REVIEW transition is what frees the worker, so an attempt still in the running phase at that instant is exactly the window where a session starts task B while task A's bytes are unlanded. Doing it first means a later failure leaves a conservatively finalizing attempt on a still-WORKING task, which blocks only that worker's next claim and is repaired by its own retry — the opposite ordering would leave a freed worker with a running attempt, which is the defect. State plainly in the comment that this is not a cross-entity transaction and promises no rollback. A task with no attempt is a legacy row: skip silently, never throw, since rows created before attempts existed must keep completing. Then change the returned nextAction: when an attempt was moved to finalizing, return an object carrying only a reason that tells the worker to record its handoff note and exit so the wrapper can land the bytes, with no tool or args keys at all, because naming any claim or wait tool is the invitation this task exists to remove. Surface the attempt id and generation on the response using the same flat key names the claim result uses. Leave the verification-evidence validation, the completed-step check, the REVIEW transition, completionSummary persistence, the branch policy block and the chat post exactly as they are.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "REFUSE A CODING CLAIM WHILE THAT WORKER HAS AN ATTEMPT FINALIZING. Add one exported code-name constant to src/util/claimGuards.ts beside the existing refusal names, with a short comment explaining that the seat is not free until the boundary is acknowledged. Keep that module pure: it imports no StateManager today and must not start, so the lookup itself lives in the claim tool. In src/tools/claimNextTask.ts, inside the exclusive section and alongside the existing one-task-per-worker check — before any ranking, eligibility scan or assignment write — scan the attempts for one belonging to this workerId in the finalizing phase, using the store's list function rather than reaching into the state map directly. When one is found, return the same non-throwing refusal shape the existing alreadyAssigned path uses: `hasNext:false`, the stable code name, and a payload naming the attempt id, its generation and its task, plus a clearly worded message and a nextAction explaining that the attempt must be acknowledged and that retrying afterwards is expected. Do NOT throw: a task rail requires a wrapper reading this to treat it as retryable rather than fatal, and the throwing refusals in this file are reserved for genuine races. Guard on the worker id being present, so a caller supplying none keeps today's behavior. Change nothing about claimable statuses, dependency gating, ranking, the alreadyAssigned resume or the attempt opening the sibling task added. Re-run the two named test files; every case from step 2 must now pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN THE NAMED GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run this task's own command first: `npx vitest run src/tools/completeTask.test.ts src/tools/claimNextTask.test.ts`. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the pre-change baseline. Watch two suites in particular: the completion tests, because the definition of done requires verification validation, the completed-step check, the REVIEW transition and completionSummary persistence to stay green, and the claim tests, because the sibling attempt wiring landed only just before this task and a regression there is easy to mistake for one of yours. If a failure belongs to the sibling's code rather than this change, say so explicitly rather than editing around it. Keep the exact commands, exit codes and counts for the `verification` argument of moe.complete_task, and keep the earlier red output as the fails-on-old-code proof.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: the phase moves to finalizing before the worker is freed, never after, so no window exists where a freed worker still holds a running attempt; a validation failure leaves no phase change behind; a legacy task with no attempt still completes; the attempt is left OPEN, not closed, since closing it here would silently hand the seat back and defeat the whole task; the claim refusal fires before any assignment write and returns rather than throws, so a wrapper treats it as retryable; the refusal names the attempt precisely enough for a human to act on; a finalizing attempt belonging to another worker never blocks this one; a caller with no worker id behaves exactly as before; and nothing weakened the verification-evidence validation that a task rail protects. Confirm the file count is exactly the five in scope, that no wrapper, git or process behavior was added to the daemon, and that the acknowledgement tool, the delivery-evidence gate on DONE and any heartbeat change were left entirely to their sibling tasks. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and summarize for QA: where the phase changes, what the new refusal looks like on the wire, and the honest boundary that nothing yet MOVES an attempt out of finalizing — until the sibling acknowledgement tool lands, a finalizing attempt is cleared only by a release, a deregister or the startup purge, so that is the current escape hatch and it should be named rather than hidden.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator asked for next architect work with an empty PLANNING column. Promoting the most dependency-ready Wave 1 root (depends only on task-b6c48bf0, planned 2026-09-11) so an idle architect seat can plan it. dependsOn still gates any WORKING claim.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -31,8 +86,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:19.867Z",
-  "updatedAt": "2026-09-11T09:56:55.373Z",
+  "updatedAt": "2026-09-11T12:12:43.620Z",
   "contextFetchedBy": [
     "architect-2d25447a"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T12:10:22.989Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T12:12:43.533Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Throwing a MoeError for the claim refusal, matching claimLostRace — rejected: a task rail requires the refusal to be retryable and not fatal to a wrapper, and this file already has the right idiom in the non-throwing alreadyAssigned response that wrappers handle by idling. Throwing refusals here are reserved for genuine races. (2) Moving the attempt to finalizing AFTER the REVIEW transition — rejected: the REVIEW write is what frees the worker, so an attempt still running at that instant is precisely the gap this task closes. Going first means a later failure leaves a conservatively finalizing attempt on a still-WORKING task, which blocks only that worker and is repaired by their retry. (3) Closing the attempt at complete_task and opening a new phase concept — rejected outright: closing hands the seat straight back, which is the defect. (4) Putting the attempt lookup helper in util/claimGuards.ts — rejected: that module is deliberately pure and imports no StateManager; only the code-name constant belongs there, the lookup stays in the tool. (5) Also guarding wait_for_task — out of scope: the definition of done constrains complete_task's own nextAction and the claim path, and widening to the waiter would touch a blocking tool for no stated requirement. (6) Keeping the old wait_for_task nextAction to avoid touching existing assertions — impossible: removing that invitation IS the second item of the definition of done, so those assertions get updated to the new contract rather than loosened.",
+    "codebaseInsights": "The sibling attempt-lifecycle task was already implemented in the working tree when this was planned, so claimNextTask.ts already imports closeOpenAttempts, currentAttempt and openAttempt, already opens the attempt AFTER the assignment write, and already returns flat attemptId and generation keys — mirror that naming. completeTask.ts is 183 lines with a deliberate ordering: all assertions run before the single updateTask so a rejection leaves the task in WORKING untouched, and that updateTask implicitly clears assignedWorkerId on the WORKING-to-REVIEW handoff. There is no explicit unassign statement in this tool, which is exactly why the sibling's four release-path closings never fire here and the attempt survives completion — the property this task depends on. touchWorker then idles the worker and never blocks a completed task. The attempt store exposes setAttemptPhase where closed is terminal, re-asserting the same phase is a documented no-op, and no fuller transition table is enforced, so running to finalizing needs no store change. currentAttempt returns the single non-closed attempt or null, so a legacy row simply yields null. util/claimGuards.ts holds the claim/release refusal vocabulary as exported string constants and is intentionally free of state imports.",
+    "risks": "The biggest trap is closing the attempt instead of holding it open: closed is terminal in the store, so a mistake there is unrecoverable for that attempt and silently restores the behavior this task removes. Assert the exact phase string in tests; a not-closed assertion passes against a still-running attempt and proves nothing. The claim refusal must be positioned before ranking and before the assignment write, or a refused claim could still have changed an owner. A finalizing attempt owned by another worker must not block this caller, and a caller with no worker id must keep today's behavior. Be aware of the current dead end and name it rather than hide it: until the sibling acknowledgement tool lands, nothing moves an attempt OUT of finalizing, so the only escape is a release, a deregister or the startup purge — which is acceptable for this slice but must be in the completion summary. Existing completion tests pin the old nextAction and must be updated to the new contract, not deleted. Finally, the sibling's code landed minutes before this work, so triage a claim-test failure carefully before assuming it is yours.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T12:12:43.620Z"
 }

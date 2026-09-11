@@ -135,8 +135,8 @@
       "completedAt": "2026-09-11T11:10:25.116Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -152,7 +152,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T11:42:17.850Z",
+  "updatedAt": "2026-09-11T12:16:05.875Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
@@ -165,7 +165,9 @@
     "firstClaimAt": "2026-09-11T09:54:58.086Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T12:16:05.875Z",
+    "wallClockMs": 8467789
   },
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -414,6 +416,51 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "360b1ef6bc745e7583acfd99c788c306df346045",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T11:57:18Z",
+      "paths": [
+        ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T11:57:25.854Z",
+      "treeId": "4315227de7e273c211baff5dc90b00fe66224d14",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-0d11e05fd60945029385c80e28da9e1f"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "b2061c8e47c04e7d776e026eddb2f2e83c93483c",
+      "ref": "moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:13:00Z",
+      "paths": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:15:33.690Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "docs(task-4d7074c001af47e881572e9efae30a41): document the Candidate record and moe.record_candidate [qa self-land]"
     }
   ],
   "filesModified": [
@@ -436,9 +483,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T11:42:11Z",
-    "at": "2026-09-11T11:42:17.850Z"
+    "kind": "completion",
+    "sessionId": "qa-8db40c97@2026-09-11T12:13:00Z",
+    "at": "2026-09-11T12:15:33.690Z"
   },
   "priorBlockedReason": "No verified task-bound wrapper delivery boundary for this session. Its supplied moe-codex-instructions-worker-53136.md (created 2026-09-11T10:10:55Z) explicitly says preflight had no claimable task; this CLI claimed the row only around 10:34Z after waiting. Existing task baseline is the PREVIOUS worker snapshot: at=2026-09-11T10:07:05Z head=792e4ced24dd2f720c289e874613a217def36266 landed=1. Read-only current wrapper inspection confirms scripts/moe-agent.ps1:4176 establishes baseline only under AutoClaim + preflightOk + preflightTaskId; :5015 runs postflight only for preflightTaskId. A mid-CLI claim does not bind those wrapper variables. Need a fresh correctly task-bound wrapper session, not a hand-created baseline or manual commit bypass.\n\nBoth source prerequisites are now DONE/landed=true/merged=true in get_context, and assertAttemptCurrent exists at enforcement.ts:148; the prior missing-guard blocker is resolved. No source edits, tests, or newly completed steps this session. All nine planned paths clean against measured HEAD 63ce15548ec89c5692c38b2c4792bf32bca36a4a on moe/work-2026-09-10. Step-1 remains COMPLETED; steps 2-7 remain PENDING. Resume at step-2 after fresh task preflight. Foreign WIP untouched. Current evidence added to existing Serena task handoff; governor notified and separate wrapper defect filed in chat. This block requires session relaunch, not a new source dependency.",
   "reviewStartedAt": "2026-09-11T11:11:13.568Z",
@@ -455,5 +502,8 @@
     "packages/moe-daemon/src/state/candidateStore.ts",
     "packages/moe-daemon/src/tools/recordCandidate.ts",
     "packages/moe-daemon/src/state/candidateStore.test.ts"
-  ]
+  ],
+  "completedAt": "2026-09-11T12:16:05.875Z",
+  "reviewCompletedAt": "2026-09-11T12:16:05.875Z",
+  "reviewSummary": "APPROVED. All 6 DoD items verified against landed bytes.\n\nQA RE-RAN (packages/moe-daemon):\n- npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts -> exit 0, 57 passed.\n- npm test -> exit 0, 1436 passed | 6 skipped (109 files).\n- npx tsc --noEmit -p tsconfig.json -> exit 0.\n\nDoD:\n1. Candidate at schema.ts:930 (id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt; no updatedAt). StateManager:373 map + :1049 loadEntities over .moe/candidates; one file per candidate via writeEntity.\n2. Registered index.ts:65 + :154. Handler calls assertAttemptCurrent BEFORE recordCandidate - read the handler; 4 superseded cases (stale id, stale generation, FUTURE generation, closed attempt) assert -32002/ATTEMPT_SUPERSEDED with a writeEntity spy proving nothing written.\n3. CANDIDATE_IMMUTABLE (-32002) per differing field with byte-level file compare; changed tree under a new id yields a second candidate, both persist. Byte-identical re-record returns the stored record, duplicate:true, original createdAt, writeEntity uncalled.\n4. listCandidatesForTask/ForAttempt tested, createdAt-then-id order.\n6. SCHEMA.md ## Candidate + validation rules; MCP_SERVER.md ### moe.record_candidate.\n\nRAILS: no update/patch/delete function EXISTS (grep + export-list test pinning exactly 5 exports). No child_process/spawn/exec (grep + source-grep test). Not blocking. Shas documented runner-REPORTED, shape-checked only.\n\nQA SELF-LAND: completion d408634 carried 8 code paths but skipped both docs as contested (peers task-7265e1fc, task-0d11e05f). Verified zero peer hunks: 46+49 insertions, 0 deletions, every added line inside the Candidate/record_candidate sections; task-7265e1fc all steps PENDING. Landed b2061c8 via temp-index + commit-tree + update-ref CAS (peers' index untouched), recorded via record_commit. Working tree == HEAD for all 9 task paths."
 }
