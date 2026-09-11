@@ -15,6 +15,24 @@
  */
 import type { ProviderDescriptor } from './providerDescriptor.js';
 
+/**
+ * The four launch invocations, verbatim. These are the strongest evidence the
+ * scripts can give without a print-argv mode: each one is a whole command line,
+ * so dropping a single token from one mode breaks its literal. The bash pair is
+ * written with its line continuations already joined, which is how the contract
+ * test views moe-agent.sh.
+ */
+const BASH_LAUNCH_INTERACTIVE =
+  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" -C "$PROJECT" "$SHORT_PROMPT"';
+const BASH_LAUNCH_EXEC =
+  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
+const PS_LAUNCH_INTERACTIVE = '& $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"';
+const PS_LAUNCH_EXEC =
+  '& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
+/** PowerShell builds the per-seat overrides once and splats them into both launches. */
+const PS_SEAT_ARG_WORKER_ID = '$codexSeatArgs += @(\'-c\', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")';
+const PS_SEAT_ARG_INSTRUCTIONS = "$codexSeatArgs += @('-c', \"model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\\', '/'))\")";
+
 export const CODEX_DESCRIPTOR: ProviderDescriptor = {
   providerId: 'codex',
   cliTypeToken: { agreement: 'shared', value: 'codex', presentInBoth: ['"codex"'] },
@@ -76,12 +94,14 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
         agreement: 'shared',
         value: ['-c', 'model_instructions_file=<seat file>', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=<workerId>', '-C', '<project>', '<prompt>'],
         presentInBoth: ['model_instructions_file=', 'mcp_servers.moe.env.MOE_WORKER_ID='],
+        emitterEvidence: { bash: [BASH_LAUNCH_INTERACTIVE], powershell: [PS_LAUNCH_INTERACTIVE] },
       },
       'exec-headless': {
         agreement: 'shared',
         // `[--sandbox <mode>]` is the scripts' own notation: MOE_CODEX_SANDBOX=inherit omits the flag.
         value: ['-c', 'model_instructions_file=<seat file>', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=<workerId>', '-c', 'approvals_reviewer=user', 'exec', '-C', '<project>', '[--sandbox <mode>]', '<prompt>'],
         presentInBoth: ['approvals_reviewer=user', 'exec -C', '--sandbox'],
+        emitterEvidence: { bash: [BASH_LAUNCH_EXEC], powershell: [PS_LAUNCH_EXEC] },
       },
     },
     perSeatOverrides: [
@@ -90,12 +110,27 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
         bash: '-c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE (raw path, always emitted)',
         powershell: '-c model_instructions_file=<path, backslashes replaced by forward slashes> (emitted only when the seat-file variable is set)',
         onlyInBash: ['model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE'],
-        onlyInPowershell: ["CodexSeatInstructionsFile.Replace('\\', '/')", 'if ($script:CodexSeatInstructionsFile) {'],
+        onlyInPowershell: [PS_SEAT_ARG_INSTRUCTIONS, 'if ($script:CodexSeatInstructionsFile) {'],
         divergenceReason:
           'Same flag, different value and different emission rule: PowerShell forward-slashes the path and emits the override conditionally, bash passes it verbatim and unconditionally.',
       },
-      { agreement: 'shared', value: '-c mcp_servers.moe.env.MOE_WORKER_ID=<workerId>', presentInBoth: ['mcp_servers.moe.env.MOE_WORKER_ID='] },
-      { agreement: 'shared', value: '-c approvals_reviewer=user (exec mode only)', presentInBoth: ['approvals_reviewer=user'] },
+      {
+        agreement: 'shared',
+        value: '-c mcp_servers.moe.env.MOE_WORKER_ID=<workerId>',
+        presentInBoth: ['mcp_servers.moe.env.MOE_WORKER_ID='],
+        // bash repeats the override inline at each launch, so both modes are
+        // pinned separately; PowerShell appends it once to the splatted array.
+        emitterEvidence: { bash: [BASH_LAUNCH_INTERACTIVE, BASH_LAUNCH_EXEC], powershell: [PS_SEAT_ARG_WORKER_ID] },
+      },
+      {
+        agreement: 'shared',
+        value: '-c approvals_reviewer=user (exec mode only)',
+        presentInBoth: ['approvals_reviewer=user'],
+        emitterEvidence: {
+          bash: ['CODEX_EXEC_OVERRIDES=(-c approvals_reviewer=user)'],
+          powershell: ["$codexExecOverrides = @('-c', 'approvals_reviewer=user')"],
+        },
+      },
     ],
     forbiddenTokens: [
       {
@@ -127,10 +162,36 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
 
   config: {
     format: 'toml',
-    pathFragments: { agreement: 'shared', value: ['.codex', 'config.toml'], presentInBoth: ['.codex', 'config.toml'] },
+    pathFragments: {
+      agreement: 'shared',
+      value: ['.codex', 'config.toml'],
+      presentInBoth: ['.codex', 'config.toml'],
+      emitterEvidence: {
+        bash: ['CODEX_CONFIG_DIR="$PROJECT/.codex"', 'CODEX_CONFIG_FILE="$CODEX_CONFIG_DIR/config.toml"'],
+        powershell: ['$codexConfigDir = Join-Path $projectPath ".codex"', '$codexConfigFile = Join-Path $codexConfigDir "config.toml"'],
+      },
+    },
     topLevelKeys: [
-      { agreement: 'shared', value: 'model_instructions_file = "agent-instructions.md"', presentInBoth: ['model_instructions_file = "agent-instructions.md"'] },
-      { agreement: 'shared', value: 'model_reasoning_effort', presentInBoth: ['model_reasoning_effort'] },
+      {
+        agreement: 'shared',
+        value: 'model_instructions_file = "agent-instructions.md"',
+        presentInBoth: ['model_instructions_file = "agent-instructions.md"'],
+        emitterEvidence: {
+          // The bare key also occurs in each wrapper's merge filter, which strips
+          // the previous run's line; only the emitter carries these forms.
+          bash: ['\'model_instructions_file = "agent-instructions.md"\','],
+          powershell: ['$topLevelConfig = @"\nmodel_instructions_file = "agent-instructions.md"'],
+        },
+      },
+      {
+        agreement: 'shared',
+        value: 'model_reasoning_effort',
+        presentInBoth: ['model_reasoning_effort'],
+        emitterEvidence: {
+          bash: ["'model_reasoning_effort = ' + json.dumps(reasoning_effort),"],
+          powershell: ['model_reasoning_effort = "$codexReasoningEffort"'],
+        },
+      },
       {
         agreement: 'divergent',
         bash: 'developer_instructions = """<the sentence on one line>"""',
@@ -140,21 +201,94 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
         divergenceReason:
           'Same key and same sentence, different bytes: the PowerShell here-string wraps the value in literal newlines. Harmless today, but it means the config the two wrappers write is not byte-identical.',
       },
-      { agreement: 'shared', value: 'project_doc_fallback_filenames includes .codex/agent-instructions.md', presentInBoth: ['project_doc_fallback_filenames', '.codex/agent-instructions.md'] },
+      {
+        // Both wrappers emit the same two-entry list into a FRESH config. The
+        // merge fix-up applied to an EXISTING config is what diverges, so this
+        // is a divergent fact even though the key and the target value match --
+        // the same keys-match/values-drift trap as the TOML encoding entry below.
+        agreement: 'divergent',
+        bash: 'fresh config gets ["CLAUDE.md", ".codex/agent-instructions.md"]; on merge, ONLY the exact string project_doc_fallback_filenames = ["CLAUDE.md"] is rewritten',
+        powershell: 'fresh config gets the same list; on merge, a regex rewrites ANY list containing "CLAUDE.md"',
+        onlyInBash: ['\'project_doc_fallback_filenames = ["CLAUDE.md"]\',', 'content_str = content_str.replace('],
+        onlyInPowershell: ['(project_doc_fallback_filenames\\s*=\\s*\\[.*?)"CLAUDE\\.md"(.*?\\])'],
+        divergenceReason:
+          'Simulated over three existing configs. On the canonical project_doc_fallback_filenames = ["CLAUDE.md"] the two agree. On ["CLAUDE.md", "AGENTS.md"] and on a no-space project_doc_fallback_filenames=["CLAUDE.md"], PowerShell adds .codex/agent-instructions.md to both while bash matches neither and leaves them untouched -- so on any config not written in exactly the canonical form, a codex seat launched by the bash wrapper never picks up the agent instructions doc while its PowerShell twin does.',
+      },
     ],
     tables: [
-      { agreement: 'shared', value: '[mcp_servers.moe]', presentInBoth: ['[mcp_servers.moe]'] },
-      { agreement: 'shared', value: '[mcp_servers.moe.env]', presentInBoth: ['[mcp_servers.moe.env]'] },
-      { agreement: 'shared', value: '[mcp_servers.serena]', presentInBoth: ['[mcp_servers.serena]'] },
+      {
+        agreement: 'shared',
+        value: '[mcp_servers.moe]',
+        presentInBoth: ['[mcp_servers.moe]'],
+        // The bash merge filter repeats every table name as a startswith()
+        // argument IN THE SAME BRANCH, so only the quoted-with-comma emitter
+        // form pins it there. PowerShell's filter uses escaped regexes, so its
+        // bare header is already emitter-unique.
+        emitterEvidence: { bash: ['"[mcp_servers.moe]",'], powershell: ['[mcp_servers.moe]'] },
+      },
+      {
+        agreement: 'shared',
+        value: '[mcp_servers.moe.env]',
+        presentInBoth: ['[mcp_servers.moe.env]'],
+        emitterEvidence: { bash: ['"[mcp_servers.moe.env]",'], powershell: ['[mcp_servers.moe.env]'] },
+      },
+      {
+        agreement: 'shared',
+        value: '[mcp_servers.serena]',
+        presentInBoth: ['[mcp_servers.serena]'],
+        emitterEvidence: { bash: ['"[mcp_servers.serena]",'], powershell: ['[mcp_servers.serena]'] },
+      },
     ],
     values: [
-      { agreement: 'shared', value: 'startup_timeout_sec, default 120', presentInBoth: ['startup_timeout_sec', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC'] },
-      { agreement: 'shared', value: 'default_tools_approval_mode = "approve" on both servers', presentInBoth: ['default_tools_approval_mode = "approve"'] },
-      { agreement: 'shared', value: 'serena argv, headless and pinned to the project', presentInBoth: ['"start-mcp-server", "--context", "codex", "--project"'] },
-      { agreement: 'shared', value: 'model_reasoning_effort default xhigh', presentInBoth: ['MOE_CODEX_REASONING_EFFORT', 'xhigh'] },
+      {
+        agreement: 'shared',
+        value: 'startup_timeout_sec, default 120',
+        presentInBoth: ['startup_timeout_sec', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC'],
+        // bash names a python variable startup_timeout_sec one line above the
+        // append, so the bare key survives deleting the emitter.
+        emitterEvidence: {
+          bash: ["moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)"],
+          powershell: ['startup_timeout_sec = $codexMcpStartupTimeout'],
+        },
+      },
+      {
+        agreement: 'shared',
+        value: 'default_tools_approval_mode = "approve" on both servers',
+        presentInBoth: ['default_tools_approval_mode = "approve"'],
+        // Two emission sites per wrapper (the moe server and the serena server);
+        // each literal below pins exactly one of them.
+        emitterEvidence: {
+          bash: ['moe_block_lines.append(\'default_tools_approval_mode = "approve"\')', '\'default_tools_approval_mode = "approve"\','],
+          powershell: [
+            'startup_timeout_sec = $codexMcpStartupTimeout\ndefault_tools_approval_mode = "approve"',
+            '"--enable-gui-log-window", "false"]\ndefault_tools_approval_mode = "approve"',
+          ],
+        },
+      },
+      {
+        agreement: 'shared',
+        value: 'serena argv, headless and pinned to the project',
+        presentInBoth: ['"start-mcp-server", "--context", "codex", "--project"'],
+        emitterEvidence: {
+          bash: ['\'args = \' + json.dumps(["start-mcp-server", "--context", "codex", "--project", serena_project,'],
+          powershell: ['args = ["start-mcp-server", "--context", "codex", "--project", "$serenaProjectForToml", "--enable-web-dashboard", "false", "--enable-gui-log-window", "false"]'],
+        },
+      },
+      {
+        agreement: 'shared',
+        value: 'model_reasoning_effort default xhigh',
+        presentInBoth: ['MOE_CODEX_REASONING_EFFORT', 'xhigh'],
+        emitterEvidence: {
+          bash: ['"${MOE_CODEX_REASONING_EFFORT:-xhigh}"', 'reasoning_effort = sys.argv[8] if len(sys.argv) > 8 else "xhigh"'],
+          powershell: ['$codexReasoningEffort = if ($env:MOE_CODEX_REASONING_EFFORT) { $env:MOE_CODEX_REASONING_EFFORT } else { "xhigh" }'],
+        },
+      },
       {
         agreement: 'divergent',
-        bash: 'every TOML string value is escaped through json.dumps',
+        // Not "every string value": developer_instructions interpolates the role
+        // into the bash here-doc raw (it is validated against a fixed set at
+        // parse time, so it is not operator-controlled at this point).
+        bash: 'every operator-controlled TOML string value is escaped through json.dumps',
         powershell: 'values are interpolated raw into a here-string (paths are forward-slashed first)',
         onlyInBash: ["'model_reasoning_effort = ' + json.dumps(reasoning_effort)"],
         onlyInPowershell: ['model_reasoning_effort = "$codexReasoningEffort"'],
@@ -172,9 +306,32 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
       },
     ],
     envKeys: [
-      { agreement: 'shared', value: 'MOE_PROJECT_PATH', presentInBoth: ['MOE_PROJECT_PATH'] },
-      { agreement: 'shared', value: 'MOE_WORKER_ID', presentInBoth: ['MOE_WORKER_ID'] },
-      { agreement: 'shared', value: 'MOE_DAEMON_HOST', presentInBoth: ['MOE_DAEMON_HOST'] },
+      {
+        agreement: 'shared',
+        value: 'MOE_PROJECT_PATH, written into [mcp_servers.moe.env] by the config writer',
+        presentInBoth: ['MOE_PROJECT_PATH'],
+        emitterEvidence: {
+          bash: ["'MOE_PROJECT_PATH = ' + json.dumps(project_path),"],
+          powershell: ['MOE_PROJECT_PATH = "$projectPathForToml"$moeDaemonHostLine'],
+        },
+      },
+      {
+        agreement: 'shared',
+        // Reaches the same table, but never through the file: the config is
+        // shared by every seat on the project, so the workerId rides argv.
+        value: 'MOE_WORKER_ID, delivered per seat on argv as -c mcp_servers.moe.env.MOE_WORKER_ID=<workerId>, never written into the config file',
+        presentInBoth: ['mcp_servers.moe.env.MOE_WORKER_ID='],
+        emitterEvidence: { bash: [BASH_LAUNCH_INTERACTIVE, BASH_LAUNCH_EXEC], powershell: [PS_SEAT_ARG_WORKER_ID] },
+      },
+      {
+        agreement: 'shared',
+        value: 'MOE_DAEMON_HOST, written only when it is already set in the environment',
+        presentInBoth: ['MOE_DAEMON_HOST'],
+        emitterEvidence: {
+          bash: ['moe_block_lines.append(\'MOE_DAEMON_HOST = \' + json.dumps(os.environ["MOE_DAEMON_HOST"]))'],
+          powershell: ['$moeDaemonHostLine = if ($env:MOE_DAEMON_HOST) {'],
+        },
+      },
     ],
     ownedSections: {
       agreement: 'divergent',
@@ -189,19 +346,19 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
       agreement: 'divergent',
       bash: 'command = the resolved node path or the proxy binary; the args line is OMITTED entirely when the proxy is a direct executable',
       powershell: 'command = "node" is hardcoded and args is always emitted',
-      onlyInBash: ['TOML_PROXY_CMD'],
-      onlyInPowershell: ['command = "node"'],
+      onlyInBash: ['TOML_PROXY_CMD', "'command = ' + json.dumps(proxy_cmd),", "moe_block_lines.append('args = ' + json.dumps([proxy_args]))"],
+      onlyInPowershell: ['command = "node"', 'args = ["$proxyScriptForToml"]'],
       divergenceReason:
         'The bash writer resolves the proxy command; the PowerShell writer hardcodes node. The two wrappers can emit structurally different [mcp_servers.moe] blocks for the same project.',
     },
     daemonHostUpsert: {
       agreement: 'divergent',
-      bash: 'after daemon-host discovery, upserts MOE_DAEMON_HOST into [mcp_servers.moe.env] so the written config stays self-contained on WSL runs',
-      powershell: 'no post-discovery upsert; only a pre-set MOE_DAEMON_HOST reaches the file',
+      bash: 'discovers a daemon host across the WSL boundary and, after discovery, upserts MOE_DAEMON_HOST into [mcp_servers.moe.env] so the written config stays self-contained',
+      powershell: 'no discovery step and no upsert; MOE_DAEMON_HOST reaches the file only when it is already set in the environment at writer time',
       onlyInBash: ['DAEMON_HOST_TOML_FILE'],
       onlyInPowershell: ['$moeDaemonHostLine'],
       divergenceReason:
-        'The TOML writer runs BEFORE daemon-host probing in both wrappers, but only the bash wrapper rewrites the file afterwards. A PowerShell run that discovers the host at probe time leaves it out of the config.',
+        'A FEATURE ASYMMETRY, not a latent PowerShell bug -- checked, because the first transcription got this wrong. moe-agent.ps1 never assigns MOE_DAEMON_HOST; it only reads it (once for codex, once for grok). The only discovery anywhere is the bash cross-boundary probe, which exports the candidate it reaches, and the upsert exists to persist exactly that. A PowerShell run that discovers a host at probe time cannot happen. Both wrappers do write a PRE-SET host, identically. So there is no winner to pick here -- but a registry would still have to model "this launcher has a step the other does not", which no single value can express.',
     },
   },
 
@@ -248,12 +405,19 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
     },
     seatInstructionsCleanup: {
       agreement: 'divergent',
-      bash: 'removed immediately after the CLI returns, and again by the EXIT trap',
+      // Transcribed from the code, NOT from the comment above it. The comment at
+      // the rm -f site claims the EXIT trap also removes the secure temp
+      // directory; it does not. create_secure_temp is only ever called inside
+      // $(...), so SECURE_TEMP_DIR never reaches the parent shell and
+      // cleanup_temp's rm -rf is a no-op against an empty path. Fixing that leak
+      // is out of scope here (it would edit a launcher); recording what the code
+      // does rather than what it claims is the point.
+      bash: 'the seat file is removed by an explicit rm -f after the CLI returns; the enclosing mktemp directory is NOT removed, despite the comment claiming the EXIT trap gets it',
       powershell: 'left in TEMP; no per-iteration removal',
       onlyInBash: ['rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE"'],
       onlyInPowershell: ['$script:CodexSeatInstructionsFile = Join-Path'],
       divergenceReason:
-        'Only the bash wrapper deletes the seat context file between iterations, so a long-running PowerShell wrapper leaves prior task context on disk.',
+        'Only the bash wrapper deletes the seat context file between iterations, so a long-running PowerShell wrapper leaves prior task context on disk. Neither wrapper cleans up the directory it wrote the file into.',
     },
     argvQuoteGuard: {
       agreement: 'divergent',
@@ -275,6 +439,13 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
           agreement: 'shared',
           value: ['the real argv plus --help, probed once per wrapper process', 'a nonzero exit whose output matches the clap parse-error vocabulary'],
           presentInBoth: ['--help', 'unexpected argument|unrecognized subcommand|unexpected value'],
+          // The probe is the THIRD site carrying the per-seat -c overrides in
+          // bash (the two launches are the others); pin it so a change there
+          // cannot slip past the per-mode launch literals.
+          emitterEvidence: {
+            bash: ['-c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
+            powershell: ['(& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
+          },
         },
         escalation: {
           agreement: 'shared',

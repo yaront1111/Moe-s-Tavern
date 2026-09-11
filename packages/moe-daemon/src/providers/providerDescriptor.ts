@@ -38,11 +38,22 @@ export const WRAPPER_FILES = {
 
 export type WrapperId = keyof typeof WRAPPER_FILES;
 
-/** A fact both launchers build identically. `presentInBoth` must appear in BOTH files. */
+/**
+ * A fact both launchers build identically. `presentInBoth` must appear in BOTH files.
+ *
+ * `presentInBoth` alone is a WEAK pin, measured so on 2026-09-11: the bash codex
+ * writer's merge filter repeats its own table headers as `startswith` arguments
+ * and names a python variable after a TOML key, so deleting the line that
+ * actually EMITS `[mcp_servers.moe]` left a site-scoped presence check green.
+ * `emitterEvidence` is the fix: per-wrapper literals that only the emitting line
+ * can satisfy. The contract test REQUIRES it for every fact the scripts emit
+ * into a config file or onto argv, and proves it by deleting each emitter.
+ */
 export interface SharedFact<T> {
   readonly agreement: 'shared';
   readonly value: T;
   readonly presentInBoth: readonly string[];
+  readonly emitterEvidence?: Readonly<Record<WrapperId, readonly string[]>>;
 }
 
 /**
@@ -100,8 +111,20 @@ export interface ForbiddenToken {
 export interface ArgvFacet {
   /**
    * Argv tokens keyed by SessionModeSpec.id. Order is transcribed for the
-   * reader; the contract test proves PRESENCE only, because no wrapper has a
-   * dry-run or print-argv mode to ask for the real command line.
+   * reader; no wrapper has a dry-run or print-argv mode, so the contract test
+   * cannot compare a real command line.
+   *
+   * What it CAN do, and does: each mode's `emitterEvidence` is the wrapper's
+   * whole launch invocation as one literal (bash line continuations joined), so
+   * dropping a single `-c` from one mode turns the suite red. That is text
+   * matching on the exact source line, not argv equality -- it proves the
+   * scripts still SAY this, never that codex RECEIVES it.
+   *
+   * Note an asymmetry the pin makes visible: bash repeats the per-seat `-c`
+   * overrides inline at each launch site, so its two modes are independently
+   * pinned. PowerShell builds one `$codexSeatArgs` array and splats it into
+   * both launches, so a deletion there necessarily hits both modes at once --
+   * not a blind spot, just the shape of that file.
    */
   readonly tokensByMode: Readonly<Record<string, WrapperFact<readonly string[]>>>;
   /** Per-seat `-c key=value` overrides passed on argv, not through the config file. */

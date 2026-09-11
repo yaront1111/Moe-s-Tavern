@@ -24,7 +24,24 @@
  *   deleted. Presence is checked only inside the codex branches, except for
  *   the facts in GLOBAL_FACT_PATHS. Absence is still checked against the whole
  *   other file, the stronger direction.
+ * - Emitter-pinned: site scoping alone was ALSO measured too weak. The bash
+ *   codex writer's merge filter repeats its own table headers as `startswith`
+ *   arguments and names a python variable after a TOML key, all inside the same
+ *   branch, so deleting the line that actually emits `[mcp_servers.moe]` (or the
+ *   startup_timeout_sec append) left the earlier version of this suite green.
+ *   Every fact under EMITTER_PINNED_PREFIXES must therefore carry per-wrapper
+ *   `emitterEvidence` -- literals only the emitting line can satisfy -- and that
+ *   requirement is itself asserted, so a new config fact cannot skip it.
  * - Descriptor `value` prose is never asserted; only evidence literals are.
+ *
+ * WHAT IS PINNED ONLY WEAKLY, stated rather than hidden (see UNPINNED_NOTES):
+ * bash repeats the per-seat `-c` overrides at three sites (two launches and the
+ * argv probe), each pinned separately; PowerShell appends them once to a splatted
+ * array, so a PowerShell deletion necessarily hits both modes together. Facts
+ * outside EMITTER_PINNED_PREFIXES -- session-mode banners, the sandbox
+ * vocabulary, resume, the failure escalation text -- are pinned by site presence
+ * only, which is enough while each of those literals occurs once per branch, and
+ * is not claimed to be more than that.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
@@ -66,6 +83,25 @@ const GLOBAL_FACT_PATHS: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Facts whose evidence must be pinned to the EMITTING line, not merely present
+ * in the branch. Everything the wrappers write into a config file or put on
+ * argv: those are the facts a migration would have to reproduce exactly, and
+ * the ones the merge filters' repeated headers were hiding.
+ */
+const EMITTER_PINNED_PREFIXES = ['config.', 'argv.tokensByMode.', 'argv.perSeatOverrides'] as const;
+
+/**
+ * Honest disclosure of what the emitter pin does NOT reach. These are claims
+ * about the scripts' shape, so no assertion can verify them; the test below only
+ * keeps them present and non-trivial, so the caveat cannot be quietly dropped
+ * while the suite stays green. Repeated in the decision note.
+ */
+const UNPINNED_NOTES = [
+  'PowerShell builds one $codexSeatArgs array and splats it into both launches, so its two modes cannot be pinned independently -- a token dropped there is caught, but not attributed to a mode.',
+  'Facts outside EMITTER_PINNED_PREFIXES (banners, sandbox vocabulary, resume, escalation text) are pinned by branch presence only.',
+] as const;
+
+/**
  * Full-line comments only. Both shells use `#`, and moe-agent.ps1 has no `<# #>`
  * block comments (asserted below). Trailing inline comments survive -- a known,
  * stated weakness.
@@ -75,6 +111,16 @@ function stripFullLineComments(source: string): string {
     .split(/\r?\n/)
     .filter((line) => !/^\s*#/.test(line))
     .join('\n');
+}
+
+/**
+ * bash splits a launch invocation over four lines with `\` continuations. Join
+ * them so the whole command line is one matchable string and a dropped `-c`
+ * breaks it. PowerShell's launches are already single lines, so its view is left
+ * alone rather than run through a transform that could only add false matches.
+ */
+function joinBashContinuations(source: string): string {
+  return source.replace(/[ \t]*\\\r?\n[ \t]*/g, ' ');
 }
 
 function loadWrapper(id: WrapperId): string {
@@ -110,7 +156,13 @@ function buildView(id: WrapperId): WrapperView {
     siteLines.push(...all.slice(i, j));
     i = j - 1;
   }
-  return { raw, code: stripFullLineComments(raw), site: stripFullLineComments(siteLines.join('\n')), branchSpans };
+  const normalize = id === 'bash' ? joinBashContinuations : (s: string) => s;
+  return {
+    raw,
+    code: normalize(stripFullLineComments(raw)),
+    site: normalize(stripFullLineComments(siteLines.join('\n'))),
+    branchSpans,
+  };
 }
 
 const views: Record<WrapperId, WrapperView> = { bash: buildView('bash'), powershell: buildView('powershell') };
@@ -208,9 +260,15 @@ describe('provider descriptor contract: every DoD facet is populated', () => {
 
   it('collected a meaningful number of facts from the descriptor tree', () => {
     // A walker that silently found nothing would make this whole file vacuous.
+    // 30 shared / 14 divergent / 3 unsupported as transcribed on 2026-09-11.
     expect(shared.length).toBeGreaterThanOrEqual(25);
-    expect(divergent.length).toBeGreaterThanOrEqual(12);
+    expect(divergent.length).toBeGreaterThanOrEqual(14);
     expect(unsupported.length).toBe(3);
+  });
+
+  it('states, rather than hides, what the emitter pin does not reach', () => {
+    expect(UNPINNED_NOTES.length).toBeGreaterThan(0);
+    for (const note of UNPINNED_NOTES) expect(note.length).toBeGreaterThan(40);
   });
 });
 
@@ -229,6 +287,62 @@ describe('provider descriptor contract: shared facts appear in BOTH launchers', 
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it('every emitted fact declares per-wrapper emitter evidence, and that evidence is at the emitting line', () => {
+    // presentInBoth alone stayed green when the line that actually writes the
+    // value was deleted. This is the assertion that closed that hole; the
+    // delete-the-emitter mutations in the decision note are its proof.
+    const problems: string[] = [];
+    let checked = 0;
+    for (const { path: at, fact } of shared) {
+      if (!EMITTER_PINNED_PREFIXES.some((prefix) => at.startsWith(prefix))) continue;
+      const evidence = fact.emitterEvidence;
+      if (!evidence) {
+        problems.push(`${at} writes a value but declares no emitterEvidence -- branch presence is not enough here`);
+        continue;
+      }
+      for (const id of WRAPPER_IDS) {
+        const literals = evidence[id] ?? [];
+        if (literals.length === 0) {
+          problems.push(`${at} declares no emitterEvidence for ${WRAPPER_FILES[id]}`);
+          continue;
+        }
+        for (const literal of literals) {
+          checked++;
+          // Long enough that it cannot be a bare key the merge filter repeats.
+          if (literal.length < 12) problems.push(`${at}: emitter literal ${JSON.stringify(literal)} is too short to pin an emission`);
+          if (!views[id].site.includes(literal)) {
+            problems.push(`${at}: emitter literal ${JSON.stringify(literal)} absent from the codex branches of ${WRAPPER_FILES[id]}`);
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+    expect(checked, 'no emitter evidence was checked at all -- the prefix filter matched nothing').toBeGreaterThanOrEqual(30);
+  });
+
+  it('pins each session mode to its own whole launch invocation', () => {
+    // Without this, a -c deleted from one mode is covered by the other mode's
+    // copy of the same token. The literal is the command line as written.
+    const byMode = CODEX_DESCRIPTOR.argv.tokensByMode;
+    expect(Object.keys(byMode).sort()).toEqual(['exec-headless', 'interactive-tui']);
+    const seen = new Set<string>();
+    for (const [modeId, fact] of Object.entries(byMode)) {
+      expect(fact.agreement, `${modeId} argv must be a wrapper fact`).not.toBe('unsupported');
+      const evidence = fact.agreement === 'shared' ? fact.emitterEvidence : undefined;
+      expect(evidence, `${modeId} declares no launch invocation`).toBeDefined();
+      for (const id of WRAPPER_IDS) {
+        for (const literal of evidence?.[id] ?? []) {
+          // A launch literal shared by two modes would prove nothing about either.
+          expect(seen.has(`${id}:${literal}`), `${modeId} reuses another mode's ${id} launch literal`).toBe(false);
+          seen.add(`${id}:${literal}`);
+          expect(literal, `${modeId} ${id} launch literal is not a command line`).toContain('$');
+        }
+      }
+    }
+    // bash: two launches; PowerShell: two launches. One literal each.
+    expect(seen.size).toBe(4);
   });
 });
 
