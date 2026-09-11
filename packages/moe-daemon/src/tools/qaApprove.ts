@@ -15,7 +15,7 @@ function commitEvidenceEntry(c: TaskCommit) {
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits after reviewStartedAt, the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -61,16 +61,29 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
       // Soft commit gate. A completion commit counts only when recorded at or
-      // after reviewStartedAt (stamped by complete_task, cleared by reopen), so
-      // a stale attempt-#1 commit can never satisfy attempt #2. Warn-only: the
-      // wrapper lands the commit seconds AFTER complete_task, so a fast QA in
-      // SPEED/TURBO can legitimately arrive first; blocking here would wedge
-      // every approval on a race. Both ISO strings come from toISOString(), so
-      // the lexicographic compare is exact.
+      // after the start of the CURRENT work round, so a stale attempt-#1 commit
+      // can never satisfy attempt #2. Warn-only: the wrapper lands the commit
+      // seconds AFTER complete_task, so a fast QA in SPEED/TURBO can legitimately
+      // arrive first; blocking here would wedge every approval on a race. Both
+      // ISO strings come from toISOString(), so the lexicographic compare is exact.
+      //
+      // The anchor is NOT reviewStartedAt. complete_task stamps that on the
+      // WORKING→REVIEW transition, but a worker that commits by hand calls
+      // record_commit BEFORE complete_task, so its completion commit is recorded
+      // ahead of reviewStartedAt and a reviewStartedAt-anchored window misses it —
+      // firing NO-COMPLETION-COMMIT on a task whose commit is sitting right there
+      // in task.commits. Anchor on the round start instead: the most recent
+      // rejection for a reopened task (rejectionHistory is newest-first and
+      // survives buildReopenClearingUpdates, which deliberately clears
+      // reviewStartedAt), else the first step start. That keeps the attempt-#1
+      // exclusion intact while accepting a hand-recorded commit from this round.
+      // reviewStartedAt remains the last-resort anchor for a legacy row that has
+      // neither marker, so such a task never silently accepts an ancient commit.
       const commits: TaskCommit[] = Array.isArray(task.commits) ? task.commits : [];
-      const reviewStartedAt = task.reviewStartedAt;
+      const roundStartedAt =
+        task.rejectionHistory?.[0]?.rejectedAt || task.workStartedAt || task.reviewStartedAt;
       const completionCommits = commits.filter(
-        (c) => c.kind === 'completion' && (!reviewStartedAt || c.recordedAt >= reviewStartedAt)
+        (c) => c.kind === 'completion' && (!roundStartedAt || c.recordedAt >= roundStartedAt)
       );
       const checkpointCommits = commits.filter((c) => c.kind === 'checkpoint');
       const rescueCommits = commits.filter((c) => c.kind === 'rescue');
