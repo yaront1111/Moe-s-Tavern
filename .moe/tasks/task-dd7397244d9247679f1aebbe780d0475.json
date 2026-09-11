@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T12:49:05.923Z",
+  "updatedAt": "2026-09-11T12:49:09.757Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
@@ -186,7 +186,10 @@
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
     "packages/moe-daemon/src/providers/codexDescriptor.ts",
     "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
-    "docs/plans/2026-09-11-provider-registry-spike.md"
+    "docs/plans/2026-09-11-provider-registry-spike.md",
+    ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+    ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+    ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
   ],
   "completionSummary": "RECOMMENDATION (the deliverable): AGAINST starting a staged migration of launch policy into a typed provider registry now. FOR one narrow prerequisite first - a print-argv mode in both wrappers - which is deliberately NOT done here because it would edit a launcher. Full argument in docs/plans/2026-09-11-provider-registry-spike.md; the type and the test are supporting evidence, not the point.\n\nWhy: codex launch VOCABULARY generalises almost perfectly (30 of 44 transcribed facts shared - sandbox modes, failure codes, config keys, the exec argv skeleton), but launch POLICY does not. 14 of 44 facts diverge, ~32%, on the provider chosen because it was expected to be the easy one. Five are behavioural - the proxy-command block shape, the PowerShell prompt quote guard, TOML value encoding, startup-timeout validation, and the project_doc_fallback_filenames merge fix-up - and a sixth is a feature asymmetry (daemon-host discovery exists only in bash). Centralising means picking a winner on each, which is a behaviour change wearing a refactor's clothes. And none of it can be verified today: with no dry-run mode a contract test can only assert text, never argv equality.\n\nREOPEN PASS - all nine QA issues fixed:\n- Test blind spots closed and PROVEN. SharedFact gained per-wrapper `emitterEvidence`; the test now REQUIRES it (41 literals) for every fact written into .codex/config.toml or onto argv, and pins each session mode to its WHOLE launch invocation as one literal (bash continuations joined). 46 delete-the-emitter mutations, 22 in moe-agent.sh and 24 in moe-agent.ps1, ALL RED - including the five QA showed staying green (sh:876, sh:881, sh:891, sh:907 and sh:5303, the interactive -c MOE_WORKER_ID). A deliberate CONTROL mutation (weaken back to whole-file matching, delete ps1's codex [mcp_servers.moe]) stays GREEN, proving site-scoping is still load-bearing.\n- Note accuracy fixed. Divergence #1 no longer claims ps1 has daemon-host discovery - it is reclassified as a feature asy",
   "commits": [
@@ -302,15 +305,35 @@
       "treeId": "7aa491dd6e05328b5940e5e2a994416e8861553d",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "032c1cb76926ed0ee3948ab60333f4983a132227",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:49:06Z",
+      "paths": [
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+        ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+        "docs/plans/2026-09-11-provider-registry-spike.md",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.ts"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:49:09.757Z",
+      "treeId": "9904f6985ab298131058c0df9a60bdf30e1b7f38",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-f2b3ac93@2026-09-11T11:57:36Z",
-    "at": "2026-09-11T11:57:40.991Z"
+    "sessionId": "qa-8db40c97@2026-09-11T12:49:06Z",
+    "at": "2026-09-11T12:49:09.757Z"
   },
   "touchedFiles": [
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
