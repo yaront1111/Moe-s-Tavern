@@ -19,8 +19,11 @@
     {
       "stepId": "step-1",
       "description": "VERIFY THE TWO PREREQUISITE CONTRACTS AND READ THE PATTERNS. Read-only, no edits. (a) Prove the ExecutionAttempt store landed - task-c97afcd55d7d41d08b9730e214b648dd, by landing.merged or a Moe-Task trailer commit - and write its ACTUAL exported names and signatures into the step note, since a candidate is keyed to an attempt and this task must bind to what shipped rather than to what was proposed. (b) Check whether the fencing guard task-a135d4d63554410286a369a95e60c2a8 has landed too. The Definition of Done requires record_candidate to be fenced by assertAttemptCurrent, so if that guard is not yet exported from util/enforcement.ts, moe.report_blocked naming it - this tool cannot honestly satisfy its own acceptance criteria without it, and writing a private substitute would create the second fencing implementation the epic is trying to avoid. (c) Read state/resourceStore.ts for the persistence idiom every Wave 1 store must copy: stateless functions taking the state handle first, mutations under the state mutex, and writeEntity before map.set before activity before emit. Read state/persistence.ts around line 323 and note that writeEntity already validates the id against traversal, creates the directory itself and writes atomically through a temp file and rename. (d) Read src/tools/recordCommit.ts as the closest existing analogue - a tool that records a fact the runner observed, with careful input reading and no git execution of its own - and src/tools/index.ts lines 77-89 for the ToolDefinition shape plus the import-and-array registration at lines 64 and 152. Note that a non-blocking tool is already serialized under the global state mutex by the dispatch layer, so this tool must NOT set blocking. (e) Read the existing docs/SCHEMA.md and docs/MCP_SERVER.md section conventions so the documentation steps match house style.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "READ-ONLY. No files edited. Outcome: prerequisite (a) LANDED, prerequisite (b) NOT LANDED -> this task must block per its own step-1(b) instruction.\n\n(a) ExecutionAttempt store — LANDED. get_context epicSiblings[task-c97afcd55d7d41d08b9730e214b648dd].landing.merged=true, lastCompletion.sha=fbeb07611e52caefeaa9dfec36e3b0b671cdd3cf, pushed=true, status DONE. ACTUAL exports measured from packages/moe-daemon/src/state/attemptStore.ts (not from the proposal):\n  attemptStore.ts:39  export const MAX_ATTEMPT_GENERATION = Number.MAX_SAFE_INTEGER\n  attemptStore.ts:75  export function getAttempt(state: StateManager, attemptId: string): ExecutionAttempt | null\n  attemptStore.ts:80  export function listAttempts(state: StateManager, taskId?: string): ExecutionAttempt[]   // sorted by generation asc\n  attemptStore.ts:91  export function currentAttempt(state: StateManager, taskId: string): ExecutionAttempt | null  // last non-closed attempt, else null\n  attemptStore.ts:113 export interface OpenAttemptParams\n  attemptStore.ts:177 export async function openAttempt(...)\n  attemptStore.ts:219 export async function setAttemptPhase(...)\n  ExecutionAttempt / ExecutionAttemptPhase live at types/schema.ts:857-905. StateManager carries `attempts` map + a loadEntities line over .moe/attempts. Named refusals reuse numeric codes with explicit codeName: ATTEMPT_ID_TASK_MISMATCH, ATTEMPT_ALREADY_OPEN, ATTEMPT_GENERATION_EXHAUSTED, ATTEMPT_CLOSED, ATTEMPT_NOT_FOUND. Callers MUST hold state.mutex. Detail in Serena memory convention-daemon-attempt-store.\n\n(b) Fencing guard — NOT LANDED. BLOCKING. `grep -rn \"assertAttemptCurrent\" packages/moe-daemon/src/` returns ZERO hits. packages/moe-daemon/src/util/enforcement.ts (mtime Jul 30, untouched) exports only assertWorkerOwns:37, assertContextFetched:56, assertAllStepsCompleted:75, MAX_VERIFICATION_COMMAND_CHARS:98, MAX_VERIFICATION_OUTPUT_CHARS:100, assertVerificationEvidence:113. Sibling task-a135d4d63554410286a369a95e60c2a8 is WORKING, assignedTo null, landing.merged=false, landed=false, commits null, its own step-1 still IN_PROGRESS. `git log --grep 'Moe-Task: task-a135d4d6...'` finds nothing. DoD item 2 names assertAttemptCurrent explicitly; the plan and planningNotes both rule out a private substitute as a second fencing implementation the epic exists to prevent. Reporting blocked.\n\n(c) Persistence idiom verified. resourceStore.ts header states the contract: stateless functions taking the state handle first, every mutation under state.mutex (tool dispatch supplies it for non-blocking tools), write path writeEntity -> map.set -> appendActivity -> emit. attemptStore correctly omits activity/emit (no consumer yet, and the StateChangeEvent union feeds a WebSocketServer switch) — candidateStore should do the same. persistence.ts:323 `export async function writeEntity(state, kind, id, entity): Promise<void>` calls validateEntityId(id), mkdirs the kind directory itself, re-checks the resolved path is inside .moe, registers fileWatcher.ignorePath, then atomicWriteJsonAsync (temp+rename, async backoff). persistence.ts:38 loadEntities returns an empty Map when the directory is missing and skips unparseable files with a warn. So .moe/candidates/ needs no scaffolding.\n\n(d) Tool shape verified. tools/index.ts:77-89 ToolDefinition = { name, description, inputSchema, handler, blocking? }; its doc comment says blocking tools are NOT wrapped in the global state mutex and it is reserved for tools that park for minutes — confirming record_candidate must NOT set blocking. Registration is two edits: import at index.ts:64 (`import { recordCommitTool } from './recordCommit.js';`) and an array entry at index.ts:152. recordCommit.ts is the right analogue: tool name is the dotted form 'moe.record_commit', it imports invalidInput/missingRequired/notFound from util/errors.js, has no child_process import and no git execution, and already defines the sha shape to reuse — `const SHA_RE = /^[0-9a-f]{7,40}$/i;` at recordCommit.ts:11 (plus MAX_SHORT_STRING = 255). Reuse SHA_RE's shape rather than inventing a second one, per step 3.\n\n(e) Doc conventions read. docs/SCHEMA.md uses `## <Record>` top-level sections (## Task, ## Worker, ## Resource, ## Chat Channel …) with a TypeScript interface block plus a Storage Layout subsection; the Candidate section slots beside ## Resource (line 915) and before ## Chat Channel (line 980), and must NOT touch ## Schema Versioning (1309) — no version bump. docs/MCP_SERVER.md uses `### moe.<tool>` sections; `### moe.record_commit` is at line 489 and is the template for the record_candidate section.\n\nShared-checkout note: 14 dirty paths at step start belong to other sessions or are pre-existing debris (9 modified .moe/tasks/*.json, untracked .moe/epics/epic-3b8eb56d.json, .moe/resources/, 3 untracked task json, packages/moe-daemon/src/providers/). Left untouched, not a stop condition.",
+      "startedAt": "2026-09-11T10:03:45.991Z",
+      "completedAt": "2026-09-11T10:05:40.203Z"
     },
     {
       "stepId": "step-2",
@@ -88,7 +91,7 @@
       ]
     }
   ],
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -104,20 +107,24 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T09:56:36.978Z",
+  "updatedAt": "2026-09-11T10:06:50.204Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "architect-8b93cc67"
+    "architect-8b93cc67",
+    "worker-010099ab"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T09:54:58.086Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 1
   },
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:56:36.918Z",
   "planningNotes": {
@@ -135,5 +142,13 @@
       "packages/moe-daemon/src/state/resourceStore.durability.test.ts (the failure-injection style)"
     ]
   },
-  "planApprovedAt": "2026-09-11T09:56:36.978Z"
+  "planApprovedAt": "2026-09-11T09:56:36.978Z",
+  "workStartedAt": "2026-09-11T10:03:45.991Z",
+  "blockedReason": "Missing prerequisite: assertAttemptCurrent does not exist. This is the block my approved plan instructs at step-1(b), executed after verifying both prerequisites read-only. Zero files edited — nothing partial in the shared checkout.\n\nMEASURED 2026-09-11 10:05\n- `grep -rn \"assertAttemptCurrent\" packages/moe-daemon/src/` -> zero hits.\n- util/enforcement.ts untouched since Jul 30; exports only assertWorkerOwns:37, assertContextFetched:56, assertAllStepsCompleted:75, MAX_VERIFICATION_COMMAND_CHARS:98, MAX_VERIFICATION_OUTPUT_CHARS:100, assertVerificationEvidence:113.\n- Owner task-a135d4d63554410286a369a95e60c2a8 is WORKING, landing.merged=false, commits=null, no Moe-Task trailer commit. Genuinely in flight — its own step-1 completed at 10:05:01 — so a short wait, not a dead end.\n\nWHY NOT SUBSTITUTE\nDoD item 2 names the symbol literally. My plan's step-1(b) and planningNotes both rule out a private staleness check inside the tool: it \"would create a second fencing implementation, which is precisely what the sibling guard task exists to prevent; if that guard has not landed, this task blocks.\" A private one satisfies the letter of the DoD while producing the duplication Wave 1 exists to avoid.\n\nALREADY SATISFIED\nPrerequisite (a) green: ExecutionAttempt store landed (task-c97afcd55d7d41d08b9730e214b648dd, fbeb076, merged, DONE). Its real exported signatures are in my step-1 note, along with the writeEntity/loadEntities contract, the resourceStore idiom, the ToolDefinition shape and both doc conventions — the resuming session starts at step-2 without re-deriving any of it.\n\nAUTO-UNBLOCK\nblockedOnTaskIds names the guard, so the daemon returns this task to WORKING when it reaches DONE. Resume at step-2 (declare Candidate in schema.ts, wire the candidates map into StateManager). Steps 2-7 all still PENDING. Notes in Serena memory task-task-4d7074c001af47e881572e9efae30a41-handoff.",
+  "blockedOnTaskIds": [
+    "task-a135d4d63554410286a369a95e60c2a8"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-09-11T10:06:50.204Z"
 }

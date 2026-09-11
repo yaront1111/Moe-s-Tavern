@@ -143,7 +143,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:40:02.958Z",
-  "updatedAt": "2026-09-11T10:04:19.558Z",
+  "updatedAt": "2026-09-11T10:04:55.494Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:33:56.838Z",
     "plannedStepCount": 6,
@@ -208,7 +208,8 @@
     ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
     ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
     ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
-    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json"
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+    ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json"
   ],
   "completionSummary": "Retired the deprecated task time-cap presentation from the JetBrains client, keeping live elapsed wall-clock metrics.\n\nFILES (exactly the five owned paths): TaskCard.kt, TaskDetailDialog.kt, MoeBundle.properties, MoeDuration.kt (comment-only), new test TaskTimingPresentationTest.kt. Models.kt and util/MoeJson.kt are byte-identical on purpose (git diff empty), as is every pre-existing test.\n\nHELPER CONTRACT (new, internal, production-used — both consumed by the real Swing builders, no dead code, no separate presenter file, DTOs nested on the outer classes not in a companion):\n- TaskCard.elapsedPresentation(task: Task, now: Instant): TaskCard.ElapsedPresentation?  -> label, tooltip, lightRgb, darkRgb. Null unless metrics.firstClaimAt parses (gate preserved: still null when only wallClockMs is recorded). Elapsed = metrics.wallClockMs ?: elapsedMs(firstClaim, parsedDoneAt ?: now) ?: 0. Label is the duration alone; colour is always the neutral pair 0x6B7280/0xA7ABB1; tooltip is \"Elapsed: started <iso>, used <duration>\".\n- TaskDetailDialog.metricsPresentation(task: Task, now: Instant): MetricsPresentation? -> ordered List<KpiRow(labelKey, value)> plus CritiqueBlock, sizeWarningLines, verificationBody, reviewSummary, failedDodLines and List<HandoffBlock>. Null unless metrics / handoffs / failed DoD / critique / size warnings / verification / nonblank review summary exists — a legacy cap alone no longer opens it.\nBoth are pure: caller supplies `now`, neither touches MoeBundle, JBColor or any service.\n\nREMOVED: card cap denominator, ratio-based red/yellow/green colours, \"Budget: \" tooltip with \"of <cap>\"/warned/escalated, the detail \"Budget remaining\" KPI and its helper, the cap-only section eligibility, the moe.metrics.budgetRemaining bundle key and all budget wording in the four scoped files (verified by a case-insensitive budget|warnedAt|escalatedAt|remaining sweep). task.budget is read nowhere in either UI file.\n\nPRESERVED (asserted): recorded-duration precedence, timest",
   "commits": [
@@ -288,17 +289,30 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "096742102d5069a27d47bab4ec349319546514fd",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T09:59:36Z",
+      "paths": [
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        ".moe/tasks/task-c97afcd55d7d41d08b9730e214b648dd.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T10:04:55.494Z",
+      "treeId": "b327e4a4bd63568fb7856880cac69e3b157cae56",
+      "status": "DONE",
+      "pushed": true
     }
   ],
-  "unattributedPaths": [
-    "packages/moe-daemon/src/tools/enterGovernance.test.ts",
-    "packages/moe-daemon/src/tools/enterGovernance.ts"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-85674160@2026-09-11T09:43:11Z",
-    "at": "2026-09-11T10:00:34.605Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T09:59:36Z",
+    "at": "2026-09-11T10:04:55.494Z"
   },
   "touchedFiles": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/MoeDuration.kt",
