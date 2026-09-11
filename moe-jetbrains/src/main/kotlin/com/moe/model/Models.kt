@@ -1,5 +1,12 @@
 package com.moe.model
 
+/**
+ * Largest plan revision that survives a round trip through the daemon's JSON
+ * numbers, i.e. `Number.MAX_SAFE_INTEGER`. Anything above it cannot be trusted
+ * to mean what the daemon sent, so it is rejected rather than truncated.
+ */
+const val MAX_SAFE_PLAN_REVISION: Long = 9007199254740991L
+
 data class MoeState(
     val project: Project,
     val epics: List<Epic>,
@@ -175,7 +182,13 @@ data class Task(
     val blockedOnTaskIds: List<String>? = null,
     val blockedResourceId: String? = null,
     val blockedFromStatus: String? = null,
-    val blockedAt: String? = null
+    val blockedAt: String? = null,
+    // Revision of the plan the daemon currently holds, used to prove an approval
+    // reviewed THIS plan. Two absent-looking cases are deliberately distinct:
+    // a daemon payload with no field at all is a legacy task, effective 0; a
+    // present but malformed field parses to null — unusable, and a reviewing UI
+    // must refuse it rather than approve against an assumed 0.
+    val planRevision: Long? = 0L
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.

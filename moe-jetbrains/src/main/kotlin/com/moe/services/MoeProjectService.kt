@@ -62,12 +62,16 @@ class MoeProjectService @JvmOverloads constructor(
         connectedCheck = { connected && wsClient != null },
         onDisconnected = { publishStatus(false, "Not connected to daemon") },
         send = send@{ type, message ->
-            val client = wsClient ?: return@send
+            // Captured once: the field can be cleared by a reconnect between the
+            // null check and the send, and a half-sent command must not be
+            // reported as delivered.
+            val client = wsClient ?: return@send false
             if (!client.isOpen) {
                 log.debug("Cannot send message '$type': WebSocket not open")
-                return@send
+                return@send false
             }
             client.send(message)
+            true
         }
     )
     @Volatile private var isManualDisconnect = false
@@ -402,7 +406,19 @@ class MoeProjectService @JvmOverloads constructor(
     fun updateEpicDetails(epicId: String, title: String, description: String, architectureNotes: String, epicRails: List<String>, status: String) =
         commandSender.updateEpicDetails(epicId, title, description, architectureNotes, epicRails, status)
 
-    fun approveTask(taskId: String) = commandSender.approveTask(taskId)
+    /**
+     * Forwards a reviewed approval verbatim — this facade never substitutes a
+     * newer revision from cached state for the one the human reviewed.
+     *
+     * @return true only when the local socket accepted the bytes, not that the
+     *   daemon approved; false means nothing was sent and the disconnected
+     *   status was published.
+     * @throws IllegalArgumentException when [expectedPlanRevision] is outside
+     *   `0..MAX_SAFE_PLAN_REVISION` (nothing is sent).
+     * @see MoeCommandSender.approveTask
+     */
+    fun approveTask(taskId: String, expectedPlanRevision: Long? = null): Boolean =
+        commandSender.approveTask(taskId, expectedPlanRevision)
 
     fun releaseTask(taskId: String, reason: String? = null) = commandSender.releaseTask(taskId, reason)
 

@@ -12,6 +12,7 @@ import com.moe.model.EpicMetricsAggregate
 import com.moe.model.FailedDodItem
 import com.moe.model.HandoffNote
 import com.moe.model.ImplementationStep
+import com.moe.model.MAX_SAFE_PLAN_REVISION
 import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PlanCritiqueResult
@@ -25,8 +26,11 @@ import com.moe.model.TaskSizingThresholds
 import com.moe.model.TaskVerification
 import com.moe.model.Team
 import com.moe.model.Worker
+import java.math.BigDecimal
 
 object MoeJson {
+    private val MAX_SAFE_PLAN_REVISION_DECIMAL: BigDecimal = BigDecimal.valueOf(MAX_SAFE_PLAN_REVISION)
+
     private fun JsonObject.getStringOrNull(key: String): String? {
         val element = get(key) ?: return null
         if (element.isJsonNull) return null
@@ -141,6 +145,36 @@ object MoeJson {
         if (element == null || !element.isJsonPrimitive) return null
         val primitive = element.asJsonPrimitive
         return if (primitive.isString) primitive.asString else null
+    }
+
+    /**
+     * Reads the plan revision an approval must quote back. Absent means a legacy
+     * task, effective 0; anything present that is not an exact integer in
+     * `0..MAX_SAFE_PLAN_REVISION` yields null so the value stays unusable instead
+     * of collapsing into an approvable 0 or a truncated revision.
+     *
+     * Neither [getLongOrNull] nor `asLong` can be used: Gson coerces there, so
+     * "17" becomes 17 and 9007199254740991.1 truncates to a valid-looking
+     * revision. The original decimal literal is re-read exactly as [BigDecimal]
+     * and only [BigDecimal.longValueExact] may convert it.
+     */
+    private fun JsonObject.getPlanRevisionOrNull(key: String): Long? {
+        val element = get(key) ?: return 0L
+        if (!element.isJsonPrimitive) return null
+        val primitive = element.asJsonPrimitive
+        if (!primitive.isNumber) return null
+        return try {
+            val decimal = BigDecimal(primitive.asString)
+            if (decimal.signum() < 0 || decimal > MAX_SAFE_PLAN_REVISION_DECIMAL) {
+                null
+            } else {
+                decimal.longValueExact()
+            }
+        } catch (_: NumberFormatException) {
+            null
+        } catch (_: ArithmeticException) {
+            null
+        }
     }
 
     /** Keeps only real JSON string members, in order; `[]` and all-invalid arrays give an empty list. */
@@ -358,7 +392,8 @@ object MoeJson {
                 blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
                 blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
                 blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
-                blockedAt = obj.getStrictStringOrNull("blockedAt")
+                blockedAt = obj.getStrictStringOrNull("blockedAt"),
+                planRevision = obj.getPlanRevisionOrNull("planRevision")
             )
         }
     }
@@ -513,7 +548,8 @@ object MoeJson {
             blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
             blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
             blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
-            blockedAt = obj.getStrictStringOrNull("blockedAt")
+            blockedAt = obj.getStrictStringOrNull("blockedAt"),
+            planRevision = obj.getPlanRevisionOrNull("planRevision")
         )
     }
 
