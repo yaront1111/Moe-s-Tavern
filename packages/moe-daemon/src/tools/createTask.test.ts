@@ -84,6 +84,36 @@ describe('moe.create_task guardrails + attribution', () => {
       expect((await create({ title: 'D', workerId: 'governor-1', createdBy: 'HUMAN' })).task.createdBy).toBe('GOVERNOR');
     });
 
+    // REGRESSION 2026-09-11: the arm above seeds a team that HAS the role, so it
+    // never exercised the shape the launcher actually produces — one
+    // project-named team, `role: null`, holding seats of several roles at once.
+    // Reading `team.role` directly resolved to nothing there and every row an
+    // architect/QA/governor filed landed `createdBy: 'WORKER'`. Attribution now
+    // goes through util/workerRole, which falls back to the seat's id prefix.
+    it('attributes by id prefix when the shared team carries no role', async () => {
+      const mixed = await h.state.createTeam({ name: 'moe-next' });
+      expect(mixed.role).toBeFalsy(); // the launcher's team: no role at all
+      for (const id of ['architect-76be3b8c', 'qa-a8573597', 'governor-d7005695', 'worker-da0aeedb']) {
+        await h.state.createWorker({
+          id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+          currentTaskId: null, status: 'IDLE',
+        });
+        await h.state.addTeamMember(mixed.id, id);
+      }
+
+      expect((await create({ title: 'H', workerId: 'architect-76be3b8c' })).task.createdBy).toBe('ARCHITECT');
+      expect((await create({ title: 'I', workerId: 'qa-a8573597' })).task.createdBy).toBe('QA');
+      expect((await create({ title: 'J', workerId: 'governor-d7005695' })).task.createdBy).toBe('GOVERNOR');
+      expect((await create({ title: 'K', workerId: 'worker-da0aeedb' })).task.createdBy).toBe('WORKER');
+    });
+
+    // A team that DOES declare a role still wins over the id prefix: an explicit
+    // join_team onto a roled team is the operator stating the seat's role.
+    it('lets a roled team override the id prefix', async () => {
+      await addRoleWorker('worker-onqateam', 'qa');
+      expect((await create({ title: 'L', workerId: 'worker-onqateam' })).task.createdBy).toBe('QA');
+    });
+
     it('falls back to the explicit createdBy, then WORKER, for team-less callers', async () => {
       expect((await create({ title: 'E', createdBy: 'HUMAN' })).task.createdBy).toBe('HUMAN');
       expect((await create({ title: 'F', workerId: 'worker-unknown' })).task.createdBy).toBe('WORKER');

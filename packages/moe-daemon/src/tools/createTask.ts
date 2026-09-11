@@ -5,6 +5,7 @@ import { missingRequired, invalidInput } from '../util/errors.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
 import { resolveMaxTasksPerEpic } from '../util/planSize.js';
 import { findDependencyPath, formatDependencyCycle } from '../state/dependencyUnblock.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 
 /**
  * Titles that read as meta/evidence/hardening rows — the shape behind measured
@@ -122,12 +123,18 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
         dependsOn = known.length > 0 ? known : undefined;
       }
 
-      // Role attribution: resolve the caller's team role into createdBy
-      // (pattern: submit_plan_critique's role gate — but soft: an unknown or
-      // team-less caller just falls back to the explicit param / WORKER).
-      const team = params.workerId ? state.getTeamForWorker(params.workerId) : null;
+      // Role attribution: resolve the caller's role through util/workerRole —
+      // team role first, then the seat's id prefix — exactly as the role-GATED
+      // tools do. Reading `team.role` directly, as this once did, stamps WORKER
+      // on every row an architect, QA or governor files from a role-LESS team,
+      // and that is the team the launcher registers seats into: measured
+      // 2026-09-11 on moe-next, an architect-filed row landed
+      // `createdBy: "WORKER"` because the project-named team `moe-next` carries
+      // `role: null` and holds seats of three different roles at once.
+      // An unknown or workerId-less caller still falls back to the param / WORKER.
+      const resolvedRole = params.workerId ? resolveWorkerRole(state, params.workerId) : null;
       const resolvedCreatedBy: Task['createdBy'] =
-        (team?.role && ROLE_TO_CREATED_BY[team.role]) || params.createdBy || 'WORKER';
+        (resolvedRole && ROLE_TO_CREATED_BY[resolvedRole]) || params.createdBy || 'WORKER';
 
       // Column WIP limit at creation — WARNING ONLY. The transition path
       // (set_task_status / board) throws at the limit, but a creation must
