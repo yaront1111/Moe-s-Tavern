@@ -111,7 +111,7 @@
       "completedAt": "2026-09-11T16:10:15.395Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,16 +137,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:31:29.268Z",
-  "updatedAt": "2026-09-11T16:11:43.830Z",
+  "updatedAt": "2026-09-11T16:39:03.721Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T12:12:37.625Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T16:39:03.721Z",
+    "wallClockMs": 15986096
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
-    "worker-85674160"
+    "worker-85674160",
+    "qa-813933f7"
   ],
   "stepsCompleted": [
     "step-1",
@@ -184,7 +187,59 @@
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "docs/roles/qa.reference.md"
+    "docs/roles/qa.reference.md",
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+    ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json"
   ],
-  "completionSummary": "A live-session marker beside the per-task baseline now stops a second seat's pre-flight from recovering a still-running owner's bytes.\n\nDESIGN PROVENANCE. The operator reviewed the filer's three options and CHOSE this one. Option (b) -- land the completion commit before the task becomes visible to QA -- is the cleanest invariant and was NOT rejected on merit: it is already scoped in Wave 1 as the finalizing phase plus the finalize tool, and a Wave 0 epic rail forbids widening into Wave 1 work. That deferral is deliberate, and when it lands it supersedes this guard, which is cheap and removable. Option (c), a timing grace window, stays ruled out: a worker's tail after completing a task is unbounded. The filer's option (a) as literally written was rejected on inspection because a hard-crashed worker is not marked DEAD on the board, so that predicate would stop recovering exactly the crash it exists for; keying on a real LOCAL process probe keeps its spirit while preserving crash recovery.\n\nTHE DEFECT, re-verified in git. The recovery predicate (\"a baseline that never reached a completed landing\") is true for a crashed session AND for one still running and about to commit. ac6c9dc, a role=qa \"... recovered\" checkpoint, carried util/enforcement.ts +144 and util/enforcement.test.ts +472 while the worker's 7cdcf2e held only a board record; b5925e2 repeats it with acceptance.test.ts +2184. task-435683c2 is NOT an instance -- that was the attribution contest fixed by 53f3ede (PR #181) -- so the tally is two.\n\nTHE FIX. `<gitdir>/moe/baseline/<taskId>.live`, one line, sibling of the baseline, identical in both wrappers: `#moe-live v1 task=<id> pid=<n> host=<h> ns=<n> worker=<id> session=<sid> start=<tok>`. Written in the same pre-flight block that takes the baseline (launch and resume alike); removed at the post-flight beside the prune and on every abnormal exit (bash cleanup_temp on the EXIT trap, which the INT/TERM handler reaches via `exit 0`; ps1's outer finally, which it"
+  "completionSummary": "A live-session marker beside the per-task baseline now stops a second seat's pre-flight from recovering a still-running owner's bytes.\n\nDESIGN PROVENANCE. The operator reviewed the filer's three options and CHOSE this one. Option (b) -- land the completion commit before the task becomes visible to QA -- is the cleanest invariant and was NOT rejected on merit: it is already scoped in Wave 1 as the finalizing phase plus the finalize tool, and a Wave 0 epic rail forbids widening into Wave 1 work. That deferral is deliberate, and when it lands it supersedes this guard, which is cheap and removable. Option (c), a timing grace window, stays ruled out: a worker's tail after completing a task is unbounded. The filer's option (a) as literally written was rejected on inspection because a hard-crashed worker is not marked DEAD on the board, so that predicate would stop recovering exactly the crash it exists for; keying on a real LOCAL process probe keeps its spirit while preserving crash recovery.\n\nTHE DEFECT, re-verified in git. The recovery predicate (\"a baseline that never reached a completed landing\") is true for a crashed session AND for one still running and about to commit. ac6c9dc, a role=qa \"... recovered\" checkpoint, carried util/enforcement.ts +144 and util/enforcement.test.ts +472 while the worker's 7cdcf2e held only a board record; b5925e2 repeats it with acceptance.test.ts +2184. task-435683c2 is NOT an instance -- that was the attribution contest fixed by 53f3ede (PR #181) -- so the tally is two.\n\nTHE FIX. `<gitdir>/moe/baseline/<taskId>.live`, one line, sibling of the baseline, identical in both wrappers: `#moe-live v1 task=<id> pid=<n> host=<h> ns=<n> worker=<id> session=<sid> start=<tok>`. Written in the same pre-flight block that takes the baseline (launch and resume alike); removed at the post-flight beside the prune and on every abnormal exit (bash cleanup_temp on the EXIT trap, which the INT/TERM handler reaches via `exit 0`; ps1's outer finally, which it",
+  "commits": [
+    {
+      "sha": "4e80c35bd25af137bc1e424c65309ea53a02696c",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T14:49:21Z",
+      "paths": [
+        ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+        ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json",
+        "docs/roles/qa.reference.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T16:11:51.261Z",
+      "treeId": "1785547c9bf7e5c67ded429b620307584c7aa320",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-80737065b0394e288b54af9810248ce2"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-80737065b0394e288b54af9810248ce2"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.ps1",
+    "docs/roles/qa.reference.md",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-11T14:49:21Z",
+    "at": "2026-09-11T16:11:51.261Z"
+  },
+  "completedAt": "2026-09-11T16:39:03.721Z",
+  "reviewCompletedAt": "2026-09-11T16:39:03.721Z",
+  "reviewSummary": "APPROVED. Verified the diff (4e80c35: the 5 declared files + 2 board JSONs, 1059 ins), not the summary.\n\nGATES RE-RUN MYSELF, quiet box: parity-check.sh exit 0 PASS; parity-check.ps1 exit 0 PASS; MOE_POSTFLIGHT_TIMEOUT_SEC=180 SEQUENTIALLY postflight.sh exit 0 \"scenarios run: 26\" PASS and postflight.ps1 exit 0 26 PASS ([scenario M2] ok in both); npm run lint exit 0 (qa.md 25/40; note landed in the lint-exempt qa.reference.md).\n\nRED PROVED BY MUTATION, not taken on trust: ran the new harness in a temp tree over the PRE-FIX wrapper (4e80c35^, zero MOE_CHECKPOINT_SKIPPED_LIVE_OWNER) -> exit 1, \"SCENARIO M2 FAILED: (a) the second seat recovered a LIVE owner's baseline\". A-M still passed there, so M2 isolates the new behaviour.\n\nDoD: (1) red above. (2) M2-a/b assert no MOE_CHECKPOINT_RECOVERED, the exact skip line, decision BEFORE CLI launch, impl.txt still present+unstaged, baseline left landed=0, owner marker neither deleted nor overwritten; this task's own completion commit is self-contained, no role=qa theft. (3) crash unchanged - M2-c spawns/kills/REAPS a real child and asserts the recovery carries exactly [.moe/tasks/..json impl.txt] plus stale-marker deletion; M2-d pid reuse recovers; M2-e no-marker recovers; scenario M green. (4) both wrappers lockstep, skip code inside the MOE_CHECKPOINT_ family parity-check diffs across them. (5)(6) recorded/documented.\n\nRAILS: grepped the diff - no git add -A/-u, no bare commit; crash path strengthened not weakened (unanswerable probe returns 'live', the safe side); removal is byte-identical-ours-only and covers bash cleanup_temp (EXIT+INT union) and the ps1 outer finally.\n\nNOT BLOCKING (worker's residual #3): a seat that stands down writes no marker of its own, so a third seat claiming after the owner exits sees none. Loses no bytes; superseded by Wave 1 finalize."
 }
