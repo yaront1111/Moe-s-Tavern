@@ -115,8 +115,8 @@
       "completedAt": "2026-09-11T13:13:35.399Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -132,12 +132,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:25:37.487Z",
-  "updatedAt": "2026-09-11T13:14:22.304Z",
+  "updatedAt": "2026-09-11T13:19:15.501Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:26:02.737Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T13:19:15.501Z",
+    "wallClockMs": 13992764
   },
   "contextFetchedBy": [
     "architect-31b9f5b1",
@@ -209,13 +211,43 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "d2bfd2a225a31922733ddf0d480c4b52b4543ab1",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T13:02:35Z",
+      "paths": [
+        ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T13:15:02.007Z",
+      "treeId": "5367f67f206e519decdc5bf416625e47faf50e3c",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-vscode/src/services/MoeDaemonClient.ts",
+          "taskId": "task-1bf079020e504aaaa760a8faeddebbcd"
+        }
+      ],
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T13:14:18Z",
-    "at": "2026-09-11T13:14:22.304Z"
-  }
+    "kind": "completion",
+    "sessionId": "worker-010099ab@2026-09-11T13:02:35Z",
+    "at": "2026-09-11T13:15:02.007Z"
+  },
+  "touchedFiles": [
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/tests/plan-approval-client.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completedAt": "2026-09-11T13:19:15.501Z",
+  "reviewCompletedAt": "2026-09-11T13:19:15.501Z",
+  "reviewSummary": "APPROVED — 5/5 DoD verified from the diff + live daemon source.\n\nCOMMITS: completion d2bfd2a (client) + checkpoint 0b542d6 (types, tests); all 3 files landed. Stale on-disk index made git diff look uncommitted; HEAD blob == worktree == 4fe8d32.\n\nGATE RE-RUN BY QA (repo root, Windows): cmd /d /c \"npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\" -> EXIT 0, tests 80/pass 80/fail 0. New file alone 28/28. RED REPRODUCED: same 28 vs pre-change blob b96d6dc -> 12 pass/16 fail, exit 1.\n\nDoD1 exact parsed frames: 0 survives (falsy mutant killed), 7 and MAX_SAFE_INTEGER unchanged, one-arg omits the key (Object.keys + hasOwnProperty, not an undefined compare).\nDoD2 strict `=== undefined` gate then typeof number + isSafeInteger + >=0, no coercion; all 8 malformed tokens return false and send NOTHING (no legacy fallback) + fire onError/APPROVE_TASK naming value and type; disconnected, no-socket, throwing-send all false.\nDoD3 planRevision?: number; TASK_UPDATED replaces the whole object — reads back 4, legacy row keeps the property ABSENT not 0. compile 0 proves the 4 one-arg callers typecheck; diff --stat over src/panels+src/views EMPTY.\nDoD4 daemon WebSocketServer.ts:1001-1014 does emit top-level operation/code/codeName+context. Client prefers top-level, nested fallback (fixes the payload?.operation-only defect); code only if finite number, codeName only if non-empty; context via a pure allowlist helper, never a spread. Tests prove epicId/field/reason/projectRoot/paths dropped, all-unlisted yields no context property, mistyped dropped, bare ERROR keeps exactly {operation,message}.\n\nRAILS: 3 files only; no webview/other callers/daemon/JetBrains/Wave 1. approveTask never reads this.state (2 tests with cached revision 9 guard it). No forbidden patterns. JetBrains-first satisfied (247fdf29 @ 5f0dc0e)."
 }
