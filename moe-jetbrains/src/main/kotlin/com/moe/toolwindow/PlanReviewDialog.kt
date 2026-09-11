@@ -42,6 +42,23 @@ class PlanReviewDialog(
     private var pendingUpdate: Runnable? = null
     private var debounceTimer: Timer? = null
 
+    /**
+     * Binds approval to the plan revision that actually rendered here. Every
+     * decision lives in the (headless, tested) state machine; this dialog only
+     * applies the results.
+     */
+    private val approval = PlanReviewApprovalState(task.id)
+    private var approveAction: Action? = null
+
+    /** Written on the daemon message thread, read on the event dispatch thread. */
+    @Volatile
+    private var lastErrorMessage: String = ""
+    private val noticeLabel = JBLabel().apply {
+        isVisible = false
+        foreground = JBColor.RED
+        font = JBUI.Fonts.smallFont()
+    }
+
     private lateinit var commentsPanel: JPanel
     private lateinit var commentsScroll: JScrollPane
 
@@ -52,6 +69,23 @@ class PlanReviewDialog(
     }
 
     override fun createCenterPanel(): JComponent {
+        val container = JPanel(BorderLayout())
+        container.preferredSize = Dimension(800, 500)
+        try {
+            buildReviewContent(container)
+            // Only now — the Definition of Done and the steps are on screen and
+            // nothing threw — is this the revision the reviewer actually read.
+            approval.onRendered(snapshotOf(task))
+        } catch (ex: Exception) {
+            // Fail closed: an unrendered plan was never reviewed, so the machine
+            // stays uncaptured and the approve button stays disabled.
+            log.warn("Failed to render the plan under review; approval stays disabled", ex)
+        }
+        applyApprovalState()
+        return container
+    }
+
+    private fun buildReviewContent(container: JPanel) {
         val leftPanel = createDodPanel()
         val rightPanel = createStepsPanel()
 
@@ -59,9 +93,6 @@ class PlanReviewDialog(
             dividerLocation = 300
             border = JBUI.Borders.empty()
         }
-
-        val container = JPanel(BorderLayout())
-        container.preferredSize = Dimension(800, 500)
 
         // Task info header
         val header = JPanel(VerticalLayout(4)).apply {
@@ -74,8 +105,15 @@ class PlanReviewDialog(
                     font = JBUI.Fonts.smallFont()
                 })
             }
+            add(noticeLabel)
         }
 
+        container.add(header, BorderLayout.NORTH)
+        container.add(splitPane, BorderLayout.CENTER)
+        container.add(buildCommentsSection(), BorderLayout.SOUTH)
+    }
+
+    private fun buildCommentsSection(): JComponent {
         // Comments section
         val commentsSection = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8)
@@ -111,11 +149,45 @@ class PlanReviewDialog(
         askPanel.add(askButton, BorderLayout.EAST)
         commentsSection.add(askPanel, BorderLayout.SOUTH)
 
-        container.add(header, BorderLayout.NORTH)
-        container.add(splitPane, BorderLayout.CENTER)
-        container.add(commentsSection, BorderLayout.SOUTH)
+        return commentsSection
+    }
 
-        return container
+    /** Reads only what the approval machine is allowed to see. */
+    private fun snapshotOf(candidate: Task?): PlanReviewApprovalState.TaskSnapshot =
+        PlanReviewApprovalState.TaskSnapshot(
+            present = candidate != null,
+            status = candidate?.status,
+            revision = PlanReviewApprovalState.tokenOf(candidate?.planRevision)
+        )
+
+    /**
+     * Pushes the machine's current verdict onto the screen. Must run on the event
+     * dispatch thread; it is the only place the dialog closes on an approval, and
+     * it does so only once the machine has seen authoritative state.
+     */
+    private fun applyApprovalState() {
+        approveAction?.isEnabled = approval.approveEnabled
+        val key = approval.noticeKey
+        if (key == null) {
+            noticeLabel.isVisible = false
+            noticeLabel.text = ""
+        } else {
+            showNotice(key)
+        }
+        if (approval.currentPhase == PlanReviewApprovalState.Phase.FINISHED) {
+            close(OK_EXIT_CODE)
+        }
+    }
+
+    /**
+     * [key] is always a MoeBundle key, so the daemon's own text can only ever
+     * appear as a parameter after a literal prefix. That matters: a JBLabel
+     * renders as HTML when the text STARTS with an html tag, and agent/daemon
+     * text is arbitrary.
+     */
+    private fun showNotice(key: String) {
+        noticeLabel.text = MoeBundle.message(key, lastErrorMessage)
+        noticeLabel.isVisible = true
     }
 
     private fun renderComments(comments: List<TaskComment>) {
@@ -160,7 +232,25 @@ class PlanReviewDialog(
     }
 
     override fun onState(state: MoeState) {
-        val updated = state.tasks.find { it.id == task.id } ?: return
+        val updated = state.tasks.find { it.id == task.id }
+
+        // The approval machine runs FIRST: strictly before the comments-equality
+        // early return below and outside the comment debounce. A plan whose steps
+        // or Definition of Done changed can carry byte-identical comments, and
+        // that case used to leave the screen showing a plan nobody could see had
+        // been replaced.
+        if (approval.onStateUpdate(snapshotOf(updated))) {
+            SwingUtilities.invokeLater {
+                if (isDisposed) return@invokeLater
+                try {
+                    applyApprovalState()
+                } catch (ex: Exception) {
+                    log.warn("Failed to apply the plan approval state", ex)
+                }
+            }
+        }
+
+        if (updated == null) return
         val oldComments = task.comments ?: emptyList()
         val newComments = updated.comments ?: emptyList()
         task = updated
@@ -198,7 +288,28 @@ class PlanReviewDialog(
 
     override fun onStatus(connected: Boolean, message: String) {}
 
+    /**
+     * A daemon ERROR frame. Only meaningful while an approval is in flight, and
+     * even then it is failure feedback, never an approval: the machine drops back
+     * to a usable state and the dialog stays open with the daemon's own message.
+     */
+    override fun onError(operation: String, message: String) {
+        if (!approval.onDaemonError(operation, message)) return
+        // Bounded: this is arbitrary daemon text and it lands in a header label.
+        lastErrorMessage = message.take(MAX_ERROR_CHARS)
+        SwingUtilities.invokeLater {
+            if (isDisposed) return@invokeLater
+            try {
+                applyApprovalState()
+            } catch (ex: Exception) {
+                log.warn("Failed to apply the daemon error to the plan review", ex)
+            }
+        }
+    }
+
     override fun dispose() {
+        // Terminal first: nothing already queued may send after teardown.
+        approval.onDisposed()
         debounceTimer?.stop()
         debounceTimer = null
         pendingUpdate = null
@@ -304,10 +415,23 @@ class PlanReviewDialog(
     override fun createActions(): Array<Action> {
         val approveAction = object : DialogWrapperAction(MoeBundle.message("moe.button.approve")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
-                service.approveTask(task.id)
-                close(OK_EXIT_CODE)
+                // Re-check independently of the button state: a caller that
+                // reaches this method anyway still cannot send a stale approval.
+                val fresh = service.getState()?.tasks?.find { it.id == task.id }
+                val decision = approval.onApproveClicked(service.isConnected(), snapshotOf(fresh))
+                lastErrorMessage = ""
+                when (decision) {
+                    is PlanReviewApprovalState.Decision.Send -> sendApproval(decision)
+                    is PlanReviewApprovalState.Decision.Blocked -> {
+                        // Stay open. The reviewer keeps the plan and the reason.
+                        applyApprovalState()
+                        showNotice(decision.messageKey)
+                    }
+                }
             }
         }
+        approveAction.isEnabled = approval.approveEnabled
+        this.approveAction = approveAction
 
         val rejectAction = object : DialogWrapperAction(MoeBundle.message("moe.button.reject")) {
             override fun doAction(e: java.awt.event.ActionEvent) {
@@ -327,7 +451,28 @@ class PlanReviewDialog(
         return arrayOf(approveAction, rejectAction, cancelAction)
     }
 
+    /**
+     * Hands the captured revision to the command layer. A transport that accepted
+     * the bytes is NOT an approval, so this never closes the dialog: only the
+     * daemon moving the task on can do that, via [onState].
+     */
+    private fun sendApproval(send: PlanReviewApprovalState.Decision.Send) {
+        // The machine is already PENDING, so this disarms the button before the
+        // command goes out and a second click cannot reach the socket.
+        applyApprovalState()
+        val delivered = try {
+            service.approveTask(send.taskId, send.expectedPlanRevision)
+        } catch (ex: Exception) {
+            log.warn("Failed to send the plan approval", ex)
+            false
+        }
+        if (!delivered && approval.onSendFailed()) {
+            applyApprovalState()
+        }
+    }
+
     companion object {
         private const val DEBOUNCE_MS = 200
+        private const val MAX_ERROR_CHARS = 300
     }
 }
