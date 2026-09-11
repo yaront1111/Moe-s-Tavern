@@ -121,7 +121,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T13:11:38.052Z",
+  "updatedAt": "2026-09-11T13:11:45.145Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
@@ -191,7 +191,8 @@
     "docs/plans/2026-09-11-provider-registry-spike.md",
     ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
     ".moe/tasks/task-5dd49fe2f31b477bbbad581dd22dd9af.json",
-    ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
+    ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json",
+    ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json"
   ],
   "completionSummary": "RECOMMENDATION (the deliverable): AGAINST starting a staged migration of launch policy into a typed provider registry now. FOR one narrow prerequisite first - a print-argv mode in both wrappers - which is deliberately NOT done here because it would edit a launcher. Full argument in docs/plans/2026-09-11-provider-registry-spike.md; the type and the test are supporting evidence, not the point.\n\nWhy: codex launch VOCABULARY generalises almost perfectly (30 of 44 transcribed facts shared - sandbox modes, failure codes, config keys, the exec argv skeleton), but launch POLICY does not. 14 of 44 facts diverge, ~32%, on the provider chosen because it was expected to be the easy one. Five are behavioural - the proxy-command block shape, the PowerShell prompt quote guard, TOML value encoding, startup-timeout validation, and the project_doc_fallback_filenames merge fix-up - and a sixth is a feature asymmetry (daemon-host discovery exists only in bash). Centralising means picking a winner on each, which is a behaviour change wearing a refactor's clothes. And none of it can be verified today: with no dry-run mode a contract test can only assert text, never argv equality.\n\nREOPEN PASS - all nine QA issues fixed:\n- Test blind spots closed and PROVEN. SharedFact gained per-wrapper `emitterEvidence`; the test now REQUIRES it (41 literals) for every fact written into .codex/config.toml or onto argv, and pins each session mode to its WHOLE launch invocation as one literal (bash continuations joined). 46 delete-the-emitter mutations, 22 in moe-agent.sh and 24 in moe-agent.ps1, ALL RED - including the five QA showed staying green (sh:876, sh:881, sh:891, sh:907 and sh:5303, the interactive -c MOE_WORKER_ID). A deliberate CONTROL mutation (weaken back to whole-file matching, delete ps1's codex [mcp_servers.moe]) stays GREEN, proving site-scoping is still load-bearing.\n- Note accuracy fixed. Divergence #1 no longer claims ps1 has daemon-host discovery - it is reclassified as a feature asy",
   "commits": [
@@ -343,14 +344,30 @@
       "treeId": "3a00d9d420955b9c9f684ef3a270f5b4c4148b94",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "eef82b0128ab08a102f907d7040a81116fb619fb",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:49:06Z",
+      "paths": [
+        ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json",
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T13:11:45.145Z",
+      "treeId": "ff8766f34c96e80b10f5b1e4ad57c177b06f2149",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-f2b3ac93@2026-09-11T12:12:42Z",
-    "at": "2026-09-11T12:49:23.059Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T12:49:06Z",
+    "at": "2026-09-11T13:11:45.145Z"
   },
   "touchedFiles": [
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
