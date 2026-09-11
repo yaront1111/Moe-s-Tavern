@@ -38,6 +38,7 @@ import type {
   Decision,
   DecisionStatus,
   Epic,
+  ExecutionAttempt,
   ImplementationStep,
   MoeStateSnapshot,
   PinEntry,
@@ -365,6 +366,8 @@ export class StateManager {
   channels = new Map<string, ChatChannel>();
   decisions = new Map<string, Decision>();
   resources = new Map<string, ResourceState>();
+  /** Execution attempts, keyed by attempt id. Mutated only via state/attemptStore.ts. */
+  attempts = new Map<string, ExecutionAttempt>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -1036,6 +1039,9 @@ export class StateManager {
       this.decisions = loadEntities<Decision>(path.join(this.moePath, 'decisions'));
       this.proposals = loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
       this.resources = loadEntities<ResourceState>(path.join(this.moePath, 'resources'));
+      // loadEntities tolerates a missing directory, so a project that has never
+      // opened an attempt simply loads an empty map — no scaffolding needed.
+      this.attempts = loadEntities<ExecutionAttempt>(path.join(this.moePath, 'attempts'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {

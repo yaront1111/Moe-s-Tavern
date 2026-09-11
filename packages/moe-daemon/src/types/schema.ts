@@ -854,6 +854,56 @@ export interface ResourceSettings {
   description?: string;
 }
 
+// =============================================================================
+// Execution attempts — durable identity for one execution of one task
+// =============================================================================
+//
+// Every execution of a task gets a record, so a later call can be told whether
+// it belongs to the current attempt or a superseded one. Purely additive: no
+// existing type changed, no schemaVersion bump, no migration (same shape as the
+// Task.planRevision addition above).
+// =============================================================================
+
+/**
+ * Lifecycle of one attempt. `closed` is terminal. Which phase may legally
+ * follow which is NOT decided here — that belongs to the work that wires
+ * attempts into claim/complete/release, which is the only thing that knows.
+ */
+export type ExecutionAttemptPhase = 'running' | 'finalizing' | 'reconciling' | 'closed';
+
+/** One execution of one task; persisted at .moe/attempts/<id>.json (daemon sole-writer). */
+export interface ExecutionAttempt {
+  id: string;
+  taskId: string;
+  /** Worker seat that opened the attempt. */
+  workerId: string;
+  /** Wrapper/runner session that owns the process side of the attempt. */
+  runnerId: string;
+  /**
+   * Fencing token: monotonic per task, starting at 1, NEVER reused — not after
+   * a closed attempt, not after a deleted record, not after a daemon restart.
+   * Allocated as (max generation over every prior attempt for the task) + 1, so
+   * it must never be derived from how many attempt records currently exist.
+   * The domain is a positive safe integer, shared with the Kotlin/JSON clients'
+   * Long; a value outside it fails closed rather than being coerced.
+   */
+  generation: number;
+  /** Checkout/worktree the attempt runs against. */
+  workspace: string;
+  phase: ExecutionAttemptPhase;
+  startedAt: string;
+  /** When `phase` last changed. */
+  lastPhaseAt: string;
+  /**
+   * Advisory hints for a later reattachment path, not evidence of liveness: a
+   * recorded process start time and host CANNOT prove the process is still
+   * alive, and nothing may treat them as proof. At best they narrow which
+   * candidate process an external probe should ask about.
+   */
+  processStartedAt?: string;
+  host?: string;
+}
+
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
 export type ProposalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
