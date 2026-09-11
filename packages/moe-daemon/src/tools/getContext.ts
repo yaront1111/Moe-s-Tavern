@@ -296,6 +296,11 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               assignedWorkerId: task.assignedWorkerId,
               reopenCount: task.reopenCount,
               reopenReason: task.reopenReason,
+              // Surfaced even when the row is no longer BLOCKED: the block
+              // quartet below is status-gated, so without this a cleared block
+              // leaves no readable trace and the claimer cannot tell a resolved
+              // block from an erased one.
+              ...(task.priorBlockedReason ? { priorBlockedReason: task.priorBlockedReason } : {}),
               rejectionDetails: task.rejectionDetails || null,
               // Epic-final flag (drives the wrapper's qualityGate scope) and
               // dependency surface: declared prerequisites plus, on a BLOCKED
