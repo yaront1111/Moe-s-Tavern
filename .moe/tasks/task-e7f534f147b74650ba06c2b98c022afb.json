@@ -99,8 +99,8 @@
       "completedAt": "2026-09-11T10:55:59.345Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -122,12 +122,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:20.514Z",
-  "updatedAt": "2026-09-11T10:57:43.811Z",
+  "updatedAt": "2026-09-11T11:03:17.759Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T18:21:49.963Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T11:03:17.759Z",
+    "wallClockMs": 60087796
   },
   "contextFetchedBy": [
     "architect-0dc7194c",
@@ -214,6 +216,33 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "1d210b21262a42cbd532726eef6d6bdeae0b9577",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T10:40:53Z",
+      "paths": [
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T10:58:00.879Z",
+      "treeId": "7559bb66084880b9237a546223d6c5d168c2454e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        },
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -227,9 +256,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-11T10:57:41Z",
-    "at": "2026-09-11T10:57:43.811Z"
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-11T10:40:53Z",
+    "at": "2026-09-11T10:58:00.879Z"
   },
   "reviewStartedAt": "2026-09-11T10:56:42.923Z",
   "verification": {
@@ -238,5 +267,13 @@
     "outputTail": "START=2026-09-11T10:53:55Z\n> Task :compileKotlin\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 3s\n11 actionable tasks: 6 executed, 5 up-to-date\nEXIT=0\nFresh JUnit XML (all 11 files written 10:53:57-58Z): 11 classes, 117 tests, 0 skipped, 0 failures, 0 errors (MoeJsonTest 18 = 10 existing + 8 new; TaskTimingPresentationTest 22; prior total 109). GRADLE_OPTS only raises the gradlew client heap (Jansi %TEMP% OOM workaround).",
     "reportedAt": "2026-09-11T10:56:42.923Z"
   },
-  "completionSummary": "JetBrains Task now carries the daemon's six blocker/attention fields as display data. Models.kt: appended needsHumanReview: Boolean=false; blockedReason, blockedResourceId, blockedFromStatus, blockedAt: String?=null; blockedOnTaskIds: List<String>?=null at the END of Task (no call-site changes; retired budget not restored; TaskMetrics untouched). MoeJson.kt: both constructors (private parseTasks via parseState, public parseTask) map them. needsHumanReview uses the existing getStrictBooleanOrDefault (real JSON boolean only). The four strings use the new private getStrictStringOrNull (real JSON string only, else null). The ids use the new getStrictStringListOrNull: missing/null/non-array gives null; an array keeps its string members verbatim, in order, with duplicates; [] and all-invalid arrays give []. No trim, sort, dedupe, date parsing or status inference; the legacy permissive helpers are untouched. Contract: values are kept verbatim and unescaped, and a payload without metadata clears it (the dispatcher replaces tasks rather than merging). MoeJsonTest.kt: 8 new tests (populated snapshot+update, Gson round trip, omitted/null defaults, 25 wrong-kind cases with a valid neighbour task, dependency arrays incl. 10k members, cleared payload, attention independence, legacy-coercion control); the 10 existing tests are unchanged. Red before the model change (focused): 18 tests, 7 failed, 0 errors, all AssertionError \"parsed Task dropped needsHumanReview\". Mutation probe killed 8/8. Final gate is fresh: 11 classes, 117 tests, 0 failures/errors/skips. Prerequisite task-435683c2 landed as e09bcb6. Modified: moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Caveats: UI code must not put these strings into HTML-rendering Swing text; VS Code parity is carded as task-c6e2eca5."
+  "completionSummary": "JetBrains Task now carries the daemon's six blocker/attention fields as display data. Models.kt: appended needsHumanReview: Boolean=false; blockedReason, blockedResourceId, blockedFromStatus, blockedAt: String?=null; blockedOnTaskIds: List<String>?=null at the END of Task (no call-site changes; retired budget not restored; TaskMetrics untouched). MoeJson.kt: both constructors (private parseTasks via parseState, public parseTask) map them. needsHumanReview uses the existing getStrictBooleanOrDefault (real JSON boolean only). The four strings use the new private getStrictStringOrNull (real JSON string only, else null). The ids use the new getStrictStringListOrNull: missing/null/non-array gives null; an array keeps its string members verbatim, in order, with duplicates; [] and all-invalid arrays give []. No trim, sort, dedupe, date parsing or status inference; the legacy permissive helpers are untouched. Contract: values are kept verbatim and unescaped, and a payload without metadata clears it (the dispatcher replaces tasks rather than merging). MoeJsonTest.kt: 8 new tests (populated snapshot+update, Gson round trip, omitted/null defaults, 25 wrong-kind cases with a valid neighbour task, dependency arrays incl. 10k members, cleared payload, attention independence, legacy-coercion control); the 10 existing tests are unchanged. Red before the model change (focused): 18 tests, 7 failed, 0 errors, all AssertionError \"parsed Task dropped needsHumanReview\". Mutation probe killed 8/8. Final gate is fresh: 11 classes, 117 tests, 0 failures/errors/skips. Prerequisite task-435683c2 landed as e09bcb6. Modified: moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Caveats: UI code must not put these strings into HTML-rendering Swing text; VS Code parity is carded as task-c6e2eca5.",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+  ],
+  "completedAt": "2026-09-11T11:03:17.759Z",
+  "reviewCompletedAt": "2026-09-11T11:03:17.759Z",
+  "reviewSummary": "All 6 DoD items + task/epic/global rails verified. Landed+pushed: 38572f1 (qa-recovered ckpt: MoeJsonTest +301/-0) + 1d210b2 (worker completion: Models.kt +9/-1, MoeJson.kt +35/-2); HEAD==origin/moe/work-2026-09-10, owned paths clean vs HEAD. Diff 0fc21ec..HEAD: six defaulted vals appended at END of Task (names match daemon schema.ts); both Task constructors (parseTasks via parseState, parseTask) map them; needsHumanReview reuses getStrictBooleanOrDefault; new private getStrictStringOrNull/getStrictStringListOrNull used only for new fields; legacy helpers + callers untouched; no retired time-cap field; only 2 Task( call sites; plugin never serializes Task back (MoeCommandSender builds explicit payloads) and dispatcher replaces by id, so no daemon/persisted-data change. Independent red: new MoeJsonTest vs 0fc21ec Models.kt+MoeJson.kt compiles, fails 7/18 AssertionError 'parsed Task dropped needsHumanReview', 0 errors. Independent mutation probe (focused MoeJsonTest under jetbrains-gradle lease) killed 7/7: snapshot permissive boolean, update-path permissive id list, snapshot blockedFromStatus cross-wired, string helper without primitive guard (throws), status-inferred attention, list helper keeping numbers, update-path blockedResourceId dropped; pristine bytes restored (sha256 + git diff clean). Gate: exact `$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE` - first run :test UP-TO-DATE (not counted); after mutant runs re-ran exact command: :test executed, BUILD SUCCESSFUL, exit 0, fresh XML 11:01:47-48Z: 11 classes, 117 tests, 0 failures/errors/skipped (MoeJsonTest 18 = 10 unchanged + 8 new). Forbidden-pattern scan clean. Scope = 3 owned files + board JSON."
 }
