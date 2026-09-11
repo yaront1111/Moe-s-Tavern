@@ -330,6 +330,11 @@ export class MoeWebSocketServer {
             }
           }
           // Validation + update inside mutex to prevent TOCTOU race
+          // Set when this edit takes the task OUT of BLOCKED, so the activity
+          // event is TASK_UNBLOCKED rather than a generic TASK_UPDATED that
+          // names neither the transition nor an actor. Declared at the mutex
+          // callback's scope because the update call that consumes it is here.
+          let unblockedFromBoard = false;
           const task = await this.withMutex(async () => {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
@@ -367,6 +372,17 @@ export class MoeWebSocketServer {
                     }
                     safeUpdates = {
                       ...safeUpdates,
+                      // Archive the prose before clearing it, exactly as
+                      // setTaskStatus does. Nulling blockedReason outright
+                      // destroyed the only record of WHY the task was parked,
+                      // so a seat that claimed the row next saw a clean
+                      // PLANNING card and could not tell a resolved block from
+                      // an erased one. Measured 2026-09-11: one row was dragged
+                      // out of BLOCKED twice while its PRODUCT_DECISION_REQUIRED
+                      // question was still unanswered, and the architect
+                      // correctly re-blocked it three times because the board
+                      // left it no way to see that nothing had been decided.
+                      ...(existing.blockedReason ? { priorBlockedReason: existing.blockedReason } : {}),
                       blockedReason: null,
                       blockedResourceId: null,
                       blockedOnTaskIds: null,
@@ -374,6 +390,7 @@ export class MoeWebSocketServer {
                       blockedAt: null,
                       ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
                     };
+                    unblockedFromBoard = true;
                   }
                   // Entering BLOCKED from the board parks the task in place:
                   // record the restore target and keep the assignee.
@@ -441,7 +458,11 @@ export class MoeWebSocketServer {
                 }
               }
             }
-            return this.state.updateTask(taskId, safeUpdates);
+            return this.state.updateTask(
+              taskId,
+              safeUpdates,
+              unblockedFromBoard ? 'TASK_UNBLOCKED' : undefined
+            );
           });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
