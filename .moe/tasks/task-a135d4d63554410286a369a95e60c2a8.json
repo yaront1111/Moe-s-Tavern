@@ -101,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T17:59:50.402Z",
-  "updatedAt": "2026-09-11T10:28:12.833Z",
+  "updatedAt": "2026-09-11T10:28:16.873Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
@@ -145,7 +145,36 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/util/enforcement.test.ts",
-    "packages/moe-daemon/src/util/enforcement.ts"
+    "packages/moe-daemon/src/util/enforcement.ts",
+    ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+    ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
   ],
-  "completionSummary": "Added exported `assertAttemptCurrent(state, task, identity?: {attemptId?, generation?}, toolName?)` and `AttemptIdentity` beside assertWorkerOwns in packages/moe-daemon/src/util/enforcement.ts. The diff is purely additive, with 0 removed lines, and StateManager is imported type-only. Current truth is read from the attempt store via listAttempts and currentAttempt.\n\nDecision order:\n- No identity (absent, JSON null, {} or both undefined): legacy tolerance, with a once-per-(task, tool) warning only when the task is claimed.\n- Validation: refuses without coercion. A generation must be a positive safe integer, and an attemptId a non-blank string.\n- No attempt record at all: tolerated and logged once. The comment says DO NOT FIX INTO A REFUSAL. A task whose attempts are all closed IS refused.\n- Comparison: strict equality on every presented field, so stale, future and self-inconsistent pairs are all refused.\n- A mismatch throws MoeError STATE_CONFLICT (-32002) with codeName ATTEMPT_SUPERSEDED. Its context is limited to {taskId, currentAttemptId, currentGeneration, callerAttemptId, callerGeneration}.\n- The header states that the guard fences DAEMON mutations only and cannot stop a superseded CLI from writing a shared workspace.\n\nEvidence:\n- enforcement.test.ts grew from 14 to 67 tests.\n- `npx vitest run src/util/enforcement.test.ts` exits 0 with 67/67.\n- `npm.cmd test` in packages/moe-daemon exits 0 with 1352 passed and 5 skipped (all peers'), 0 FAIL.\n- `npx tsc --noEmit -p tsconfig.json` exits 0.\n- 11 mutations were run on the final code and all went red: ordering compare, no-identity block, no-identity return, no-record tolerance, coercing validator, OR instead of AND, truthiness check, code swap, unscoped lookup, shared dedupe map, unsafe render.\n\nDownstream:\n- task-b6c48bf0 (attempt lifecycle) must return attemptId and generation from claim_next_task so callers can present them.\n- task-4d7074c0 (record_candidate) is BLOCKED on this task and auto-unblocks at DONE.\n- tas"
+  "completionSummary": "Added exported `assertAttemptCurrent(state, task, identity?: {attemptId?, generation?}, toolName?)` and `AttemptIdentity` beside assertWorkerOwns in packages/moe-daemon/src/util/enforcement.ts. The diff is purely additive, with 0 removed lines, and StateManager is imported type-only. Current truth is read from the attempt store via listAttempts and currentAttempt.\n\nDecision order:\n- No identity (absent, JSON null, {} or both undefined): legacy tolerance, with a once-per-(task, tool) warning only when the task is claimed.\n- Validation: refuses without coercion. A generation must be a positive safe integer, and an attemptId a non-blank string.\n- No attempt record at all: tolerated and logged once. The comment says DO NOT FIX INTO A REFUSAL. A task whose attempts are all closed IS refused.\n- Comparison: strict equality on every presented field, so stale, future and self-inconsistent pairs are all refused.\n- A mismatch throws MoeError STATE_CONFLICT (-32002) with codeName ATTEMPT_SUPERSEDED. Its context is limited to {taskId, currentAttemptId, currentGeneration, callerAttemptId, callerGeneration}.\n- The header states that the guard fences DAEMON mutations only and cannot stop a superseded CLI from writing a shared workspace.\n\nEvidence:\n- enforcement.test.ts grew from 14 to 67 tests.\n- `npx vitest run src/util/enforcement.test.ts` exits 0 with 67/67.\n- `npm.cmd test` in packages/moe-daemon exits 0 with 1352 passed and 5 skipped (all peers'), 0 FAIL.\n- `npx tsc --noEmit -p tsconfig.json` exits 0.\n- 11 mutations were run on the final code and all went red: ordering compare, no-identity block, no-identity return, no-record tolerance, coercing validator, OR instead of AND, truthiness check, code swap, unscoped lookup, shared dedupe map, unsafe render.\n\nDownstream:\n- task-b6c48bf0 (attempt lifecycle) must return attemptId and generation from claim_next_task so callers can present them.\n- task-4d7074c0 (record_candidate) is BLOCKED on this task and auto-unblocks at DONE.\n- tas",
+  "commits": [
+    {
+      "sha": "ac6c9dc6d201814ac52d0e2ac77cad7e665aa974",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T10:28:12Z",
+      "paths": [
+        ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        "packages/moe-daemon/src/util/enforcement.test.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T10:28:16.873Z",
+      "treeId": "397a5c421ddc11ac528c7eee063d1591548bffbf",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T10:28:12Z",
+    "at": "2026-09-11T10:28:16.873Z"
+  }
 }
