@@ -27,6 +27,17 @@ export const RELEASE_NOT_ASSIGNEE = 'RELEASE_NOT_ASSIGNEE';
 export const CLAIM_LOST_RACE = 'CLAIM_LOST_RACE';
 /** The row's current step is IN_PROGRESS and its holder is alive. */
 export const STEP_LEASE_HELD = 'STEP_LEASE_HELD';
+/**
+ * The claimer still holds an attempt in the `finalizing` phase. complete_task
+ * hands the task to QA but deliberately leaves that attempt OPEN, because the
+ * bytes are only landed once the session exits and the wrapper commits them —
+ * so the seat is NOT free until the boundary is acknowledged, and starting the
+ * next task now would open a second one across the first.
+ *
+ * Unlike every name above it this one is RETURNED, never thrown: a wrapper must
+ * read it as retryable and come back, not as a fatal error.
+ */
+export const CLAIM_ATTEMPT_FINALIZING = 'CLAIM_ATTEMPT_FINALIZING';
 
 /**
  * The actor recorded when a release carries no caller id.

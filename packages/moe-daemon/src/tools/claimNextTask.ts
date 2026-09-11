@@ -2,12 +2,12 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
-import { closeOpenAttempts, currentAttempt, openAttempt } from '../state/attemptStore.js';
+import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
-import { assertNoLiveLease, claimLostRace } from '../util/claimGuards.js';
+import { assertNoLiveLease, claimLostRace, CLAIM_ATTEMPT_FINALIZING } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
@@ -169,6 +169,48 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           const hold = blockingHold(state, params.workerId, params.taskId);
           if (hold) {
             return heldTaskRefusal(hold, params.workerId);
+          }
+
+          // The seat is not free while an attempt of THIS worker is still
+          // finalizing. complete_task hands its task to QA and leaves the
+          // attempt open on purpose, because the wrapper only lands the bytes
+          // after the CLI exits — so claiming now would start task B while
+          // task A's artifact boundary is still open.
+          //
+          // Fires HERE, beside the one-task-per-worker check and before any
+          // ranking, eligibility scan or assignment write, so a refused claim
+          // can never have changed an owner. RETURNED, never thrown: a task
+          // rail requires a wrapper to treat this as retryable, and the
+          // throwing refusals in this file are reserved for genuine races.
+          // Scoped to this worker by construction — another worker's
+          // finalizing attempt is none of this caller's business.
+          const finalizing = listAttempts(state).find(
+            (a) => a.workerId === params.workerId && a.phase === 'finalizing'
+          );
+          if (finalizing) {
+            return {
+              hasNext: false,
+              code: CLAIM_ATTEMPT_FINALIZING,
+              finalizingAttempt: {
+                attemptId: finalizing.id,
+                generation: finalizing.generation,
+                taskId: finalizing.taskId,
+              },
+              message:
+                `Worker ${params.workerId} still holds attempt ${finalizing.id} (generation ` +
+                `${finalizing.generation}) on task ${finalizing.taskId} in phase finalizing: its ` +
+                'bytes are not landed yet, so no new task may be started. This is a ' +
+                'retryable refusal, NOT a fatal error.',
+              nextAction: {
+                reason:
+                  `End this session so the wrapper can land task ${finalizing.taskId}; retry this ` +
+                  'claim afterwards rather than escalating. Be aware that NOTHING acknowledges the ' +
+                  'boundary yet: the attempt is closed by the next claim of ' +
+                  `${finalizing.taskId} (normally QA picking it up for review). A deregister, a ` +
+                  'release or a daemon restart does NOT clear it — all three key on an assignment ' +
+                  'the completed task no longer has.'
+              }
+            };
           }
         }
 

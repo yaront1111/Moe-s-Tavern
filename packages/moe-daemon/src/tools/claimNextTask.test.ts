@@ -9,7 +9,7 @@ import { activeWaiters, waitForTaskTool } from './waitForTask.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import { releaseTaskTool } from './releaseTask.js';
 import { ToolTestHarness } from './toolTestHarness.js';
-import { listAttempts, openAttempt } from '../state/attemptStore.js';
+import { closeOpenAttempts, listAttempts, openAttempt, setAttemptPhase } from '../state/attemptStore.js';
 import type { Project, Epic, Worker, Task, TeamRole, HandoffNote } from '../types/schema.js';
 
 // Mocked so the flag logic is tested without a git binary; the real subprocess
@@ -1024,5 +1024,129 @@ describe('moe.claim_next_task — execution attempts', () => {
     expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
     expect(result).not.toHaveProperty('attemptId');
     expect(attemptsOf('task-1')).toEqual([]);
+  });
+});
+
+// =============================================================================
+// Finalizing attempts (task-5dd49fe2). complete_task holds the owning attempt
+// OPEN in the `finalizing` phase instead of closing it, because the wrapper
+// only lands the bytes after the CLI exits. Until that boundary is
+// acknowledged the seat is not free, so a coding claim from the SAME worker is
+// refused — by RETURN, never by throw: a task rail requires a wrapper reading
+// this to treat it as retryable rather than fatal.
+// =============================================================================
+describe('moe.claim_next_task — finalizing attempt refusal', () => {
+  const h = new ToolTestHarness();
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    // task-1 is the just-completed row: complete_task moved it to REVIEW and
+    // the WORKING->REVIEW handoff cleared its assignment, so it is NOT a
+    // blockingHold. task-2 is the next piece of work the worker must not start.
+    h.createTask({ id: 'task-1', status: 'REVIEW', assignedWorkerId: null });
+    h.createTask({ id: 'task-2', status: 'WORKING', assignedWorkerId: null, order: 2 });
+    await h.state.load();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  async function claim(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return await claimNextTaskTool(h.state).handler({ statuses: ['WORKING'], ...args }, h.state) as Record<string, unknown>;
+  }
+
+  /** [generation, workerId, phase] for each attempt of the task, in generation order. */
+  function attemptsOf(taskId: string): Array<[number, string, string]> {
+    return listAttempts(h.state, taskId).map((a) => [a.generation, a.workerId, a.phase]);
+  }
+
+  /** The state complete_task leaves behind: an open attempt held in `finalizing`. */
+  async function finalizingAttemptFor(workerId: string): Promise<{ id: string; generation: number }> {
+    const opened = await openAttempt(h.state, {
+      taskId: 'task-1', workerId, runnerId: workerId, workspace: h.testDir,
+    });
+    const held = await setAttemptPhase(h.state, opened.id, 'finalizing');
+    return { id: held.id, generation: held.generation };
+  }
+
+  it('refuses a coding claim while that worker has an attempt finalizing', async () => {
+    const held = await finalizingAttemptFor('worker-1');
+
+    // Awaited directly: a throw here fails the test, which is the point — the
+    // refusal is retryable, and the throwing refusals in this tool are reserved
+    // for genuine races.
+    const refused = await claim({ workerId: 'worker-1' });
+
+    expect(refused.hasNext).toBe(false);
+    expect(refused.code).toBe('CLAIM_ATTEMPT_FINALIZING');
+    expect(refused.finalizingAttempt).toEqual({
+      attemptId: held.id,
+      generation: held.generation,
+      taskId: 'task-1',
+    });
+    expect(typeof refused.message).toBe('string');
+    // The acknowledgement tool is a sibling task and does not exist yet, so the
+    // hint carries a reason and names no tool it cannot honour.
+    expect(refused.nextAction).not.toHaveProperty('tool');
+    expect(typeof (refused.nextAction as { reason?: unknown }).reason).toBe('string');
+  });
+
+  it('changes no task owner when it refuses a worker holding a finalizing attempt', async () => {
+    await finalizingAttemptFor('worker-1');
+
+    await expect(claim({ workerId: 'worker-1' })).resolves.toMatchObject({ hasNext: false });
+
+    // The refusal fires before ranking and before the assignment write.
+    expect(h.state.getTask('task-2')!.assignedWorkerId).toBeNull();
+    expect(h.state.getTask('task-2')!.status).toBe('WORKING');
+    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();
+    expect(attemptsOf('task-2')).toEqual([]);
+  });
+
+  it('claims normally when the worker\'s only attempts are closed', async () => {
+    await finalizingAttemptFor('worker-1');
+    await closeOpenAttempts(h.state, 'task-1');
+
+    const result = await claim({ workerId: 'worker-1' });
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-2');
+  });
+
+  it('is not blocked by a finalizing attempt belonging to a different worker', async () => {
+    await finalizingAttemptFor('worker-2');
+
+    const result = await claim({ workerId: 'worker-1' });
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-2');
+  });
+
+  it('claims successfully once the finalizing attempt reaches the closed phase', async () => {
+    const held = await finalizingAttemptFor('worker-1');
+    const refused = await claim({ workerId: 'worker-1' });
+    expect(refused.hasNext).toBe(false);
+
+    // The retry the refusal promises.
+    await setAttemptPhase(h.state, held.id, 'closed');
+    const retried = await claim({ workerId: 'worker-1' });
+
+    expect(retried.hasNext).toBe(true);
+    expect((retried.task as { id: string }).id).toBe('task-2');
+    expect(attemptsOf('task-1')).toEqual([[1, 'worker-1', 'closed']]);
+  });
+
+  it('keeps today\'s behaviour for a claim that names no worker', async () => {
+    await finalizingAttemptFor('worker-1');
+
+    // No worker id, so there is no worker whose seat could be held.
+    const result = await claim({});
+
+    expect(result.hasNext).toBe(true);
+    expect((result.task as { id: string }).id).toBe('task-2');
   });
 });

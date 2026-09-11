@@ -3,6 +3,8 @@ import type { StateManager } from '../state/StateManager.js';
 import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
+import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import type { ExecutionAttempt } from '../types/schema.js';
 
 interface BranchPolicyOutcome {
   pattern: string;
@@ -125,6 +127,30 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           ? params.summary.trim().slice(0, 2000)
           : undefined;
 
+      // Hold the owning attempt OPEN in `finalizing` BEFORE the REVIEW
+      // transition, never after it. That single updateTask is what frees the
+      // worker — it clears assignedWorkerId on the WORKING -> REVIEW handoff —
+      // so an attempt still in phase `running` at that instant is exactly the
+      // window in which a session starts task B while task A's bytes are still
+      // unlanded (the wrapper only lands them after the CLI exits).
+      //
+      // Going FIRST is deliberate: a later failure then leaves a conservatively
+      // `finalizing` attempt on a still-WORKING task, which blocks only this
+      // worker's own next claim and is repaired by its own retry. The opposite
+      // order would leave a freed worker holding a `running` attempt, which is
+      // the defect itself. This is NOT a cross-entity transaction and promises
+      // no rollback: the attempt write and the task write can diverge, and the
+      // direction they diverge in is chosen to fail safe.
+      //
+      // Never `closed` here — closed is terminal in the store, so closing would
+      // hand the seat straight back and silently restore the old behaviour.
+      // A task with no attempt is a legacy row predating attempts entirely:
+      // currentAttempt returns null and the completion proceeds untouched.
+      const openAttempt = currentAttempt(state, task.id);
+      const finalizing: ExecutionAttempt | null = openAttempt
+        ? await setAttemptPhase(state, openAttempt.id, 'finalizing')
+        : null;
+
       // Stamp reviewStartedAt only. completedAt means "finished" and is stamped
       // at DONE by qa_approve — not here at REVIEW entry (that was a misnomer).
       const updated = await state.updateTask(
@@ -169,14 +195,31 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           duration: 'n/a'
         },
         ...(branchPolicy ? { branchPolicy } : {}),
-        nextAction: {
-          tool: 'moe.wait_for_task',
-          args: {
-            statuses: ['WORKING'],
-            workerId: params.workerId,
-          },
-          reason: 'Task handed to QA. Record a Serena write_memory `task-' + updated.id + '-handoff` note (and any gotcha-<area> learnings) for the next agent, then block until the next task arrives.'
-        }
+        // Beside the stats, with the same flat key names the claim result uses.
+        ...(finalizing ? { attemptId: finalizing.id, generation: finalizing.generation } : {}),
+        // While an attempt of this worker is finalizing, the hint must name NO
+        // tool at all: every claim/wait tool is an invitation to start the next
+        // task across an artifact boundary that is still open, and a claim from
+        // this worker is refused until the boundary is acknowledged anyway. A
+        // legacy row with no attempt opened no boundary, so it keeps the old
+        // hint unchanged.
+        nextAction: finalizing
+          ? {
+              reason:
+                `Task handed to QA, but attempt ${finalizing.id} (generation ${finalizing.generation}) is ` +
+                'FINALIZING: your bytes are NOT landed until this session exits and the wrapper commits them. ' +
+                'Record a Serena write_memory `task-' + updated.id + '-handoff` note (and any gotcha-<area> ' +
+                'learnings) for the next agent, then END YOUR TURN. Do not claim or wait for another task — ' +
+                'a claim from you is refused while this attempt is finalizing.'
+            }
+          : {
+              tool: 'moe.wait_for_task',
+              args: {
+                statuses: ['WORKING'],
+                workerId: params.workerId,
+              },
+              reason: 'Task handed to QA. Record a Serena write_memory `task-' + updated.id + '-handoff` note (and any gotcha-<area> learnings) for the next agent, then block until the next task arrives.'
+            }
       };
     }
   };

@@ -5,7 +5,8 @@ import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { completeTaskTool } from './completeTask.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
-import type { Task, Epic, Project, ProjectSettings } from '../types/schema.js';
+import { listAttempts, openAttempt } from '../state/attemptStore.js';
+import type { ExecutionAttempt, Task, Epic, Project, ProjectSettings } from '../types/schema.js';
 
 describe('moe.complete_task ownership + ordering enforcement', () => {
   let testDir: string;
@@ -468,5 +469,123 @@ describe('moe.complete_task summary persistence', () => {
     }, h.state);
 
     expect(h.state.getTask('task-1')!.completionSummary).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finalizing phase (task-5dd49fe2). complete_task must NOT close the artifact
+// boundary. It holds the owning attempt OPEN in the `finalizing` phase and
+// stops inviting the worker to claim or wait for more work — otherwise a
+// session starts task B while task A's bytes are still unlanded, because the
+// wrapper only lands after the CLI exits.
+//
+// Every phase assertion names the exact string: a "not closed" assertion passes
+// against a still-`running` attempt and would prove nothing.
+// ---------------------------------------------------------------------------
+describe('moe.complete_task — finalizing attempt', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      id: 'task-1',
+      status: 'WORKING',
+      assignedWorkerId: 'worker-a',
+      implementationPlan: [
+        { stepId: 'step-1', description: 'd', status: 'COMPLETED', affectedFiles: [] },
+      ],
+    });
+    await h.state.load();
+  });
+
+  /** [generation, phase] per attempt, in generation order. */
+  function attemptsOf(taskId: string): Array<[number, string]> {
+    return listAttempts(h.state, taskId).map((a) => [a.generation, a.phase]);
+  }
+
+  /** The record as persisted, so a phase only published in memory cannot pass. */
+  function attemptOnDisk(attemptId: string): Record<string, unknown> {
+    const file = path.join(h.moePath, 'attempts', `${attemptId}.json`);
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+  }
+
+  /** The attempt the claim path would have opened for this worker. */
+  async function openRunningAttempt(): Promise<ExecutionAttempt> {
+    return await openAttempt(h.state, {
+      taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: h.testDir,
+    });
+  }
+
+  function complete(args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    return completeTaskTool(h.state).handler({
+      taskId: 'task-1',
+      workerId: 'worker-a',
+      verification: { command: 'npm test', exitCode: 0 },
+      ...args,
+    }, h.state) as Promise<Record<string, unknown>>;
+  }
+
+  it('moves the open attempt to the finalizing phase and leaves it open', async () => {
+    const attempt = await openRunningAttempt();
+
+    await complete();
+
+    // Exactly one record, still present, in `finalizing` — NOT closed. Closing
+    // here would hand the seat straight back, which is the defect.
+    expect(attemptsOf('task-1')).toEqual([[1, 'finalizing']]);
+    expect(attemptOnDisk(attempt.id).phase).toBe('finalizing');
+  });
+
+  it('returns a nextAction that names no tool for claiming or waiting on work', async () => {
+    await openRunningAttempt();
+
+    const result = await complete();
+    const nextAction = result.nextAction as Record<string, unknown>;
+
+    // Asserted on the absent tool field, not on message wording: naming ANY
+    // claim/wait tool is the invitation this behaviour exists to remove.
+    expect(nextAction).not.toHaveProperty('tool');
+    expect(nextAction).not.toHaveProperty('args');
+    expect(typeof nextAction.reason).toBe('string');
+  });
+
+  it('surfaces the finalizing attempt id and generation with the claim result key names', async () => {
+    const attempt = await openRunningAttempt();
+
+    const result = await complete();
+
+    expect(result.attemptId).toBe(attempt.id);
+    expect(result.generation).toBe(1);
+  });
+
+  it('completes a legacy task carrying no attempt exactly as it does today', async () => {
+    // A row created before attempts existed. currentAttempt() yields null; the
+    // completion must skip silently rather than throw or change its contract.
+    const result = await complete();
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('REVIEW');
+    expect(h.state.getTask('task-1')!.status).toBe('REVIEW');
+    expect(listAttempts(h.state, 'task-1')).toEqual([]);
+    expect(result).not.toHaveProperty('attemptId');
+    expect(result).not.toHaveProperty('generation');
+    expect((result.nextAction as { tool?: string }).tool).toBe('moe.wait_for_task');
+  });
+
+  it('leaves the attempt running when a completion is rejected', async () => {
+    await openRunningAttempt();
+
+    await expect(complete({ verification: { command: 'npm test', exitCode: 1 } }))
+      .rejects.toBeInstanceOf(MoeError);
+    expect(attemptsOf('task-1')).toEqual([[1, 'running']]);
+
+    await expect(complete({ workerId: 'worker-b' })).rejects.toBeInstanceOf(MoeError);
+    expect(attemptsOf('task-1')).toEqual([[1, 'running']]);
+
+    // The rejection left the task untouched too — no half-applied state.
+    expect(h.state.getTask('task-1')!.status).toBe('WORKING');
   });
 });
