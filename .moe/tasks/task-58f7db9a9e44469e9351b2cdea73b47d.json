@@ -127,7 +127,7 @@
       "completedAt": "2026-09-11T21:53:37.938Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -151,7 +151,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:55.761Z",
-  "updatedAt": "2026-09-11T21:55:20.182Z",
+  "updatedAt": "2026-09-11T21:57:38.786Z",
   "contextFetchedBy": [
     "worker-85674160",
     "qa-813933f7"
@@ -162,7 +162,9 @@
     "plannedDistinctFileCount": 9,
     "executedStepCount": 16,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-11T21:57:38.786Z",
+    "wallClockMs": 12115519
   },
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -215,7 +217,8 @@
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/index.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json"
   ],
   "completionSummary": "REOPEN FIX. The code was already correct and landed in 2d9635f (13 paths); only the one-word unskip of acceptance case 4 never reached the branch. Cause: `contested: skip-untouched` (moe-agent.sh:2790) drops a peer-declared path — task-5b857738 declares acceptance.test.ts — unless it is TOOL-tier, and the prior session wrote it with a shell. docs/MCP_SERVER.md was contested too and landed only because an editing tool wrote it.\n\nRe-applied the identical change with the Edit tool. Round trip: Edit back to `it.skip(`, confirmed `git diff --stat` printed NOTHING (byte-identical to HEAD, LF endings preserved), then Edit forward. No logic, assertion or comment touched; `git diff -U0` is one hunk, `-  it.skip(` / `+  it(`. Other four cases still skip at 1187/1445/1852/1996 and still collect.\n\nFRESH VERIFICATION (this session, exit codes captured separately from filtered output):\n- gate `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts` = 0 — 11 passed | 4 skipped (15)\n- case 4 proved BY NAME, not by count: `-t \"holds the task for its live owner...\" --reporter=verbose` = 0, passed in 1648ms with real daemon children and a real long build\n- `npm.cmd test` = 0 — 114 files, 1530 passed | 4 skipped (baseline 112/1498/5)\n- `npx tsc --noEmit -p tsconfig.json` = 0\n\nTWO THINGS I CANNOT ASSERT MYSELF:\n1. LANDED BLOB. It cannot be checked inside the session that produces the commit — the wrapper lands after the CLI exits. HEAD is b586b1c and still returns 5. Please run against the completion sha: `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` == 4, the path present in `git show --stat <sha>`, and no `Moe-Contested` line for it in the trailer. If it is dropped again, that is the wrapper's TOOL harvest, not the diff.\n2. SCOPE. DoD 3 (one successor generation for a dead/expired attempt) and DoD 5 (the reconcile-window settings key) belong to task-d7fa98f4e43d434a96cad9440b153f1c under the operator-approved split reco",
   "commits": [
@@ -276,6 +279,28 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "f7663c00c06032c374d3967b821b0c86c3444bee",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T21:46:28Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T21:55:28.572Z",
+      "treeId": "e59d45b4e89a3ce5f5bcaa030740fb82d9879687",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -288,7 +313,8 @@
     "packages/moe-daemon/src/state/workerStore.ts",
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/reattachAttempt.test.ts",
-    "packages/moe-daemon/src/index.ts"
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts"
   ],
   "unattributedPaths": [
     ".moe-tmp-patch.py",
@@ -296,11 +322,11 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-11T21:40:01Z",
-    "at": "2026-09-11T21:47:16.897Z"
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-11T21:46:28Z",
+    "at": "2026-09-11T21:55:28.572Z"
   },
-  "reviewCompletedAt": "2026-09-11T21:46:25.265Z",
+  "reviewCompletedAt": "2026-09-11T21:57:38.786Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The acceptance case for restart during a long build is unskipped and passes unchanged"
@@ -343,5 +369,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-11T21:57:38.786Z",
+  "reviewSummary": "APPROVED after reopen #1. The landing gap is closed and re-verified on the LANDED blob, not the worktree.\n\nTHE FIX: f7663c0 contains packages/moe-daemon/src/delivery/acceptance.test.ts with exactly one hunk, `-  it.skip(` / `+  it(` at 1621. No assertion, no logic, no timeout changed. `git show HEAD:<path> | grep -c 'it\\.skip('` = 4 (was 5); worktree = 4; HEAD:1621 is now `  it(`. The Moe-Contested trailer still names the path, but it landed this time — TOOL tier survives skip-untouched, which is the exact mechanism I asked for.\n\nRE-RAN MYSELF, ALL EXIT 0:\n- gate `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts` -> 2 files, 11 passed | 4 skipped\n- case 4 by name --reporter=verbose -> PASSED 1653ms (real daemon children, real long build); 1 passed | 5 skipped\n- `npm.cmd test` -> 114 files, 1530 passed | 4 skipped (baseline 112/1498/5)\n- `npx tsc --noEmit` -> clean\nCounts match the worker's reported evidence exactly.\n\nDoD: 1 index.ts:506-507 reconcile-before-purge inside the mutex, load first; 2 reattachAttempt.ts registered at tools/index.ts:118, non-blocking, identity = id+generation+exact-string processStartedAt+host, idempotent for running; 4 workerStore spares the seat and restores it into state.workers BEFORE the release loop, so a held seat never enters it; 6 unskipped AND landed; 7 green above. DoD 3 and 5 are the operator-approved split to task-d7fa98f4e43d434a96cad9440b153f1c — deliberately absent, not a gap.\n\nRAILS: zero idle signals — lastActivityAt appears only inside two comments; sweeps.ts has zero changed lines; reviewStaleTimeoutMs appears in the diff only as task-JSON rail text. ATTEMPT_RECONCILING is TASK-scoped with the owner exempt and thrown before any write. No forbidden patterns in the diff.\n\nHONEST BOUNDARY carried forward: start time + host narrow WHICH process a runner means, never that it is alive, so until the sibling card lands a genuinely dead runner parks its task indefinitely."
 }
