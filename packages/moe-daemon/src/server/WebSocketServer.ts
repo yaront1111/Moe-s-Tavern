@@ -2,6 +2,7 @@
 // WebSocketServer - plugin + MCP proxy connections
 // =============================================================================
 
+import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
@@ -366,6 +367,7 @@ export class MoeWebSocketServer {
                   // src/tools/setTaskStatus.ts.
                   if (existing.status === 'BLOCKED') {
                     const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
+                    const carriedQuestion = carriedBlockQuestion(this.state, existing);
                     if (newStatus !== effectiveFrom && newStatus !== 'ARCHIVED'
                       && !(VALID_TRANSITIONS[effectiveFrom] ?? []).includes(newStatus)) {
                       throw new Error(`Cannot move task from BLOCKED to ${newStatus}: it was blocked from ${effectiveFrom} and ${effectiveFrom} -> ${newStatus} is not legal. Un-block to ${effectiveFrom} first.`);
@@ -383,6 +385,15 @@ export class MoeWebSocketServer {
                       // correctly re-blocked it three times because the board
                       // left it no way to see that nothing had been decided.
                       ...(existing.blockedReason ? { priorBlockedReason: existing.blockedReason } : {}),
+                      // A block with no pending lease and no unmet prerequisite
+                      // had nothing that would ever clear it — it was a
+                      // question. Carry it forward as a plan input so the next
+                      // claimer is handed the open question instead of a clean
+                      // card, rather than relying on a human to notice.
+                      // A reason the client supplied wins: it has spoken.
+                      ...(carriedQuestion && !safeUpdates.reopenReason
+                        ? { reopenReason: carriedQuestion }
+                        : {}),
                       blockedReason: null,
                       blockedResourceId: null,
                       blockedOnTaskIds: null,

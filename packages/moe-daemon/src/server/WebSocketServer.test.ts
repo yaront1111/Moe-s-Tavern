@@ -468,6 +468,80 @@ describe('MoeWebSocketServer Integration', () => {
       const unblock = events.find((e) => e.event === 'TASK_UNBLOCKED');
       expect(unblock, 'board unblock must log TASK_UNBLOCKED, not a generic TASK_UPDATED').toBeDefined();
 
+      // This block had no pending lease and no unmet prerequisite, so nothing
+      // would ever have cleared it: the question is still open and the row
+      // carries it forward where get_context will show the next claimer.
+      expect(updated.reopenReason).toContain('UNANSWERED BLOCK');
+      expect(updated.reopenReason).toContain(REASON);
+
+      ws.close();
+    });
+
+    it('UPDATE_TASK out of a RESOURCE block carries no question forward', async () => {
+      // A queued lease clears this row by itself when the grant fires, so a
+      // manual exit loses nothing and a carried question would be noise.
+      await state.updateTask('task-1', {
+        status: 'BLOCKED',
+        blockedReason: 'waiting on full-suite-gate for the daemon leg',
+        blockedResourceId: 'full-suite-gate',
+        blockedFromStatus: 'WORKING',
+        blockedAt: new Date().toISOString(),
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
+      }));
+
+      const updated = (await nextTaskUpdated(nextMessage)).payload;
+      expect(updated.status).toBe('WORKING');
+      // Evidence still kept...
+      expect(updated.priorBlockedReason).toBe('waiting on full-suite-gate for the daemon leg');
+      // ...but not re-asked as an open question.
+      expect(updated.reopenReason == null || !String(updated.reopenReason).includes('UNANSWERED BLOCK')).toBe(true);
+
+      ws.close();
+    });
+
+    it('UPDATE_TASK out of a DEPENDENCY block carries no question while a prerequisite is unmet', async () => {
+      // The dependency sweep restores this row when task-2 lands, so again
+      // nothing is lost by a manual exit.
+      const prereq = await state.createTask({
+        epicId: 'epic-1',
+        title: 'prerequisite still open',
+        description: '',
+        definitionOfDone: [],
+        status: 'WORKING',
+      });
+      // Must be a LIVE task: isDependencySatisfied treats a missing id as
+      // satisfied, so a fabricated id would invert what this arm measures.
+      expect(state.getTask(prereq.id)?.status).toBe('WORKING');
+
+      await state.updateTask('task-1', {
+        status: 'BLOCKED',
+        blockedReason: `BUILD-ORDER BLOCK on ${prereq.id}`,
+        blockedOnTaskIds: [prereq.id],
+        blockedFromStatus: 'WORKING',
+        blockedAt: new Date().toISOString(),
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
+      }));
+
+      const updated = (await nextTaskUpdated(nextMessage)).payload;
+      expect(updated.status).toBe('WORKING');
+      expect(updated.reopenReason == null || !String(updated.reopenReason).includes('UNANSWERED BLOCK')).toBe(true);
+
       ws.close();
     });
 
