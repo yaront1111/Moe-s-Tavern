@@ -145,7 +145,7 @@
       "completedAt": "2026-09-11T15:04:39.703Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -163,16 +163,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:38.246Z",
-  "updatedAt": "2026-09-11T15:05:50.495Z",
+  "updatedAt": "2026-09-11T15:09:32.008Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "worker-de4739a8"
+    "worker-de4739a8",
+    "qa-8db40c97"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T14:47:51.266Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-11T15:09:32.008Z",
+    "wallClockMs": 1300742
   },
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -222,7 +225,53 @@
     "packages/moe-daemon/src/tools/claimNextTask.test.ts",
     "packages/moe-daemon/src/tools/finalizeAttempt.ts",
     "packages/moe-daemon/src/tools/index.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json"
   ],
-  "completionSummary": "moe.finalize_attempt exists, is registered in getTools(), and the held-out acceptance case \"fast QA cannot finish before candidate preparation\" passes with ZERO edits to its assertions — the only change to acceptance.test.ts in this whole task is `it.skip(` -> `it(` on line 1020.\n\nREAD THIS FIRST, QA — I deliberately reshaped a refusal that shipped hours ago with task-5dd49fe2, and the card did not mention it. That sibling shipped the finalizing refusal as a RETURNED object `{hasNext:false, code:'CLAIM_ATTEMPT_FINALIZING', finalizingAttempt, message, nextAction}`, and added NO qa_approve hold at all. Acceptance case 1 drives both calls through `captureRefusal`, which fails outright if the call resolves, and its assertions may not be edited. So the returned shape became a thrown MoeError — numeric -32002, codeName ATTEMPT_FINALIZING, context exactly {attemptId, generation, taskId, workerId, retryable:true} — and qa_approve gained the hold that card never covered. Neither was optional: this task cannot meet its own definition of done without both. The claim suite's pinned assertion was UPDATED to the new contract, never deleted or loosened (it now asserts strictly more: instance, numeric code, codeName, the full context object, and that the message names the attempt).\n\nWHAT LANDED (9 paths). New: src/tools/finalizeAttempt.ts, src/tools/finalizeAttempt.test.ts (22 cases). Edited: src/tools/index.ts (registration), src/util/claimGuards.ts (ATTEMPT_FINALIZING + one pure MoeError builder, no StateManager import), src/tools/claimNextTask.ts (throw, lookup and position unchanged), src/tools/claimNextTask.test.ts, src/tools/qaApprove.ts, src/delivery/acceptance.test.ts, docs/MCP_SERVER.md.\n\nTHE DESIGN DETAIL THAT DECIDES CORRECTNESS, and where to attack it: the already-closed shortcut sits BEFORE assertAttemptCurrent. That guard resolves the current attempt through currentAttempt(), which ignores closed attempts, so fencing first would refuse the required idempotent repeat a"
+  "completionSummary": "moe.finalize_attempt exists, is registered in getTools(), and the held-out acceptance case \"fast QA cannot finish before candidate preparation\" passes with ZERO edits to its assertions — the only change to acceptance.test.ts in this whole task is `it.skip(` -> `it(` on line 1020.\n\nREAD THIS FIRST, QA — I deliberately reshaped a refusal that shipped hours ago with task-5dd49fe2, and the card did not mention it. That sibling shipped the finalizing refusal as a RETURNED object `{hasNext:false, code:'CLAIM_ATTEMPT_FINALIZING', finalizingAttempt, message, nextAction}`, and added NO qa_approve hold at all. Acceptance case 1 drives both calls through `captureRefusal`, which fails outright if the call resolves, and its assertions may not be edited. So the returned shape became a thrown MoeError — numeric -32002, codeName ATTEMPT_FINALIZING, context exactly {attemptId, generation, taskId, workerId, retryable:true} — and qa_approve gained the hold that card never covered. Neither was optional: this task cannot meet its own definition of done without both. The claim suite's pinned assertion was UPDATED to the new contract, never deleted or loosened (it now asserts strictly more: instance, numeric code, codeName, the full context object, and that the message names the attempt).\n\nWHAT LANDED (9 paths). New: src/tools/finalizeAttempt.ts, src/tools/finalizeAttempt.test.ts (22 cases). Edited: src/tools/index.ts (registration), src/util/claimGuards.ts (ATTEMPT_FINALIZING + one pure MoeError builder, no StateManager import), src/tools/claimNextTask.ts (throw, lookup and position unchanged), src/tools/claimNextTask.test.ts, src/tools/qaApprove.ts, src/delivery/acceptance.test.ts, docs/MCP_SERVER.md.\n\nTHE DESIGN DETAIL THAT DECIDES CORRECTNESS, and where to attack it: the already-closed shortcut sits BEFORE assertAttemptCurrent. That guard resolves the current attempt through currentAttempt(), which ignores closed attempts, so fencing first would refuse the required idempotent repeat a",
+  "commits": [
+    {
+      "sha": "a899c92ebd9d71dfde57e7d5053b70837cca6985",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T14:50:38Z",
+      "paths": [
+        ".moe/tasks/task-d72d8cc6a29a4181a3767f493007320e.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T15:05:59.587Z",
+      "treeId": "6c6d3f371a030c61b64ea3bb87d49d8bf22157de",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-11T14:50:38Z",
+    "at": "2026-09-11T15:05:59.587Z"
+  },
+  "completedAt": "2026-09-11T15:09:32.008Z",
+  "reviewCompletedAt": "2026-09-11T15:09:32.008Z",
+  "reviewSummary": "VERIFIED 7/7 DoD. Gates re-run by me, exit codes captured: named gate (finalizeAttempt.test.ts + acceptance.test.ts) EXIT=0, 23 passed|5 skipped; npm.cmd test EXIT=0, 112 files, 1498 passed|5 skipped; tsc --noEmit EXIT=0. Completion commit a899c92 present (Moe-Kind: completion, 10 paths = 9 in scope + board). DoD1 registered tools/index.ts:116, test pins exactly one registration under the exact name. DoD2 finalizing->closed via one setAttemptPhase write; hold lift proven by a follow-on claim. DoD3 asserts codeName 'ATTEMPT_SUPERSEDED' + code -32002, phase still finalizing after. DoD4 idempotency proven by comparing attempt FILE bytes before/after the repeat, not by trusting the store no-op. DoD5 acceptance diff is exactly one it.skip->it at line 1020, zero assertion edits; other five still skipped at 1187/1445/1621/1852/1996 and still collecting. DoD7 MCP_SERVER.md gains a full section plus claim_next_task/qa_approve updates. Rails: blocking NOT set (own test), no forbidden patterns, no attempt-schema field for outcome/landedRevision, no migration. Traps hold: the already-closed shortcut at finalizeAttempt.ts:200 sits BEFORE assertAttemptCurrent at :202 and is no bypass, every open path still hits the guard; a running attempt is refused ATTEMPT_NOT_FINALIZING. qa_approve hold is TASK-scoped and fires before assertWorkerOwns and all mutation; a refused approval leaves the task file byte-identical. IN SCOPE: it reshaped task-5dd49fe2's returned CLAIM_ATTEMPT_FINALIZING into a thrown -32002/ATTEMPT_FINALIZING carrying context.retryable and added the qa_approve hold that card omitted, because the held-out case routes both through captureRefusal, which fails if the call resolves. claimNextTask.test.ts tightened (exact context toEqual), not loosened. Flagged, sibling-owned: moe-agent.ps1:3796 keys on hasNext:false; Invoke-MoeRpc returns $null on an MCP error, so the wrapper idles rather than crashing."
 }
