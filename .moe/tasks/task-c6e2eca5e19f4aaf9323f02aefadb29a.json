@@ -115,7 +115,7 @@
       "completedAt": "2026-09-11T12:57:12.591Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,16 +132,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:08.571Z",
-  "updatedAt": "2026-09-11T12:58:07.725Z",
+  "updatedAt": "2026-09-11T13:02:34.111Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:37:28.204Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T13:02:34.111Z",
+    "wallClockMs": 12305907
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
-    "worker-e67b0dd2"
+    "worker-e67b0dd2",
+    "qa-813933f7"
   ],
   "stepsCompleted": [
     "step-1",
@@ -182,7 +185,55 @@
     "moe-vscode/src/panels/TaskDetailPanel.ts",
     "moe-vscode/media/taskDetail.js",
     "moe-vscode/tests/task-blocker-visibility.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+    ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json"
+  ],
+  "completionSummary": "VS Code now names WHY a task is blocked instead of one generic BLOCKED chip. Copies the confirmed contract from the JetBrains parent task-aec72949166b42a99b4279ba4615ac4b (TaskBlockerPresentation.kt), including its exact wording; no precedence was re-derived.\n\nMODIFIED PATHS (5, all under moe-vscode):\n- src/types/moe.ts (+11/-0): the six optional fields only — needsHumanReview?, blockedReason?, blockedOnTaskIds?, blockedResourceId?, blockedFromStatus?, blockedAt? — nullability copied from packages/moe-daemon/src/types/schema.ts:747-791. No transport parser added or changed.\n- src/panels/TaskDetailPanel.ts (+188/-0): the canonical TS rule (exported BlockCause, BLOCK_CAUSE_LABEL/CLEARS, blockCause, needsHumanAttention, blockedPrerequisiteIds, blockerFacts), renderBlocker(), a read-only <div id=\"blockerSection\"> at the top of .main-content, and two CSS rules in the existing style block.\n- media/board.js (+62/-3): the only deletion is the hardcoded chip `title=\"Waiting on a shared-resource lease or a human\">BLOCKED`. Now a cause chip (.chip-blocked, label + title naming the cause and its clearance) plus an independent attention chip (.chip-question).\n- media/taskDetail.js (+116): the webview copy plus blockerLine/renderBlocker, and one call added inside the existing single message listener's updateTask branch.\n- NEW tests/task-blocker-visibility.test.cjs (581 lines, 29 tests).\n\nPLAN DEVIATION, stated plainly: step 3 put the canonical rule in src/types/moe.ts with the panel importing it. That import adds a runtime require to the transpiled panel, and the pre-existing tests/task-time-budget.test.cjs loads the panel through a strict dependency map that throws on any unlisted require — it reddened 5 of its tests. That file is not mine to edit (DoD: retirement tests unchanged). So the canonical rule lives in TaskDetailPanel.ts, the one TypeScript renderer that consumes it — still exactly three copies, the canonical one has a real production consumer, no new module edge, and ",
+  "commits": [
+    {
+      "sha": "7d3dda5c29f042c745cca1daf85c1182e5e4029f",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T12:38:34Z",
+      "paths": [
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+        ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json",
+        "moe-vscode/media/board.js",
+        "moe-vscode/media/taskDetail.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/task-blocker-visibility.test.cjs"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-11T12:58:19.072Z",
+      "treeId": "482168d5099089e1662f6cce6e4af97bf3080f8b",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-vscode/src/types/moe.ts",
+          "taskId": "task-34dba87e4e1948bcba69e85f3f34bfd3"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-blocker-visibility.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/media/taskDetail.js",
+    "moe-vscode/media/board.js",
     "moe-vscode/src/types/moe.ts"
   ],
-  "completionSummary": "VS Code now names WHY a task is blocked instead of one generic BLOCKED chip. Copies the confirmed contract from the JetBrains parent task-aec72949166b42a99b4279ba4615ac4b (TaskBlockerPresentation.kt), including its exact wording; no precedence was re-derived.\n\nMODIFIED PATHS (5, all under moe-vscode):\n- src/types/moe.ts (+11/-0): the six optional fields only — needsHumanReview?, blockedReason?, blockedOnTaskIds?, blockedResourceId?, blockedFromStatus?, blockedAt? — nullability copied from packages/moe-daemon/src/types/schema.ts:747-791. No transport parser added or changed.\n- src/panels/TaskDetailPanel.ts (+188/-0): the canonical TS rule (exported BlockCause, BLOCK_CAUSE_LABEL/CLEARS, blockCause, needsHumanAttention, blockedPrerequisiteIds, blockerFacts), renderBlocker(), a read-only <div id=\"blockerSection\"> at the top of .main-content, and two CSS rules in the existing style block.\n- media/board.js (+62/-3): the only deletion is the hardcoded chip `title=\"Waiting on a shared-resource lease or a human\">BLOCKED`. Now a cause chip (.chip-blocked, label + title naming the cause and its clearance) plus an independent attention chip (.chip-question).\n- media/taskDetail.js (+116): the webview copy plus blockerLine/renderBlocker, and one call added inside the existing single message listener's updateTask branch.\n- NEW tests/task-blocker-visibility.test.cjs (581 lines, 29 tests).\n\nPLAN DEVIATION, stated plainly: step 3 put the canonical rule in src/types/moe.ts with the panel importing it. That import adds a runtime require to the transpiled panel, and the pre-existing tests/task-time-budget.test.cjs loads the panel through a strict dependency map that throws on any unlisted require — it reddened 5 of its tests. That file is not mine to edit (DoD: retirement tests unchanged). So the canonical rule lives in TaskDetailPanel.ts, the one TypeScript renderer that consumes it — still exactly three copies, the canonical one has a real production consumer, no new module edge, and "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e67b0dd2@2026-09-11T12:38:34Z",
+    "at": "2026-09-11T12:58:19.072Z"
+  },
+  "completedAt": "2026-09-11T13:02:34.111Z",
+  "reviewCompletedAt": "2026-09-11T13:02:34.111Z",
+  "reviewSummary": "APPROVED. Re-ran the exact task command in pwsh from repo root: tests 52/pass 52/fail 0, tsc clean, exit 0 - matches task.verification. 24 pre-existing tests unchanged+green, 28 new (summary says 29; off by one, cosmetic). Commit 7d3dda5 audited via git show: the 5 owned files + 2 board-state json only.\n\nRED REPRODUCED, not trusted: a 4-file scratch tree inside moe-vscode with board.js from 7d3dda5^ ran the new test file - 10 fail/18 pass, failing as assertion errors on the label (actual ['BLOCKED'] vs expected ['Dependency wait']), not module-resolution errors. Scratch deleted.\n\nDoD: (1) six optional fields typed; grep across moe-vscode/src outside types+panel finds no transport parser that could strip them. (2) board.js deletes exactly the 3 hardcoded-chip lines; cause chip + independent .chip-question attention chip, styles pre-existing at BoardViewProvider.ts:500/505; displayStatus, the status!=='BLOCKED' sub-chip guard and drag guards untouched - BLOCKED stays in Working, no new column. (3) initial markup escapes every daemon string via the existing escapeHtml, neutral fallback on a blank reason. (4) taskDetail.js writes only textContent on nodes it creates; touched-id set asserted exactly [blockerSection, commentsList, planContent, statusBadge] - unsaved title/description/DoD inputs survive. (5) tests run all three real surfaces in vm (production board.js, transpiled panel, real taskDetail.js) against a strict DOM whose innerHTML throws, plus a 10-row drift guard over all three rule copies; deepEqual on exact values for four labels, non-BLOCKED attention, resource-over-dependency precedence, 12 malformed shapes, hostile escaping, id order/duplicates, BLOCKED->WORKING clearing with attention persisting. (6) verified every CSS class the live renderer emits exists in the panel style block.\n\nNot rejected on: Moe-Contested trailer for types/moe.ts (task-34dba87e) - hunk inspected, only this task's six fields landed, inferred=0."
 }
