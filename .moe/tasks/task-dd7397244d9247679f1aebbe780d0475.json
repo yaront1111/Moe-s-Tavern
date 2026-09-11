@@ -108,8 +108,8 @@
       "completedAt": "2026-09-11T12:47:26.572Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -121,14 +121,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:48.215Z",
-  "updatedAt": "2026-09-11T12:49:09.757Z",
+  "updatedAt": "2026-09-11T13:11:38.052Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:46:47.754Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-11T13:11:38.052Z",
+    "wallClockMs": 12290298
   },
   "contextFetchedBy": [
     "worker-f2b3ac93",
@@ -326,14 +328,29 @@
       "treeId": "9904f6985ab298131058c0df9a60bdf30e1b7f38",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "3f4220b4b26cb72123c427bbe4a6978c9949af2c",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-11T12:12:42Z",
+      "paths": [
+        ".moe/tasks/task-dd7397244d9247679f1aebbe780d0475.json"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-11T12:49:23.059Z",
+      "treeId": "3a00d9d420955b9c9f684ef3a270f5b4c4148b94",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-11T12:49:06Z",
-    "at": "2026-09-11T12:49:09.757Z"
+    "kind": "completion",
+    "sessionId": "worker-f2b3ac93@2026-09-11T12:12:42Z",
+    "at": "2026-09-11T12:49:23.059Z"
   },
   "touchedFiles": [
     "packages/moe-daemon/src/providers/providerDescriptor.ts",
@@ -342,7 +359,7 @@
     "docs/plans/2026-09-11-provider-registry-spike.md",
     ".worktrees/qa-dd73/packages/moe-daemon/src/providers/zzQaAnalysis.test.ts"
   ],
-  "reviewCompletedAt": "2026-09-11T10:56:00.602Z",
+  "reviewCompletedAt": "2026-09-11T13:11:38.052Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The descriptor is populated for exactly one provider and contract tests assert it reproduces that provider's current argv and config from both wrappers",
@@ -471,5 +488,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-11T13:11:38.052Z",
+  "reviewSummary": "APPROVED after reopen #1; all 9 issues re-verified by re-running evidence, not reading summaries.\n\nDoD #2 (was FAILED) passes. 16-mutation delete-the-emitter sweep in a throwaway worktree: all five previously-GREEN mutations now RED (sh:876/881/891/907/5303). Per-mode holds -- sh:5289 (exec) and sh:5303 (interactive) go red INDEPENDENTLY. PowerShell emitters red too (ps1 762/765/766/768/781/4416/4418/4506/4511), so the pin bites in EACH wrapper. CONTROL ps1:1037 (grok's copy of the header) stays GREEN, proving site scoping still does work and the sweep isn't trivially all-red.\n\nDoD #3 (was FAILED) passes; corrections checked at source. ps1 never ASSIGNS MOE_DAEMON_HOST (reads only, 752/1013), so the bash-only feature-asymmetry reframe is right and counts/recommendation/follow-ups track it. All 16 create_secure_temp calls are inside $(...), so cleanup_temp's rm -rf is a no-op; the note records the leak, not the false EXIT-trap comment. project_doc_fallback_filenames really diverges (bash exact-string replace sh:955-959 vs ps1 regex ps1:825) and is now divergent. json.dumps wording qualified.\n\nCounts reproduce: 30/14/3, 18 emitterEvidence blocks = \"18 of the 30\", 41 literals under the pinned prefixes, 6141+5214=11355, no dry-run mode (zero hits).\n\nGates I ran: contract test 23/23 exit 0; tsc --noEmit exit 0; vitest list = 1 of 110 collected (DoD #5, no new runner); parity-check.sh PASS exit 0; postflight.sh (TIMEOUT_SEC=300) PASS, 25 scenarios, exit 0, zero ^FAIL. DoD #4 direct: blobs f64bdb88 / f456b7d1 unchanged before, during and after every harness and mutation; scripts/ diff empty. DoD #1: eight facets populated, type-required. Rails: one provider (asserted), zero importers repo-wide, daemon state-only, no forbidden patterns. Completion commit 3f4220b; bytes in 032c1cb; tree clean.\n\nRecommendation stands: AGAINST a staged migration now, FOR a print-argv mode first."
 }
