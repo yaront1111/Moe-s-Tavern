@@ -15,8 +15,69 @@
     "Never infer the reviewed revision from latest currentState.",
     "Do not alter old callers' omitted-token compatibility."
   ],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE DELIVERED CONTRACT AND SEAMS (read-only, no edits). This slice only has to match what the daemon actually accepts, so confirm it rather than trusting this plan text. Check that the daemon compare-and-swap slice landed: `git log --oneline --grep 'Moe-Task: task-dd743a02000e46cca6ae2442a1821066'` and `grep -n 'expectedPlanRevision' packages/moe-daemon/src/server/WebSocketServer.ts packages/moe-daemon/src/state/taskStore.ts`. Read the delivered APPROVE_TASK payload key name and the delivered ERROR frame field names (expected: top-level `message`, `operation`, `code`, `codeName`, plus `context` carrying `taskId` and the two revision numbers) and note the allowlist of context keys the daemon emits. Also confirm the JetBrains reviewed-dialog slice task-247fdf296ff2445daae8e057c0608f51 has landed, per the epic's JetBrains-first rail. If the daemon key name or the ERROR field layout differs from the above, follow the DELIVERED shape and say so in the step note. Then re-read the three VS Code seams you will touch: src/types/moe.ts (the `Task` interface near line 246, the `PluginOutboundMessage` APPROVE_TASK entry near line 423, the `DaemonInboundMessage` ERROR entry at line 482), and src/services/MoeDaemonClient.ts (the `_onError` emitter type near line 123, `sendMessage` near line 328 which returns boolean and tears the socket down on a send failure, `approveTask(taskId): boolean` at line 388, the ERROR case near line 971 which currently reads only the nested `payload?.operation`, and the TASK_UPDATED case near line 775 which replaces the whole cached task object). Confirm the four existing call sites that must keep compiling unchanged: PlanReviewPanel.ts:119, TaskDetailPanel.ts:136 and :214, BoardViewProvider.ts:107. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING TEST FILE FIRST AND CAPTURE RED PROOF. Create moe-vscode/tests/plan-approval-client.test.cjs following the existing convention in tests/metrics-view.test.cjs exactly: `node:test` + `node:assert/strict`, read src/services/MoeDaemonClient.ts off disk, compile it with `ts.transpileModule` (CommonJS / ES2020 / esModuleInterop) and run the output in a `vm` context so the tests execute PRODUCTION code rather than a copy of its logic. The context must stub the modules the client imports: a `vscode` shim whose `EventEmitter` records listeners and exposes `event`/`fire`/`dispose` and whose `window.createOutputChannel` returns an object with `appendLine`/`dispose`, plus inert `fs`, `path`, `net`, `child_process` and a `ws` default export exposing a constructor and the numeric `OPEN` constant. Build a helper that constructs the client, injects a fake socket by setting the private `ws` field and the private connection-state field to 'connected' with `readyState` equal to the stubbed OPEN, and records every string handed to `send`. Tests to write, each asserting the EXACT parsed JSON frame, not a substring: (A) `approveTask('task-1', 0)` sends payload `{ taskId: 'task-1', expectedPlanRevision: 0 }` — zero must survive, which kills a falsy-check mutant; (B) a normal value such as 7 and `Number.MAX_SAFE_INTEGER` both survive unchanged; (C) `approveTask('task-1')` sends payload `{ taskId: 'task-1' }` with the property genuinely ABSENT — assert with a key check, not an undefined comparison; (D) the same omitted-argument call while the cached state holds that task at a DIFFERENT revision still omits the key, proving the reviewed token is never inferred from current state; (E) explicit `undefined` behaves as omitted; (F) each malformed token — null, '3', true, 3.5, -1, Number.MAX_SAFE_INTEGER+1, NaN, Infinity — returns false, sends NOTHING at all (no legacy fallback frame), and fires an error event naming the APPROVE_TASK operation; (G) while disconnected, a valid approval still returns false and sends nothing, and a socket whose `send` throws still returns false and fires an error event, so no path reports false success; (H) an inbound ERROR frame in the modern shape (top-level operation/code/codeName plus context with taskId and both revisions) reaches the error event with operation, code, codeName and exactly those three context keys; (I) the same assertion for the legacy nested `payload.operation` shape; (J) an ERROR frame whose context also carries unrelated keys such as an internal field name, a reason string or a filesystem path promotes NONE of them, and an ERROR frame with no context at all yields no context property; (K) a TASK_UPDATED frame carrying planRevision leaves it readable on the cached task, and one WITHOUT the field leaves the property absent rather than coerced to zero. Run `npm --prefix moe-vscode test` and SAVE the failing output — the epic rail requires a test that fails on the old behavior.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "EXTEND THE SHARED TYPES ADDITIVELY. In moe-vscode/src/types/moe.ts add `planRevision?: number` to the `Task` interface beside the other optional server-owned fields, with a short comment that an absent value means a record written before the daemon stamped revisions and reads as effective 0, which is why it is optional and why no legacy snapshot breaks. Change the APPROVE_TASK entry of `PluginOutboundMessage` to `{ type: 'APPROVE_TASK'; payload: { taskId: string; expectedPlanRevision?: number } }`, with a comment that the token is command metadata beside taskId and is omitted entirely for legacy approvals. Extend the `DaemonInboundMessage` ERROR entry from `{ type: 'ERROR'; message: string }` to additionally carry optional `operation?: string`, `code?: number`, `codeName?: string`, `context?: { taskId?: string; expectedPlanRevision?: number; currentPlanRevision?: number; epicId?: string }` and an optional legacy `payload?: Record<string, unknown>` so the older nested shape still type-checks. Every addition is optional, so `npm --prefix moe-vscode run compile` must still pass with all four existing approval call sites untouched — do not edit PlanReviewPanel.ts, TaskDetailPanel.ts or BoardViewProvider.ts in this task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "FORWARD THE REVIEWED TOKEN FROM THE CLIENT WITHOUT INVENTING ONE. In moe-vscode/src/services/MoeDaemonClient.ts change the method to `approveTask(taskId: string, expectedPlanRevision?: number): boolean`. When the argument is `undefined` send exactly the legacy payload `{ taskId }` with no extra property — this is the whole backwards-compatibility contract for the four unchanged callers. When it is supplied, validate it locally: accept only `typeof expectedPlanRevision === 'number' && Number.isSafeInteger(expectedPlanRevision) && expectedPlanRevision >= 0`. `Number.isSafeInteger` is what rejects fractional, non-finite and out-of-range values; never use a numeric conversion here, because coercion is exactly the silent fallback this task exists to prevent. The error handling for a malformed token is: log it, fire the error event with `operation: 'APPROVE_TASK'` and a message naming the rejected value, return false, and send NOTHING — in particular do not fall back to the token-free frame, because the daemon would then approve a plan the human never reviewed. Build the outbound payload as a value typed against the APPROVE_TASK member of `PluginOutboundMessage` so the compiler binds the method to the wire type, and pass it through the existing `sendMessage`, preserving its boolean result verbatim so a disconnected or failed send still reports false. Under no circumstance read `this.state` / `currentState` in this method: the token is whatever the reviewed panel hands in, never the newest cached revision. Re-run the focused suite; groups A through G must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "GIVE THE PANEL CORRELATED REFUSAL FEEDBACK WITHOUT LEAKING CONTEXT. In moe-vscode/src/services/MoeDaemonClient.ts widen the `_onError` emitter payload type additively to `{ operation?: string; message: string; code?: number; codeName?: string; context?: { taskId?: string; expectedPlanRevision?: number; currentPlanRevision?: number } }`; existing subscribers read only operation and message and must keep compiling untouched. In the inbound ERROR case, keep the current message resolution as it is and fix the operation lookup to prefer the daemon's modern top-level field with the old nested one as fallback, so a stale-approval refusal is finally correlated to the command that caused it. Promote `code` only when it is a finite number and `codeName` only when it is a non-empty string, each with the same top-level-then-nested fallback. For context, write a small pure allowlist helper that copies at most `taskId` (string), `expectedPlanRevision` and `currentPlanRevision` (finite numbers) from the daemon context; never spread the received context object, because other daemon errors carry internal field names, reason strings and paths that must not reach the public event. Omit the context property entirely when none of the three survive. This is additive error handling only: an ERROR frame with none of the new fields must produce exactly the payload it produces today. Re-run the focused suite; groups H, I, J and K must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "RUN THE FULL GATE WITH RECORDED EVIDENCE. From the repo root run, on Windows, `cmd /d /c \"npm --prefix moe-vscode test && npm --prefix moe-vscode run compile\"`, and elsewhere `npm --prefix moe-vscode test && npm --prefix moe-vscode run compile`. Capture the exit code separately from any filtered output, because a grep pipeline hides it on this box. Require exit 0 from both, a nonzero node:test pass count that is strictly greater than the count before this task (the suite currently holds only daemon-start and metrics-view), and zero compile errors — the compile is what proves the optional type additions did not break the four unchanged approval callers. If anything unrelated fails, diagnose it before proceeding rather than re-running. Keep the exact command, exit code and counts for the `verification` argument of moe.complete_task, and keep the earlier red output as the fails-on-old-code proof the epic rail demands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Re-read the whole diff as an attacker and confirm each of these or fix it: an explicit 0 really reaches the wire and is not swallowed by a falsy check; the property is genuinely absent for legacy calls rather than serialized as null; no code path reads cached state to manufacture a token; a malformed token cannot produce any outbound frame, including the legacy one; a disconnected client and a throwing socket both still return false with no false success; the error allowlist cannot forward an unlisted context key even when the daemon adds one later; the widened error event and the optional type fields are additive enough that every unchanged caller and subscriber still compiles; and nothing in the three files drifts into webview click or render logic, other board and detail callers, daemon policy, JetBrains code or Wave 1. Confirm the file count is exactly the three in scope. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and summarize for QA: the exact APPROVE_TASK wire shape for supplied, zero and omitted tokens, the local refusal behavior, the error-field promotion rules with their allowlist, and the deliberate boundary that binding the token to what the panel actually rendered belongs to the following webview slice, so this slice alone does not yet guarantee the sent revision is the reviewed one.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -33,5 +94,30 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:25:37.487Z",
-  "updatedAt": "2026-09-10T18:27:19.344Z"
+  "updatedAt": "2026-09-11T09:28:47.130Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:26:02.737Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-31b9f5b1",
+    "architect-2d25447a"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:28:47.054Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Typing the parameter `number | null` and treating null as legacy — rejected: the daemon treats an omitted key as the only legacy opt-out and refuses an explicit null, so mirroring that here keeps one rule across the wire. (2) Letting a malformed token fall back to the token-free frame so the human is not blocked — rejected outright: that is the exact hole this epic exists to close, since the daemon would then approve a plan nobody reviewed; refuse locally and report it. (3) Validating in the panel instead of the client — rejected: the panel slice is a separate card and every future caller would repeat the check; the client is the single wire boundary. (4) Spreading the daemon's error context straight into the public event — rejected: unrelated MoeErrors carry internal field names, reason strings and paths, so only three keys may cross. (5) Changing the four existing approval call sites to pass a token — explicitly out of scope and forbidden by a task rail; the optional parameter is what keeps them working untouched. (6) Writing the test against a hand-copied serializer — rejected: the existing metrics-view test executes production code through transpileModule plus vm, and that convention is what makes these assertions real.",
+    "codebaseInsights": "moe-vscode has no vitest; `npm test` is `node --test tests/*.test.cjs` and `npm run compile` is `tsc -p ./` over src only, so the new .cjs test is never type-checked but the compile still guards the callers. tests/metrics-view.test.cjs is the template: it reads the .ts source, transpiles it with the typescript devDependency and runs it in a vm context with stubbed requires. MoeDaemonClient imports vscode, fs, path, net, child_process and ws, so all six need stubs; the constructor takes only an extensionPath, and the socket plus connection state are private fields a test can inject through bracket access. `sendMessage(type, payload)` already returns boolean and, on a throwing send, logs, fires the error event, tears down the half-dead socket and returns false — preserve that result verbatim rather than re-implementing it. `approveTask` is at line 388 and simply delegates. The ERROR case near line 971 currently reads `payload?.operation` only, while the daemon sends `operation` at the TOP level, so operation is effectively always undefined today; that is the pre-existing defect this slice fixes additively. TASK_UPDATED at line 775 replaces the entire cached task object, so planRevision flows through the state path for free once the type carries it — no update logic to write, only a regression test. The `DaemonInboundMessage` ERROR member is the minimal `{ type: 'ERROR'; message: string }` and needs widening before the new fields can be read type-safely.",
+    "risks": "A falsy check such as `if (expectedPlanRevision)` silently drops revision 0, which is precisely the legacy-row value — the zero test exists to kill that mutant. Any numeric conversion of the supplied token reintroduces the coercion this task forbids; `Number.isSafeInteger` plus a non-negative check is the whole rule. Asserting an omitted key with an undefined comparison passes even when the property is serialized, so assert key absence and compare the parsed frame. JSON.stringify drops an undefined-valued property, which makes a sloppy implementation look correct in the wire test while still being wrong in typed code — build the payload without the key instead of assigning undefined. The client must never consult cached state for a token; a test with a differing cached revision guards that rail. Widening the error event payload is only safe while every field stays optional, since existing subscribers destructure operation and message. Do not promote epicId or any other daemon context key, and do not report success on a disconnected send. JetBrains ships first by epic rail, and the reviewed-versus-latest binding lives in the following webview slice, so do not claim this slice makes the sent revision provably the rendered one.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/metrics-view.test.cjs",
+      "moe-vscode/package.json",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:28:47.130Z"
 }

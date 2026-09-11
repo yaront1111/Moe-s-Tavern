@@ -64,6 +64,26 @@ function decodeStoredPlanRevision(task: Task): number {
   return stored;
 }
 
+/**
+ * Validate a CALLER-SUPPLIED approval token. Typed `unknown` on purpose: it
+ * arrives from an untyped /ws payload, so this is the one place that decides
+ * what a token is. Error handling contract: only a non-negative safe integer
+ * passes; null, strings, booleans, fractional, negative, unsafe and non-finite
+ * values throw INVALID_INPUT. Never coerce, and never degrade a malformed
+ * token into the token-free legacy approval — that would turn a typo into an
+ * unchecked approval.
+ */
+function decodeSuppliedPlanRevision(value: unknown, taskId: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidInput(
+      'expectedPlanRevision',
+      `approval token for task ${taskId} must be a non-negative safe integer (got ${String(value)}); ` +
+        'omit the field entirely to approve without a revision check'
+    );
+  }
+  return value;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -425,7 +445,11 @@ export async function deleteTask(state: StateManager, taskId: string): Promise<T
   return task;
 }
 
-export async function approveTask(state: StateManager, taskId: string): Promise<Task> {
+export async function approveTask(
+  state: StateManager,
+  taskId: string,
+  expectedPlanRevision?: unknown
+): Promise<Task> {
   // NOTE: callers MUST hold the StateManager mutex (e.g. via
   // WebSocketServer.withMutex / state.runExclusive) so that the status
   // re-check and updateTask happen atomically. The mutex is non-reentrant,
@@ -434,6 +458,27 @@ export async function approveTask(state: StateManager, taskId: string): Promise<
   if (!task) throw new Error(`Task not found: ${taskId}`);
   if (task.status !== 'AWAITING_APPROVAL') {
     throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
+  }
+  // Compare-and-swap on the plan revision the approver actually reviewed.
+  // ABSENCE is the only legacy opt-out (SPEED/TURBO auto-approval,
+  // set_task_status relaxed mode, an old client) — a supplied token is always
+  // validated and compared. This whole block runs BEFORE cancelSpeedModeTimeout
+  // and before any write, so a refusal cancels no pending timer, mutates no
+  // bytes and publishes nothing.
+  if (expectedPlanRevision !== undefined) {
+    const supplied = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
+    // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
+    // stored stamp still fails closed as INVALID_INPUT.
+    const current = decodeStoredPlanRevision(task);
+    if (supplied !== current) {
+      throw new MoeError(
+        MoeErrorCode.STATE_CONFLICT,
+        `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
+          'Re-open the plan, review the current revision and approve again.',
+        { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
+        'PLAN_REVISION_MISMATCH'
+      );
+    }
   }
   cancelSpeedModeTimeout(taskId);
   const updated = await state.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');

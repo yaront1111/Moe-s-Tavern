@@ -622,8 +622,14 @@ export class StateManager {
     return deleteTask(this, taskId);
   }
 
-  async approveTask(taskId: string): Promise<Task> {
-    return approveTask(this, taskId);
+  /**
+   * `expectedPlanRevision` is the OPTIONAL compare-and-swap token: the plan
+   * revision the approver actually reviewed. Typed `unknown` so an untyped /ws
+   * payload cannot smuggle a malformed value past validation — taskStore is the
+   * single authority that decodes it. Omit it for the legacy token-free path.
+   */
+  async approveTask(taskId: string, expectedPlanRevision?: unknown): Promise<Task> {
+    return approveTask(this, taskId, expectedPlanRevision);
   }
 
   async rejectTask(taskId: string, reason: string): Promise<Task> {

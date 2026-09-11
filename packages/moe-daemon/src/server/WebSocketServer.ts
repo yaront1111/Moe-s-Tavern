@@ -24,6 +24,26 @@ import {
   filterTasksForMetrics,
 } from '../util/metrics.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
+import { MoeError } from '../util/errors.js';
+
+/**
+ * The ONLY error-context keys allowed to cross the /ws boundary. A MoeError's
+ * `context` is free-form debugging data (field/reason/paths/projectRoot/...),
+ * so it must never be spread into a client frame — this allowlist reads at most
+ * these two revision numbers and drops everything else.
+ */
+const ERROR_CONTEXT_ALLOWLIST = ['expectedPlanRevision', 'currentPlanRevision'] as const;
+
+/** Pick the allowlisted, finite-number revision details out of an error context. */
+function allowlistedErrorContext(context: Record<string, unknown> | undefined): Record<string, number> {
+  const picked: Record<string, number> = {};
+  if (!context) return picked;
+  for (const key of ERROR_CONTEXT_ALLOWLIST) {
+    const value = context[key];
+    if (typeof value === 'number' && Number.isFinite(value)) picked[key] = value;
+  }
+  return picked;
+}
 
 // Identity / lifecycle fields a /ws plugin client must never set directly via
 // UPDATE_TASK. The daemon owns these; legit board edits only ever touch
@@ -81,6 +101,15 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'verification',
   'reviewSummary',
   'completionSummary',
+  // Plan-revision bookkeeping. `planRevision` is DERIVED by the daemon inside
+  // taskStore.updateTask from what a write actually changes, and
+  // `expectedPlanRevision` is COMMAND METADATA (the revision the approver
+  // reviewed) that travels beside taskId/updates — neither is ever a writable
+  // task field. Stripping both closes the forgery hole where a client stamps a
+  // fake revision onto the row, or smuggles its own approval token through
+  // `updates` to dodge the compare-and-swap.
+  'planRevision',
+  'expectedPlanRevision',
 ]);
 
 export type PluginMessage =
@@ -88,13 +117,16 @@ export type PluginMessage =
   | { type: 'GET_STATE' }
   | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
-  | { type: 'UPDATE_TASK'; payload: { taskId: string; updates: Record<string, unknown> } }
+  // expectedPlanRevision is the optional plan-approval compare-and-swap token.
+  // It sits BESIDE taskId/updates as command metadata — never inside `updates`,
+  // which is task-field territory and is denylist-stripped.
+  | { type: 'UPDATE_TASK'; payload: { taskId: string; updates: Record<string, unknown>; expectedPlanRevision?: unknown } }
   | { type: 'DELETE_TASK'; payload: { taskId: string } }
   | { type: 'CREATE_EPIC'; payload: Record<string, unknown> }
   | { type: 'UPDATE_EPIC'; payload: { epicId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_EPIC'; payload: { epicId: string } }
   | { type: 'REORDER_TASK'; payload: { taskId: string; beforeId: string | null; afterId: string | null } }
-  | { type: 'APPROVE_TASK'; payload: { taskId: string } }
+  | { type: 'APPROVE_TASK'; payload: { taskId: string; expectedPlanRevision?: unknown } }
   | { type: 'RELEASE_TASK'; payload: { taskId: string; reason?: string; force?: boolean } }
   | { type: 'REJECT_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
@@ -307,7 +339,10 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing payload' }));
             return;
           }
-          const { taskId, updates } = message.payload;
+          // Read the approval token from the PAYLOAD, never from `updates` — the
+          // denylist strips it out of there precisely so a client cannot supply
+          // its own compare-and-swap token as if it were a task field.
+          const { taskId, updates, expectedPlanRevision: approvalToken } = message.payload;
           if (!taskId || typeof taskId !== 'string') {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
@@ -400,9 +435,14 @@ export class MoeWebSocketServer {
                   // SAME state.approveTask the board's APPROVE_TASK button uses so
                   // it stamps planApprovedAt and records PLAN_APPROVED — a raw
                   // updateTask would silently lose both. A board drag is a human
-                  // action, equivalent to clicking Approve.
+                  // action, equivalent to clicking Approve. The optional
+                  // compare-and-swap token rides along so a drag of a card that
+                  // was re-planned since it was rendered is refused here too —
+                  // we are already inside withMutex, so the comparison is
+                  // serialized with the write. The rest of safeUpdates is still
+                  // deliberately ignored on this route.
                   if (existing.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
-                    return this.state.approveTask(taskId);
+                    return this.state.approveTask(taskId, approvalToken);
                   }
                   // Reopen route (e.g. JetBrains drag DONE/REVIEW → WORKING):
                   // invalidate the prior completion via the SAME shared helper
@@ -516,7 +556,14 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          const task = await this.withMutex(() => this.state.approveTask(message.payload.taskId));
+          // Forward the optional compare-and-swap token INSIDE the mutex, so the
+          // validation + revision comparison happen under the same lock as the
+          // status re-check and the write. Omitting the key is the only legacy
+          // (unchecked) approval; an explicit null is a malformed token and
+          // surfaces INVALID_INPUT from taskStore.
+          const task = await this.withMutex(() =>
+            this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision)
+          );
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;
         }
@@ -946,21 +993,28 @@ export class MoeWebSocketServer {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      // Machine-readable classification is ADDITIVE and only for a MoeError: a
+      // plain Error (an illegal-transition check, say) keeps the exact legacy
+      // frame — message / operation / context.taskId+epicId and nothing else.
+      const moeError = error instanceof MoeError ? error : null;
       // Include context about which operation failed
-      const context = {
+      const response = {
         type: 'ERROR',
         message: errorMessage,
         operation: message.type,
+        ...(moeError && { code: moeError.code, codeName: moeError.codeName }),
         // Include IDs if available for debugging
         ...(('payload' in message && message.payload && typeof message.payload === 'object') && {
           context: {
             taskId: (message.payload as { taskId?: string }).taskId,
-            epicId: (message.payload as { epicId?: string }).epicId
+            epicId: (message.payload as { epicId?: string }).epicId,
+            // Allowlisted revision details only — error.context is NEVER spread.
+            ...(moeError ? allowlistedErrorContext(moeError.context) : {})
           }
         })
       };
       logger.error({ messageType: message.type, error }, 'WebSocket handler error');
-      this.safeSend(ws, JSON.stringify(context));
+      this.safeSend(ws, JSON.stringify(response));
     }
   }
 
