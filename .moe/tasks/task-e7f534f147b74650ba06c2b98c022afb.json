@@ -73,12 +73,12 @@
       ]
     }
   ],
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-85674160",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor ruling clears a human-confirmation block with no blockedOnTaskIds and no resource, which nothing would ever auto-clear. Project approvalMode is TURBO: the human has already configured plans to auto-approve, so blocking before submit_plan to collect per-plan REPL confirmation contradicts the project's own approval policy. The draft is complete and preserved. Submit it; TURBO decides approval, not a keyboard answer.",
+  "reopenReason": "Governor clearing a session-scoped block. worker-104791d9 blocked because its CLI launched idle and claimed mid-session, so the wrapper took no per-task baseline and would run no post-flight for this task (moe-agent.ps1 binds both to preflightTaskId only). The task itself has no blocker: its only dependency task-435683c2 is DONE. Returning it to WORKING-unassigned so a seat whose wrapper pre-flight claims it gets a baseline and a landing. Defect filed separately as task-80737065. Zero source edits were made under the block.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-aec72949166b42a99b4279ba4615ac4b",
   "dependsOn": [
@@ -96,7 +96,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:00:20.514Z",
-  "updatedAt": "2026-09-11T10:33:08.377Z",
+  "updatedAt": "2026-09-11T10:40:53.832Z",
   "metrics": {
     "firstClaimAt": "2026-09-10T18:21:49.963Z",
     "plannedStepCount": 6,
@@ -105,13 +105,14 @@
   "contextFetchedBy": [
     "architect-0dc7194c",
     "architect-8b93cc67",
-    "worker-104791d9"
+    "worker-104791d9",
+    "worker-85674160"
   ],
-  "blockedReason": "Step-1 requires the worker wrapper baseline; this session has no verified task-bound preflight/delivery tracking. Its supplied instructions file moe-codex-instructions-worker-40728.md explicitly says preflight had no claimable task. I waited and claimed this task only at 2026-09-11 10:31 UTC. The only task baseline (.git/moe/baseline/task-e7f534f147b74650ba06c2b98c022afb.tsv) is the architect snapshot at=2026-09-10T18:21:50Z, head=93e5222adcfac6b43babdb4902ba9d7c6fd4334d, landed=0. Current wrapper scripts/moe-agent.ps1:4176 baselines only preflightOk + preflightTaskId; :5015 postflights only preflightTaskId. An in-CLI claim cannot establish that wrapper boundary. Do not hand-create the baseline or bypass attribution. Need a fresh wrapper-bound task launch, with this block cleared for resume.\n\nPrerequisite is NOT blocked: get_context confirms time-cap retirement DONE/landed=true/merged=true at e09bcb64439d55903babb0f0e9f0556098de3f06. All three owned files are clean against HEAD 7cdcf2e9f5d09097d62bcfd1e0661f25130cb0e4. No source edits, test runs or completed steps. Step-1 remains the resume point. Foreign WIP untouched. Evidence/handoff saved in Serena task-task-e7f534f147b74650ba06c2b98c022afb-handoff; governor notified via msg-8c855bb9df794e399e5d2c9030742340.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-11T10:33:08.377Z",
-  "priorBlockedReason": "Required human REPL approach confirmation before submit_plan has not been received. A complete six-step three-file draft and live exploration are preserved in Serena task-task-e7f534f147b74650ba06c2b98c022afb-handoff and the latest task comment. Confirmation requested: six defaulted model fields, strict new-field-only mappings in both parsers, exact preservation/default/malformed/clearing JUnit fixtures; empty actual dependency arrays remain [], absent/null/wrong-shape arrays become null; no UI/lifecycle edits. This is a human-confirmation wait, not a dependency wait or completed work. No source edits, tests, plan submission or approval occurred.",
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Step-1 requires the worker wrapper baseline; this session has no verified task-bound preflight/delivery tracking. Its supplied instructions file moe-codex-instructions-worker-40728.md explicitly says preflight had no claimable task. I waited and claimed this task only at 2026-09-11 10:31 UTC. The only task baseline (.git/moe/baseline/task-e7f534f147b74650ba06c2b98c022afb.tsv) is the architect snapshot at=2026-09-10T18:21:50Z, head=93e5222adcfac6b43babdb4902ba9d7c6fd4334d, landed=0. Current wrapper scripts/moe-agent.ps1:4176 baselines only preflightOk + preflightTaskId; :5015 postflights only preflightTaskId. An in-CLI claim cannot establish that wrapper boundary. Do not hand-create the baseline or bypass attribution. Need a fresh wrapper-bound task launch, with this block cleared for resume.\n\nPrerequisite is NOT blocked: get_context confirms time-cap retirement DONE/landed=true/merged=true at e09bcb64439d55903babb0f0e9f0556098de3f06. All three owned files are clean against HEAD 7cdcf2e9f5d09097d62bcfd1e0661f25130cb0e4. No source edits, test runs or completed steps. Step-1 remains the resume point. Foreign WIP untouched. Evidence/handoff saved in Serena task-task-e7f534f147b74650ba06c2b98c022afb-handoff; governor notified via msg-8c855bb9df794e399e5d2c9030742340.",
   "blockedOnTaskIds": null,
   "stepsCompleted": [],
   "failedDodItems": [],

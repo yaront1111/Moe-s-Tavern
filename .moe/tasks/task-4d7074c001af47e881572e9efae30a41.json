@@ -91,12 +91,12 @@
       ]
     }
   ],
-  "status": "BLOCKED",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Operator instruction 2026-09-11: promote the three attempt-chain roots out of human-gated BACKLOG so an idle architect seat can plan them. dependsOn (task-c97afcd5, the ExecutionAttempt store) continues to gate any WORKING claim; planning is not dependency-gated.",
+  "reopenReason": "Governor clearing a session-scoped block. worker-6dd2f337 blocked because its CLI launched idle and claimed mid-session, so the wrapper took no per-task baseline and would run no post-flight for this task. The task itself has no blocker: both dependencies (task-c97afcd5 attempt store, task-a135d4d6 fencing guard) are DONE, and assertAttemptCurrent exists at enforcement.ts:148. Returning it to WORKING-unassigned for a wrapper-bound seat. Step 1 COMPLETED, steps 2-7 PENDING; resume at step 2 per the Serena handoff. Zero source edits were made under the block.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -108,11 +108,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:27.252Z",
-  "updatedAt": "2026-09-11T10:12:11.750Z",
+  "updatedAt": "2026-09-11T10:40:44.614Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "architect-8b93cc67",
-    "worker-010099ab"
+    "worker-010099ab",
+    "worker-6dd2f337"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T09:54:58.086Z",
@@ -145,13 +146,11 @@
   },
   "planApprovedAt": "2026-09-11T09:56:36.978Z",
   "workStartedAt": "2026-09-11T10:03:45.991Z",
-  "blockedReason": "Missing prerequisite: assertAttemptCurrent does not exist. This is the block my approved plan instructs at step-1(b), executed after verifying both prerequisites read-only. Zero files edited — nothing partial in the shared checkout.\n\nMEASURED 2026-09-11 10:05\n- `grep -rn \"assertAttemptCurrent\" packages/moe-daemon/src/` -> zero hits.\n- util/enforcement.ts untouched since Jul 30; exports only assertWorkerOwns:37, assertContextFetched:56, assertAllStepsCompleted:75, MAX_VERIFICATION_COMMAND_CHARS:98, MAX_VERIFICATION_OUTPUT_CHARS:100, assertVerificationEvidence:113.\n- Owner task-a135d4d63554410286a369a95e60c2a8 is WORKING, landing.merged=false, commits=null, no Moe-Task trailer commit. Genuinely in flight — its own step-1 completed at 10:05:01 — so a short wait, not a dead end.\n\nWHY NOT SUBSTITUTE\nDoD item 2 names the symbol literally. My plan's step-1(b) and planningNotes both rule out a private staleness check inside the tool: it \"would create a second fencing implementation, which is precisely what the sibling guard task exists to prevent; if that guard has not landed, this task blocks.\" A private one satisfies the letter of the DoD while producing the duplication Wave 1 exists to avoid.\n\nALREADY SATISFIED\nPrerequisite (a) green: ExecutionAttempt store landed (task-c97afcd55d7d41d08b9730e214b648dd, fbeb076, merged, DONE). Its real exported signatures are in my step-1 note, along with the writeEntity/loadEntities contract, the resourceStore idiom, the ToolDefinition shape and both doc conventions — the resuming session starts at step-2 without re-deriving any of it.\n\nAUTO-UNBLOCK\nblockedOnTaskIds names the guard, so the daemon returns this task to WORKING when it reaches DONE. Resume at step-2 (declare Candidate in schema.ts, wire the candidates map into StateManager). Steps 2-7 all still PENDING. Notes in Serena memory task-task-4d7074c001af47e881572e9efae30a41-handoff.",
-  "blockedOnTaskIds": [
-    "task-a135d4d63554410286a369a95e60c2a8"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-11T10:06:50.204Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "91ae3f90012c209ceed824aacd78534d7b489636",
@@ -180,5 +179,6 @@
     "kind": "checkpoint",
     "sessionId": "worker-010099ab@2026-09-11T10:03:31Z",
     "at": "2026-09-11T10:07:07.929Z"
-  }
+  },
+  "priorBlockedReason": "No verified task-bound wrapper delivery boundary for this session. Its supplied moe-codex-instructions-worker-53136.md (created 2026-09-11T10:10:55Z) explicitly says preflight had no claimable task; this CLI claimed the row only around 10:34Z after waiting. Existing task baseline is the PREVIOUS worker snapshot: at=2026-09-11T10:07:05Z head=792e4ced24dd2f720c289e874613a217def36266 landed=1. Read-only current wrapper inspection confirms scripts/moe-agent.ps1:4176 establishes baseline only under AutoClaim + preflightOk + preflightTaskId; :5015 runs postflight only for preflightTaskId. A mid-CLI claim does not bind those wrapper variables. Need a fresh correctly task-bound wrapper session, not a hand-created baseline or manual commit bypass.\n\nBoth source prerequisites are now DONE/landed=true/merged=true in get_context, and assertAttemptCurrent exists at enforcement.ts:148; the prior missing-guard blocker is resolved. No source edits, tests, or newly completed steps this session. All nine planned paths clean against measured HEAD 63ce15548ec89c5692c38b2c4792bf32bca36a4a on moe/work-2026-09-10. Step-1 remains COMPLETED; steps 2-7 remain PENDING. Resume at step-2 after fresh task preflight. Foreign WIP untouched. Current evidence added to existing Serena task handoff; governor notified and separate wrapper defect filed in chat. This block requires session relaunch, not a new source dependency."
 }

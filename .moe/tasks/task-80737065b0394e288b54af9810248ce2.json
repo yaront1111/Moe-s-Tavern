@@ -1,0 +1,30 @@
+{
+  "id": "task-80737065b0394e288b54af9810248ce2",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: Bind idle-launched CLI claims to task preflight and postflight",
+  "description": "A Codex CLI launched with 'Pre-flight Complete: no claimable task' is instructed to wait and claim inside the CLI, but scripts/moe-agent.ps1:4176 captures a baseline only for preflightOk + preflightTaskId and :5015 lands only preflightTaskId. Fresh in-CLI claims therefore have no task-bound wrapper delivery tracking (reproduced by worker-104791d9 and worker-6dd2f337 on 2026-09-11; both stopped before edits).\nKeep waiting/claiming in the wrapper until a task-bound session can launch, or establish an equivalently verified pre-edit adoption boundary. Preserve task attribution, peer WIP, and crash recovery; no hand-created baseline or whole-tree staging.",
+  "definitionOfDone": [
+    "Regression reproduces the no-task preflight -> in-CLI claim path and proves task-specific baseline exists before code edits and correct task postflight is not skipped.",
+    "Fix the supported launcher paths consistently without weakening recovery, attribution, or preserving unrelated peer work.",
+    "Fresh wrapper-launched canary demonstrates correct task binding and recorded path-specific landing; tests cover the idle and resume paths."
+  ],
+  "taskRails": [
+    "Wrapper remains the only git actor; do not compensate with agent-side manual baselines or commits.",
+    "Preserve live peer ownership and dirty paths; do not relax attribution to bypass the missing boundary."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 201,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-11T10:36:05.147Z",
+  "updatedAt": "2026-09-11T10:36:05.147Z"
+}

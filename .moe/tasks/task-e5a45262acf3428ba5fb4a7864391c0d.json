@@ -28,8 +28,15 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-581c3404feca47e4bc6e1d282d9088e3",
+      "author": "governor-983e1bae",
+      "content": "CORRECTION BY THE FILER — read this before planning. One of the two examples in this task's description is wrong, and it points at a different defect.\n\ntask-435683c2 is NOT an instance of this race. I cited it as \"same shape\", and that was a misread. Its QA recovery wip 5a7d27a carried only board JSONs, not code. Its code was never taken by a recovery at all. It was held OUT of the worker's completion commit by the attribution contest: task-e7f534f1 and task-0ad3744e declare the same Models.kt/MoeJson.kt in their plans, and the wrapper's contested policy skipped them. QA then had to land the code by hand as e09bcb6. That is a separate defect with a separate fix, now in review as PR #181 (get_commit_scope ignores plan intent from peers that wait on the landing task).\n\nTHE ONLY VERIFIED INSTANCE OF THIS TASK'S RACE is task-a135d4d6:\n- REVIEW 10:27:44, QA claimed 10:28:12\n- ac6c9dc wip [role=qa recovered] at 10:28:16 holds the whole implementation (enforcement.ts +144, enforcement.test.ts +472)\n- 7cdcf2e feat at 10:29:55 holds only the board JSON\n\nImplication for the plan: one instance, not two. The race is real, but it is rarer than the description implied, and PR #181 removes the far more frequent cause of an empty completion commit. Weigh the fix cost against that. Rule out option (c), the timing grace window, on this evidence: with one instance you cannot tune a window, only guess one.",
+      "timestamp": "2026-09-11T10:38:59.185Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:31:29.268Z",
-  "updatedAt": "2026-09-11T10:31:29.268Z"
+  "updatedAt": "2026-09-11T10:38:59.185Z"
 }
