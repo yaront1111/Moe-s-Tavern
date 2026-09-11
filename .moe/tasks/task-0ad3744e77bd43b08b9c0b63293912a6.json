@@ -135,8 +135,8 @@
       "completedAt": "2026-09-11T12:27:17.175Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -160,12 +160,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:24:33.518Z",
-  "updatedAt": "2026-09-11T12:27:57.905Z",
+  "updatedAt": "2026-09-11T12:32:11.892Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:17:44.893Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T12:32:11.892Z",
+    "wallClockMs": 11666999
   },
   "contextFetchedBy": [
     "architect-2d25447a",
@@ -281,6 +283,26 @@
       "treeId": "6684bd626292e70791d2b4887b65b82405ae7fc9",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "c827b290aaba243f709bf92334c0c619d89f8c6e",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:27:58Z",
+      "paths": [
+        ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:28:00.944Z",
+      "treeId": "994bebdcd90c0fa0c2d8c121b7307bb4fb4168dd",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -288,15 +310,16 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+    ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "nothing",
-    "kind": "checkpoint",
+    "kind": "completion",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "worker-85674160@2026-09-11T11:58:08Z",
-    "at": "2026-09-11T11:58:13.029Z"
+    "sessionId": "worker-85674160@2026-09-11T12:13:14Z",
+    "at": "2026-09-11T12:28:01.035Z"
   },
   "reviewStartedAt": "2026-09-11T12:27:51.348Z",
   "verification": {
@@ -305,5 +328,8 @@
     "outputTail": "> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 2s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nFresh build/test-results/test XML rewritten 2026-09-11T12:25:47Z (checked against run start): 13 classes, 154 tests, 0 failures, 0 errors, 0 skipped. GRADLE_OPTS=-Xmx512m, run under the shared jetbrains-gradle lease (released afterwards). The repo-root gate is spelled with an absolute cd and .\\gradlew.bat because a PowerShell-spawned cmd does not inherit the PS location and does not resolve a bare gradlew.bat here. After the review-only byte change :test first reported UP-TO-DATE, so the plan's escape hatch was used: focused --tests com.moe.services.PlanApprovalContractTest --rerun, then this exact unfiltered gate; no clean, no shared output deleted.\n\nOld-behaviour reds (all AssertionError, never compile/environment failures): (1) parser tests=7 failures=5 errors=0 — 'absent legacy field via parseState: parsed Task dropped planRevision', 'valid 0 via parseState: ...', 'malformed null via parseState: ...', 'sequence[0] 42 via parseState: ...'; (2) serializer, final signature already in place — 'revision 0: payload keys expected:<[taskId, expectedPlanRevision]> but was:<[taskId]>'; (3) transport — 'approveTask must not swallow the transport failure expected same:<java.lang.IllegalStateException: sentinel transport failure> was not:<null>'. Peer suites in the same run stayed green (MoeJsonTest, untracked peer TaskBlockerPresentationTest), so no landed parser work or foreign WIP was discarded.",
     "reportedAt": "2026-09-11T12:27:51.348Z"
   },
-  "completionSummary": "JetBrains now carries plan revisions end to end on the model/wire path. Models.kt adds const MAX_SAFE_PLAN_REVISION = 9007199254740991L and appends Task.planRevision: Long? = 0L LAST (landed blocker fields and every call site untouched); absent field = legacy effective 0, present-but-malformed = null = unusable and never a silent 0. MoeJson adds a private getPlanRevisionOrNull used explicitly in BOTH constructors (parseTasks via parseState, and parseTask): missing -> 0L; JsonNull/non-primitive/non-number -> null; otherwise the ORIGINAL literal is re-read as BigDecimal, rejected when negative or above the bound (compareTo, not equals), converted only by longValueExact, catching only NumberFormatException/ArithmeticException. No asLong/asInt/Double/rounding and no broad catch, so 9007199254740991.1, \"17\", true, [17], 9007199254740992, Long overflow and 1e-400 all stay null while 1.0/1e3/2147483648/4294967297/MAX stay exact. MoeCommandSender extracts a private unchecked dispatch helper, switches the injected transport to (String,String)->Boolean and exposes approveTask(taskId, expectedPlanRevision: Long? = null): Boolean — require(0..MAX) before any connection check (IllegalArgumentException, zero packets), expectedPlanRevision added only when supplied (omitted/null keeps the byte-identical legacy {taskId}, never a null token), false plus exactly one existing onDisconnected when the check refuses or the transport returns false, true only after send returns, transport exceptions propagated. sendMessage keeps its exact best-effort catch around the same helper, so unrelated/background commands are unchanged. MoeProjectService returns Boolean from the transport (captured client, false for missing/non-open socket) and delegates the caller token verbatim, never reading state for a fresher revision. A local send is explicitly not daemon approval. New PlanApprovalContractTest.kt (18 tests) drives the real parser, serializer and facade — fake IdeaProject Proxy, synchronous disp"
+  "completionSummary": "JetBrains now carries plan revisions end to end on the model/wire path. Models.kt adds const MAX_SAFE_PLAN_REVISION = 9007199254740991L and appends Task.planRevision: Long? = 0L LAST (landed blocker fields and every call site untouched); absent field = legacy effective 0, present-but-malformed = null = unusable and never a silent 0. MoeJson adds a private getPlanRevisionOrNull used explicitly in BOTH constructors (parseTasks via parseState, and parseTask): missing -> 0L; JsonNull/non-primitive/non-number -> null; otherwise the ORIGINAL literal is re-read as BigDecimal, rejected when negative or above the bound (compareTo, not equals), converted only by longValueExact, catching only NumberFormatException/ArithmeticException. No asLong/asInt/Double/rounding and no broad catch, so 9007199254740991.1, \"17\", true, [17], 9007199254740992, Long overflow and 1e-400 all stay null while 1.0/1e3/2147483648/4294967297/MAX stay exact. MoeCommandSender extracts a private unchecked dispatch helper, switches the injected transport to (String,String)->Boolean and exposes approveTask(taskId, expectedPlanRevision: Long? = null): Boolean — require(0..MAX) before any connection check (IllegalArgumentException, zero packets), expectedPlanRevision added only when supplied (omitted/null keeps the byte-identical legacy {taskId}, never a null token), false plus exactly one existing onDisconnected when the check refuses or the transport returns false, true only after send returns, transport exceptions propagated. sendMessage keeps its exact best-effort catch around the same helper, so unrelated/background commands are unchanged. MoeProjectService returns Boolean from the transport (captured client, false for missing/non-open socket) and delegates the caller token verbatim, never reading state for a fresher revision. A local send is explicitly not daemon approval. New PlanApprovalContractTest.kt (18 tests) drives the real parser, serializer and facade — fake IdeaProject Proxy, synchronous disp",
+  "completedAt": "2026-09-11T12:32:11.892Z",
+  "reviewCompletedAt": "2026-09-11T12:32:11.892Z",
+  "reviewSummary": "Re-ran the exact gate myself under the jetbrains-gradle lease: `cmd /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, fresh XML 12:31:03Z = 13 classes / 154 tests / 0 failures / 0 errors / 0 skipped (plain `test` was UP-TO-DATE; no clean). PlanApprovalContractTest = 18 green; peer MoeJsonTest + untracked TaskBlockerPresentationTest also green, so no landed blocker parser work or foreign WIP was discarded.\nDiff audited at c827b29 (5 files, +732/-37): planRevision: Long? = 0L appended LAST in Task + MAX_SAFE_PLAN_REVISION; getPlanRevisionOrNull wired explicitly into BOTH MoeJson constructors (absent -> 0L; JsonNull/non-primitive/non-number -> null; else original literal as BigDecimal, signum/compareTo bounds, longValueExact, catching only NumberFormat/Arithmetic); MoeCommandSender private unchecked dispatch() with sendMessage keeping its exact best-effort catch; approveTask(taskId, expectedPlanRevision: Long? = null): Boolean with require(0..MAX) BEFORE ensureConnected; MoeProjectService captures wsClient once, returns Boolean, forwards the caller token verbatim (never getState()). All 4 legacy one-arg UI call sites untouched.\nDoD 5 red proven empirically, not trusted: mutated production source under the lease (parseTask route -> coercive getLongOrNull; conditional expectedPlanRevision removed) -> focused run 18 tests / 6 failed (absent-legacy, malformed, successive-payload, supplied-revision, facade-zero, facade-token, all AssertionError). Restored via git checkout, full gate re-run green; peer dirty paths untouched.\nScope clean: no PlanReviewDialog, no other approval entry point, no daemon, no VS Code, no build change. Commits: bytes landed+pushed on moe/work-2026-09-10 as checkpoint c827b29 (`git show c827b29` = the 5 files); no feat/fix commit because the worker seat exited before REVIEW and my QA pre-flight recovered the bytes — a NO-COMPLETION-COMMIT warning is bookkeeping here, not missing code."
 }
