@@ -132,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:25:04.295Z",
-  "updatedAt": "2026-09-11T12:49:08.101Z",
+  "updatedAt": "2026-09-11T12:49:11.225Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:25:54.505Z",
     "plannedStepCount": 6,
@@ -181,7 +181,36 @@
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
-    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+    ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json"
   ],
-  "completionSummary": "JetBrains plan approval is now bound to the plan revision that actually rendered.\n\nWHAT LANDED (4 files, JetBrains only)\n- NEW `toolwindow/PlanReviewApprovalState.kt` — the whole approval decision machine as a plain synchronized state machine over plain values (no Swing, no IntelliJ, no service imports; the one import is the `MAX_SAFE_PLAN_REVISION` const). Phases AWAITING_RENDER/READY/PENDING/INVALIDATED/FINISHED/DISPOSED; `Decision.Send` always quotes the CAPTURED revision and never the snapshot's newer one; FINISHED is reachable only from PENDING observing status WORKING. `tokenOf` maps slice 3's contract: null = Malformed = never approvable, 0 = legacy = approvable, out-of-range folded to Malformed so the command layer's `require` can never be tripped from here.\n- NEW `PlanReviewApprovalStateTest.kt` — 32 headless JUnit 4 tests, every assertion an exact value.\n- `PlanReviewDialog.kt` — captures only after createDodPanel and createStepsPanel both returned (render wrapped in try/catch: a failed render leaves the machine uncaptured and Approve disabled); onState folds state into the machine BEFORE the comments-equality early return and OUTSIDE the 200ms debounce, with its own invokeLater; the approve action re-reads getState()/isConnected() at click time and sends `approveTask(taskId, capturedRevision)` without closing; `onError` feeds the machine; dispose calls onDisposed first.\n- `MoeBundle.properties` — 11 ASCII `moe.message.planReview.*` keys including the close-and-reopen notice.\n\nVERIFICATION — `$env:GRADLE_OPTS='-Xmx512m'; cmd.exe --% /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, 14 classes / 186 tests / 0 failures / 0 errors / 0 skipped (fresh XML 15:47:46). Serialized under the `jetbrains-gradle` lease, now released; no `clean`.\n\nRED-ON-OLD (5 mutations, each restored and md5-verified; `git checkout --` deliberately never used — two files are untracked and the third holds uncommitted work):\n- onStateUpdate moved after "
+  "completionSummary": "JetBrains plan approval is now bound to the plan revision that actually rendered.\n\nWHAT LANDED (4 files, JetBrains only)\n- NEW `toolwindow/PlanReviewApprovalState.kt` — the whole approval decision machine as a plain synchronized state machine over plain values (no Swing, no IntelliJ, no service imports; the one import is the `MAX_SAFE_PLAN_REVISION` const). Phases AWAITING_RENDER/READY/PENDING/INVALIDATED/FINISHED/DISPOSED; `Decision.Send` always quotes the CAPTURED revision and never the snapshot's newer one; FINISHED is reachable only from PENDING observing status WORKING. `tokenOf` maps slice 3's contract: null = Malformed = never approvable, 0 = legacy = approvable, out-of-range folded to Malformed so the command layer's `require` can never be tripped from here.\n- NEW `PlanReviewApprovalStateTest.kt` — 32 headless JUnit 4 tests, every assertion an exact value.\n- `PlanReviewDialog.kt` — captures only after createDodPanel and createStepsPanel both returned (render wrapped in try/catch: a failed render leaves the machine uncaptured and Approve disabled); onState folds state into the machine BEFORE the comments-equality early return and OUTSIDE the 200ms debounce, with its own invokeLater; the approve action re-reads getState()/isConnected() at click time and sends `approveTask(taskId, capturedRevision)` without closing; `onError` feeds the machine; dispose calls onDisposed first.\n- `MoeBundle.properties` — 11 ASCII `moe.message.planReview.*` keys including the close-and-reopen notice.\n\nVERIFICATION — `$env:GRADLE_OPTS='-Xmx512m'; cmd.exe --% /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, 14 classes / 186 tests / 0 failures / 0 errors / 0 skipped (fresh XML 15:47:46). Serialized under the `jetbrains-gradle` lease, now released; no `clean`.\n\nRED-ON-OLD (5 mutations, each restored and md5-verified; `git checkout --` deliberately never used — two files are untracked and the third holds uncommitted work):\n- onStateUpdate moved after ",
+  "commits": [
+    {
+      "sha": "da59ba9e90f8e028e21ee04a4acc4c768915fbec",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T12:49:08Z",
+      "paths": [
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T12:49:11.225Z",
+      "treeId": "ad5c5cafce76d783ffea720ea19b3bdddf8e0ad0",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T12:49:08Z",
+    "at": "2026-09-11T12:49:11.225Z"
+  }
 }
