@@ -1,6 +1,12 @@
 package com.moe.util
 
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.JsonPrimitive
+import com.moe.model.Task
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -458,6 +464,301 @@ class MoeJsonTest {
             assertNull(single.metrics)
             assertTrue(single.implementationPlan.isEmpty())
             assertEquals("verified", single.reviewSummary)
+        }
+    }
+
+    // ---- Blocker and human-attention metadata: display data only ----
+
+    private val nullSafeGson = GsonBuilder().serializeNulls().create()
+
+    private val blockerKeys = listOf(
+        "needsHumanReview",
+        "blockedReason",
+        "blockedOnTaskIds",
+        "blockedResourceId",
+        "blockedFromStatus",
+        "blockedAt"
+    )
+
+    /**
+     * The six metadata values a parsed Task must carry, built without the production
+     * parsers. [assertBlocker] compares them with Gson's null-serializing view of the
+     * parsed Task, so an absent field fails as a dropped key instead of passing as a
+     * default, and the suite compiles against a Task that does not declare the fields.
+     */
+    private fun expectedBlocker(
+        needsHumanReview: Boolean = false,
+        blockedReason: String? = null,
+        blockedOnTaskIds: List<String>? = null,
+        blockedResourceId: String? = null,
+        blockedFromStatus: String? = null,
+        blockedAt: String? = null
+    ): JsonObject = JsonObject().apply {
+        addProperty("needsHumanReview", needsHumanReview)
+        addProperty("blockedReason", blockedReason)
+        val ids = blockedOnTaskIds?.let { list -> JsonArray().also { array -> list.forEach { array.add(it) } } }
+        add("blockedOnTaskIds", ids ?: JsonNull.INSTANCE)
+        addProperty("blockedResourceId", blockedResourceId)
+        addProperty("blockedFromStatus", blockedFromStatus)
+        addProperty("blockedAt", blockedAt)
+    }
+
+    private fun assertBlocker(label: String, expected: JsonObject, task: Task) {
+        assertEquals("$label: expectation must name all six keys", blockerKeys.toSet(), expected.keySet())
+        val actual = nullSafeGson.toJsonTree(task).asJsonObject
+        for (key in blockerKeys) {
+            assertTrue("$label: parsed Task dropped $key", actual.has(key))
+            assertEquals("$label: $key", expected.get(key), actual.get(key))
+        }
+    }
+
+    /** A task payload with [members] spliced in verbatim as extra JSON object members. */
+    private fun blockerTaskJson(members: String, status: String = "BLOCKED", id: String = "task-blocked"): String {
+        val extra = if (members.isBlank()) "" else "$members,"
+        return """
+        {
+          $extra
+          "id": "$id",
+          "epicId": "epic-blocked",
+          "title": "Blocked task",
+          "description": "desc",
+          "status": "$status",
+          "priority": "HIGH",
+          "order": 2.25,
+          "definitionOfDone": ["dod-1"],
+          "reopenReason": "qa reject",
+          "assignedWorkerId": "worker-9"
+        }
+        """.trimIndent()
+    }
+
+    private fun blockerMembers(fields: Map<String, String>) =
+        fields.entries.joinToString(",\n") { (key, literal) -> "\"$key\": $literal" }
+
+    private fun snapshotTasks(vararg taskJson: String): List<Task> {
+        val tasks = parseState(
+            """{"project": {"id": "proj-1", "name": "Moe"}, "epics": [], "tasks": [${taskJson.joinToString(",")}]}"""
+        ).tasks
+        assertEquals("snapshot dropped a task", taskJson.size, tasks.size)
+        return tasks
+    }
+
+    /** Parses one payload through the single-task update path AND the state snapshot path. */
+    private fun bothPaths(taskJson: String, id: String = "task-blocked"): List<Pair<String, Task>> {
+        val parsed = listOf("parseTask" to parseTask(taskJson), "parseState" to snapshotTasks(taskJson).single())
+        for ((path, task) in parsed) assertEquals("$path lost the task identity", id, task.id)
+        return parsed
+    }
+
+    private fun assertCompanions(label: String, task: Task, status: String = "BLOCKED") {
+        assertEquals("$label: epicId", "epic-blocked", task.epicId)
+        assertEquals("$label: title", "Blocked task", task.title)
+        assertEquals("$label: status", status, task.status)
+        assertEquals("$label: priority", "HIGH", task.priority)
+        assertEquals("$label: order", 2.25, task.order, 0.0)
+        assertEquals("$label: definitionOfDone", listOf("dod-1"), task.definitionOfDone)
+        assertEquals("$label: reopenReason", "qa reject", task.reopenReason)
+        assertEquals("$label: assignedWorkerId", "worker-9", task.assignedWorkerId)
+    }
+
+    /**
+     * Fully populated metadata. The reason is multi-line Unicode with JSON escapes, the
+     * dependency ids are out of order with a duplicate, and the timestamp carries an
+     * offset and microseconds: every value must survive exactly as sent.
+     */
+    private val populatedBlockerMembers = """
+        "needsHumanReview": true,
+        "blockedReason": "Build box busy \u2014 lease held by task-other\n\t\"C:\\moe\\build\" ✓ 日本語 🚧",
+        "blockedOnTaskIds": ["task-b", "task-a", "task-b"],
+        "blockedResourceId": "jetbrains-gradle",
+        "blockedFromStatus": "WORKING",
+        "blockedAt": "2026-09-11T12:34:56.789123+03:00"
+    """.trimIndent()
+
+    private val populatedBlocker = expectedBlocker(
+        needsHumanReview = true,
+        blockedReason = "Build box busy \u2014 lease held by task-other\n\t\"C:\\moe\\build\" ✓ 日本語 🚧",
+        blockedOnTaskIds = listOf("task-b", "task-a", "task-b"),
+        blockedResourceId = "jetbrains-gradle",
+        blockedFromStatus = "WORKING",
+        blockedAt = "2026-09-11T12:34:56.789123+03:00"
+    )
+
+    /** One valid value per key, so every malformed case varies exactly one field. */
+    private val validBlockerFields = linkedMapOf(
+        "needsHumanReview" to "true",
+        "blockedReason" to "\"waiting on task-a\"",
+        "blockedOnTaskIds" to "[\"task-a\"]",
+        "blockedResourceId" to "\"jetbrains-gradle\"",
+        "blockedFromStatus" to "\"REVIEW\"",
+        "blockedAt" to "\"2026-09-11T10:00:00Z\""
+    )
+
+    private val validBlocker = expectedBlocker(
+        needsHumanReview = true,
+        blockedReason = "waiting on task-a",
+        blockedOnTaskIds = listOf("task-a"),
+        blockedResourceId = "jetbrains-gradle",
+        blockedFromStatus = "REVIEW",
+        blockedAt = "2026-09-11T10:00:00Z"
+    )
+
+    @Test
+    fun `populated blocker metadata survives snapshot and update parsing`() {
+        val json = blockerTaskJson(populatedBlockerMembers)
+
+        for ((path, task) in bothPaths(json)) {
+            assertCompanions(path, task)
+            assertBlocker(path, populatedBlocker, task)
+        }
+        assertEquals(parseTask(json), snapshotTasks(json).single())
+    }
+
+    @Test
+    fun `a gson round trip preserves blocker metadata`() {
+        for ((path, parsed) in bothPaths(blockerTaskJson(populatedBlockerMembers))) {
+            assertBlocker(path, populatedBlocker, parsed)
+
+            val restored = nullSafeGson.fromJson(nullSafeGson.toJson(parsed), Task::class.java)
+            assertBlocker("$path via Gson", populatedBlocker, restored)
+            assertEquals("$path via Gson", parsed, restored)
+
+            val restoredJson = nullSafeGson.toJson(restored)
+            assertEquals("$path reparsed by parseTask", parsed, parseTask(restoredJson))
+            assertEquals("$path reparsed by parseState", parsed, snapshotTasks(restoredJson).single())
+        }
+    }
+
+    @Test
+    fun `absent blocker metadata parses to false and null defaults`() {
+        val explicitNulls = blockerMembers(blockerKeys.associateWith { "null" })
+
+        for ((shape, members) in listOf("omitted" to "", "explicit null" to explicitNulls)) {
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                assertCompanions("$path $shape", task)
+                assertBlocker("$path $shape", expectedBlocker(), task)
+            }
+        }
+    }
+
+    @Test
+    fun `wrong-kind blocker metadata is ignored field by field`() {
+        // A single-member array is the shape Gson's asString and asBoolean silently unwrap.
+        val notStrings = listOf("42", "-7.5", "true", "{\"text\": \"x\"}", "[\"x\"]")
+        val notBooleans = listOf("\"true\"", "\"false\"", "1", "{\"value\": true}", "[true]")
+        val notArrays = listOf("\"task-a\"", "42", "true", "{\"0\": \"task-a\"}")
+        val cases = listOf("blockedReason", "blockedResourceId", "blockedFromStatus", "blockedAt")
+            .flatMap { key -> notStrings.map { key to it } } +
+            notBooleans.map { "needsHumanReview" to it } +
+            notArrays.map { "blockedOnTaskIds" to it }
+        val neighbour = blockerTaskJson(blockerMembers(validBlockerFields), id = "task-second")
+
+        for ((key, literal) in cases) {
+            val label = "$key=$literal"
+            val json = blockerTaskJson(blockerMembers(validBlockerFields + (key to literal)))
+            val expected = validBlocker.deepCopy().apply {
+                add(key, if (key == "needsHumanReview") JsonPrimitive(false) else JsonNull.INSTANCE)
+            }
+            for ((path, task) in bothPaths(json)) {
+                assertCompanions("$path $label", task)
+                assertBlocker("$path $label", expected, task)
+            }
+            val (malformed, valid) = snapshotTasks(json, neighbour)
+            assertEquals(label, listOf("task-blocked", "task-second"), listOf(malformed.id, valid.id))
+            assertBlocker("neighbour of $label", validBlocker, valid)
+        }
+    }
+
+    @Test
+    fun `blocker dependency arrays keep only real strings in order`() {
+        val large = (0 until 10_000).joinToString(",", "[", "]") { if (it % 2 == 0) "\"task-$it\"" else "$it" }
+        val arrays = listOf(
+            "[\"task-b\", 42, \"task-a\", true, null, {\"id\": \"task-x\"}, [\"task-c\"], \"task-b\", \"\", \"  \", \"42\"]" to
+                listOf("task-b", "task-a", "task-b", "", "  ", "42"),
+            "[]" to emptyList<String>(),
+            "[1, false, null, {}, [\"task-a\"]]" to emptyList<String>(),
+            large to (0 until 10_000 step 2).map { "task-$it" }
+        )
+        for ((literal, ids) in arrays) {
+            for ((path, task) in bothPaths(blockerTaskJson("\"blockedOnTaskIds\": $literal"))) {
+                assertBlocker("$path ${literal.take(48)}", expectedBlocker(blockedOnTaskIds = ids), task)
+            }
+        }
+
+        for (members in listOf("", "\"blockedOnTaskIds\": null", "\"blockedOnTaskIds\": \"task-a\"")) {
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                assertBlocker("$path '$members'", expectedBlocker(), task)
+            }
+        }
+    }
+
+    @Test
+    fun `a cleared payload does not inherit earlier blocker metadata`() {
+        val explicitClear = blockerMembers(blockerKeys.associateWith { if (it == "needsHumanReview") "false" else "null" })
+
+        val clearedByShape = listOf("omitted" to "", "explicit clear" to explicitClear).map { (shape, members) ->
+            val blocked = bothPaths(blockerTaskJson(populatedBlockerMembers))
+            val blockedBefore = blocked.map { (_, task) -> nullSafeGson.toJson(task) }
+
+            val cleared = bothPaths(blockerTaskJson(members, status = "WORKING"))
+            for ((path, task) in cleared) {
+                assertCompanions("$path $shape", task, status = "WORKING")
+                assertBlocker("$path $shape after BLOCKED", expectedBlocker(), task)
+            }
+            for ((index, earlier) in blocked.withIndex()) {
+                val (path, task) = earlier
+                assertEquals("$path earlier task changed", blockedBefore[index], nullSafeGson.toJson(task))
+                assertBlocker("$path earlier task", populatedBlocker, task)
+            }
+            cleared
+        }
+        assertEquals(clearedByShape[0], clearedByShape[1])
+    }
+
+    @Test
+    fun `human attention is independent of status reason and critique`() {
+        for ((path, task) in bothPaths(blockerTaskJson("\"needsHumanReview\": true", status = "REVIEW"))) {
+            assertCompanions("$path REVIEW", task, status = "REVIEW")
+            assertBlocker("$path REVIEW", expectedBlocker(needsHumanReview = true), task)
+        }
+
+        val humanReason = "Needs human review: an operator must confirm the approach"
+        val soundsHuman = blockerTaskJson(
+            "\"blockedReason\": \"$humanReason\", " +
+                "\"planCritiqueResult\": {\"verdict\": \"block\", \"concerns\": [\"needs a human decision\"]}"
+        )
+        for ((path, task) in bothPaths(soundsHuman)) {
+            assertEquals("$path critique", "block", requireNotNull(task.planCritiqueResult).verdict)
+            assertBlocker("$path human-sounding BLOCKED", expectedBlocker(blockedReason = humanReason), task)
+        }
+
+        val dataOnly = linkedMapOf(
+            "blockedReason" to "\"\"",
+            "blockedOnTaskIds" to "[\"\"]",
+            "blockedResourceId" to "\" \"",
+            "blockedFromStatus" to "\"NOT_A_STATUS\"",
+            "blockedAt" to "\"last tuesday\""
+        )
+        val asSent = expectedBlocker(
+            blockedReason = "",
+            blockedOnTaskIds = listOf(""),
+            blockedResourceId = " ",
+            blockedFromStatus = "NOT_A_STATUS",
+            blockedAt = "last tuesday"
+        )
+        for ((path, task) in bothPaths(blockerTaskJson(blockerMembers(dataOnly), status = "WORKING"))) {
+            assertCompanions("$path WORKING", task, status = "WORKING")
+            assertBlocker("$path WORKING", asSent, task)
+        }
+    }
+
+    @Test
+    fun `legacy task fields keep their permissive coercion`() {
+        val legacy = """{"id": "task-legacy", "epicId": "epic-legacy", "title": 42, "hasPendingQuestion": "true"}"""
+
+        for ((path, task) in bothPaths(legacy, id = "task-legacy")) {
+            assertEquals("$path numeric title", "42", task.title)
+            assertTrue("$path string hasPendingQuestion", task.hasPendingQuestion)
         }
     }
 }
