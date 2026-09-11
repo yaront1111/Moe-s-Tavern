@@ -19,25 +19,28 @@
     {
       "stepId": "step-1",
       "description": "Refresh the worker wrapper baseline and prerequisite delivery before edits. This wire slice depends on task-492b573920264188888d56638dd98d81, task-dd743a02000e46cca6ae2442a1821066 and especially task-e7f534f147b74650ba06c2b98c022afb, which serializes Models.kt/MoeJson.kt after budget retirement. For each accept get_context.epicSiblings[*].landing.merged=true or a reachable branch commit found with git log <branch> --grep 'Moe-Task: <id>'; inspect that commit for the actual promised source delivery rather than treating an architect-only WIP as implementation. If delivery is missing at execution time, use Moe report_blocked with the actual dependency ids instead of implementing ahead. Reread the landed Task, both parsers, sender and service transport lambda; preserve blocker additions, budget removals and all peer tests. Record foreign dirty paths in the step note and leave them untouched; unrelated WIP is not a stop condition. Own only the four production paths and the new test named by this plan. No dialog, legacy approval entry-point, daemon, VS Code, build/dependency or broad parser changes.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
       ],
-      "startedAt": "2026-09-11T11:04:02.383Z"
+      "note": "Read-only refresh. Seat is wrapper-bound (baseline .git/moe/baseline/task-0ad3744e....tsv at 11:05:42Z, head 037473c; that recovered WIP holds board JSON only, no source). All 3 dependsOn DONE + landing.merged=true: producer 7da080b, CAS 48267af, blocker parser 1d210b2 (+ test 38572f1). Verified on HEAD: Task ends with the 6 blocker fields, no budget field; both Task constructors (private parseTasks via parseState, public parseTask) map them; getLongOrNull is coercive asLong (unsuitable); MoeCommandSender.approveTask(taskId) Unit + public sendMessage catches Exception; service transport lambda silently returns for null/non-open wsClient; facade delegates one arg. Daemon contract confirmed: APPROVE_TASK payload {taskId, expectedPlanRevision?: number}, top-level Task.planRevision. 5 approveTask call sites (TaskDetailDialog:522, PlanReviewDialog:307, MoeToolWindowPanel:511/570, ApproveTaskAction:17) are statements, so a Boolean return compiles unchanged; not touched (out of scope). Java-WebSocket 1.6.0 javap: WebSocketClient(URI), isOpen(), send(String), close() public non-final. Gson 2.14.0 / JUnit 4.13.2 present. Shared lease id jetbrains-gradle exists, free. Owned paths clean. 17 foreign dirty paths left untouched: 5 .moe/tasks board JSONs (own task JSON is BOARD), docs/MCP_SERVER.md, docs/SCHEMA.md, 11 packages/moe-daemon/src files (StateManager, attemptStore, workerLifecycle, workerStore, claimNextTask{,.contract.test,.test}, index, releaseTask{,.test}, schema) plus untracked candidateStore/recordCandidate daemon files and .moe/epics, .moe/resources.",
+      "startedAt": "2026-09-11T11:04:02.383Z",
+      "completedAt": "2026-09-11T11:09:19.864Z"
     },
     {
       "stepId": "step-2",
       "description": "Load test-driven-development and create JUnit 4 PlanApprovalContractTest.kt before implementation. Use JsonParser with raw numeric JSON literals and exercise BOTH MoeJson.parseState({tasks:[fixture,validControl]}) and MoeJson.parseTask(fixture); assert identity/count and independent expected results, never only parser equality. For an assertion-red that compiles on the old Task, inspect GsonBuilder().serializeNulls().create().toJsonTree(actualTask), assert planRevision key existence and exact numeric/null values. Named coverage: snapshot and incremental revisions preserve 0, 17, 2147483648, 4294967297 and 9007199254740991; absent legacy field is exactly 0; malformed present null, -1, fractions (including 9007199254740991.1), strings including numeric strings, booleans, arrays/objects, 9007199254740992 and Long overflow are null without dropping or corrupting the task/control. Include integral decimal/exponent literals 1.0 and 1e3, huge positive/negative exponents, and successive valid/malformed/missing payloads to forbid cached fallback. Add direct sender tests that compile with the existing signature: capture real APPROVE_TASK packet from approveTask(id), assert exact type/payload/taskId with no revision key, and assert a sentinel transport exception propagates (old sendMessage currently swallows it). A capturing callback can end in true (compatible with the new Boolean transport contract). Before every Gradle invocation coordinate the shared slot via Moe list_resources/acquire_resource and the actual agreed peer resource id; if no resource exists, agree on a common JetBrains Gradle id rather than creating a private ineffective lock. Queue/report_blocked according to nextAction, release the lease on success/failure, and never clean shared output. Focused red command from Windows repo root: cmd /d /c \"cd /d moe-jetbrains && gradlew.bat test --tests com.moe.services.PlanApprovalContractTest\"; Unix: cd moe-jetbrains && ./gradlew test --tests com.moe.services.PlanApprovalContractTest. Record actual assertion failures for revision loss and swallowed transport exceptions, not compile/IPC/environment failures.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
       ],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
-      ]
+      ],
+      "startedAt": "2026-09-11T11:09:22.933Z"
     },
     {
       "stepId": "step-3",
@@ -117,18 +120,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:24:33.518Z",
-  "updatedAt": "2026-09-11T11:05:39.079Z",
+  "updatedAt": "2026-09-11T11:09:22.933Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:17:44.893Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-2d25447a",
     "worker-53c83cb5",
     "worker-85674160"
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T09:26:50.467Z",
   "planningNotes": {
@@ -150,5 +156,36 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Step-1 wrapper prerequisite fails before source edits. This CLI began from no-claim preflight (temp prompt created 2026-09-11 10:43:49Z). Live parent wrapper PID 55244 began 10:43:48Z with -Role worker -Command codex -Team moes and NO -CodexExec. Task was claimed later inside this CLI. Existing .git/moe/baseline/task-0ad3744e77bd43b08b9c0b63293912a6.tsv is from 09:17:45Z, head=661f13e65e46722538dbc23e35fa80ec97099c24, landed=0; it cannot attest this session's preflight. Source scripts/moe-agent.ps1:4176 gates baseline creation on preflightTaskId; :5015 gates postflight on that original id. Hence safe automatic delivery is not bound to this task. All implementation prerequisites are DONE and landed=true in fresh Moe context; this is NOT a dependency block. Current branch moe/work-2026-09-10, HEAD d607ec2534699b09535c5fd35f0b0a76c1a82d62. Five owned JetBrains paths are clean. No source edits, builds, tests, git mutations or step completions performed; foreign daemon/docs/board WIP preserved. Governor informed via chat with full evidence. Relaunch a one-shot seat that preflights this task; do not treat a new chat turn or this old baseline as binding proof.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "commits": [
+    {
+      "sha": "037473c4317281adb400aa2c223376f17cafc296",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T11:05:39Z",
+      "paths": [
+        ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+        ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T11:05:42.264Z",
+      "treeId": "fa5fee84784beac0dde476cde68a47544a7f7c16",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+    ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-85674160@2026-09-11T11:05:39Z",
+    "at": "2026-09-11T11:05:42.264Z"
+  }
 }
