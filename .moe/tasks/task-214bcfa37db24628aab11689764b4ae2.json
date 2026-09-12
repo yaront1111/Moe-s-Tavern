@@ -107,8 +107,8 @@
       "completedAt": "2026-09-12T19:58:02.754Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,12 +124,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-12T14:10:44.557Z",
-  "updatedAt": "2026-09-12T19:59:44.193Z",
+  "updatedAt": "2026-09-12T20:09:53.604Z",
   "metrics": {
     "firstClaimAt": "2026-09-12T17:45:09.917Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T20:09:53.604Z",
+    "wallClockMs": 8683687
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
@@ -173,7 +175,63 @@
     "packages/moe-daemon/src/state/StateManager.ts",
     "packages/moe-daemon/src/state/checkRunStore.ts",
     "packages/moe-daemon/src/state/checkRunStore.test.ts",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-214bcfa37db24628aab11689764b4ae2.json",
+    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json"
   ],
-  "completionSummary": "Persistence slice for candidate-bound CheckRun records; five paths. schema.ts: additive CheckRunSource ('runner-observed'|'agent-reported', declared provenance only) and readonly CheckRun {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source, optional createdAt}. StateManager.ts: checkRuns map + loadEntities(.moe/checks). New state/checkRunStore.ts exports exactly MAX_CHECK_LOG_BYTES=16384, validateCheckRunParams, recordCheckRun->{checkRun,duplicate}, getCheckRun, listCheckRunsForCandidate; no update/delete. Validates without coercing (entity ids; treeSha 7-40 hex exact; command non-blank <=500 verbatim; any safe-integer exitCode; exact source; optional string tail -> '', bounded to its final 16384 UTF-8 bytes on a character boundary, surrogates normalized). Order: validate -> -32001 CANDIDATE_NOT_FOUND -> -32002 CHECK_RUN_TREE_MISMATCH {candidateId,expectedTreeSha,actualTreeSha} -> normalized same-id replay (duplicate:true, no write, original createdAt) or -32002 CHECK_RUN_IMMUTABLE -> writeEntity before map.set. Daemon-clock createdAt, copies, lists order missing createdAt first then createdAt/id; nothing executed. checkRunStore.test.ts: 89 tests covering persistence, reload, absent dir, preservation, refusals with byte+map snapshots, order, replay, write failure, historical fixture rows (loaded verbatim, not eligibility), 16 UTF-8 rows, 36 malformed inputs, export list, no child process. docs/SCHEMA.md: CheckRun section + validation rules (73 insertions, 0 deletions). Gate exit 0: focused 89 passed; npm test 116 files, 1690 passed | 3 skipped (baseline 115/1601|3); tsc 0; acceptance.test.ts untouched. 21 scratch mutations all red on named tests, including the three DoD ones and replay-skips-compare. Stops at persistence: no tool registered, no registry entry; task-867f69a6 remains the full gate and owns registration. Contested shared files were written with Edit only; QA please confirm git show --stat on the completion commit lists all five paths."
+  "completionSummary": "Persistence slice for candidate-bound CheckRun records; five paths. schema.ts: additive CheckRunSource ('runner-observed'|'agent-reported', declared provenance only) and readonly CheckRun {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source, optional createdAt}. StateManager.ts: checkRuns map + loadEntities(.moe/checks). New state/checkRunStore.ts exports exactly MAX_CHECK_LOG_BYTES=16384, validateCheckRunParams, recordCheckRun->{checkRun,duplicate}, getCheckRun, listCheckRunsForCandidate; no update/delete. Validates without coercing (entity ids; treeSha 7-40 hex exact; command non-blank <=500 verbatim; any safe-integer exitCode; exact source; optional string tail -> '', bounded to its final 16384 UTF-8 bytes on a character boundary, surrogates normalized). Order: validate -> -32001 CANDIDATE_NOT_FOUND -> -32002 CHECK_RUN_TREE_MISMATCH {candidateId,expectedTreeSha,actualTreeSha} -> normalized same-id replay (duplicate:true, no write, original createdAt) or -32002 CHECK_RUN_IMMUTABLE -> writeEntity before map.set. Daemon-clock createdAt, copies, lists order missing createdAt first then createdAt/id; nothing executed. checkRunStore.test.ts: 89 tests covering persistence, reload, absent dir, preservation, refusals with byte+map snapshots, order, replay, write failure, historical fixture rows (loaded verbatim, not eligibility), 16 UTF-8 rows, 36 malformed inputs, export list, no child process. docs/SCHEMA.md: CheckRun section + validation rules (73 insertions, 0 deletions). Gate exit 0: focused 89 passed; npm test 116 files, 1690 passed | 3 skipped (baseline 115/1601|3); tsc 0; acceptance.test.ts untouched. 21 scratch mutations all red on named tests, including the three DoD ones and replay-skips-compare. Stops at persistence: no tool registered, no registry entry; task-867f69a6 remains the full gate and owns registration. Contested shared files were written with Edit only; QA please confirm git show --stat on the completion commit lists all five paths.",
+  "commits": [
+    {
+      "sha": "fac1e3d461d040f60d4921becbff56ac3ad3b988",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-12T19:28:25Z",
+      "paths": [
+        ".moe/tasks/task-214bcfa37db24628aab11689764b4ae2.json",
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts",
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-12T20:00:23.368Z",
+      "treeId": "7861ff7438b624bbc3d3dc71cb638e0718ef40ec",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/state/StateManager.ts",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-95a1d08e21dd45688cb296914daf4417"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/checkRunStore.test.ts",
+    "packages/moe-daemon/src/state/checkRunStore.ts",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-12T19:28:25Z",
+    "at": "2026-09-12T20:00:23.368Z"
+  },
+  "completedAt": "2026-09-12T20:09:53.604Z",
+  "reviewCompletedAt": "2026-09-12T20:09:53.604Z",
+  "reviewSummary": "All 6 DoD items and the rails verified.\nGATE re-run from repo root (PowerShell): cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\" (plus an end marker). Exit 0: focused 89 passed; npm test 116 files, 1690 passed | 3 skipped (baseline 115/1601|3, so +1 file, +89 tests, skips unchanged); tsc 0.\nCOMMIT fac1e3d, pushed after reviewStartedAt. Parent 3ac1207, so prereq task-5b857738 landed. Source paths are exactly the 5 owned ones, insertions only, blobs identical to the tested bytes. acceptance.test.ts hash equals HEAD; not in the commit.\nCODE:\n- order: validate, then -32001 CANDIDATE_NOT_FOUND, then -32002 CHECK_RUN_TREE_MISMATCH {candidateId,expectedTreeSha,actualTreeSha}, then normalized replay or CHECK_RUN_IMMUTABLE, then writeEntity before map.set\n- daemon createdAt; readers return copies\n- exports only MAX_CHECK_LOG_BYTES=16384 + 4 fns\n- UTF-8 byte tail with continuation-byte skip\n- no child_process, no forbidden patterns\n- StateManager wiring mirrors candidates/reviews\n- acceptance check fixtures load as-is; SCHEMA.md accurate\nMUTATION audit (isolated scratch, exactly-once anchors, pristine restore; unmutated 89/89 first and last): 41/41 red on named tests.\n- DoD-named: tree-check-off 7, map-before-write 1, char-count-truncation 12 (expected 24576 to be 16383)\n- also: replay-skips-compare 9, reload-empty 2, replay-falls-through 2, 4 returns-live, same-id-after-write 11, replay-before-candidate 1, tree case-fold/prefix, codeName/context key, continuation-skip-off 9, cap off-by-one 3, caller createdAt, exitCode/command/source/id validation, 3 sort mutations, each RECORDED_FIELDS drop\nScratch torn down; repo == pristine. Persistence only, no tool/registry; task-867f69a6 owns registration."
 }
