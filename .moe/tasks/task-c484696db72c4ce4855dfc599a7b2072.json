@@ -15,13 +15,75 @@
     "The default must be behaviour-preserving; strictness is opt-in via settings.",
     "Never label missing code evidence as verified delivery."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "READ THE EVIDENCE THAT ALREADY EXISTS AND FIX THE SHARED TOKEN VOCABULARY (read-only, no edits). No acceptance case names this card, confirmed by grepping the task id against src/delivery/acceptance.test.ts, so the card is its own contract — with one hard external constraint described below. Read src/tools/qaApprove.ts from the handler start to the metrics block. Note what siblings already added ahead of you: an attempt-finalizing refusal and a reviewed-candidate binding, both firing before any mutation, and the existing SOFT commit gate that computes completion commits filtered to at or after reviewStartedAt, plus checkpoint and rescue commits and an autoCommit-on flag, and emits the NO-COMPLETION-COMMIT string into both the singular warning key and the warnings array. That soft gate is exactly what this card makes conditionally hard, so read its comment explaining WHY it is soft — the wrapper lands the commit seconds after complete_task, so a fast approval can legitimately arrive first — and preserve that reasoning under the default policy. Read the TaskCommit shape for the fields that distinguish a local commit from a pushed one, and check whether a pull-request link already lives on the task. Read the STRICT_SETTINGS fixture at acceptance.test.ts line 249: it sets `deliveryPolicy: 'local-branch'` alongside the ALREADY EXISTING `qualityGate` and `qualityGateScope` settings, so those two are what name the required gate command and decide whether this task needs one. NOW THE EXTERNAL CONSTRAINT, which is why this card was planned deliberately: task-94f534924ea841af8c164191060ee4d3 is already planned to CONSUME this card's evidence helper rather than reimplement it, and acceptance criterion 2 pins one token exactly — its refusal asserts `missingEvidence` deep-equal to `['required-check:node gate.cjs']`. Read that case from line 1179, especially its four decoy check records, because the check dimension of this helper must satisfy them: current candidate, that candidate's own tree, the required command, exit code zero, and source runner-observed. Your helper must therefore be a reusable predicate over ANY task, not a can-this-task-go-DONE closure, and it must emit the prefixed-string token vocabulary. Record in the step note which check-record store and fields task-867f69a6 actually landed, and use them verbatim. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING CASES FIRST AND CAPTURE RED PROOF. ADD cases to packages/moe-daemon/src/tools/qaApprove.test.ts, which this card's verification command names, and do not touch a single existing case — a definition-of-done item requires today's soft-warning behaviour proven by the existing tests staying green UNMODIFIED, so any edit to one is evidence you changed the default. Cover: with no policy configured, a task with no completion commit still reaches DONE carrying the same warning string in the same two places, which is the behaviour-preservation guarantee; under the local-branch policy the same task is hard-refused with an error naming the missing completion commit, and the task stays in REVIEW with its files byte-identical and .moe/reviews untouched; under the local-branch policy a task WITH a qualifying completion commit reaches DONE; under the remote-push policy a commit that was recorded but never pushed is refused while a pushed one passes; under the merged-pull-request policy the absence of a merged pull request is refused; under the manual-artifact policy a task with no commit and no recorded artifact is refused, while one with a recorded artifact reaches DONE and its persisted state labels the evidence as manual rather than as verified delivery; an autoCommit-false project keeps working, which a definition-of-done item demands its own test for; and a policy value that is not one of the recognised ones is refused as invalid input rather than silently treated as the default, because silently ignoring a misspelled strict policy would report unverified work as delivered. Add cases for the shared helper itself in this same file: the exact token for a missing required check, matching criterion 2's array element byte for byte, and each of that case's four decoys refused. Assert exact code names and deep-equal token arrays, never truthiness. Run `npx vitest run src/tools/qaApprove.test.ts` and SAVE the failing output as the fails-on-old-behaviour proof.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "WRITE THE POLICY MODULE AS A REUSABLE PREDICATE. Create packages/moe-daemon/src/delivery/policy.ts as the single authority for what DONE requires. Export the recognised policy values — the behaviour-preserving default plus local branch commit, remote branch push, merged pull request and manual artifact — a resolver that reads `deliveryPolicy` from project settings and refuses an unrecognised value as invalid input rather than falling back to the default, and the stable token vocabulary as exported constants or builders so no caller ever hand-writes a token string. The required-check token MUST render exactly as criterion 2 asserts, the prefix followed by the gate command, so build it from the `qualityGate` setting through a named builder and test it against that literal. Export ONE evidence function taking the state and any task and returning whether that task satisfies the configured policy plus the list of missing evidence tokens. It must be a plain predicate over a task, because task-94f53492 consumes it for a PREREQUISITE task rather than for the task being approved; a closure shaped around the approval path would force that card to copy the rules, which is precisely what its four decoy records exist to catch. Evidence rules: the commit-shaped requirements read the task's recorded commits using the same at-or-after-reviewStartedAt filter qa_approve already applies, so a stale earlier-attempt commit never satisfies a later review; the pushed and merged-pull-request requirements need their own distinguishing evidence rather than treating any commit as delivery; the manual requirement needs a recorded artifact and nothing else may stand in for it; and the check requirement, when the gate scope demands one for this task, needs a check bound to the task's CURRENT candidate, that candidate's own tree, the required command, a zero exit and a runner-observed source. Error handling is fail-closed throughout: an unreadable record, an unresolvable candidate or any lookup failure reports the evidence MISSING and never falls through to satisfied, because a rail forbids labelling missing code evidence as verified delivery. Return tokens only for what is actually missing, so a satisfied policy returns an empty list.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "TURN THE SOFT WARNING INTO A CONDITIONAL HARD REFUSAL. In packages/moe-daemon/src/tools/qaApprove.ts, resolve the policy and evaluate the evidence through the new module, then branch on the result. Under the default policy change NOTHING: the existing warning string, the singular warning key, the warnings array and the DONE transition all behave exactly as today, because a rail makes strictness opt-in and an existing project must see no difference on upgrade. Under a configured policy that the evidence does not satisfy, throw an error naming the specific missing evidence tokens and carrying them in its context alongside the task id and the resolved policy, so a human reads which evidence is absent rather than a generic refusal. Place the refusal with the other hard gates already in this handler — after the read, ownership, summary and reviewed-candidate guards so their precedence is unchanged, and before the Review write, the task update, the worker touch and every chat side effect, so a refused approval moves not one byte and leaves the reviews directory empty. Follow the shape of the neighbouring finalizing and candidate refusals for consistency on the wire. Under the manual-artifact policy, when the recorded artifact IS present, let the approval proceed and persist an explicit label on the task recording that DONE rested on a manual artifact rather than on verified delivery — an additive optional field, no migration, and the wording must not read as a verified landing, which is what the second rail is about. Keep the soft warnings flowing in every case that still reaches DONE, including under a satisfied strict policy, since they carry information the refusal no longer needs to.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "DOCUMENT THE SETTING AND CORRECT THE TOOL CONTRACT. In docs/CONFIGURATION.md add `deliveryPolicy` to the settings table, which a definition-of-done item requires: list all four strict values plus the default, state for each exactly what evidence it demands, and say plainly that the default reproduces today's soft-warning behaviour so an upgrade changes nothing until a project opts in. Note that an unrecognised value is refused rather than ignored, and that the manual-artifact policy is the supported path for autoCommit-false and no-git projects, where the evidence is labelled manual and never presented as verified delivery. Then correct docs/MCP_SERVER.md, where the `moe.qa_approve` section currently describes itself as a soft commit gate that always approves — that becomes untrue the moment a project sets a policy. Rewrite that description to say it is soft under the default policy and a hard refusal under a configured one, name the error and the fact that its context carries the missing-evidence tokens, and keep the existing explanation of why the soft path exists, because the wrapper-lands-after-exit race it describes is still real. Mention that the same evidence rule is what withholds dependent claims, so a reader does not think the two gates can disagree. Documentation only, no behaviour change in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "RUN THE GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run this card's command: `npx vitest run src/tools/qaApprove.test.ts`. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Watch three things specifically. The pre-existing qa_approve cases must pass with no edit, which is the definition-of-done item proving the default is behaviour-preserving. The whole suite boots projects without a delivery policy, so a resolver that throws on an absent setting would fail broadly and loudly — confirm absent means default. And the acceptance file must be left entirely alone by this card: it owns no case there, so every skip state stays as it is, and if criterion 2 now passes as a side effect of this helper existing, that is task-94f53492's evidence to claim, not yours. Keep the exact commands, exit codes and counts for the verification argument of moe.complete_task, and keep the step-2 red output as the fails-on-old-behaviour proof.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: with no policy set, absolutely nothing changed, proven by the untouched existing qa_approve tests rather than by reading the code; a misspelled policy value is refused rather than silently treated as the default, or a project that believes it is strict is silently not; the refusal fires after the existing read, ownership, summary and candidate guards and before every write, so a refused approval leaves the task in REVIEW and the reviews directory empty; the commit-shaped rules reuse the at-or-after-reviewStartedAt filter, so a stale earlier-attempt commit cannot satisfy a later review; a pushed or merged requirement is not satisfied by the mere existence of a local commit; nothing anywhere labels absent code evidence as verified delivery, and the manual-artifact label reads as manual; every lookup failure reports evidence missing rather than falling through to satisfied; and the evidence function is a plain predicate over any task, so the dependency card can call it for a prerequisite without copying a rule. Verify the required-check token renders byte-identically to the literal criterion 2 asserts, since a consumer's deep-equal assertion will fail on a single character. Confirm the file count is the five in scope, that no receipt record and no target-movement recheck crept in, and that the dependent-claim gate was left to its own card. Then call moe.complete_task with the verification evidence, list every modified path in modifiedFiles, and tell QA plainly: which token vocabulary this card defined and that task-94f53492 consumes it, that the default remains soft on purpose because the wrapper lands after the CLI exits, and the honest boundary that this gate reads RECORDED evidence and re-runs nothing, so a check or commit record that misreports what happened still satisfies the policy.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator asked for next architect work; no BACKLOG card is dependency-ready, so choosing on structural value. This CRITICAL card owns the delivery-policy evidence helper that task-94f53492 (planned minutes ago) consumes, so planning it now defines that seam coherently instead of leaving two workers to negotiate it. Both dependsOn targets remain unlanded and still gate any WORKING claim.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -33,8 +95,33 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:15.135Z",
-  "updatedAt": "2026-09-11T09:45:32.857Z",
+  "updatedAt": "2026-09-12T18:44:12.767Z",
   "contextFetchedBy": [
     "architect-2d25447a"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T18:41:55.776Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 6
+  },
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T18:44:12.692Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Shaping the evidence check as a can-this-task-go-DONE closure inside qaApprove.ts: rejected, and this is the decision that justified taking this card now. task-94f53492 is already planned to consume this helper for a PREREQUISITE task, and its acceptance case plants four decoy check records specifically to catch a second subtly different implementation. A closure around the approval path would force that copy, so the helper is a plain predicate over any task in its own module. (2) Letting this card cover only commit-shaped evidence and leaving the check dimension to the dependency card: rejected for the same reason — the two plans would then contradict each other, since the dependency card was explicitly told not to reimplement the rules. The helper covers both dimensions and this card owns the token vocabulary. (3) Falling back to the default policy on an unrecognised setting value: rejected outright. A project that misspells a strict policy would silently keep reporting unverified work as delivered, which is the exact defect the card exists to close, so an unknown value is invalid input. (4) Treating any recorded commit as satisfying the pushed and merged-pull-request policies: rejected — each needs its own distinguishing evidence or the stricter policies are decorative. (5) Making the default policy strict, or warning louder under it: forbidden by a rail; strictness is opt-in and the soft path stays because the wrapper legitimately lands the commit after complete_task returns. (6) Adding a receipt record to carry the manual artifact: out of scope by the card's own wording; the manual label is an additive optional field on the task.",
+    "codebaseInsights": "qa_approve has already grown two hard gates from siblings landed earlier in this epic: an attempt-finalizing refusal and a reviewed-candidate binding, both placed before every mutation, which is the precedent and the position for this one. Its existing soft commit gate already computes exactly the evidence this card needs to reuse — completion commits filtered to at or after reviewStartedAt so a stale earlier-attempt commit cannot satisfy a later review, plus checkpoint and rescue commits and an autoCommit-on flag — and its comment records WHY it is soft: the wrapper lands the commit seconds after complete_task, so a fast approval can legitimately arrive first. That reasoning must survive under the default policy. The strict fixture in the acceptance file sets deliveryPolicy alongside the ALREADY EXISTING qualityGate and qualityGateScope settings, so the required gate command and whether this task needs one both come from settings that predate this epic. src/delivery/ currently holds only the acceptance test, so policy.ts is the natural home and is what the dependency card's plan already refers to as the helper it consumes. Acceptance criterion 2 pins one token byte for byte, the required-check prefix followed by the gate command, and its four decoys define the check-matching rule: current candidate, that candidate's own tree, the required command, zero exit, runner-observed source.",
+    "risks": "The highest-impact failure is silent non-strictness: an unrecognised policy value quietly treated as the default leaves a project believing DONE is gated when it is not, so that path must be invalid input. Second, the default must be untouched, and the proof is the existing qa_approve cases passing unmodified — any edit to one means default behaviour moved. Third, the whole test suite boots projects with no delivery policy at all, so a resolver that throws on an absent setting fails broadly; absent means default. Fourth, the required-check token is asserted deep-equal by another card's acceptance case, so a single character of drift breaks a consumer that this plan forbids from writing its own token. Fifth, fail-open is the dangerous direction everywhere in this module: an unreadable record must read as missing evidence, never as satisfied, and nothing may describe absent code evidence as verified delivery. Finally, state the boundary honestly: this gate reads RECORDED evidence and re-runs nothing, so a commit or check record that misreports what happened still satisfies the policy — binding a record to an observed run belongs to the runner and receipt cards.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaApprove.test.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "docs/CONFIGURATION.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T18:44:12.767Z"
 }

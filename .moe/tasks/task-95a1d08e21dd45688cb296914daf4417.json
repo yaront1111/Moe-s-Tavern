@@ -17,13 +17,67 @@
     "Preserve landed QA candidate-binding behavior and all foreign hunks when editing getContext/schema.",
     "No policy gate or held-out-test unskip belongs to this compatibility slice."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CONFIRM LANDED PREREQUISITES AND THE FIVE-FILE BOUNDARY (read-only). Before editing, re-fetch context and prove store task-214bcfa37db24628aab11689764b4ae2 landed via landing.merged or a matching Moe-Task commit trailer on the delivery branch; its dependency also serializes the preceding QA candidate-binding changes. An undelivered prerequisite means report_blocked naming it, not copying its changes. Re-read TaskVerification, assertVerificationEvidence, completeTaskTool, both getContextTool verification projections, existing finalizing-attempt tests, and the newly landed schema/getContext hunks. Record HEAD, status and foreign paths; preserve peer bytes. This compatibility slice owns only schema.ts, completeTask.ts/test and getContext.ts/test. It labels existing agent attestation; it never records or synthesizes a Candidate, CheckRun, runner identity or delivery proof. Freeze the unchanged legacy contract: command length checked before trimming, maximum 500 characters, exitCode exactly zero, final 2000 JavaScript string characters of outputTail, absent/empty tail omitted. Parent task-867f69a6cdb748a8ab68fcbeec0de711 owns public MCP documentation and the complete recorder gate; this task owns no held-out acceptance edits or unskips.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE REAL WRITER/READER REGRESSIONS FIRST. Extend completeTask.test.ts and getContext.test.ts using their existing temporary-directory fixtures, real StateManager.load and production tool handlers; no mocked validator or replacement serializer. Writer: complete a no-attempt/no-candidate project with no Git repository, parameterized for autoCommit absent and false, then assert the exact verification object in memory, task JSON and a fresh StateManager reload: source agent-reported, normalized command, exitCode 0, exact tail and server reportedAt (the same stamp as reviewStartedAt). Cover omitted/empty tail, whitespace trimming, 500-character success versus 501-character refusal before trimming, and a multibyte tail longer than 2000 string characters that is sliced exactly as before, not by the CheckRun byte cap. A direct handler caller supplying an extra source runner-observed must still persist agent-reported; inputSchema verification properties and additionalProperties:false remain unchanged and do not advertise source. Assert no candidate/check records or attempt/runner identity is fabricated and the legacy nextAction/result shape remains unchanged. Add source assertions to the existing real open-attempt completion case without weakening its exact finalizing/REVIEW assertions. Preserve or extend exact MoeError code/codeName assertions for missing/malformed evidence, blank/oversize command, non-integer/nonzero exitCode, invalid tail, ownership/step/state and branch-policy precedence; rejected calls leave the legacy task bytes and verification unchanged. Inject updateTask rejection in a no-attempt case and assert the same error escapes with no successful completion or persisted label. Reader: seed source-less, explicit agent-reported, and manually persisted runner-observed/source-null records; call getContextTool for a primary task plus declared dependsOn and blockedOnTaskIds prerequisites. Assert source exactly agent-reported in both projections, primary command/exitCode/outputTail/reportedAt unchanged, compact prerequisites omit outputTail, missing/null verification stays null, and ordinary undeclared siblings stay unenriched. For read-only provenance checks, explicitly stub MOE_WORKER_ID empty and supply taskId without workerId so existing contextFetchedBy/touchWorker bookkeeping is not triggered; restore env afterwards. Snapshot primary/prerequisite disk bytes and in-memory verification after load, invoke context twice, and prove neither changes; mutate the returned verification copy and prove state remains unchanged. Retain separate existing bookkeeping and currentCandidate tests unchanged. Capture focused assertion-red results against the existing source-less writer and both readers before production edits; use typed response records or unknown JSON at malformed-fixture boundaries so missing properties/compile errors are not the red. Clear each original and reload StateManager emitter, restore spies/env/clocks, and clean only each test's own temporary root without changing the shared harness.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "LABEL THE LEGACY MODEL AND COMPLETION WRITE, WITHOUT MOVING GUARDS. Add source?: 'agent-reported' to TaskVerification in schema.ts, with a short comment that optionality loads old records and this candidate-less surface is agent attestation, not runner-observed CheckRun evidence. Preserve all CheckRun/Candidate/QA types landed by prerequisites. In completeTask.ts change only the verification object in the existing state.updateTask REVIEW write: spread the result of the existing assertVerificationEvidence, stamp reportedAt as today, and force source:'agent-reported' AFTER the spread. Never spread raw caller verification or take caller source. Do not change the inputSchema, input type, util/enforcement.ts or its return construction, caps and error handling. Keep task lookup/status/ownership/completed-step/evidence/branch-policy order, finalizing-before-REVIEW ordering, worker release and existing nextAction logic intact. No catch that turns persistence failure into success; no new attempt/candidate lookup, Git call, CheckRun write, migration or source authentication. The optional literal preserves the existing Omit<TaskVerification,'reportedAt'> validator return type without modifying the validator.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "LABEL BOTH CONTEXT PROJECTIONS WITHOUT A MIGRATION. In getContext.ts replace the primary raw verification reference with a fresh shallow projection when verification exists, preserving its existing fields and forcing source:'agent-reported' AFTER the spread; absent/null stays null. In siblingEntry's declared-prerequisite verification object add the same literal while retaining its explicit command, exitCode and reportedAt field list and excluding outputTail. Do not return the persisted source even if it says runner-observed, and do not assign into task.verification or write a normalized record during the read. No new helper module is needed for these two small projections. Preserve get_context's pre-existing caller bookkeeping, chat failure handling, declared-dependency selection/caps, currentCandidate selection/copy semantics and all QA candidate-binding additions. Add only a concise why-comment explaining legacy projection labels are not an upgrade of provenance. Missing verification must never become a fabricated object; no candidate, check or runner field is introduced. Public contract documentation is deliberately delegated to the already-planned parent recorder task rather than adding a sixth owned file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ONE FINAL VERIFICATION GATE. Load regression-check and verification-before-completion. Retain the meaningful pre-implementation red evidence for the real writer and both readers, with failing source assertions and test names; a type error, missing import, or broken fixture does not satisfy regression red. Run this exact completion command from repo root on Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/tools/completeTask.test.ts src/tools/getContext.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/tools/completeTask.test.ts src/tools/getContext.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). Every command must exit 0, with nonzero executed Test Files/Tests counts for focused and full runs; record actual counts and remaining skips, not merely a green process. This shared schema/wire change requires full daemon regression even though it is mid-epic; do not replace npm test with only the focused files. tsc excludes test files, so do not claim it type-checks them. Preserve all pre-existing finalizing/branch/QA/held-out assertions; no held-out edits or unskips. Do not build/prebuild/clean, delete shared dist, mask peer failures or disturb foreign source. All filesystem fixture setup/cleanup uses Node path utilities on verified temporary roots, not shell-composed recursive deletion.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "FINAL ADVERSARIAL SELF-REVIEW AND QA HANDOFF. Load adversarial-self-review and review only this five-file diff as a caller trying to upgrade an agent claim. Check a manual persisted runner-observed source cannot leak through either projection; a caller-provided label cannot override the writer; read/re-read/response mutation cannot rewrite or alias stored legacy verification; null does not fabricate evidence; and no command/exit/tail fields or compact-sibling limits are lost. Re-check empty/null/huge numeric/string inputs against unchanged validation, persistence-failure propagation, existing finalizing retry semantics and normal mutex serialization without adding a new concurrency mechanism. Confirm no candidate/check/runner/Git/policy authority was invented and autoCommit=false/manual/no-git completion remains supported. Review exact prerequisite landing evidence, source schema diff and preservation of all peer QA-binding hunks; held-out tests and util/enforcement.ts remain byte-identical to the worker's post-prerequisite baseline. Record commands/counts, old-behavior red evidence, five-path scope, compatibility semantics and the parent-owned documentation obligation in the task handoff. Report every actually created/modified path in complete_step.modifiedFiles, empty for read-only steps; never broad-stage or self-approve. Use complete_task for QA/runtime delivery, not BLOCKED as a completion substitute. If self-review changes owned bytes, refresh the same final gate. Whole-epic integration remains task-808869c56228430ca5b15cb901497544, not another hardening task here.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "User confirmed in the REPL ('work') the proposed promotion of this unassigned legacy-labeling slice to PLANNING for architect-2d25447a.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-867f69a6cdb748a8ab68fcbeec0de711",
   "dependsOn": [
@@ -41,8 +95,35 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-12T14:11:35.660Z",
-  "updatedAt": "2026-09-12T17:46:33.264Z",
+  "updatedAt": "2026-09-12T18:47:23.516Z",
   "contextFetchedBy": [
     "architect-2d25447a"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T18:44:37.681Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T18:47:23.453Z",
+  "planningNotes": {
+    "approachesConsidered": "User previously confirmed the three-slice CheckRun decomposition and candidate-less agent-reported legacy behavior, then explicitly answered 'work' to promoting/taking this legacy slice; no unresolved approach ambiguity. Use one optional literal field, one existing write and two inline projections. Rejected upgrading TaskVerification to CheckRun, requiring candidates/attempts/Git, accepting caller source, a read-time migration, widening legacy validation to the new CheckRun cap, or another helper/store/docs file. Six steps and five existing files preserve the confirmed scope.",
+    "codebaseInsights": "Live inspection at HEAD 9225483: TaskVerification has command/exitCode/outputTail?/reportedAt and no source; completeTaskTool persists {...verification,reportedAt:now}; primary getContext returns the stored reference and declared prerequisites construct command/exitCode/reportedAt only. assertVerificationEvidence is the real existing normalizer: 500 raw-command characters before trim, only exitCode 0, final 2000 JS string characters, empty tail omitted; its constructed return ignores unrecognized caller fields. complete_task first holds an open attempt finalizing before REVIEW; no-attempt legacy path is explicitly supported. getContext's currentCandidate projection and QA binding are now present and must survive. getContext legitimately writes contextFetchedBy for a new caller and touches a caller worker: provenance read-only tests must suppress only that existing fixture path, not remove production bookkeeping. ToolTestHarness.cleanup removes its directory but does not clear StateManager emitters, so new fixture scopes must do that themselves. tsc excludes test files.",
+    "risks": "The CheckRun store dependency was WORKING/unlanded at this planning claim; planning is allowed now, editing must wait for actual store delivery. Dependency serialization protects shared schema and transitive QA getContext changes. Current checkout contained daemon-driven .moe state changes but no dirty production paths at HEAD9225483; remeasure before implementation and preserve all foreign changes. The new source label is compatibility metadata, not authentication, actual execution, QA acceptance or delivery evidence. Do not claim read_context is globally write-free: only source normalization is read-only. Parent task867f69a6 already owns docs/MCP_SERVER.md updates for this contract; this child intentionally changes only its five named paths. No source changes, tests, builds, commits or manual live .moe edits were performed by the architect.",
+    "keyFiles": [
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/completeTask.test.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/getContext.test.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T18:47:23.516Z"
 }
