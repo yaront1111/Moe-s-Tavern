@@ -20,13 +20,16 @@
     {
       "stepId": "step-1",
       "description": "READ THE FROZEN CONTRACT BEFORE WRITING A LINE. Read-only, no edits. This task's shape is dictated, not chosen: packages/moe-daemon/src/delivery/acceptance.test.ts was authored before any implementation so no later task could redefine delivery, and its rules say a diff that edits an assertion, constant, fixture or helper in that file instead of the code under test is a QA reject. You may change exactly one character in it - the skip on your own case. (a) Read its header, lines 1-70, and transcribe the four normative items that belong to this task into the step note verbatim: moe.qa_approve also accepts candidateId; moe.get_context projects result.currentCandidate as the exact stored Candidate record selected by createdAt then id; the persisted Review carries taskId, candidateId, reviewerId, decision and summary; CANDIDATE_MISMATCH maps to MoeErrorCode -32002. Note also that every new record lives at .moe/<kind>/<id>.json following the resourceStore pattern, so reviews go in .moe/reviews. (b) Read criterion 3 in full, lines 1435-1625, and write down what it asserts BEYOND this card's Definition of Done, because those assertions are binding too: the refusal's context must carry expectedCandidateId and currentCandidateId with exactly those key names; currentCandidate must deep-equal the whole stored candidate file, not just an id; on refusal the task file bytes, BOTH candidate files and an EMPTY reviews directory must all hold; and the positive control expects exactly one review record after approving the current candidate. (c) Read src/tools/qaApprove.ts (179 lines) whole - its result literal at line 155 carries warnings, commitEvidence and message, and a task rail forbids restructuring it. Read src/tools/qaReject.ts and the tail of src/tools/getContext.ts, whose single large return literal begins at line 271. (d) Read src/state/candidateStore.ts and note its exact export list - a test in the candidate task pins it at five exports, so do not add a sixth; listCandidatesForTask already orders by createdAt then id, which is exactly the selection rule, so REUSE it rather than sorting again. (e) Note what NOT to do: ATTEMPT_FINALIZING lives in src/util/claimGuards.ts and gates claiming, not approving, and criterion 3 deliberately finalizes the attempt so that hold is not the refusing layer. Do not fence qa_approve on attempt identity - QA is not the attempt holder, and assertAttemptCurrent here would break the case.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Round 3 (worker-de4739a8), read-only, no edits.\n\n(a) acceptance.test.ts header, verbatim (lines 40-52):\n  \"moe.qa_approve         also accepts candidateId (reviewed-candidate binding)\"\n  \"moe.get_context        projects result.currentCandidate = the exact stored Candidate record, selected by createdAt then id\"\n  \"persisted Review       { taskId, candidateId, reviewerId, decision, summary }\"\n  \"refusal codeNames ... CANDIDATE_MISMATCH -> MoeErrorCode -32002\"\n  plus \"persisted records .moe/<kind>/<id>.json for attempts, candidates, checks, reviews and receipts (resourceStore pattern)\" -> .moe/reviews.\n(b) Criterion 3 (now lines 1435-1602) beyond the DoD: refusal context keys exactly expectedCandidateId + currentCandidateId; currentCandidate deep-equals the whole candidate file; after refusal the task bytes, BOTH candidate files and an EMPTY reviews dir hold; positive control = exactly one review, reviewerId 'qa-Q'. `git diff 7b33028~1 HEAD -- acceptance.test.ts` = only the it.skip->it at line 1445. Not touched this round.\n(c) qaApprove.ts (213 lines), qaReject.ts (395), reviewStore.ts (224), candidateStore.ts read whole. candidateStore exports stay five; not touched.\n(e) No attempt fence added; ATTEMPT_FINALIZING (claimGuards) is the sibling's hold, unchanged.\n\nQA reject #2 verified against code, all five items hold:\n1 DEFECT reviewStore.ts:124-143 never reads state.reviews for the id, so a reused id rewrites map + file and createdAt; the JSDoc at :38 ('retry idempotent') is false. Fix in step-2: replay-or-refuse mirroring candidateStore.ts:180-226 (identical caller fields -> stored copy, no write; any difference -> -32002 REVIEW_IMMUTABLE with context {reviewId, differingFields}, no write). SCHEMA.md alignment in step-6.\n2 tests (a)/(b) -> step-5, red first in a scratch tree against the current store.\n3 reviews reload StateManager.ts:1100 -> pin in step-5 (production line unchanged).\n4 candidateId inputSchema qaApprove.ts:27 / qaReject.ts:45-48 -> pin in step-5.\n5 workerId||'human' qaApprove.ts:148 / qaReject.ts:266 -> pin in step-5 (assertWorkerOwns no-ops when assignedWorkerId is null, so a workerId-less call reaches the fallback).\nGate and get_context kept as they are, per QA.\n\nFacts: tsconfig excludes src/**/*.test.ts, so tsc does not type-check tests. EOL: tools/*.ts + qaApprove.test.ts + SCHEMA.md CRLF; reviewStore.ts + StateManager.ts LF.\nDirty paths not mine (peers/pre-existing, untouched): .moe/tasks/{7265e1fc,80737065,95a1d08e,b1c98508,c484696d,e5a45262,fa46784f}.json, .moe/epics/epic-3b8eb56d...json, .moe/resources/, 3 untracked .moe/tasks files.",
+      "startedAt": "2026-09-12T19:05:42.660Z",
+      "completedAt": "2026-09-12T19:07:26.251Z"
     },
     {
       "stepId": "step-2",
       "description": "PERSIST THE REVIEW RECORD. In src/types/schema.ts add an exported Review interface carrying id, taskId, candidateId, reviewerId, decision and createdAt, plus the summary, with decision a union of approve and reject. The five field names the acceptance case projects are fixed by the frozen contract; id and createdAt are the record's own, matching every other store. Keep it additive: no existing type changes, no schemaVersion bump, no migration. In src/state/StateManager.ts add a reviews map beside the existing candidates map and one loadEntities call over the reviews directory in load, exactly as the candidates collection was wired. Create src/state/reviewStore.ts as stateless exported functions taking the state handle first, mirroring candidateStore: record, get and a list by task. Reviews are an append-only audit trail, so there is NO update and NO delete function - the function must not exist, which is stronger than a convention not to call one, and a reopened task that is reviewed again simply gets a second record. Persist with writeEntity BEFORE touching the map, so a failed write leaves no review visible. Error handling: validate that taskId, candidateId, reviewerId and summary are non-blank strings and that the decision is one of the two members, refusing with the invalid-input error rather than coercing. Do NOT add a separate reviewStore test file - the named verification command covers src/tools/qaApprove.test.ts and the acceptance file, so the store's cases live in the former.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/StateManager.ts",
@@ -34,46 +37,70 @@
       ],
       "newFiles": [
         "packages/moe-daemon/src/state/reviewStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/reviewStore.ts"
+      ],
+      "note": "Round 3: fixes QA DEFECT (reused review id rewrote the stored record).\n\nCHANGE, packages/moe-daemon/src/state/reviewStore.ts only (schema.ts Review + StateManager reviews map/loadEntities unchanged):\n- RECORDED_FIELDS = [taskId, candidateId, reviewerId, decision, summary].\n- New private replayOrRefuse(stored, incoming), mirroring candidateStore.ts:180-190: every recorded field identical -> return copy(stored), no write, createdAt kept; any difference -> MoeError(-32002 STATE_CONFLICT, codeName 'REVIEW_IMMUTABLE', message \"Review <id> already exists and differs in <fields>; reviews are append-only, so a new decision needs a new review id\", context {reviewId, differingFields}), no write.\n- recordReview: validate -> id = input.id ?? generateId('review') -> state.reviews.get(id) -> replayOrRefuse, BEFORE writeEntity. Still writeEntity before map.set. Return type unchanged (Promise<Review>). Exports unchanged, still no update/delete function.\n- Header comment + id JSDoc (was the false \"retry idempotent\" at :38) now state the replay/refuse rule and that the check holds only under state.mutex.\n\nTDD RED FIRST (scratch D:/moe-5b85-r3-scratch, a copy of HEAD src+docs+scripts, node_modules junction; unmutated baseline 35 passed | 3 skipped = repo). New tests written into the SCRATCH qaApprove.test.ts before any production edit, run against the old store:\n- 4x it.each 'refuses a same-id review that differs in {decision, summary | taskId | candidateId | reviewerId}' -> \"Error: expected a MoeError refusal, but the call resolved\"\n- 'replays an identical same-id review...' -> diff `- \"createdAt\": \"2026-09-11T03:00:00.000Z\"` / `+ \"createdAt\": \"2026-09-11T03:05:00.000Z\"` (old store rewrote createdAt)\n- Tests 32 passed | 5 failed, only those five.\nGREEN: fixed store copied to scratch (cmp equal) -> 37 passed (37), exit 0.\nRepo (no new tests landed yet; they land in step-5): `cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts` -> RUN root D:/projexts/moes/packages/moe-daemon, 35 passed | 3 skipped, exit 0. `npx tsc --noEmit -p tsconfig.json` exit 0.\nSCHEMA.md alignment is in step-6.",
+      "startedAt": "2026-09-12T19:07:37.161Z",
+      "completedAt": "2026-09-12T19:11:37.124Z"
     },
     {
       "stepId": "step-3",
       "description": "PROJECT THE CURRENT CANDIDATE FROM get_context. In src/tools/getContext.ts add currentCandidate as a top-level key on the result literal that begins at line 271. Its value is the task's current candidate record - the last one by createdAt then id - obtained through candidateStore's existing list-by-task function so the ordering rule lives in one place and cannot drift from the record_candidate side. Emit the WHOLE stored record, not a projection and not just an id: the acceptance case deep-equals it against the candidate file on disk, so any reshaping or added field fails it. Omit the key entirely when the task has no candidate, rather than emitting null, so a project that has never recorded one sees no change at all. Include it whenever a candidate exists regardless of status, which necessarily covers the REVIEW case the Definition of Done names and also helps a worker about to record a second candidate; a status gate would make the field vanish exactly when a reviewer re-reads a reopened task. Hand out a copy rather than the live cached object, the way the candidate task's own review insisted, so a caller cannot mutate stored state through the response. Change nothing else in that literal - it is the payload every role reads at the start of every task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts"
-      ]
+      ],
+      "note": "Round 3: no production change, by QA's instruction \"Keep the gate and get_context as they are\". get_context was not among the reject's issues.\nEvidence it stands as round 2 left it: `git diff --quiet HEAD -- packages/moe-daemon/src/tools/getContext.ts` clean, and `git diff --quiet 7b33028 HEAD` for it = unchanged since the round-1 commit. Its pins already in qaApprove.test.ts pass in the step-2 repo run (35 passed | 3 skipped, exit 0): 'get_context omits the currentCandidate key for a task without one' (Object.keys) and 'get_context projects a copy of the whole current candidate' (toEqual whole record + tamper-a-copy), plus criterion 3's two contextA/contextB deep-equals against the candidate files. Selection still via listCandidatesForTask (createdAt then id), shared with the gate.",
+      "startedAt": "2026-09-12T19:12:31.256Z",
+      "completedAt": "2026-09-12T19:12:41.913Z"
     },
     {
       "stepId": "step-4",
       "description": "BIND BOTH QA DECISIONS TO THE REVIEWED CANDIDATE. In src/tools/qaApprove.ts accept an optional candidateId argument and resolve the task's current candidate through the same list-by-task helper. Decide in this order. If the task has NO candidate at all, behave exactly as today, which is the additive-adoption rail - a project that never records candidates must keep working. If a candidateId is supplied and it does not match the current candidate's id, refuse BEFORE any write with a MoeError carrying the existing state-conflict numeric code, the stable codeName CANDIDATE_MISMATCH, and a context holding exactly expectedCandidateId - what the reviewer read - and currentCandidateId; the message should tell the reviewer to re-read the current candidate, because that is the action. If it matches, proceed. If a candidate exists but candidateId was OMITTED, proceed - adoption is incremental - but push a warning onto the existing warnings array so the gap is visible rather than silent; that array already exists for the commit-evidence warning and a rail forbids restructuring the result, so add to it and change nothing else about warnings, commitEvidence or message. On every successful approval write one Review with decision approve, and write it only after the candidate check has passed, since the acceptance case asserts an EMPTY reviews directory after a refusal. Apply the identical argument, the identical refusal and an identical Review with decision reject in src/tools/qaReject.ts, leaving its existing reopen and failed-item behaviour untouched. Do not add an attempt fence to either tool.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaApprove.ts",
         "packages/moe-daemon/src/tools/qaReject.ts"
-      ]
+      ],
+      "note": "Round 3: no production change, by QA's instruction \"Keep the gate and get_context as they are\". qaApprove.ts and qaReject.ts: `git diff --quiet HEAD` clean and unchanged since 7b33028.\nQA's two unpinned sites in these files are TEST gaps, not code defects, and are closed in step-5 without touching the tools:\n- candidateId inputSchema entries (qaApprove.ts:27, qaReject.ts:45-48): exist as { type: 'string' }, not in required (['taskId','summary'] / ['taskId','reason']), additionalProperties false.\n- reviewerId `params.workerId || 'human'` (qaApprove.ts:148, qaReject.ts:266): exists. A workerId-less call reaches it because assertWorkerOwns returns early when task.assignedWorkerId is null (enforcement.ts:42) and assertContextFetched no-ops on that path.\nDecision order still: validate candidateId -> no candidate returns {} (adoption) -> omitted: bound + NO-REVIEWED-CANDIDATE warning -> mismatch: CANDIDATE_MISMATCH before any write -> match. Review written after the check, before updateTask. No attempt fence added. Result literal (warning, warnings, commitEvidence, message) untouched.",
+      "startedAt": "2026-09-12T19:12:56.345Z",
+      "completedAt": "2026-09-12T19:13:08.936Z"
     },
     {
       "stepId": "step-5",
       "description": "TEST IT, THEN UNSKIP THE ACCEPTANCE CASE AND OWE THE RED. Extend src/tools/qaApprove.test.ts with the unit-level matrix, asserting exact values and, for every refusal, BOTH the numeric code and the exact codeName string, since several codes share a number here. Cover: a matching candidate approves and writes exactly one review with the five contract fields; a mismatched candidate refuses with CANDIDATE_MISMATCH carrying both context keys, and afterwards the task bytes on disk and the reviews directory are untouched; a task with no candidate approves exactly as before, with the result's warnings, commitEvidence and message shape unchanged, which is the adoption rail; a candidate that exists with the id omitted approves but adds the warning; a supplied id naming a candidate that belongs to a DIFFERENT task is a mismatch, not a match; malformed input is refused rather than coerced; qa_reject records a review with decision reject and refuses the same mismatch; and an injected writeEntity failure on the review leaves no review visible and is surfaced rather than swallowed. Then change the single skip on criterion 3 in src/delivery/acceptance.test.ts and NOTHING else in that file - no assertion, constant, fixture or helper. Owe the red properly: before the production change is complete, run that case unskipped and record it failing at the counterexample the describe names, which is the wrong-candidate approval reaching DONE on bytes nobody reviewed. Take that red in a throwaway copy or a scratch worktree, never by editing the shared checkout's assertions. Run the named command, npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts, and require green with the criterion-3 case now executing rather than skipped - check the skipped count actually dropped by one.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/qaApprove.test.ts",
         "packages/moe-daemon/src/delivery/acceptance.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts"
+      ],
+      "note": "Round 3: QA test issues 1-5 closed in packages/moe-daemon/src/tools/qaApprove.test.ts (+10 tests, 32 -> 42). acceptance.test.ts untouched (still only the round-1 unskip).\n\nADDED\n- import StateManager.\n- binding describe: it.each over moe.qa_approve / moe.qa_reject 'declares candidateId as an optional string input': tool.name, properties.candidateId toMatchObject {type:'string'}, required toEqual ['taskId','summary'] / ['taskId','reason'], additionalProperties false.\n- binding describe: it.each 'without a workerId records the review with reviewerId \"human\"': candidateId cand-A, no workerId, status DONE / WORKING, exactly one review {task-1, cand-A, human, approve|reject, summary}.\n- reviewStore describe (afterEach now also vi.restoreAllMocks): it.each 4 same-id rewrites ('decision, summary' | taskId | candidateId | reviewerId): exact {code -32002, codeName REVIEW_IMMUTABLE, message incl. [REVIEW_IMMUTABLE] prefix, context {reviewId, differingFields}}; getReview, file JSON and file bytes still the first record; map size 1. Replay: fake Date 03:00 then 03:05, identical record returns the stored copy, createdAt 03:00, writeEntity spy not called, bytes unchanged, tampering the replay does not reach the store. Reload: record approve + reject, new StateManager({projectPath: h.testDir}).load(): reviews.size 2, getReview equals each, listReviewsForTask equals the original (length 2), reused id still REVIEW_IMMUTABLE with bytes unchanged; clearEmitter in finally.\n\nVERIFY (repo): `cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts` -> RUN root D:/projexts/moes/packages/moe-daemon, Test Files 2 passed, Tests 45 passed | 3 skipped, exit 0.\n\nMUTATION RED PROOF (scratch D:/moe-5b85-r3-scratch, driver mutate.mjs: restore all targets from pristine, apply ONE anchor-exact mutation, run both named files). none FIRST and LAST: 45 passed | 3 skipped. Each mutation turns ONLY the listed tests red:\n- old-store (HEAD reviewStore.ts) -> 4x same-id refusals \"expected a MoeError refusal, but the call resolved\", replay (createdAt 03:05 vs 03:00), reload. [QA DEFECT]\n- reload-off (StateManager :1100 -> new Map) -> reload \"expected +0 to be 2\". [QA issue 3]\n- approve-schema-entry (delete qaApprove.ts:27) -> qa_approve schema \"expected undefined to match object { type: 'string' }\". [issue 4]\n- reject-schema-entry (delete qaReject.ts:45-48) -> qa_reject schema, same. [issue 4]\n- approve-human-fallback (qaApprove.ts:148 -> params.workerId) -> qa_approve human \"[MISSING_REQUIRED] Missing required field: reviewerId\". [issue 5]\n- reject-human-fallback (qaReject.ts:266) -> qa_reject human, same. [issue 5]\n- replay-never-refuses -> 4x refusals + reload. replay-writes-again -> replay \"writeEntity ... called 1 times\". same-id-lookup-off -> 6 (as old-store). recorded-drop-reviewerId -> reviewerId row. recorded-drop-decision -> 'decision, summary' row (message) + reload. replay-returns-live -> replay copy.\n- approve-gate-off (candidateId not passed to resolveReviewedCandidate) -> criterion 3 \"expected a MoeError refusal, but the call resolved\" (the wrong-candidate DONE counterexample) + 5 qaApprove binding tests.\nLeak check: repo reviewStore/StateManager/qaApprove/qaReject cmp-equal to pristine; mutation text absent from repo; only reviewStore.ts + qaApprove.test.ts dirty outside .moe/.",
+      "startedAt": "2026-09-12T19:14:38.670Z",
+      "completedAt": "2026-09-12T19:16:44.602Z"
     },
     {
       "stepId": "step-6",
       "description": "DOCUMENT, GATE, REVIEW, HAND OFF. (a) Add a Review section to docs/SCHEMA.md beside the Candidate section the sibling task added, covering every field, the append-only rule with the explicit statement that a re-review appends rather than edits, and the storage location. In docs/MCP_SERVER.md extend the qa_approve and qa_reject sections with the candidateId argument, the CANDIDATE_MISMATCH refusal and its two context keys, the incremental-adoption behaviour when a project records no candidates, and the new currentCandidate projection on get_context. Both documents are contended by sibling Wave 1 cards, so re-read the landed text immediately before editing and add rather than restructure. (b) Run the named verification, then the full daemon suite from the repository root with npm.cmd on Windows, requiring exit 0 and a total no lower than before minus nothing - the skipped count should drop by one and the passed count rise. Filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Note that the suite has been observed flaking under heavy fleet load; if a file unrelated to this change fails, re-run that file alone before treating it as yours. Run npx tsc --noEmit -p tsconfig.json and require exit 0. (c) Adversarially review: can an approval ever reach DONE on a candidate the reviewer did not name; is the refusal genuinely before every write, proven by the untouched bytes and the empty reviews directory rather than only by the thrown error; does a project with no candidates behave byte-identically to before; is currentCandidate the whole record, a copy rather than the live object, and absent rather than null when there is none; is the selection rule shared with record_candidate rather than duplicated; does the review store truly lack an update path; did the qa_approve result keep its warnings, commitEvidence and message shape; and was the acceptance file changed by exactly one skip. (d) Note the file count honestly in the completion summary: ten files, which trips the size warning, because the Definition of Done requires the record, its store, both decision tools, the context projection, the unit matrix, the acceptance unskip and both contract documents. Complete through moe.complete_task with the commands, exit codes, counts and the recorded red, listing every modified path.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Round 3.\n(a) DOCS, re-read immediately before editing, added not restructured. docs/SCHEMA.md Review section 'Append-only' paragraph: a reused id is refused -32002 / REVIEW_IMMUTABLE with context.reviewId + context.differingFields and nothing written; an identical same-id record is an idempotent no-op returning the stored review, createdAt included, no write. Validation 'Review' first bullet: same rule. This replaces nothing that was false in SCHEMA.md; the false claim was the reviewStore.ts:38 JSDoc, fixed in step-2. docs/MCP_SERVER.md unchanged: tools never pass a review id (generateId), so REVIEW_IMMUTABLE is unreachable over MCP and its line 1581 ('Reviews are append-only — reviewing a reopened task again appends a second record') stays true.\n(b) GATES, fresh after every edit, exit codes captured apart from filters:\n- named `cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts` -> exit 0, RUN root D:/projexts/moes/packages/moe-daemon, Test Files 2 passed (2), Tests 45 passed | 3 skipped (48). Round 2 was 35 | 3.\n- `npm --prefix packages/moe-daemon test` (after the SCHEMA.md edit; taskTimeBudgetDocs.test.ts reads it) -> exit 0, Test Files 115 passed (115), Tests 1601 passed | 3 skipped (1604). Round 2 was 1591 | 3; +10 = the new tests, no other change.\n- `npx tsc --noEmit -p tsconfig.json` -> exit 0.\n(c) ADVERSARIAL (adversarial-self-review loaded, git diff read whole):\n- Concurrency: same-id get -> await write -> map.set is check-then-act; safe only under state.mutex. Both callers (qa_approve, qa_reject) are non-blocking tools serialized by the global mutex, and they never pass an id anyway. Documented in the header, same as candidateStore. Theoretical only.\n- Exit paths: refusal throws before writeEntity (bytes-unchanged tests); replay returns a copy with no write (spy test); write failure still leaves no review (existing test).\n- Malformed stored record (for example a missing summary) is refused as differing, never rewritten.\n- Pre-existing, untouched: `id: null` passed straight to recordReview is MISSING_REQUIRED, where candidateStore says INVALID_INPUT. Not reachable from the tools.\n- Plan checklist: gate refuses a named mismatch before every write (criterion 3 + unit bytes/empty-dir tests, re-bitten by approve-gate-off); no-candidate path unchanged; currentCandidate whole record, copy, key absent; selection shared via listCandidatesForTask; store has no update/delete AND a reused id cannot rewrite; qa_approve result shape untouched; acceptance.test.ts = exactly one skip vs pre-task parent (git diff 7b33028~1 HEAD).\nScratch D:/moe-5b85-r3-scratch torn down: junction .Delete() -> Test-Path real vitest.mjs True -> repo targets cmp-equal pristine -> rm -rf -> gone.\n(d) Files: this round 3 paths (reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md), all inside the task's existing 10; no new file.",
+      "startedAt": "2026-09-12T19:17:01.835Z",
+      "completedAt": "2026-09-12T19:19:26.743Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-de4739a8",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-8db40c97",
   "branch": null,
   "prLink": null,
   "reopenCount": 2,
@@ -96,23 +123,31 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:58.916Z",
-  "updatedAt": "2026-09-12T19:04:09.365Z",
+  "updatedAt": "2026-09-12T19:20:41.975Z",
   "contextFetchedBy": [
     "worker-de4739a8",
-    "qa-813933f7"
+    "qa-813933f7",
+    "qa-8db40c97"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T21:24:44.067Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 12,
+    "executedStepCount": 18,
     "rejectCount": 2,
     "reopenCount": 2
   },
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [
     {
       "item": "A project with no candidate recorded keeps the current approve behaviour, so adoption is incremental",
@@ -163,21 +198,22 @@
       "reason": "Governor force-release with human approval. worker-53c83cb5 is an interactive Codex seat (moe-agent.ps1 -Command codex, no -CodexExec) launched idle on 2026-09-11 13:43; it claimed this row at 21:28 and in 16+ hours completed 0 of 6 steps with no commits. Its wrapper binds baseline and post-flight to a pre-flight claim only, so it structurally cannot land this task until the operator closes its window. force is required because its step-1 lease would otherwise refuse the release (STEP_LEASE_HELD). Nothing is lost: no commits, no completed steps, no dirty files attributable to it."
     }
   ],
-  "reviewStartedAt": "2026-09-12T18:42:27.103Z",
+  "reviewStartedAt": "2026-09-12T19:20:41.181Z",
   "verification": {
     "command": "npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts",
     "exitCode": 0,
-    "outputTail": " RUN  v5.0.0 D:/projexts/moes/packages/moe-daemon\n Test Files  2 passed (2)\n      Tests  35 passed | 3 skipped (38)",
-    "reportedAt": "2026-09-12T18:42:27.103Z"
+    "outputTail": " RUN  v5.0.0 D:/projexts/moes/packages/moe-daemon\n Test Files  2 passed (2)\n      Tests  45 passed | 3 skipped (48)\n--- also: npm --prefix packages/moe-daemon test -> exit 0, Test Files 115 passed (115), Tests 1601 passed | 3 skipped (1604); npx tsc --noEmit -p tsconfig.json -> exit 0",
+    "reportedAt": "2026-09-12T19:20:41.181Z"
   },
   "filesModified": [
-    "packages/moe-daemon/src/tools/qaApprove.test.ts",
     "packages/moe-daemon/src/state/reviewStore.ts",
-    "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md",
-    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json"
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "docs/SCHEMA.md"
   ],
-  "completionSummary": "Reopen #1: all 6 QA items fixed. 4 of the task's 10 paths changed, no new file (size warning acknowledged).\n1) reviewStore.ts: NO-CANDIDATE-RECORDED removed. A task with no candidate behaves exactly as before, with or without a candidateId: no warning, no Review, and qa_reject returns no warnings key. candidateId null stays omitted, matching the optional-arg convention (heartbeat.ts:73, releaseTask.ts:73, recordCommit.ts:60). Any other invalid id is INVALID_INPUT on every path.\n2) qaApprove.test.ts 21->32 tests: recordReview refusals (code + codeName + exact message, nothing written); list order createdAt then id, plus the task filter; copies from record/get/list; get_context currentCandidate absent, whole record, a copy; omitted|null and no-candidate+candidateId for both tools; malformed ids assert codeName.\n3) MCP_SERVER.md (qa_approve adoption; qa_reject warnings? line + binding) and SCHEMA.md (adoption, copies, Review validation codeNames).\nRED (scratch tree, torn down): 23 single mutations, each red only on its named test; pristine 31/31, then 32/32. Covers QA's 8 plus null refused, validation after the no-candidate return, get_context first/null/live, qa_reject null->blank, and approve-gate-off on criterion 3 ('expected a MoeError refusal, but the call resolved').\nVERIFY (cwd-proven): named command exit 0, 35 passed | 3 skipped; npm --prefix packages/moe-daemon test exit 0, 115 files, 1591 passed | 3 skipped (was 1580 | 3); npx tsc --noEmit -p tsconfig.json exit 0. acceptance.test.ts untouched this round.\nModified: packages/moe-daemon/src/state/reviewStore.ts, packages/moe-daemon/src/tools/qaApprove.test.ts, docs/MCP_SERVER.md, docs/SCHEMA.md",
+  "completionSummary": "Round 3, fixing QA reject #2 (1 defect, 5 unpinned sites). Gate and get_context unchanged, as QA asked.\nDEFECT, packages/moe-daemon/src/state/reviewStore.ts: recordReview checks the id before writeEntity, via replayOrRefuse (same as candidateStore). Identical fields: returns a copy of the stored review, createdAt kept, no write. Any difference: -32002 REVIEW_IMMUTABLE, context {reviewId, differingFields}, no write. Header and id JSDoc fixed. docs/SCHEMA.md aligned (Review append-only paragraph + validation bullet). MCP_SERVER.md unchanged: tools never pass a review id.\nPINS, packages/moe-daemon/src/tools/qaApprove.test.ts, +10 tests:\n- 4 same-id rewrites: exact code/codeName/message/context; map and file bytes keep the first record\n- identical replay: createdAt kept, writeEntity spy not called, returns a copy\n- reload into a fresh StateManager: size 2, getReview each, list equal, reused id still refused\n- candidateId inputSchema, both tools: type string, exact required, additionalProperties false\n- approve and reject without workerId: reviewerId 'human'\nRED: new tests written into a scratch copy and run against the old store first: 4x 'expected a MoeError refusal, but the call resolved'; replay createdAt 03:05 vs 03:00. Then 13 single mutations; the unmutated run gave 45|3 before and after. Each turned only its named tests red:\n- old store\n- reload -> new Map ('expected +0 to be 2')\n- each schema entry deleted\n- each 'human' fallback removed ('[MISSING_REQUIRED] Missing required field: reviewerId')\n- replay/lookup/field-list mutations\n- gate-off: criterion 3 red\nScratch torn down; repo files byte-identical to the pre-mutation copies, so nothing leaked.\nVERIFY:\n- named: exit 0, 45 passed | 3 skipped (was 35|3)\n- npm --prefix packages/moe-daemon test: exit 0, 115 files, 1601 passed | 3 skipped (was 1591|3)\n- tsc --noEmit: exit 0\nFiles this round: reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md, all within the task's existing 10. acceptance.test.ts still only the uns",
   "commits": [
     {
       "sha": "7b33028f7c42f01e14df35a5d6283e094e23c624",
@@ -272,6 +308,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "04901ba7ec2d62777b814bd74b16b3816c0d61d4",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-12T18:42:41Z",
+      "paths": [
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        ".moe/tasks/task-95a1d08e21dd45688cb296914daf4417.json",
+        ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-12T19:04:11.967Z",
+      "treeId": "d57cda184dd423341f51fffa4a3f0177d7fbef3e",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -289,9 +342,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e67b0dd2@2026-09-12T18:14:10Z",
-    "at": "2026-09-12T18:42:37.575Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-12T18:42:41Z",
+    "at": "2026-09-12T19:04:11.967Z"
   },
   "reviewCompletedAt": "2026-09-12T19:03:05.620Z",
   "rejectionDetails": {

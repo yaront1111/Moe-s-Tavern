@@ -12,11 +12,16 @@
 // cannot misuse a function that does not exist, which is stronger than a
 // convention not to call one. A reopened task that is reviewed again gets a
 // SECOND record — history is never rewritten, so the trail of who approved what
-// stays readable after the fact.
+// stays readable after the fact. Nor can a reused id rewrite it: recordReview
+// refuses a same-id record that differs in any field (REVIEW_IMMUTABLE). Its one
+// exception is an identical re-record, which returns the stored review, its
+// createdAt included, and writes nothing, so a retry after a crash makes
+// progress instead of failing; nothing changes, so it is not a mutation.
 //
 // Follows the resourceStore / attemptStore / candidateStore pattern: stateless
 // functions taking the state handle first; every mutation assumes THE CALLER
-// HOLDS state.mutex (tool dispatch provides it for non-blocking tools).
+// HOLDS state.mutex (tool dispatch provides it for non-blocking tools). The
+// same-id check reads the map and then writes, so it holds only under that mutex.
 //
 // Write path: writeEntity → map.set. Persist BEFORE the record becomes visible,
 // so a failed write leaves no review anywhere — which is what lets qa_approve
@@ -34,8 +39,15 @@ import { listCandidatesForTask } from './candidateStore.js';
 /** The only two decisions a review may carry. A third value is refused, never coerced. */
 const DECISIONS: readonly ReviewDecision[] = ['approve', 'reject'] as const;
 
+/** Every caller-supplied field besides the id, which the lookup itself matches. */
+const RECORDED_FIELDS = ['taskId', 'candidateId', 'reviewerId', 'decision', 'summary'] as const;
+
 export interface RecordReviewParams {
-  /** Optional. Supply an id to make a retry idempotent; omit it for a fresh generated id. */
+  /**
+   * Optional. Supply the id a crashed record used so the retry is idempotent:
+   * identical fields return the stored review and write nothing, and any
+   * difference is refused REVIEW_IMMUTABLE. Omit it for a fresh generated id.
+   */
   id?: string;
   taskId: string;
   candidateId: string;
@@ -117,17 +129,40 @@ export function listReviewsForTask(state: StateManager, taskId: string): Review[
 }
 
 /**
- * Append one review. Validates without coercing, then persists BEFORE publishing.
- * createdAt is the daemon's clock, never the caller's. There is no counterpart
- * that edits or removes what this writes.
+ * The only thing a same-id record may do is repeat itself. Identical in every
+ * caller-supplied field: the stored review comes back unchanged (the crash
+ * retry). Any difference is refused and named, because a second decision is a
+ * second review and needs its own id.
+ */
+function replayOrRefuse(stored: Review, incoming: RecordReviewParams): Review {
+  const differingFields = RECORDED_FIELDS.filter((field) => stored[field] !== incoming[field]);
+  if (differingFields.length === 0) return copy(stored);
+  throw new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Review ${stored.id} already exists and differs in ${differingFields.join(', ')}; ` +
+      'reviews are append-only, so a new decision needs a new review id',
+    { reviewId: stored.id, differingFields },
+    'REVIEW_IMMUTABLE'
+  );
+}
+
+/**
+ * Append one review. In order: validate without coercing; replay or refuse a
+ * same-id record; then persist BEFORE publishing. createdAt is the daemon's
+ * clock, never the caller's. There is no counterpart that edits or removes what
+ * this writes, and a reused id cannot become one.
  */
 export async function recordReview(
   state: StateManager,
   params: RecordReviewParams
 ): Promise<Review> {
   const input = validateReviewParams(params);
+  const id = input.id ?? generateId('review');
+  const stored = state.reviews.get(id);
+  if (stored) return replayOrRefuse(stored, input);
+
   const review: Review = {
-    id: input.id ?? generateId('review'),
+    id,
     taskId: input.taskId,
     candidateId: input.candidateId,
     reviewerId: input.reviewerId,

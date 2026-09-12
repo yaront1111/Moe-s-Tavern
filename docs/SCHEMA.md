@@ -1048,7 +1048,7 @@ interface Review {
 }
 ```
 
-**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
 
 **Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
 
@@ -1523,7 +1523,7 @@ function generateId(prefix: string): string {
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### Review
-- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record
+- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included
 - `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
 - `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`

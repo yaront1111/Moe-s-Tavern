@@ -7,6 +7,7 @@ import { qaRejectTool } from './qaReject.js';
 import { getContextTool } from './getContext.js';
 import { MoeError } from '../util/errors.js';
 import { getReview, listReviewsForTask, recordReview, type RecordReviewParams } from '../state/reviewStore.js';
+import { StateManager } from '../state/StateManager.js';
 import type { Candidate, Review, TaskCommit } from '../types/schema.js';
 
 /** Capture a refusal's exact identity, failing loudly if the call resolved instead. */
@@ -566,6 +567,42 @@ describe('moe.qa_approve — reviewed-candidate binding', () => {
     expect(decisions).toEqual(['approve', 'reject']);
     expect(h.state.reviews.size).toBe(2);
   });
+
+  // With additionalProperties false an MCP client can send only what the schema
+  // declares, and handler calls bypass the schema, so only inspecting it pins the entry.
+  it.each<[string, typeof qaApproveTool, string[]]>([
+    ['moe.qa_approve', qaApproveTool, ['taskId', 'summary']],
+    ['moe.qa_reject', qaRejectTool, ['taskId', 'reason']],
+  ])('%s declares candidateId as an optional string input', (name, factory, required) => {
+    const tool = factory(h.state);
+    const schema = tool.inputSchema as { properties: Record<string, unknown>; required: string[]; additionalProperties: boolean };
+
+    expect(tool.name).toBe(name);
+    expect(schema.properties.candidateId).toMatchObject({ type: 'string' });
+    expect(schema.required).toEqual(required);
+    expect(schema.additionalProperties).toBe(false);
+  });
+
+  // The IDE/human path sends no workerId, and a review must still name who decided.
+  it.each<[string, 'approve' | 'reject', string]>([
+    ['moe.qa_approve', 'approve', 'DONE'],
+    ['moe.qa_reject', 'reject', 'WORKING'],
+  ])('%s without a workerId records the review with reviewerId "human"', async (_name, decision, status) => {
+    writeCandidate({ id: 'cand-A' });
+    await load();
+    const args = { taskId: 'task-1', candidateId: 'cand-A' };
+
+    const result = (decision === 'approve'
+      ? await qaApproveTool(h.state).handler({ ...args, summary: SUMMARY }, h.state)
+      : await qaRejectTool(h.state).handler({ ...args, reason: SUMMARY }, h.state)) as { status: string };
+
+    expect(result.status).toBe(status);
+    const reviews = storedReviews();
+    expect(reviews.length).toBe(1);
+    expect(projectFields(reviews[0], REVIEW_FIELDS)).toEqual({
+      taskId: 'task-1', candidateId: 'cand-A', reviewerId: 'human', decision, summary: SUMMARY,
+    });
+  });
 });
 
 // =============================================================================
@@ -582,7 +619,7 @@ describe('reviewStore — refusals, list order and copies', () => {
     h.createEpic();
     await h.state.load();
   });
-  afterEach(() => { vi.useRealTimers(); h.cleanup(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); h.cleanup(); });
 
   const VALID: RecordReviewParams = {
     taskId: 'task-1',
@@ -646,6 +683,75 @@ describe('reviewStore — refusals, list order and copies', () => {
     listReviewsForTask(h.state, 'task-1').forEach(tamper);
     expect(h.state.reviews.get('review-a')).toEqual(original);
     expect(getReview(h.state, 'review-missing')).toBeNull();
+  });
+
+  const reviewFile = (id: string): string => path.join(h.moePath, 'reviews', `${id}.json`);
+
+  // A reused id is the one way an append-only trail could still be rewritten, so
+  // the store refuses it. The label is the exact differingFields list, in order.
+  it.each<[string, Partial<RecordReviewParams>]>([
+    ['decision, summary', { decision: 'reject', summary: 'rewritten' }],
+    ['taskId', { taskId: 'task-2' }],
+    ['candidateId', { candidateId: 'cand-B' }],
+    ['reviewerId', { reviewerId: 'qa-2' }],
+  ])('refuses a same-id review that differs in %s and keeps the first record in memory and on disk', async (differs, change) => {
+    const first = await recordReview(h.state, { ...VALID, id: 'review-x' });
+    const bytesBefore = fs.readFileSync(reviewFile('review-x'), 'utf8');
+
+    const err = await refusalOf(recordReview(h.state, { ...VALID, id: 'review-x', ...change }));
+
+    expect({ code: err.code, codeName: err.codeName, message: err.message, context: err.context }).toEqual({
+      code: -32002,
+      codeName: 'REVIEW_IMMUTABLE',
+      message: `[REVIEW_IMMUTABLE] Review review-x already exists and differs in ${differs}; reviews are append-only, so a new decision needs a new review id`,
+      context: { reviewId: 'review-x', differingFields: differs.split(', ') },
+    });
+    expect(getReview(h.state, 'review-x')).toEqual(first);
+    expect(JSON.parse(bytesBefore)).toEqual(first);
+    expect(fs.readFileSync(reviewFile('review-x'), 'utf8')).toBe(bytesBefore);
+    expect(h.state.reviews.size).toBe(1);
+  });
+
+  it('replays an identical same-id review: the stored copy comes back with its createdAt, and nothing is written', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-11T03:00:00.000Z'));
+    const first = await recordReview(h.state, { ...VALID, id: 'review-x' });
+    const bytesBefore = fs.readFileSync(reviewFile('review-x'), 'utf8');
+    vi.setSystemTime(new Date('2026-09-11T03:05:00.000Z'));
+    const write = vi.spyOn(h.state, 'writeEntity');
+
+    const replay = await recordReview(h.state, { ...VALID, id: 'review-x' });
+
+    expect(replay).toEqual(first);
+    expect(replay.createdAt).toBe('2026-09-11T03:00:00.000Z');
+    expect(write).not.toHaveBeenCalled();
+    expect(fs.readFileSync(reviewFile('review-x'), 'utf8')).toBe(bytesBefore);
+    // A copy, like every other read: editing the replay cannot edit the stored review.
+    (replay as { summary: string }).summary = 'tampered';
+    expect(listReviewsForTask(h.state, 'task-1')).toEqual([first]);
+  });
+
+  it('loads persisted reviews into a fresh StateManager after a restart, still refusing a reused id', async () => {
+    const approve = await recordReview(h.state, { ...VALID, id: 'review-a' });
+    const reject = await recordReview(h.state, { ...VALID, id: 'review-b', decision: 'reject', summary: 'DoD item 2 fails' });
+    const original = listReviewsForTask(h.state, 'task-1');
+    expect(original).toHaveLength(2);
+
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      expect(restarted.reviews.size).toBe(2);
+      expect(getReview(restarted, 'review-a')).toEqual(approve);
+      expect(getReview(restarted, 'review-b')).toEqual(reject);
+      expect(listReviewsForTask(restarted, 'task-1')).toEqual(original);
+      // The same-id check reads the reloaded map, so a restart cannot reopen the rewrite hole.
+      const bytesBefore = fs.readFileSync(reviewFile('review-a'), 'utf8');
+      const err = await refusalOf(recordReview(restarted, { ...VALID, id: 'review-a', decision: 'reject' }));
+      expect({ code: err.code, codeName: err.codeName }).toEqual({ code: -32002, codeName: 'REVIEW_IMMUTABLE' });
+      expect(fs.readFileSync(reviewFile('review-a'), 'utf8')).toBe(bytesBefore);
+    } finally {
+      restarted.clearEmitter();
+    }
   });
 });
 
