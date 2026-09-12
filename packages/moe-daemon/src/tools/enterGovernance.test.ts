@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { StateManager } from '../state/StateManager.js';
 import { enterGovernanceTool } from './enterGovernance.js';
+import { MoeError } from '../util/errors.js';
 import type { Project, Epic, Worker, TeamRole } from '../types/schema.js';
 
 describe('moe.enter_governance', () => {
@@ -93,6 +94,69 @@ describe('moe.enter_governance', () => {
     const tool = enterGovernanceTool(state);
     await expect(tool.handler({ workerId: 'orphan-1' }, state))
       .rejects.toThrow(/governor-only|NOT_ALLOWED/i);
+  });
+
+  // -----------------------------------------------------------------------
+  // 2026-09-12: the gate read `team.role` directly, so on the role-less
+  // project team the launcher registers every seat into it refused a GENUINE
+  // governor — and the refusal text then told it to go join a governor team,
+  // which is the workaround for that bug. The role now resolves through
+  // util/workerRole. Not a widening: join_team is unauthenticated, so any seat
+  // could already grant itself the governor role with one call. These three
+  // cases exist to prove the refusal itself did not move.
+  // -----------------------------------------------------------------------
+  async function bindWorkerToRolelessTeam(workerId: string): Promise<void> {
+    const team = await state.createTeam({ name: 'moe-next' });
+    expect(team.role).toBeFalsy(); // the launcher's team shape: no role at all
+    await state.addTeamMember(team.id, workerId);
+  }
+
+  it('lets a governor-prefixed seat on a ROLE-LESS team enter', async () => {
+    writeWorker({ id: 'governor-1', status: 'IDLE', currentTaskId: null });
+    await state.load();
+    await bindWorkerToRolelessTeam('governor-1');
+
+    const tool = enterGovernanceTool(state);
+    const result = await tool.handler({ workerId: 'governor-1' }, state) as Record<string, unknown>;
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('GOVERNING');
+    expect(state.getWorker('governor-1')!.status).toBe('GOVERNING');
+  });
+
+  it('still refuses a worker-prefixed seat on a ROLE-LESS team, writing nothing', async () => {
+    writeWorker({ id: 'worker-1', status: 'IDLE', currentTaskId: 'task-held' });
+    await state.load();
+    await bindWorkerToRolelessTeam('worker-1');
+    const general = vi.spyOn(state, 'postToGeneral');
+    const role = vi.spyOn(state, 'postToRoleChannel');
+
+    const tool = enterGovernanceTool(state);
+    const err = await tool.handler({ workerId: 'worker-1' }, state).catch((e: unknown) => e);
+
+    // Same helper, same code, same message as before the conversion.
+    expect(err).toBeInstanceOf(MoeError);
+    expect((err as MoeError).codeName).toBe('NOT_ALLOWED');
+    expect((err as MoeError).message).toContain('enter_governance is governor-only');
+    // Asserted on STATE, not only on the throw: a refused caller must leave no
+    // governance behind — no status flip, no released task, no broadcast.
+    expect(state.getWorker('worker-1')!.status).toBe('IDLE');
+    expect(state.getWorker('worker-1')!.currentTaskId).toBe('task-held');
+    expect(general).not.toHaveBeenCalled();
+    expect(role).not.toHaveBeenCalled();
+  });
+
+  it('lets an explicitly roled team beat the id prefix at the gate', async () => {
+    // The operator's join_team still decides: a governor-NAMED seat the
+    // operator put on a worker team does not govern.
+    writeWorker({ id: 'governor-onworkerteam', status: 'IDLE' });
+    await state.load();
+    await bindWorkerToTeamRole('governor-onworkerteam', 'worker');
+
+    const tool = enterGovernanceTool(state);
+    await expect(tool.handler({ workerId: 'governor-onworkerteam' }, state))
+      .rejects.toThrow(/governor-only|NOT_ALLOWED/i);
+    expect(state.getWorker('governor-onworkerteam')!.status).toBe('IDLE');
   });
 
   it('sets governor worker to GOVERNING and returns chat_wait nextAction', async () => {

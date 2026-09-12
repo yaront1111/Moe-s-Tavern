@@ -15,25 +15,125 @@
     "Do not remove or weaken the existing agent-reported verification path; label it, do not delete it.",
     "The daemon never executes the check command; it records what the runner observed."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE SPLIT PRODUCERS AND FREEZE THE REMAINING WIRE CONTRACT (read-only). Re-fetch context and prove Candidate task-4d7074c001af47e881572e9efae30a41, CheckRun-store task-214bcfa37db24628aab11689764b4ae2 and legacy-label task-95a1d08e21dd45688cb296914daf4417 actually landed (landing.merged or matching Moe-Task trailer), not merely green in a shared tree. If a producer is undelivered, report_blocked naming it; do not implement its files here. Read the delivered checkRunStore exports/type/bounds, legacy completeTask/getContext labels, and acceptance.test.ts's frozen record_check_run payload. This parent retains ALL six original DoD items through those producers and owns ONLY recordCheckRun.ts, recordCheckRun.test.ts, tools/index.ts and docs/MCP_SERVER.md. The new store is contracted to validateCheckRunParams(unknown), recordCheckRun(state,params)->{checkRun,duplicate}, getCheckRun/listCheckRunsForCandidate and MAX_CHECK_LOG_BYTES=16384; verify the actual signatures and flag material drift rather than compensating with aliases. Read recordCandidateTool, getTools, McpAdapter.handle and existing registry.test.ts. Record HEAD/status/foreign paths; no peer cleanup. Required payload fields are candidateId,treeSha,command,exitCode,runnerId,source; optional id/outputTail/workerId. source has no default. No taskId/attemptId/generation requirement: the frozen acceptance caller intentionally supplies none and can report against a completed candidate attempt.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE PRODUCTION-BOUND TOOL REGRESSIONS FIRST. Create recordCheckRun.test.ts using ToolTestHarness, real Candidate/store fixtures and the registered production handler under state.runExclusive; include a real McpAdapter.handle smoke path to verify wire registration and error serialization. Exact assertions: getTools exposes moe.record_check_run once and its blocking flag is not true; both source literals persist unchanged with matching candidate/tree; zero, positive and negative safe-integer exit codes are recorded exactly, and success:true acknowledges persistence even for a failed check, never daemon approval. Commands and runnerId remain reported values, optional outputTail becomes empty string, optional id is generated. Invoke the frozen payload verbatim without worker/attempt/task identity and prove it works for a closed attempt/REVIEW task now held by QA, without changing task/attempt status, owner, verification or candidate bytes. Add no-write refusals for missing candidate (-32001/CANDIDATE_NOT_FOUND), wrong tree (-32002/CHECK_RUN_TREE_MISMATCH with candidateId/expectedTreeSha/actualTreeSha), malformed source/IDs/numbers/logs, and mismatched same-id content (-32002/CHECK_RUN_IMMUTABLE after a valid tree). Assert the exact error number AND codeName and persisted bytes/map contents. An identical normalized same-id retry must return duplicate:true, preserve the original timestamp/bytes and cause no second write; a new id creates a second independent record for the same candidate. Spy only for injected I/O failure: store write failure must reach the caller unchanged and leave no record/map entry or false success. Include ASCII and emoji tails over 16384 UTF-8 bytes, exact persisted suffix and byte cap, proving the HANDLER reaches the production normalizer. No fake store, copied validator, subprocess/check execution or held-out-file edits. Missing exports/compile failures are not red evidence; meaningful registration/no-write/source-preservation mutations are demonstrated at the final gate.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADD THE MINIMAL REGISTERED RECORDER. Create tools/recordCheckRun.ts exporting recordCheckRunTool in the existing ToolDefinition factory shape. Use type-only StateManager/ToolDefinition imports and the delivered store rather than duplicating validation, UTF-8 truncation, candidate matching or persistence. Input schema documents id (optional validated entity id for crash retry), candidateId and runnerId (bounded entity ids, runnerId need not be a registered worker), treeSha (7-40 hex), command (nonblank, maximum 500 characters, not trimmed/reinterpreted), exitCode (signed safe integer, zero is not required), optional string outputTail (stored UTF-8 suffix <=16384 bytes), required explicit source enum runner-observed|agent-reported, and optional proxy-injected workerId (not evidence provenance). additionalProperties:false; no caller-createdAt field. The handler delegates validation/recording to the actual store contract and returns {success:true,checkRun,duplicate}; success is record acknowledgement only. source is declared report provenance, NOT authenticated runner identity or a command observed by the daemon. Do not infer source from workerId, default missing source, mutate existing task.verification, look up a newer candidate, enforce the current configured command, gate by task owner/status/current attempt, or call any process/Git API. Persist both passes and failures; later policy determines whether this exact candidate/tree/command/source is sufficient. Error handling is propagation: do not catch I/O or MoeError as a success/empty result; the existing McpAdapter maps them. Do NOT set blocking:true: the dispatch mutex protects check-then-write/replay. Add the factory import and exactly one entry in getTools() in tools/index.ts, preserving all sibling registrations. Do not alter the store/schema/legacy producers to make these tests pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "DOCUMENT THE USABLE WIRE AND COMPATIBILITY BOUNDARY. In docs/MCP_SERVER.md add the moe.record_check_run section beside the existing record_candidate section using current house style: complete JSON input/output examples including explicit source, a recorded nonzero exitCode with success:true, optional caller id and duplicate retry, .moe/checks/<id>.json grouping by candidate, exact bounds and refusal names/numbers, and write-error propagation. Document the 16384-byte UTF-8 suffix cap (not 16384 characters), normalization and preservation of complete characters; link the producer's docs/SCHEMA.md CheckRun section instead of rewriting it. State that idempotency compares normalized stored fields and a changed run uses a fresh id. Explain that source is reported provenance, the daemon never executes/authenticates the check, and this tool neither marks a task DONE nor releases dependents. Add a small note to the existing complete_task/get_context evidence documentation: TaskVerification stays candidate-less agent-reported, newly persisted and legacy-projected source is forced to that value, old validation/2000-character tail behavior stays unchanged, absent verification remains null and compact prerequisite projections still omit the tail. Do not silently advertise a new complete_task source input. Preserve all recently landed plan-revision/attempt/QA docs and all unrelated budget terminology; no broad documentation cleanup.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ONE FINAL VERIFICATION GATE, WITH MUTATION RED. Load regression-check/verification-before-completion. First demonstrate the new tests kill task-local mutations only: remove this registry entry, return success without recording, and force all source inputs to runner-observed. Restore each owned mutation and verify exact restoration; never mutate the producer store or peer files. No missing-module/compilation failure counts as the red. Run this exact completion command from repo root on Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). The named store/tool files explicitly appear, satisfying the original task gate; compatibility/registry tests audit the producer composition. Require every command exit 0 and record focused/full Test Files and Tests counts with nonzero executed tests; distinguish remaining held-out skips from passes. This wire change and original DoD require the whole daemon suite even though it is mid-epic. Note tsc excludes test files; do not claim it type-checks them. Do not build/prebuild/clean (prebuild deletes shared dist), narrow npm test, discard peer failures or edit held-out tests. Tests clean only verified temporary roots using Node paths, clear every StateManager emitter/timer and restore spies/clocks. On Windows preserve native paths, actual exit codes and scoped cleanup; no cross-shell filesystem deletion. Inspect all original DoD evidence: landed CheckRun schema/store/cap plus real registered tool plus legacy source writer/readers.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "FINAL ADVERSARIAL SELF-REVIEW AND QA HANDOFF. Load adversarial-self-review and inspect this four-file diff as a caller trying to falsify evidence. Can omission/typos/numeric coercion invent runner-observed provenance, can success be returned after an I/O failure, can a failed check be mistaken for approval, can an old/other-tree/other-command check be rebound to the current candidate, or can parallel duplicate calls bypass the state mutex? Exact disk/source/error assertions must defeat those cases. Check all production validation/truncation/persistence still lives in the delivered store, no business rule was copied into the tool, no attempt/worker/ownership/status gate was added that breaks the frozen payload, and no process execution or fabricated candidate exists. Confirm the 16 KiB cap differs intentionally from unchanged legacy 2000-character outputTail. Validate the producer landing evidence and original full DoD; this parent must not complete on only the new endpoint. Record source-as-declared-provenance/authentication limitation and downstream policy/wrapper obligations in the handoff, together with full commands/counts and mutation red evidence. Acceptance.test.ts remains byte-identical; this task owns no unskip. Report every actual created/modified path in complete_step.modifiedFiles (empty for read-only exploration), preserve all foreign WIP, and complete_task through the runtime for QA/wrapper delivery; never self-approve. If self-review changes owned bytes, refresh the same final gate. The existing epic-final task-808869c56228430ca5b15cb901497544 owns whole-epic integration, not this producer.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted BACKLOG → PLANNING on the human's explicit instruction. Its only dependency, task-4d7074c0 (frozen Candidate record), is DONE, so the candidate contract this CheckRun binds to already exists. Six DoD items are defined; an architect plans it from here.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-4d7074c001af47e881572e9efae30a41"
+    "task-4d7074c001af47e881572e9efae30a41",
+    "task-214bcfa37db24628aab11689764b4ae2",
+    "task-95a1d08e21dd45688cb296914daf4417"
   ],
   "priority": "HIGH",
   "order": 100,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ee4c93cb713c41c0abcbec9b04a52b70",
+      "author": "architect-2d25447a",
+      "content": "Planning exploration (read-only) at HEAD fa6c122: Candidate dependency is confirmed landing.merged=true; live candidateStore/recordCandidate and held-out acceptance.test.ts agree on CheckRun fields {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source}. No CheckRun implementation exists. Full requested scope exceeds the planning sizing target: schema/StateManager/store/tool/registry/two tests are seven files before labeling completeTask/getContext and documenting the wire contract. Loaded moe-planning, explore-before-assume and moe-epic-breakdown; proposing three independently tested layers: durable CheckRun store, registered recorder tool, and legacy verification labeling. Proposed byte cap 16 KiB UTF-8 suffix, preserving character boundaries; legacy task.verification stays candidate-less and is authoritatively labeled agent-reported (including legacy reads), never fabricated into a bound CheckRun or promoted by caller input. Holding for concise REPL approach confirmation before splitting/submitting. No production files, tests, git refs, task dependencies or DoD edited. Existing held-out assertions remain immutable; no unskip belongs to this producer slice.",
+      "timestamp": "2026-09-11T21:26:17.237Z"
+    },
+    {
+      "id": "comment-827e31f8514043d2990f54d2c54f3da1",
+      "author": "architect-2d25447a",
+      "content": "User said \"next\" to the proposed three-slice approach; proceeding with 16 KiB UTF-8 log tail and candidate-less legacy agent-reported labeling. Created store producer task-214bcfa37db24628aab11689764b4ae2 (five paths) and compatibility producer task-95a1d08e21dd45688cb296914daf4417 (five paths), both BACKLOG/human-gated. Their own tests ship with their behavior. This ORIGINAL task retains every existing DoD and owns the remaining registered record_check_run tool, registry, tool tests and MCP documentation (four paths). Added both producers as structural dependencies, preserving Candidate. No consumer dependency is redirected or weakened: original DONE still means the entire requested contract is delivered. Store waits on in-flight QA-binding task-5b857738 solely for shared-file serialization; compatibility waits on store. No peer task dependencies changed and no new whole-epic hardening row (existing task-808869c5 owns that). Split pass complete; parent tool planning resumes separately against these explicit producer contracts.",
+      "timestamp": "2026-09-12T14:11:35.781Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:42.561Z",
-  "updatedAt": "2026-09-11T09:45:32.666Z",
+  "updatedAt": "2026-09-12T14:15:28.608Z",
   "contextFetchedBy": [
     "architect-2d25447a"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T21:22:41.594Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T14:15:28.545Z",
+  "planningNotes": {
+    "approachesConsidered": "Human approved proceeding with three reviewable behavior slices, 16 KiB UTF-8 log tail and candidate-less legacy agent-reported labeling. A monolithic implementation exceeded the file cap (seven core files before legacy writer/readers/docs); instead created store task-214bcfa3 and legacy task-95a1d08e as real producers with their own tests. This ORIGINAL task retains the six original DoD items and delivers the registered endpoint/documentation after both land, so existing policy/wrapper dependencies remain correct. Rejected narrowing the parent's DoD merely via comments, adding a second integration/hardening row, inventing a Candidate for legacy reports, defaulting source to runner-observed, duplicating the store validator, requiring new attempt inputs forbidden by the frozen payload, and running checks in the daemon.",
+    "codebaseInsights": "Live recheck at HEAD 542f704: CheckRun/store/tool absent; Candidate and attempt/finalize paths landed. CandidateStore exposes copies, validateCandidateParams and recordCandidate -> {candidate,duplicate}; getTools registration/ToolDefinition/McpAdapter.handle are real established seams. Tool handlers are serialized by dispatch unless blocking; getTools registration completeness is already tested. Frozen acceptance.test.ts demands record_check_run {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source} with no task/attempt/worker identity; case2 records agent and runner passes against a previously completed candidate, and also loads deliberately ineligible historical check records. Recording must not silently become eligibility filtering. Existing TaskVerification has no candidate identity, and assertVerificationEvidence returns a constructed command/exitCode/tail object capped at 500/2000 chars. Legacy producer owns its source field and both getContext projections; this parent must not reimplement those files. New store contract includes optional createdAt for timestamp-less fixture/history compatibility, server timestamps on new writes and normalized-idempotent replay.",
+    "risks": "Source records what the caller declares; it is NOT authenticated runner identity, successful delivery, or daemon-observed execution. Future policy/wrapper tasks must use the exact candidate/tree/command/source and delivery evidence rather than task-wide any-pass logic. Store producer waits on current QA-binding task-5b857738 to serialize schema/StateManager/docs; legacy waits on store; parent depends on both. Neither new producer has been promoted/implemented by this planning turn: both are BACKLOG/human-gated. Do not substitute board DONE without landing evidence. Parent keeps original DoD to prevent consumers releasing after only the store. Current unrelated createTask.ts/createTask.test.ts WIP and runtime board dirt must remain untouched. Docs are shared: make section-local edits after rereading current bytes. Compiler excludes tests. Existing held-out case owners, assertion constants, fixtures and helper bodies are immutable; this producer owns none of their unskips.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/recordCandidate.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/tools/registry.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T14:15:28.608Z"
 }

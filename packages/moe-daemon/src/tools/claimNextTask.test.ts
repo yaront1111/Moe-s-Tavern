@@ -129,6 +129,107 @@ describe('moe.claim_next_task — role-aware routing', () => {
     const next = result.nextAction as { tool: string };
     expect(next.tool).toBe('moe.wait_for_task');
   });
+
+  // ---------------------------------------------------------------------
+  // REGRESSION 2026-09-12: the governor redirect read `team.role` directly.
+  // The launcher registers every seat into ONE project-named team whose role
+  // is null, so the read saw nothing, a governor seat fell THROUGH the
+  // redirect and claimed a task — work the project's rules say governors
+  // never do. The role now resolves through util/workerRole.
+  // ---------------------------------------------------------------------
+  async function bindWorkerToRolelessTeam(workerId: string): Promise<string> {
+    const team = await state.createTeam({ name: 'moe-next' });
+    expect(team.role).toBeFalsy(); // the launcher's team shape: no role at all
+    await state.addTeamMember(team.id, workerId);
+    return team.id;
+  }
+
+  function writeWorkingTask(id: string): void {
+    const now = new Date().toISOString();
+    const task: Task = {
+      id, epicId: 'epic-1', title: `Task ${id}`, description: '',
+      definitionOfDone: ['Done'], taskRails: [], implementationPlan: [],
+      status: 'WORKING', assignedWorkerId: null, branch: null, prLink: null,
+      reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
+      order: 1, createdAt: now, updatedAt: now,
+    };
+    fs.writeFileSync(path.join(moePath, 'tasks', id + '.json'), JSON.stringify(task, null, 2));
+  }
+
+  it('routes a governor-prefixed seat on a ROLE-LESS team to enter_governance', async () => {
+    writeWorker('governor-noroleteam');
+    writeWorkingTask('task-claimable');
+    await state.load();
+    await bindWorkerToRolelessTeam('governor-noroleteam');
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler(
+      { workerId: 'governor-noroleteam', statuses: ['PLANNING', 'WORKING', 'REVIEW'] },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(false);
+    expect((result.nextAction as { tool: string }).tool).toBe('moe.enter_governance');
+    // The point of the redirect: a claimable task was sitting right there and
+    // the governor did not take it.
+    expect(state.getTask('task-claimable')!.assignedWorkerId).toBeNull();
+  });
+
+  it('still lets an UNREGISTERED governor-prefixed seat fall through to claim', async () => {
+    // The onboarding escape, deliberately keyed on the WORKER RECORD rather
+    // than on the role: enter_governance throws NOT_FOUND for an id with no
+    // record, so routing this caller there would hand it a next action that
+    // immediately refuses. It registers by claiming; the NEXT call is routed.
+    writeWorkingTask('task-onboarding');
+    await state.load();
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler(
+      { workerId: 'governor-unregistered', statuses: ['WORKING'] },
+      state
+    ) as Record<string, unknown>;
+
+    expect(result.hasNext).toBe(true);
+    expect(state.getTask('task-onboarding')!.assignedWorkerId).toBe('governor-unregistered');
+  });
+
+  it('lets a team-supplied role beat the id prefix in the governor redirect', async () => {
+    // An explicit join_team is the operator stating the seat's role, so a
+    // governor-NAMED seat the operator put on a worker team claims normally.
+    writeWorker('governor-onworkerteam');
+    writeWorkingTask('task-for-roled-seat');
+    await state.load();
+    await bindWorkerToTeamRole('governor-onworkerteam', 'worker');
+
+    const tool = claimNextTaskTool(state);
+    const result = await tool.handler(
+      { workerId: 'governor-onworkerteam', statuses: ['WORKING'] },
+      state
+    ) as Record<string, unknown>;
+
+    expect((result.nextAction as { tool: string } | undefined)?.tool).not.toBe('moe.enter_governance');
+    expect(result.hasNext).toBe(true);
+    expect(state.getTask('task-for-roled-seat')!.assignedWorkerId).toBe('governor-onworkerteam');
+  });
+
+  it('names the resolved role in the worker-is-online chat line', async () => {
+    // The status-based guess would say "worker" for a WORKING claim, so an
+    // architect seat announcing itself is the case where the two disagree —
+    // the resolved role must win. An announcement naming the wrong role is a
+    // small lie, but it is one the whole board reads.
+    writeWorkingTask('task-for-chatline');
+    await state.load();
+    const posted: string[] = [];
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => {
+      posted.push(content);
+    });
+
+    const tool = claimNextTaskTool(state);
+    await tool.handler({ workerId: 'architect-chatline', statuses: ['WORKING'] }, state);
+
+    const online = posted.find((line) => line.includes('is online'));
+    expect(online).toBe('architect-chatline is online (architect)');
+  });
 });
 
 describe('moe.claim_next_task — one task per worker', () => {

@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatChannel } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 import { releaseWorkerTasks } from '../state/workerLifecycle.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { logger } from '../util/logger.js';
 
 const GOVERNANCE_DUTIES = [
@@ -40,8 +41,17 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
       // workers code, qa verifies. Call moe.claim_next_task for your role
       // instead — architects on an empty PLANNING queue get a wait_for_task
       // nextAction.
-      const team = state.getTeamForWorker(params.workerId);
-      if (team?.role !== 'governor') {
+      //
+      // Resolved through util/workerRole (team role first, then the seat's id
+      // prefix), like every other role-gated tool. The prefix fallback is not a
+      // widening: as workerRole's docblock records, this is a workflow guard
+      // rather than a security boundary — join_team is unauthenticated, so a
+      // seat that wants the governor role can already grant itself one with a
+      // single call, and the fallback hands out nothing new. What the direct
+      // `team.role` read DID do is refuse a GENUINE governor on the role-less
+      // project team the launcher registers every seat into, and then tell it
+      // (below) to go join a governor team — the workaround for that bug.
+      if (resolveWorkerRole(state, params.workerId) !== 'governor') {
         throw notAllowed(
           'enter_governance',
           'enter_governance is governor-only. Architects plan (use moe.claim_next_task with statuses:["PLANNING"], then moe.wait_for_task when empty); workers code; qa verifies. Join a governor team to govern.'

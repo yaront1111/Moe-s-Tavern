@@ -9,6 +9,7 @@ import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { assertNoLiveLease, claimLostRace, attemptFinalizingRefusal, attemptReconcilingRefusal } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import {
@@ -131,12 +132,21 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         }
 
         // Governors never claim tasks — they oversee. Route them straight to
-        // enter_governance. The role is derived from the worker's team, so a
-        // fresh first-time caller without a registered worker falls through to
-        // the normal claim path (so onboarding doesn't break).
-        if (params.workerId) {
-          const team = state.getTeamForWorker(params.workerId);
-          if (team?.role === 'governor') {
+        // enter_governance. The role resolves through util/workerRole (team
+        // role first, then the seat's id prefix): reading `team.role` directly,
+        // as this once did, saw nothing on the role-LESS project team the
+        // launcher registers every seat into, so a governor seat FELL THROUGH
+        // and claimed a task — work the project's rules say governors never do.
+        //
+        // The onboarding escape stays keyed on the WORKER RECORD, not on the
+        // role: a fresh first-time caller with no record must still reach the
+        // normal claim path, because enter_governance throws NOT_FOUND for an
+        // unregistered id and routing it there hands it a next action that
+        // immediately refuses. That is also exactly the old condition —
+        // getTeamForWorker reads `state.workers.get(id)` first and returns null
+        // without a record — so this guard preserves it rather than adding one.
+        if (params.workerId && state.getWorker(params.workerId)) {
+          if (resolveWorkerRole(state, params.workerId) === 'governor') {
             return {
               hasNext: false,
               nextAction: {
@@ -445,11 +455,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             });
 
             try {
-              // Prefer the worker's registered team role over inferring from
-              // the requested statuses (a worker may legitimately claim
-              // across multiple status sets).
-              const team = state.getTeamForWorker(params.workerId);
-              const roleLabel = team?.role
+              // Prefer the worker's resolved role — team role, then the seat's
+              // id prefix — over inferring from the requested statuses (a
+              // worker may legitimately claim across multiple status sets, and
+              // on the launcher's role-less team the team read alone announced
+              // every architect and qa seat as a "worker"). The status guess
+              // stays as the last resort for an id that declares no role.
+              const roleLabel = resolveWorkerRole(state, params.workerId)
                 ?? (statuses.includes('PLANNING')
                   ? 'architect'
                   : statuses.includes('REVIEW') ? 'qa' : 'worker');
