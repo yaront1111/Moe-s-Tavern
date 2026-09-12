@@ -93,7 +93,7 @@
       "completedAt": "2026-09-12T22:12:10.205Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -116,11 +116,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-12T14:11:35.660Z",
-  "updatedAt": "2026-09-12T22:12:46.983Z",
+  "updatedAt": "2026-09-12T22:21:25.304Z",
   "contextFetchedBy": [
     "worker-f2b3ac93",
     "qa-8db40c97",
-    "worker-62409c0c"
+    "worker-62409c0c",
+    "qa-9dc36824"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T18:44:37.681Z",
@@ -128,7 +129,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-12T22:21:25.303Z",
+    "wallClockMs": 13007622
   },
   "stepsCompleted": [
     "step-1",
@@ -178,7 +181,12 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/tools/completeTask.ts",
     "packages/moe-daemon/src/tools/getContext.ts",
-    "packages/moe-daemon/src/tools/completeTask.test.ts"
+    "packages/moe-daemon/src/tools/completeTask.test.ts",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+    ".moe/tasks/task-95a1d08e21dd45688cb296914daf4417.json",
+    ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json"
   ],
   "completionSummary": "QA round-1 fix for DoD 2. Test-only: getContext.test.ts +13/-4. Production code is unchanged since 3297ed7.\n\nThe read-only proof 'never rewrites or aliases the stored rows it labels, across repeated reads, for %s' now runs over STORED_PRIMARY_LABELS. The table holds a source-less legacy row, agent-reported, runner-observed and null, and it also drives the primary label test. Each case keeps MOE_WORKER_ID stubbed empty and passes no workerId.\n- Before reading, it asserts the loaded primary strictly equals the seeded row (a legacy row has no source key).\n- Across two reads, each response equals PRIMARY and is not the stored object.\n- Tampering with the response never reaches state.\n- The stored task-1 verification still strictly equals the seed.\n- All stored rows and task-file bytes are unchanged, updateTask and touchWorker are never called, and there is no contextFetchedBy.\n\nFresh red proof in a scratch tree, one mutation per run; none gave 30/30 first and last:\n- QA survivor 1 (updateTask backfill of a source-less primary): 2 red, the source-less and null-label cases.\n- QA survivor 2 (Object.assign alias): the same 2 red.\n- migrate-non-agent: 3 red. alias-all: 4 red. Old reader (ee8da0b): 9 red.\n- The 3297ed7 test file stays 27/27 under both survivors, so the gap is reproduced.\n- Writer: the old ee8da0b completeTask.ts gives 8 red out of 52.\n\nGate from the PowerShell tool at the repo root: exit 0.\n- Focused: 2 files, 82 passed.\n- npm test: 116 files, 1728 passed | 3 skipped.\n- tsc: exit 0. The test file was also type-checked in scratch: exit 0.\n\nScope vs ee8da0b is exactly the five owned paths. enforcement.ts, delivery/ and toolTestHarness.ts are unchanged. Docs stay with parent task-867f69a6 (comment-1938cc2c, including SCHEMA.md:408).",
   "commits": [
@@ -223,6 +231,26 @@
       "treeId": "b3df257ec2bdc922ca79e8cec46ccea8dcebe2fd",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "31c7536ff8cc649d7722015a41df600a0a3fb196",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-62409c0c@2026-09-12T22:03:59Z",
+      "paths": [
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+        ".moe/tasks/task-95a1d08e21dd45688cb296914daf4417.json",
+        ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ],
+      "recordedBy": "worker-62409c0c",
+      "recordedAt": "2026-09-12T22:13:01.405Z",
+      "treeId": "389700e1313357bf6fdf6cf01f0dd65d647f001c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -235,11 +263,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-8db40c97@2026-09-12T20:35:30Z",
-    "at": "2026-09-12T20:48:03.606Z"
+    "kind": "completion",
+    "sessionId": "worker-62409c0c@2026-09-12T22:03:59Z",
+    "at": "2026-09-12T22:13:01.405Z"
   },
-  "reviewCompletedAt": "2026-09-12T20:46:32.615Z",
+  "reviewCompletedAt": "2026-09-12T22:21:25.303Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Real get_context exposes agent-reported for both the primary task and declared-prerequisite projections of legacy source-less records without rewriting their files; null/missing verification remains null and sibling outputTail remains omitted."
@@ -288,5 +316,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-12T22:21:25.303Z",
+  "reviewSummary": "Round 2: all 6 DoD items and rails verified; round-1 DoD 2 gap closed.\nCOMMIT 31c7536 (completion, pushed, in task.commits after reviewStartedAt). vs 3297ed7: only getContext.test.ts +13/-4. ee8da0b..31c7536 non-.moe = exactly the 5 owned paths; enforcement.ts, delivery/ (held-out), toolTestHarness.ts, docs unchanged. Prereq 214bcfa3 merged (fac1e3d). HEAD 31c7536, owned paths clean.\nGATE (PowerShell tool, repo root) cmd /d /c 'cd /d packages\\moe-daemon && npx vitest run src/tools/completeTask.test.ts src/tools/getContext.test.ts && npm test && npx tsc --noEmit -p tsconfig.json && echo DONE': exit 0; focused 2 files/82 passed; npm test 116 files, 1728 passed | 3 skipped; tsc 0 (marker printed). Both test files also type-check in scratch: 0.\nCODE: writer forces source after the validated spread, inputSchema unchanged; primary = fresh copy, label last, null stays null; compact prereq = explicit fields + label, no outputTail; no candidate/check/runner/Git writes.\nMUTATIONS (scratch outside repo, exactly-once anchors, pristine restore; none 82/82 first+last): round-1 survivors now red, updateTask backfill 2 and Object.assign alias 2 (source-less + null-label no-write cases); both stay 79/79 on the 3297ed7 test file, so the new cases are what bite. 16 more all red: in-memory backfill 2, migrate-non-agent 3, alias-already-labelled 1, primary stored-wins 4, null-fabricate 2, drop-tail 8, compact leak-tail 6, compact stored-wins 5, compact no-label 5, sibling backfill 4, sibling alias 4, old reader 9, old writer 8, caller source 1, raw spread 2, label-first 2.\nDocs delegated to parent 867f69a6 (comment-1938cc2c)."
 }
