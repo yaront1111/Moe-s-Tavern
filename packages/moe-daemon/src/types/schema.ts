@@ -196,6 +196,17 @@ export interface ProjectSettings {
    */
   reviewStaleTimeoutMs?: number;
   /**
+   * How long (ms) an execution attempt may sit in the `reconciling` phase —
+   * parked there by a daemon restart that lost sight of it — without a runner
+   * reattaching, before the sweep closes it and releases its task for exactly
+   * one successor. Bounds that phase ONLY: a `running` attempt (including one
+   * that reattached successfully) and a `finalizing` one are never checked
+   * against it, so this is NOT an idle timeout and a quiet build is still not
+   * evidence of a dead worker. Measured from the attempt's own lastPhaseAt,
+   * never from a worker's lastActivityAt. default: 7200000 (2 h)
+   */
+  reconcileWindowMs?: number;
+  /**
    * Project-relative globs for files every task appends to (changelogs,
    * release notes). Claim-time fileCollision warnings ignore them so real
    * overlaps stay visible. Literal paths, `*` (one segment) and `**` (across
