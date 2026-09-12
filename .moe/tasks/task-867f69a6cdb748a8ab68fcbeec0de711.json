@@ -102,13 +102,20 @@
       "author": "architect-2d25447a",
       "content": "User said \"next\" to the proposed three-slice approach; proceeding with 16 KiB UTF-8 log tail and candidate-less legacy agent-reported labeling. Created store producer task-214bcfa37db24628aab11689764b4ae2 (five paths) and compatibility producer task-95a1d08e21dd45688cb296914daf4417 (five paths), both BACKLOG/human-gated. Their own tests ship with their behavior. This ORIGINAL task retains every existing DoD and owns the remaining registered record_check_run tool, registry, tool tests and MCP documentation (four paths). Added both producers as structural dependencies, preserving Candidate. No consumer dependency is redirected or weakened: original DONE still means the entire requested contract is delivered. Store waits on in-flight QA-binding task-5b857738 solely for shared-file serialization; compatibility waits on store. No peer task dependencies changed and no new whole-epic hardening row (existing task-808869c5 owns that). Split pass complete; parent tool planning resumes separately against these explicit producer contracts.",
       "timestamp": "2026-09-12T14:11:35.781Z"
+    },
+    {
+      "id": "comment-1938cc2c129d4eeca1583274a3dcf2b1",
+      "author": "worker-de4739a8",
+      "content": "Docs handoff from child task-95a1d08e (legacy verification provenance), which is going to REVIEW. The child deliberately changed no docs, so this is for your MCP_SERVER.md pass.\n\nWHAT CHANGED\n- **schema.ts:** TaskVerification now has optional `source?: 'agent-reported'`. It is optional only so old rows still load.\n- **complete_task:** persists `verification.source = 'agent-reported'`, stamped after validation.\n  - A direct caller's source, reportedAt, runnerId or candidateId is ignored.\n  - The inputSchema is unchanged and does not advertise source.\n- **get_context, primary:** `task.verification` is a fresh copy, `{ ...stored, source: 'agent-reported' }`.\n  - Null or missing stays null.\n  - This applies to every stored label, including a hand-edited `runner-observed`, `null`, or none.\n  - No read-time write.\n- **get_context, declared prerequisites:** `epicSiblings[].verification` is `{ command, exitCode, reportedAt, source: 'agent-reported' }`, still without outputTail.\n- **Validation:** unchanged (`util/enforcement.ts` untouched).\n  - Raw command is capped at 500 characters, measured BEFORE trim.\n  - exitCode must be === 0.\n  - outputTail keeps the final 2000 JS string units, and an empty tail is omitted.\n  - This is NOT the CheckRun 16 KiB UTF-8 byte cap.\n- **No Candidate/CheckRun/runner record** is written or synthesized for legacy evidence.\n\nSTALE DOC LINES (at HEAD ee8da0b)\n- `docs/MCP_SERVER.md:200`: the task.verification projection shape has no `source`.\n- `docs/MCP_SERVER.md:214`: the epicSiblings verification shape has no `source`.\n- `docs/MCP_SERVER.md:432`: the persistence sentence for complete_task has no label.\n- `docs/SCHEMA.md:408`: the task.verification shape has no `source`. SCHEMA.md is in neither child's file list nor yours, so please decide whether your docs pass covers it or it needs a follow-up row.",
+      "timestamp": "2026-09-12T20:33:10.977Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:42.561Z",
-  "updatedAt": "2026-09-12T14:15:28.608Z",
+  "updatedAt": "2026-09-12T22:07:14.732Z",
   "contextFetchedBy": [
-    "architect-2d25447a"
+    "architect-2d25447a",
+    "governor-6c1e1bf2"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T21:22:41.594Z",

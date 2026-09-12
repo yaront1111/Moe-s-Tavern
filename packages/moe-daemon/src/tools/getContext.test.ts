@@ -555,12 +555,16 @@ describe('moe.get_context — legacy verification provenance', () => {
     return await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as ProvenanceContext;
   }
 
-  it.each([
+  // Stored primary rows by source label: none at all (the legacy rows the label
+  // exists for), the label itself, and labels hand-edited into a task file.
+  const STORED_PRIMARY_LABELS: Array<[string, Record<string, unknown>]> = [
     ['a row written before the label existed', {}],
     ['a row already labelled agent-reported', { source: 'agent-reported' }],
     ['a hand-edited runner-observed label', { source: 'runner-observed' }],
     ['a null label', { source: null }],
-  ])('labels the primary verification agent-reported for %s', async (_label, label) => {
+  ];
+
+  it.each(STORED_PRIMARY_LABELS)('labels the primary verification agent-reported for %s', async (_label, label) => {
     await seed({ verification: stored(label) });
 
     const result = await read();
@@ -608,18 +612,22 @@ describe('moe.get_context — legacy verification provenance', () => {
     expect(result).not.toHaveProperty('currentCandidate');
   });
 
-  it('never rewrites or aliases the stored rows it labels, across repeated reads', async () => {
-    await seed({ verification: stored({ source: 'runner-observed' }) });
+  it.each(STORED_PRIMARY_LABELS)('never rewrites or aliases the stored rows it labels, across repeated reads, for %s', async (_label, label) => {
+    await seed({ verification: stored(label) });
     const taskDir = path.join(h.moePath, 'tasks');
     const rows = () => new Map(fs.readdirSync(taskDir).map((file) => [file, fs.readFileSync(path.join(taskDir, file), 'utf8')]));
     const ids = ['task-1', ...LABELLED_PREREQUISITES, ...EMPTY_PREREQUISITES];
     const storedRows = () => ids.map((id) => h.state.getTask(id)?.verification);
     const rowsBefore = rows();
     const storedBefore = structuredClone(storedRows());
+    // The primary is loaded in exactly the shape under test: a legacy row has no source key at all.
+    expect(storedBefore[0]).toStrictEqual(stored(label));
     const updateTask = vi.spyOn(h.state, 'updateTask');
     const touchWorker = vi.spyOn(h.state, 'touchWorker');
 
     const first = await read();
+    expect(first.task.verification).toStrictEqual(PRIMARY);
+    expect(first.task.verification).not.toBe(h.state.getTask('task-1')!.verification);
     // Tamper with every labelled object this caller was handed.
     Object.assign(first.task.verification!, { source: 'runner-observed', command: 'tampered' });
     for (const sibling of first.task.epicSiblings) {
@@ -630,6 +638,7 @@ describe('moe.get_context — legacy verification provenance', () => {
     expect(second.task.verification).toStrictEqual(PRIMARY);
     expect(second.task.verification).not.toBe(h.state.getTask('task-1')!.verification);
     expect(second.task.epicSiblings.find((s) => s.id === 'task-dep-runner')?.verification).toStrictEqual(COMPACT);
+    expect(h.state.getTask('task-1')!.verification).toStrictEqual(stored(label));
     expect(storedRows()).toStrictEqual(storedBefore);
     expect(rows()).toStrictEqual(rowsBefore);
     expect(updateTask).not.toHaveBeenCalled();

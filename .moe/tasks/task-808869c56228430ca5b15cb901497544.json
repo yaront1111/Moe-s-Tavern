@@ -1,0 +1,42 @@
+{
+  "id": "task-808869c56228430ca5b15cb901497544",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Integration and hardening pass over the Wave 1 delivery path",
+  "description": "Objective: gate the epic where the slices could not see each other. Wave 1 touched shared schema, the tool registry, the wire protocol to both clients and both launcher scripts, so the composed result needs a pass no individual task could perform.\n\nDeliverable: one end-to-end pilot run of the whole flow on a throwaway project, a full regression across every package the epic touched, the epic's documentation sweep, and an adversarial read of the entire epic diff looking for producer and consumer contracts that drifted apart, duplicated stores, and error paths that only fail in combination.\n\nThe pilot exercises the real path once: claim opens an attempt, the worker completes, the attempt holds finalizing, the wrapper freezes a candidate and runs the gate in a clean workspace, QA approves against that exact candidate, the receipt records the landing, and a dependent task becomes claimable only then. Then repeat it with a forced gate failure and confirm the dependent stays withheld and the bytes went to a rescue ref.\n\nNot in scope: new features. Any defect found that is not a contract drift between Wave 1 slices is filed as a new task rather than fixed here.\n\nVerification: the full suites named in the Definition of Done, all green, with counts recorded.",
+  "definitionOfDone": [
+    "All six acceptance cases in src/delivery/acceptance.test.ts are unskipped and passing with no assertion edited since they were authored",
+    "Full regression green with recorded counts: npm test in packages/moe-daemon, packages/moe-proxy and packages/moe-claude-plugin, cd moe-jetbrains and ./gradlew test, cd moe-vscode and npm test plus npm run compile",
+    "Both launcher harnesses pass: bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh, run sequentially on a quiet box with MOE_POSTFLIGHT_TIMEOUT_SEC=180",
+    "The end-to-end pilot runs on a throwaway project for both the success path and a forced gate failure, and its transcript is recorded in the completion summary",
+    "docs/SCHEMA.md, docs/MCP_SERVER.md, docs/ARCHITECTURE.md and docs/CONFIGURATION.md describe the attempt, candidate, check run, review, receipt and deliveryPolicy surfaces as shipped",
+    "An adversarial pass over the whole epic diff is recorded, naming every contract drift, duplicated helper and combined-failure path found, each either fixed here or filed as a new task"
+  ],
+  "taskRails": [
+    "This is the epic's only concentrated gate; do not add sibling evidence or hardening rows.",
+    "Defects outside Wave 1 contract drift are filed as new tasks, not fixed here.",
+    "Run the launcher harnesses sequentially; they flake under a busy fleet."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d72d8cc6a29a4181a3767f493007320e",
+    "task-06b658be6e2c4b4bbfaab2f7f200e1f5",
+    "task-b1c9850824fe4437a8c70b4ee083602b",
+    "task-94f534924ea841af8c164191060ee4d3",
+    "task-9e851d4e6e144f808a089bfbbd29ae11",
+    "task-bfe2f04ea25941cbbeaa9d07bd4dc1e7"
+  ],
+  "priority": "HIGH",
+  "order": 200,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:04:10.992Z",
+  "updatedAt": "2026-09-12T22:10:36.157Z"
+}
