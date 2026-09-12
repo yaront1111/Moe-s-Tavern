@@ -99,8 +99,8 @@
       "completedAt": "2026-09-12T19:19:26.743Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 2,
@@ -123,7 +123,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:58.916Z",
-  "updatedAt": "2026-09-12T19:20:41.975Z",
+  "updatedAt": "2026-09-12T19:28:18.991Z",
   "contextFetchedBy": [
     "worker-de4739a8",
     "qa-813933f7",
@@ -135,7 +135,9 @@
     "plannedDistinctFileCount": 10,
     "executedStepCount": 18,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-09-12T19:28:18.991Z",
+    "wallClockMs": 79414924
   },
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -211,7 +213,8 @@
     "packages/moe-daemon/src/tools/qaApprove.ts",
     "packages/moe-daemon/src/tools/qaReject.ts",
     "packages/moe-daemon/src/tools/qaApprove.test.ts",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json"
   ],
   "completionSummary": "Round 3, fixing QA reject #2 (1 defect, 5 unpinned sites). Gate and get_context unchanged, as QA asked.\nDEFECT, packages/moe-daemon/src/state/reviewStore.ts: recordReview checks the id before writeEntity, via replayOrRefuse (same as candidateStore). Identical fields: returns a copy of the stored review, createdAt kept, no write. Any difference: -32002 REVIEW_IMMUTABLE, context {reviewId, differingFields}, no write. Header and id JSDoc fixed. docs/SCHEMA.md aligned (Review append-only paragraph + validation bullet). MCP_SERVER.md unchanged: tools never pass a review id.\nPINS, packages/moe-daemon/src/tools/qaApprove.test.ts, +10 tests:\n- 4 same-id rewrites: exact code/codeName/message/context; map and file bytes keep the first record\n- identical replay: createdAt kept, writeEntity spy not called, returns a copy\n- reload into a fresh StateManager: size 2, getReview each, list equal, reused id still refused\n- candidateId inputSchema, both tools: type string, exact required, additionalProperties false\n- approve and reject without workerId: reviewerId 'human'\nRED: new tests written into a scratch copy and run against the old store first: 4x 'expected a MoeError refusal, but the call resolved'; replay createdAt 03:05 vs 03:00. Then 13 single mutations; the unmutated run gave 45|3 before and after. Each turned only its named tests red:\n- old store\n- reload -> new Map ('expected +0 to be 2')\n- each schema entry deleted\n- each 'human' fallback removed ('[MISSING_REQUIRED] Missing required field: reviewerId')\n- replay/lookup/field-list mutations\n- gate-off: criterion 3 red\nScratch torn down; repo files byte-identical to the pre-mutation copies, so nothing leaked.\nVERIFY:\n- named: exit 0, 45 passed | 3 skipped (was 35|3)\n- npm --prefix packages/moe-daemon test: exit 0, 115 files, 1601 passed | 3 skipped (was 1591|3)\n- tsc --noEmit: exit 0\nFiles this round: reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md, all within the task's existing 10. acceptance.test.ts still only the uns",
   "commits": [
@@ -325,6 +328,34 @@
       "treeId": "d57cda184dd423341f51fffa4a3f0177d7fbef3e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "97071e0d99d1cfe8f0b9052ea50b86435db96543",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-12T19:03:09Z",
+      "paths": [
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/reviewStore.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-12T19:21:32.052Z",
+      "treeId": "f5ca702839b0007153f70907306ea639396596eb",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-214bcfa37db24628aab11689764b4ae2"
+        },
+        {
+          "path": "packages/moe-daemon/src/tools/qaApprove.test.ts",
+          "taskId": "task-c484696db72c4ce4855dfc599a7b2072"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -342,11 +373,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-813933f7@2026-09-12T18:42:41Z",
-    "at": "2026-09-12T19:04:11.967Z"
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-12T19:03:09Z",
+    "at": "2026-09-12T19:21:32.052Z"
   },
-  "reviewCompletedAt": "2026-09-12T19:03:05.620Z",
+  "reviewCompletedAt": "2026-09-12T19:28:18.991Z",
   "rejectionDetails": {
     "failedDodItems": [
       "A Review record persisting reviewer, decision, reviewed candidate and summary is written for both outcomes",
@@ -471,5 +502,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-12T19:28:18.991Z",
+  "reviewSummary": "Round 3 verified at HEAD 97071e0. It is the completion commit, recorded 19:21:32Z (after reviewStartedAt 19:20:41Z) and pushed. Paths: reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md and the task JSON. The worktree matches it.\n\nQA re-ran, in packages/moe-daemon:\n- `npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts`: exit 0, 45 passed | 3 skipped. Criterion 3 (\"reviewing candidate A cannot approve candidate B\") ran and passed; the 3 skips are sibling criteria.\n- `npm --prefix packages/moe-daemon test`: exit 0, 115 files, 1601 passed | 3 skipped.\n- `npx tsc --noEmit -p tsconfig.json`: exit 0.\n\nacceptance.test.ts differs from 7b33028~1 only by it.skip->it. qaApprove.ts, qaReject.ts, getContext.ts, StateManager.ts, schema.ts and MCP_SERVER.md are byte-identical to 9225483, so the round-2-verified gate, result literal and get_context are unchanged.\n\nRound-2 defect fixed: recordReview replays an identical same-id review (stored copy, createdAt kept, no write). It refuses any difference before writeEntity with -32002 REVIEW_IMMUTABLE and context {reviewId, differingFields}, mirroring candidateStore. SCHEMA.md and the JSDoc match.\n\nScratch mutation audit outside the repo; the baseline gave 45|3 first and last, equal to the repo. 14 of 14 mutations turn a named test red:\n- the round-2 store swapped back in (6 red)\n- reviews reload replaced by new Map\n- each candidateId inputSchema entry deleted\n- each workerId||'human' fallback removed\n- replay falls through to a write\n- replay returns the live object\n- summary or taskId dropped from the compared fields\n- context key renamed\n- codeName changed\n- same-id check moved after writeEntity\n\nOnly ||->?? (empty-string workerId) goes uncaught; it is not a DoD item.\n\nRails: no forbidden patterns, additive, no migration, no git in the daemon. Scratch torn down, no leak. Out of scope and already escalated: the set_task_status and /ws REVIEW->DONE bypass, and Review candidateId provenance."
 }
