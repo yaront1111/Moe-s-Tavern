@@ -1072,6 +1072,68 @@ interface Review {
 
 ---
 
+## CheckRun
+
+**File:** `.moe/checks/{check-run-id}.json` (one file per run)
+
+What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; no MCP tool records one yet (`moe.record_check_run` is a later slice). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
+
+```typescript
+interface CheckRun {
+  readonly id: string;           // "check-<32 hex>" when the daemon generates it; a caller-supplied
+                                 // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
+  readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
+                                 // candidate's treeSha exactly when recorded: no prefix match, no case folding
+  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 500 chars
+  readonly exitCode: number;     // Any signed safe integer. A failing run is recorded like a passing one
+  readonly outputTail: string;   // The END of the output, at most 16384 UTF-8 BYTES; "" when none was sent
+  readonly runnerId: string;     // The runner the report names: reported, not authenticated
+  readonly source: 'runner-observed' | 'agent-reported';
+  readonly createdAt?: string;   // ISO 8601, the daemon's clock at first record (never the caller's).
+                                 // Optional only so rows written before the field existed still load
+}
+```
+
+**Provenance.** `source` is *declared* provenance. The daemon never executes the command and does not authenticate whoever reports it, so `runner-observed` is a claim about where the result came from — not proof that the command ran, and not a verified identity. There is no third value and no default. `runnerId` is likewise only what the report says.
+
+**Output tail.** The stored tail is capped at **16384 bytes of UTF-8** (16 KiB) — bytes, not characters, so a multibyte log keeps fewer characters than an ASCII one. The kept portion is the **end** of the log, and it always begins on a whole character: when the cut would split a character, it moves forward past that character instead of storing part of it, so the cut never adds a replacement character (U+FFFD). Malformed input, such as a lone UTF-16 surrogate, is first normalized to U+FFFD, deterministically. An absent tail is stored as `""`.
+
+**Many runs per candidate.** A candidate accumulates check runs. There is never one row per candidate that a later run overwrites: running a check again is a new record under a new id, and the history keeps every result, failures included.
+
+**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused.
+
+**Refusals.** Checked in this order; every refusal writes nothing:
+
+1. Malformed input: `-32602` `INVALID_INPUT` or `MISSING_REQUIRED` (see the CheckRun validation rules below).
+2. `candidateId` names no candidate: `-32001` `CANDIDATE_NOT_FOUND`, with `context.candidateId`. No candidate is ever created on the caller's behalf.
+3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
+4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
+
+A failed write reaches the caller as an error, and the run is published nowhere.
+
+**Recording is not eligibility.** Recording checks shape, that the candidate exists, and that the reported tree is the candidate's. Whether a stored run satisfies a gate — its command, its exit code, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
+
+**Queries.** Runs are listed per candidate: rows without a `createdAt` first, then by `createdAt`, then by `id`, so ties are deterministic. Every read, and the record `recordCheckRun` returns, is a copy: editing it cannot change the stored run.
+
+**Example:**
+
+```json
+{
+  "id": "check-5e4d3c2b1a09f8e7d6c5b4a392817065",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "command": "node gate.cjs",
+  "exitCode": 1,
+  "outputTail": "1 failing: expected 0 lint errors, found 3",
+  "runnerId": "runner-pilot",
+  "source": "runner-observed",
+  "createdAt": "2026-09-11T03:20:00.000Z"
+}
+```
+
+---
+
 ## Chat Channel
 
 **File:** `.moe/channels/{channel-id}.json`
@@ -1528,6 +1590,17 @@ function generateId(prefix: string): string {
 - `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`
 - `candidateId` must be the task's CURRENT candidate at decision time, else the decision is refused with `CANDIDATE_MISMATCH` and no record is written
+- `createdAt` is always the daemon's clock; a caller cannot set it
+
+### CheckRun
+- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included
+- `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
+- `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
+- `command` must be a non-blank string of at most 500 characters, stored verbatim
+- `exitCode` must be a safe integer; zero, positive and negative values are all accepted
+- `source` must be exactly `runner-observed` or `agent-reported`, with no default
+- `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
+- An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ---

@@ -36,6 +36,7 @@ import type {
   Candidate,
   ChatChannel,
   ChatMessage,
+  CheckRun,
   Decision,
   DecisionStatus,
   Epic,
@@ -386,6 +387,8 @@ export class StateManager {
   candidates = new Map<string, Candidate>();
   /** Reviews, keyed by review id. Written only via state/reviewStore.ts, which is append-only. */
   reviews = new Map<string, Review>();
+  /** Check runs, keyed by check-run id. Written only via state/checkRunStore.ts, which has no update or delete path. */
+  checkRuns = new Map<string, CheckRun>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -1098,6 +1101,8 @@ export class StateManager {
       // Same tolerance again: a project whose QA has never bound a decision to a
       // candidate loads empty, which is exactly the incremental-adoption case.
       this.reviews = loadEntities<Review>(path.join(this.moePath, 'reviews'));
+      // And again: a project that has never recorded a check run loads empty.
+      this.checkRuns = loadEntities<CheckRun>(path.join(this.moePath, 'checks'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {

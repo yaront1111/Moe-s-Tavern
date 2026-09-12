@@ -1024,6 +1024,61 @@ export interface Review {
   readonly createdAt: string;
 }
 
+// =============================================================================
+// Check runs — what a check reported about one candidate's exact bytes
+// =============================================================================
+//
+// A CheckRun is the result someone REPORTED for one command run against one
+// Candidate's tree, so a later gate can ask about exactly those bytes instead of
+// about a task. Purely additive: no existing type changed, no schemaVersion
+// bump, no migration (same shape as the Candidate addition above).
+// =============================================================================
+
+/**
+ * Where a check result says it came from. DECLARED PROVENANCE, nothing more:
+ * the daemon never executes the command and does not authenticate the caller,
+ * so `runner-observed` is a claim about the source of the result — not proof
+ * that the command ran, and not a verified identity of whoever reported it.
+ * There is no third value and no default.
+ */
+export type CheckRunSource = 'runner-observed' | 'agent-reported';
+
+/**
+ * One reported command result for one candidate; persisted at
+ * .moe/checks/<id>.json (daemon sole-writer, via state/checkRunStore.ts only).
+ *
+ * IMMUTABLE. A check run is never edited and never deleted, and a candidate
+ * ACCUMULATES runs rather than owning one row that is overwritten: running the
+ * check again is a new record under a new id.
+ *
+ * RECORDING IS NOT ELIGIBILITY. Recording checks shape, that the candidate
+ * exists and that the reported tree equals the candidate's. Whether a stored
+ * run satisfies a gate (its command, exit code or source) is decided later by
+ * policy, and rows loaded from disk are never re-checked or repaired.
+ */
+export interface CheckRun {
+  readonly id: string;
+  /** The Candidate whose bytes were checked. */
+  readonly candidateId: string;
+  /** The tree the reporter says it checked. Recording refuses one that differs from the candidate's. */
+  readonly treeSha: string;
+  /** The command exactly as reported: never trimmed, rewritten or run. */
+  readonly command: string;
+  /** Signed exit code as reported. A failing run is recorded exactly like a passing one. */
+  readonly exitCode: number;
+  /** The END of the output, at most 16384 UTF-8 bytes, starting on a whole character; '' when none was sent. */
+  readonly outputTail: string;
+  /** The runner the report names. Reported, not authenticated. */
+  readonly runnerId: string;
+  readonly source: CheckRunSource;
+  /**
+   * Daemon clock when the run was first recorded. Every NEW record is stamped
+   * with it, and a caller can never supply it. Optional ONLY so rows written
+   * before the field existed still load; lists order such rows first.
+   */
+  readonly createdAt?: string;
+}
+
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
 export type ProposalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
