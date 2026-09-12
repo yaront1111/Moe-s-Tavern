@@ -102,8 +102,8 @@
       "completedAt": "2026-09-12T22:56:43.896Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-9dc36824",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -145,7 +145,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:42.561Z",
-  "updatedAt": "2026-09-12T22:58:03.192Z",
+  "updatedAt": "2026-09-12T23:10:58.708Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "governor-6c1e1bf2",
@@ -156,7 +156,9 @@
     "firstClaimAt": "2026-09-11T21:22:41.594Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T23:10:58.708Z",
+    "wallClockMs": 92897114
   },
   "stepsCompleted": [
     "step-1",
@@ -237,6 +239,21 @@
       "treeId": "9408dd9329de1c735698acc669c14bc68604cc6f",
       "status": "WORKING",
       "pushed": false
+    },
+    {
+      "sha": "11d569c541ba5834318e06617985fae9559693db",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-62409c0c@2026-09-12T22:44:38Z",
+      "paths": [
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json"
+      ],
+      "recordedBy": "worker-62409c0c",
+      "recordedAt": "2026-09-12T22:58:15.146Z",
+      "treeId": "a9c8b1891e000f6a60c53ae563c62db6c579f52d",
+      "status": "REVIEW",
+      "pushed": false
     }
   ],
   "filesModified": [
@@ -244,7 +261,8 @@
     "packages/moe-daemon/src/tools/recordCheckRun.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json"
   ],
   "touchedFiles": [
     "docs/SCHEMA.md",
@@ -255,9 +273,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-62409c0c@2026-09-12T22:43:33Z",
-    "at": "2026-09-12T22:43:38.045Z"
+    "kind": "completion",
+    "sessionId": "worker-62409c0c@2026-09-12T22:44:38Z",
+    "at": "2026-09-12T22:58:15.146Z"
   },
   "reviewStartedAt": "2026-09-12T22:57:40.141Z",
   "verification": {
@@ -266,5 +284,8 @@
     "outputTail": "GATE_EXIT=0 (13.2s, PowerShell tool, repo root, HEAD 558d0ec)\n[focused vitest] Test Files  5 passed (5)\n      Tests  206 passed (206)\n> moe-daemon@0.8.0 test\n> vitest run\n Test Files  117 passed (117)\n      Tests  1761 passed | 3 skipped (1764)\n[npx tsc --noEmit -p tsconfig.json] exit 0 (last link of the && chain; covers src only, tests excluded)",
     "reportedAt": "2026-09-12T22:57:40.141Z"
   },
-  "completionSummary": "Registered moe.record_check_run on top of the landed CheckRun store (task-214bcfa3) and the legacy agent-reported label (task-95a1d08e). Together they cover all six original DoD items.\n\nDelivered:\n- tools/recordCheckRun.ts: the handler is validateCheckRunParams, then recordCheckRun, returning {success:true, checkRun, duplicate}. It has no gate, is not blocking, never defaults or infers source, and lets errors propagate.\n- One getTools() entry in tools/index.ts.\n- tools/recordCheckRun.test.ts: 33 tests through getTools + runExclusive and a real McpAdapter.\n- docs/MCP_SERVER.md: a record_check_run section, plus provenance notes for get_context and complete_task.\n- docs/SCHEMA.md +4/-1: verification.source, and a fix to a stale CheckRun sentence. This is scope growth, explained in the step-4 note.\n\nDoD:\n1. CheckRunSource and CheckRun.source are in schema.ts.\n2. One file per run under .moe/checks/<id>.json, grouped by candidateId; the tool is registered.\n3. CHECK_RUN_TREE_MISMATCH (-32002) is asserted through the handler.\n4. The 16384 UTF-8 byte tail cap is documented and asserted with ASCII and emoji input.\n5. complete_task stamps and get_context forces agent-reported; the legacy 500/2000-char rules are unchanged.\n6. The gate passes (below).\n\nEvidence:\n- Gate exit 0. Focused: 5 files, 206 passed. npm test: 117 files, 1761 passed | 3 skipped (the 3 held-out acceptance it.skip). tsc exit 0.\n- Mutation red, run in a scratch copy: 17 of 17 caught. Registry entry removed: 34 red. Success without recording: 15. Forced runner-observed: 5. Also caught: source default, inference and coercion; exitCode coercion; tree rebind; errors turned into results; duplicate forced false; blocking; and 6 schema mutations.\n- The unmutated run passed 52/52 first and last, and repo bytes equal HEAD afterwards. acceptance.test.ts is byte-identical.\n\nLimit: source is declared provenance. Any MCP caller can claim runner-observed, and the daemon neither runs nor authenticates the check. Policy (c48"
+  "completionSummary": "Registered moe.record_check_run on top of the landed CheckRun store (task-214bcfa3) and the legacy agent-reported label (task-95a1d08e). Together they cover all six original DoD items.\n\nDelivered:\n- tools/recordCheckRun.ts: the handler is validateCheckRunParams, then recordCheckRun, returning {success:true, checkRun, duplicate}. It has no gate, is not blocking, never defaults or infers source, and lets errors propagate.\n- One getTools() entry in tools/index.ts.\n- tools/recordCheckRun.test.ts: 33 tests through getTools + runExclusive and a real McpAdapter.\n- docs/MCP_SERVER.md: a record_check_run section, plus provenance notes for get_context and complete_task.\n- docs/SCHEMA.md +4/-1: verification.source, and a fix to a stale CheckRun sentence. This is scope growth, explained in the step-4 note.\n\nDoD:\n1. CheckRunSource and CheckRun.source are in schema.ts.\n2. One file per run under .moe/checks/<id>.json, grouped by candidateId; the tool is registered.\n3. CHECK_RUN_TREE_MISMATCH (-32002) is asserted through the handler.\n4. The 16384 UTF-8 byte tail cap is documented and asserted with ASCII and emoji input.\n5. complete_task stamps and get_context forces agent-reported; the legacy 500/2000-char rules are unchanged.\n6. The gate passes (below).\n\nEvidence:\n- Gate exit 0. Focused: 5 files, 206 passed. npm test: 117 files, 1761 passed | 3 skipped (the 3 held-out acceptance it.skip). tsc exit 0.\n- Mutation red, run in a scratch copy: 17 of 17 caught. Registry entry removed: 34 red. Success without recording: 15. Forced runner-observed: 5. Also caught: source default, inference and coercion; exitCode coercion; tree rebind; errors turned into results; duplicate forced false; blocking; and 6 schema mutations.\n- The unmutated run passed 52/52 first and last, and repo bytes equal HEAD afterwards. acceptance.test.ts is byte-identical.\n\nLimit: source is declared provenance. Any MCP caller can claim runner-observed, and the daemon neither runs nor authenticates the check. Policy (c48",
+  "completedAt": "2026-09-12T23:10:58.708Z",
+  "reviewCompletedAt": "2026-09-12T23:10:58.708Z",
+  "reviewSummary": "HEAD 11d569c, source in 3feff7c: recordCheckRun.ts +99, recordCheckRun.test.ts +361, index.ts +2, MCP_SERVER.md +86/-3, SCHEMA.md +4/-1. Producers landed: 4d7074c0 (b2061c8), 214bcfa3 (fac1e3d), 95a1d08e (31c7536).\n\nGATE re-run by QA from PowerShell at repo root: the task's cmd /d /c chain (5 named vitest files && npm test && tsc --noEmit) plus && echo GATE_CHAIN_DONE. Exit 0.\n- Focused: 5 files, 206 passed.\n- npm test: 117 files, 1761 passed | 3 skipped (held-out acceptance).\n- tsc: 0. The new test file also type-checks via a scratch tsconfig.\n\nDoD\n1. schema.ts has CheckRunSource and CheckRun.source.\n2. Runs persist as .moe/checks/<id>.json and are listed by candidate; the tool is registered once.\n3. CHECK_RUN_TREE_MISMATCH -32002 is asserted through the handler.\n4. The 16384 UTF-8 byte cap is documented in SCHEMA.md and MCP_SERVER.md; ASCII and emoji tails go through the handler.\n5. completeTask.ts:164 stamps agent-reported and getContext.ts:213/348 forces it; enforcement.ts is untouched.\n6. Gate above.\n\nMUTATIONS (own driver, scratch copy): 26 of 26 red; none 223/223 first and last. Red counts:\n- old tree (7e1e293 index, no tool) 34, all assertions\n- registry removed 34, duplicated 1\n- default missing source 3; infer source from workerId 2\n- success only when exitCode is 0: 3\n- errors returned as results 20; fake success on write failure 1\n- WORKING-only gate 14; rebind to candidate tree 1\n- raw args returned 4; runnerId taken from workerId 2\n- tail stripped 7; duplicate inverted 10; blocking 2; name typo 33\n- 4 schema edits, 1 each\n- store tree check off 8 (tool 1); char truncation 13 (tool 1); dir renamed 44; reload empty 2\n- legacy writer 8, reader 4\n\nNOTE: the push failed because the branch diverged (human merge 055f85f). merge-tree is clean, and the merged tree passes the full suite (119 files, 1794 passed | 3 skipped) and tsc."
 }
