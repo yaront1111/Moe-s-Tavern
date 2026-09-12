@@ -112,7 +112,7 @@
       "completedAt": "2026-09-12T00:08:53.347Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,12 +128,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T21:22:45.077Z",
-  "updatedAt": "2026-09-12T00:09:23.869Z",
+  "updatedAt": "2026-09-12T00:13:17.558Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T23:53:50.656Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T00:13:17.558Z",
+    "wallClockMs": 1166902
   },
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -163,7 +165,8 @@
   },
   "planApprovedAt": "2026-09-11T23:55:49.524Z",
   "contextFetchedBy": [
-    "worker-e67b0dd2"
+    "worker-e67b0dd2",
+    "qa-813933f7"
   ],
   "workStartedAt": "2026-09-11T23:56:03.782Z",
   "reviewStartedAt": "2026-09-12T00:09:23.869Z",
@@ -179,7 +182,57 @@
     "packages/moe-daemon/src/state/attemptStore.ts",
     "docs/CONFIGURATION.md",
     "packages/moe-daemon/src/state/sweeps.test.ts",
-    "packages/moe-daemon/src/types/schema.ts"
+    "packages/moe-daemon/src/types/schema.ts",
+    ".moe/tasks/task-d7fa98f4e43d434a96cad9440b153f1c.json"
   ],
-  "completionSummary": "A reconcile-window sweep bounds the `reconciling` phase so a task cannot be parked forever, and permits exactly one successor.\n\nFILES (5): state/sweeps.ts, state/sweeps.test.ts (new, 10 cases), state/StateManager.ts, types/schema.ts, docs/CONFIGURATION.md.\n\nHOW DoD #1 IS MET — read this first. The confirmed-dead arm has no new code BY DESIGN. An epic rail keeps the daemon state-only, so it can never establish that a process stopped; the only authority is the wrapper's exit trap calling moe.deregister_worker. That path ALREADY closes a reconciling attempt, verified by reading it, not assumed: deregisterWorker -> releaseWorkerTasks (workerLifecycle.ts:146) -> closeOpenAttempts, which closes every phase in OPEN_PHASES = {running, finalizing, reconciling}. What this card adds is the other half: the bounded window for when no such declaration ever arrives.\n\nWHAT SHIPPED. sweeps.ts gains DEFAULT_RECONCILE_WINDOW_MS (7200000 = 2h), RECONCILE_WINDOW_CHECK_INTERVAL_MS (300000), start/stopReconcileWindowCheck, checkReconcileWindow(state, nowMs) (mutex wrapper) and runReconcileWindowSweep(state, nowMs) (body). settings.reconcileWindowMs threads through StateManagerOptions + public field + Explicit flag + constructor default + applySettingsTimeouts (the real name; there is no applyProjectSettings) + ProjectSettings, and is documented in CONFIGURATION.md under reviewStaleTimeoutMs.\n\nsrc/index.ts IS UNTOUCHED although the plan named it — not an omission. index.ts:500 is `new StateManager({ projectPath })` with no timeout options, and all three existing sweep lifecycles are armed in StateManager.load() (outside the locked section, so the interval does not inherit the mutex ALS context) and cleared in clearEmitter(). The new sweep went exactly there. A second arming path in index.ts would be a duplicate interval.\n\nTWO DEFECTS THIS COULD HAVE SHIPPED, both with dedicated tests: the clock is the ATTEMPT's lastPhaseAt, never a worker's lastActivityAt (which would be the idle-based aut"
+  "completionSummary": "A reconcile-window sweep bounds the `reconciling` phase so a task cannot be parked forever, and permits exactly one successor.\n\nFILES (5): state/sweeps.ts, state/sweeps.test.ts (new, 10 cases), state/StateManager.ts, types/schema.ts, docs/CONFIGURATION.md.\n\nHOW DoD #1 IS MET — read this first. The confirmed-dead arm has no new code BY DESIGN. An epic rail keeps the daemon state-only, so it can never establish that a process stopped; the only authority is the wrapper's exit trap calling moe.deregister_worker. That path ALREADY closes a reconciling attempt, verified by reading it, not assumed: deregisterWorker -> releaseWorkerTasks (workerLifecycle.ts:146) -> closeOpenAttempts, which closes every phase in OPEN_PHASES = {running, finalizing, reconciling}. What this card adds is the other half: the bounded window for when no such declaration ever arrives.\n\nWHAT SHIPPED. sweeps.ts gains DEFAULT_RECONCILE_WINDOW_MS (7200000 = 2h), RECONCILE_WINDOW_CHECK_INTERVAL_MS (300000), start/stopReconcileWindowCheck, checkReconcileWindow(state, nowMs) (mutex wrapper) and runReconcileWindowSweep(state, nowMs) (body). settings.reconcileWindowMs threads through StateManagerOptions + public field + Explicit flag + constructor default + applySettingsTimeouts (the real name; there is no applyProjectSettings) + ProjectSettings, and is documented in CONFIGURATION.md under reviewStaleTimeoutMs.\n\nsrc/index.ts IS UNTOUCHED although the plan named it — not an omission. index.ts:500 is `new StateManager({ projectPath })` with no timeout options, and all three existing sweep lifecycles are armed in StateManager.load() (outside the locked section, so the interval does not inherit the mutex ALS context) and cleared in clearEmitter(). The new sweep went exactly there. A second arming path in index.ts would be a duplicate interval.\n\nTWO DEFECTS THIS COULD HAVE SHIPPED, both with dedicated tests: the clock is the ATTEMPT's lastPhaseAt, never a worker's lastActivityAt (which would be the idle-based aut",
+  "commits": [
+    {
+      "sha": "02cc7bfe28d56ef67c2f0bebbe0788ee3068ca90",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T23:55:51Z",
+      "paths": [
+        ".moe/tasks/task-d7fa98f4e43d434a96cad9440b153f1c.json",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/sweeps.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-12T00:09:39.637Z",
+      "treeId": "0c8514fbfe957375388e7971a901a42d6a0f9c68",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/state/StateManager.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/state/sweeps.test.ts",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e67b0dd2@2026-09-11T23:55:51Z",
+    "at": "2026-09-12T00:09:39.637Z"
+  },
+  "completedAt": "2026-09-12T00:13:17.558Z",
+  "reviewCompletedAt": "2026-09-12T00:13:17.558Z",
+  "reviewSummary": "APPROVED. Gates re-run by QA: named gate (sweeps + workerStore) EXIT=0, 19 passed; full npm test EXIT=0, 115 files/1540 passed/4 skipped (baseline 114/1530); tsc --noEmit EXIT=0. Red proof re-derived: parent 081a6f7 sweeps.ts has 0 \"reconcile\" matches, so all 10 new cases fail on old code. Commit 02cc7bf audited via git show (6 paths, pushed); source paths clean.\n\nDoD: (1) past-window reconciling attempt closed, then task released via nextStatusForRelease(task,'requeue') so a successor can claim ('park' would route to human-gated BACKLOG, yielding none); confirmed-dead arm is the existing deregister -> closeOpenAttempts, verified at attemptStore.ts:321-329 (OPEN_PHASES includes reconciling) - the only authority an epic rail leaves a state-only daemon. (2) reconcileWindowMs in ProjectSettings + StateManagerOptions + constructor default 7200000 + applySettingsTimeouts, <=0 rejected. (3) Single successor comes from the store: repeated pass byte- and mtime-identical, one claim takes generation 2, second claim hasNext:false, openAttempt refused ATTEMPT_ALREADY_OPEN. (4) running (incl. reattached) and finalizing untouched at 10x window age with a 3h-quiet worker; WINDOW-1 survives byte-identical, so the boundary is a real comparison. (5) CONFIGURATION.md row: key, 2h default, reconciling-ONLY, reviewStaleTimeoutMs unchanged.\n\nRails hold: clock is the attempt's lastPhaseAt, never worker lastActivityAt (one pass-through write, nothing reads it); filter is phase, never task status. Integration risk checked: reconcileRunningAttempts goes through setAttemptPhase, so each restart re-stamps lastPhaseAt and grants a fresh window instead of firing instantly.\n\nindex.ts untouched though the plan named it - correct: it passes no timeout options, sweeps arm in StateManager.load(). Accepted residual: release is on a timer alone; the stale runner's next mutation is fenced as superseded, its file writes stay out of reach. Audit in Serena task-d7fa98f4 handoff."
 }
