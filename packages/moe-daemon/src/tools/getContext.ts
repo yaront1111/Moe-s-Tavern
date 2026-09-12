@@ -6,6 +6,7 @@ import { logger } from '../util/logger.js';
 import { contextNextAction } from '../util/contextNextAction.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
+import { listCandidatesForTask } from '../state/candidateStore.js';
 
 /** Newest commits surfaced per task (the ledger itself is capped at MAX_COMMITS_PER_TASK). */
 const MAX_CONTEXT_COMMITS = 20;
@@ -268,6 +269,20 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         await state.touchWorker(callerWorkerId);
       }
 
+      // The task's CURRENT candidate — the bytes a reviewer is being asked to
+      // read, and the id qa_approve/qa_reject bind their decision to. Selection
+      // is "last by createdAt then id", and it deliberately reuses
+      // listCandidatesForTask rather than sorting again here: one definition of
+      // "current", shared with the record_candidate side, so the two can never
+      // drift. That helper already hands out copies, so nothing in the response
+      // aliases stored state.
+      //
+      // Surfaced whenever a candidate exists, not only in REVIEW: a worker about
+      // to record a second candidate needs it too, and a status gate would make
+      // the field vanish exactly when a reviewer re-reads a reopened task.
+      const taskCandidates = task ? listCandidatesForTask(state, task.id) : [];
+      const currentCandidate = taskCandidates.length > 0 ? taskCandidates[taskCandidates.length - 1] : undefined;
+
       return {
         project: {
           id: state.project.id,
@@ -371,6 +386,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               generalChannelId
             }
           : null,
+        // Omitted entirely (not null) when the task has no candidate, so a
+        // project that has never recorded one sees a byte-identical payload.
+        ...(currentCandidate ? { currentCandidate } : {}),
         worker: assignedWorker
           ? {
               id: assignedWorker.id,

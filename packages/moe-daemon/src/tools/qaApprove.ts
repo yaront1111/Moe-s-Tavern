@@ -5,6 +5,7 @@ import { missingRequired, notFound, invalidState, invalidInput } from '../util/e
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { listAttempts } from '../state/attemptStore.js';
 import { attemptFinalizingRefusal } from '../util/claimGuards.js';
+import { recordReview, resolveReviewedCandidate } from '../state/reviewStore.js';
 
 /** Upper bound on the approval summary — mirrors qa_reject's reason cap. */
 const MAX_SUMMARY_CHARS = 2000;
@@ -17,19 +18,20 @@ function commitEvidenceEntry(c: TaskCommit) {
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits after reviewStartedAt, the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits after reviewStartedAt, the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The task ID to approve' },
         summary: { type: 'string', description: 'What was verified: commands re-run, DoD items checked, diff size. Required — an approval without evidence is a rubber stamp.' },
+        candidateId: { type: 'string', description: 'The candidate you actually reviewed (get_context.currentCandidate.id). Refused with CANDIDATE_MISMATCH if the task has moved on to a different candidate. Optional only for projects that record no candidates; omitting it on a task that has one approves with a warning.' },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId', 'summary'],
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = (args || {}) as { taskId?: string; summary?: string; workerId?: string };
+      const params = (args || {}) as { taskId?: string; summary?: string; candidateId?: string; workerId?: string };
 
       if (!params.taskId) {
         throw missingRequired('taskId');
@@ -85,6 +87,17 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const reviewSummary = params.summary.trim();
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
 
+      // THE HARD GATE. An approval must apply to the bytes the reviewer read, so
+      // the candidate they name is checked against the task's CURRENT candidate
+      // and a mismatch is refused outright (CANDIDATE_MISMATCH). Placed after the
+      // read/summary guards so those keep their precedence, but still before the
+      // Review write, the updateTask, the touchWorker and every chat side effect
+      // — a refused approval moves not one byte, and leaves .moe/reviews empty.
+      //
+      // A task with no candidate at all resolves to no binding and behaves
+      // exactly as it did before this gate existed: adoption is incremental.
+      const binding = resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_approve');
+
       // Soft commit gate. A completion commit counts only when recorded at or
       // after reviewStartedAt (stamped by complete_task, cleared by reopen), so
       // a stale attempt-#1 commit can never satisfy attempt #2. Warn-only: the
@@ -103,6 +116,12 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       const warning = completionCommits.length === 0 && autoCommitOn
         ? `NO-COMPLETION-COMMIT: task ${task.id} has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging`
         : undefined;
+      // The array collects every soft signal; `warning`, the singular key, stays
+      // the commit-evidence one it has always been, and so does `message`.
+      const warnings = [
+        ...(warning ? [warning] : []),
+        ...(binding.warning ? [binding.warning] : []),
+      ];
 
       // Capture metrics: doneAt + wallClockMs (first claim → DONE). If no
       // firstClaimAt was recorded (legacy task), wallClockMs stays undefined.
@@ -115,6 +134,21 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
           nextMetrics.wallClockMs = end - start;
         }
+      }
+
+      // Persist the binding BEFORE the status flip, and only once the candidate
+      // check has passed. A DONE task with no Review is the exact hole this gate
+      // closes; a Review whose later status write failed is merely a truthful
+      // record that the decision was made. The write is awaited and never
+      // swallowed — if it fails, the approval fails with it and nothing is DONE.
+      if (binding.candidateId) {
+        await recordReview(state, {
+          taskId: task.id,
+          candidateId: binding.candidateId,
+          reviewerId: params.workerId || 'human',
+          decision: 'approve',
+          summary: reviewSummary,
+        });
       }
 
       const updated = await state.updateTask(
@@ -158,7 +192,7 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
         status: updated.status,
         summary: reviewSummary,
         ...(warning ? { warning } : {}),
-        warnings: warning ? [warning] : [],
+        warnings,
         commitEvidence: {
           completion: completionCommits.map(commitEvidenceEntry),
           checkpoint: checkpointCommits.map(commitEvidenceEntry),

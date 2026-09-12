@@ -1442,7 +1442,7 @@ describe('Wave 1 acceptance: reviewing candidate A cannot approve candidate B', 
   // DONE): on today's code qa_approve has no notion of which bytes were
   // reviewed. QA reads candidate A, the runner then records B, and the approval
   // still drives the task to DONE — on bytes nobody reviewed.
-  it.skip('refuses an approval bound to a superseded candidate and records one against the current', async () => {
+  it('refuses an approval bound to a superseded candidate and records one against the current', async () => {
     const h = new ToolTestHarness();
     h.init();
     // Date-only fake clock so production-stamped createdAt values are exact and

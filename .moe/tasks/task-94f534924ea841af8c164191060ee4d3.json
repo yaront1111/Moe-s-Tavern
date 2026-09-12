@@ -16,13 +16,68 @@
     "dependsOn still gates WORKING-status claims only; planning must keep proceeding.",
     "Missing or deleted prerequisite ids keep counting as satisfied, as they do today."
   ],
-  "implementationPlan": [],
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "READ THE HELD-OUT CASE AS THE CONTRACT AND MAP THE ONE SHARED SEAM (read-only, no edits). This card owns unskipping acceptance criterion 2, whose assertions may not be edited, so that case is the specification. Read src/delivery/acceptance.test.ts from the describe at line 1179 to line 1425, plus the STRICT_SETTINGS fixture at line 249 and the PILOT_TARGET and PILOT_GATE_COMMAND constants at lines 224 and 264. Extract the exact contract. The strict policy is `deliveryPolicy: 'local-branch'` with `qualityGate: 'node gate.cjs'` and `qualityGateScope: 'everyTask'`, so the required gate command comes from the existing qualityGate setting and the policy switch is deliveryPolicy; an absent or default policy must change nothing. The refusal is a thrown error with numeric code -32003, codeName exactly `DEPENDENCY_EVIDENCE_MISSING`, `context.prerequisiteTaskId` naming the prerequisite, and `context.missingEvidence` deep-equal to the single-element array `['required-check:node gate.cjs']`, so it is an array of prefixed strings and not a sentence. `runDependencyUnblock(state, 'task-P')` must return an empty array while the evidence is missing and `['task-E']` once it exists. Every refusal is byte-pure across the dependent task file, the blocked task file and the failed check record. STUDY THE FOUR DECOY RECORDS the case plants, because each one kills a specific sloppy lookup: a passing run for an OLDER candidate of the same task kills any-pass-ever-for-this-task; a pass carrying the current candidate id but a different tree kills a lookup keyed on candidate id alone; a pass on the right candidate and tree under a different command kills any-check-passed; and an `agent-reported` pass on the right candidate, tree and command kills any-source-counts. The evidence rule is therefore: the task's CURRENT candidate, that candidate's own tree, the required gate command, exit code zero, and source `runner-observed`. Now map the production seam, which is better than the card implies: `isDependencySatisfied` at src/state/dependencyUnblock.ts line 32 is called by both `unmetDependsOn` and `unmetBlockedOnTaskIds`, and claimNextTask.ts imports `unmetDependsOn` at line 9 and gates on it at lines 266 and 304. One rule placed there covers the claim gate AND the blockedOnTaskIds auto-unblock, which is the fourth definition-of-done item for free. Enumerate every caller of that function before changing it and confirm the cycle-detection helpers use `dependencyEdges` instead, because the evidence rule must never reach cycle detection. Finally confirm what your prerequisites delivered: the check record store and `moe.record_check_run` belong to task-867f69a6cdb748a8ab68fcbeec0de711 and the policy evidence helper to task-c484696db72c4ce4855dfc599a7b2072; neither is in the tree yet. Read whatever they landed and use it verbatim. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "CAPTURE THE RED PROOF, THEN ADD THE UNIT CASES. Unskip only acceptance criterion 2 by changing its `it.skip` to `it`, touching not one assertion, and run `npx vitest run src/delivery/acceptance.test.ts` from packages/moe-daemon. SAVE the failing output: it is the epic rail's fails-on-old-behaviour evidence and the definition-of-done item requiring the case to pass unedited. The counterexample the case names is a released dependent: the prerequisite being DONE is the whole test today, so the claim succeeds and the auto-unblock flips the blocked task straight back. Record which assertion fails first. Then ADD cases to src/state/dependencyUnblock.test.ts without touching any existing one, because a definition-of-done item requires the existing dependency tests to stay green unmodified. Cover: under the default policy a DONE prerequisite with no evidence at all still satisfies its dependents, which is the behaviour-preservation guarantee; under the strict policy the four decoy shapes from step 1 each fail to satisfy, one case per decoy so a regression names which lookup broke; a matching runner-observed pass on the current candidate and tree satisfies; a prerequisite that is DONE but has no candidate at all reports the missing evidence rather than throwing; a prerequisite id that does not exist on the board still counts as satisfied, which a task rail requires; and a prerequisite in a status other than DONE is unmet for the reason it already is today, with no evidence claim in the message. Add one case asserting the shortfall reports evidence as an array of prefixed strings, matching the acceptance case exactly. Assert exact code names and deep-equal arrays, never truthiness.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "PUT THE EVIDENCE RULE IN THE ONE SHARED PLACE. In src/state/dependencyUnblock.ts add a function that reports a prerequisite's shortfall rather than a bare boolean: it returns whether the prerequisite satisfies its dependents and, when it does not, the list of missing evidence as prefixed strings. Then make the existing `isDependencySatisfied` delegate to it and keep returning a boolean, so `unmetDependsOn`, `unmetBlockedOnTaskIds` and every current caller inherit the new rule with no signature change and the auto-unblock path needs no separate edit. Order the checks so today's behaviour is untouched wherever the policy does not demand evidence: a prerequisite that is missing from the board counts satisfied exactly as it does now, a prerequisite whose status is not DONE or ARCHIVED is unmet for the existing reason with no evidence claim attached, and only a DONE prerequisite under a policy that requires a gate is asked for evidence. Resolve the policy and the required command through the helper delivered by task-c484696db72c4ce4855dfc599a7b2072 and do NOT re-implement the matching rules locally: the four decoy records exist precisely to catch a second, subtly different implementation. If that helper turns out to be shaped only as a can-this-task-go-DONE check rather than a reusable predicate over any task, EXTRACT the predicate into something both callers share rather than copying it, and say so in the step note. Error handling: a store read that fails, or evidence records that cannot be resolved, must report the evidence as MISSING and withhold, never fall through to satisfied — failing open here would release a dependent on exactly the promise this card exists to check. Add no new record type and no migration.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "MAKE THE CLAIM REFUSAL NAME WHAT IS MISSING. Add one exported refusal builder to src/util/claimGuards.ts beside the existing claim refusals, keeping that module pure of any StateManager import: it takes the dependent task, the prerequisite task id and the missing-evidence list, and returns a MoeError carrying the code that resolves to -32003, codeName exactly `DEPENDENCY_EVIDENCE_MISSING`, a message naming both tasks and the missing gate readably, and a context carrying the dependent task id, `prerequisiteTaskId` and `missingEvidence` as the array. Check which MoeErrorCode member maps to -32003 and use it by name rather than writing the number. Then in src/tools/claimNextTask.ts use the detailed shortfall at both dependency gates, the explicit-taskId claim around line 266 and the ranked-candidate gate around line 304, keeping them mirrored as the comment there already demands. Where a prerequisite is unmet purely on status, keep today's existing message and behaviour verbatim; only a DONE prerequisite failing on evidence raises the new refusal, so an ordinary not-yet-finished dependency reads exactly as it does now. Throw the refusal rather than returning it, matching the acceptance case's capture helper, and raise it before any assignment write so a refused claim leaves every file byte-identical. Follow whatever the neighbouring attempt refusals in this file do to surface the tool name on the error payload, so all the claim refusals look alike on the wire. Change nothing about claimable statuses, ranking, the alreadyAssigned resume or the attempt opening already in this file, and do not touch the rule that planning proceeds regardless — these gates are reached for WORKING candidates only, which is what keeps the third definition-of-done item true.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN THE NAMED GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run this card's own command: `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts`. Criterion 2 must pass with its assertions untouched; if it does not, fix the production code, never the case. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Three suites deserve particular attention because this change sits under a widely shared function: the existing dependency tests, which a definition-of-done item requires to pass UNMODIFIED, so treat any edit to them as a signal you changed default behaviour; the claim tests, which cover both dependency gates plus the attempt refusals added earlier in this epic; and anything covering the blocked-timeout sweep or the stale-block alert, since those walk the same blocked rows. Confirm criterion 2 is the only case whose skip state changed and that the others still collect. Keep the exact commands, exit codes and counts for the verification argument of moe.complete_task, and keep the step-2 red output as the fails-on-old-behaviour proof.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: under the default policy nothing whatsoever changed, proven by the untouched existing dependency tests rather than by reading the code; each of the four decoys is genuinely refused, so the lookup binds to the current candidate, that candidate's own tree, the required command, a zero exit and the runner-observed source, and an agent-reported pass never counts; the rule lives in one place so the claim gate and the blockedOnTaskIds auto-unblock cannot drift apart, and it did NOT leak into cycle detection, which must keep using the edge helper; a prerequisite absent from the board still counts satisfied, as a task rail requires; a prerequisite unmet purely on status still produces today's message with no evidence claim; a failed store read withholds rather than falling through to satisfied; planning on a dependent task still proceeds, because these gates are reached for WORKING candidates only; the refusal is thrown before any write and names both the prerequisite and the missing evidence as an array; and the evidence rules were consumed from the sibling helper rather than reimplemented. Confirm the file count is the five in scope, that no new record type or migration was added, and that the DONE gate itself, the check-run recording surface and the receipt work were left to their sibling cards. Then call moe.complete_task with the verification evidence, list every modified path in modifiedFiles, and tell QA plainly which helper this card consumed from task-c484696db72c4ce4855dfc599a7b2072, whether the predicate had to be extracted to be reusable, and the honest boundary that this card withholds dependents on RECORDED evidence — it re-runs nothing, so a check record that lies about a gate it never ran will still release a dependent.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Operator directed this card next. It owns Wave 1 acceptance criterion 2, so a held-out contract exists to plan against even though dependsOn task-c484696d is still unlanded. dependsOn continues to gate any WORKING claim.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -34,8 +89,30 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:08.677Z",
-  "updatedAt": "2026-09-11T09:45:33.000Z",
+  "updatedAt": "2026-09-12T17:47:44.480Z",
   "contextFetchedBy": [
     "architect-2d25447a"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T17:45:25.533Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T17:47:44.423Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Editing the claim gate and the auto-unblock separately, as the card's wording implies: rejected once the seam was read. `isDependencySatisfied` at dependencyUnblock.ts line 32 already backs both `unmetDependsOn` and `unmetBlockedOnTaskIds`, and claimNextTask imports the former, so one rule there covers both paths and satisfies the fourth definition-of-done item without a second edit. Two edits would be two rules that drift. (2) Changing `isDependencySatisfied` to return a rich object: rejected, because every existing caller wants a boolean; instead a new shortfall function carries the missing-evidence detail and the boolean delegates to it, leaving all current signatures intact. (3) Re-implementing the evidence match locally: rejected outright and called out in the plan, because the acceptance case plants four decoy check records specifically to catch a second subtly different implementation — the rules must be consumed from the helper the DONE-gate sibling delivers, extracted into a shared predicate if it arrives shaped only as a can-this-go-DONE check. (4) Returning the refusal instead of throwing: rejected — the acceptance case captures it through a helper that fails if the call resolves, unlike the finalizing hold earlier in this epic, which the same file wants returned. The shapes genuinely differ per case; read the case, do not generalise. (5) Failing open when an evidence store read fails: rejected — that releases a dependent on exactly the unverified promise this card exists to check, so a failed read reports the evidence missing and withholds.",
+    "codebaseInsights": "Acceptance criterion 2 at line 1179 is the specification and pins everything the card leaves vague. The strict fixture is `deliveryPolicy: 'local-branch'` plus the ALREADY EXISTING `qualityGate` setting, so the required command is read from qualityGate and deliveryPolicy is the switch; an absent policy must be a no-op. The refusal is thrown with -32003, codeName DEPENDENCY_EVIDENCE_MISSING, and a context carrying prerequisiteTaskId plus missingEvidence deep-equal to ['required-check:node gate.cjs'] — a prefixed-string array, not prose. runDependencyUnblock returns [] while held and ['task-E'] once satisfied. The four decoys define the lookup precisely: current candidate, that candidate's own treeSha, the required command, exitCode zero, source 'runner-observed'; an 'agent-reported' pass on an otherwise perfect record must not count. Production-side, `isDependencySatisfied` is the single shared seam behind both dependency paths, cycle detection goes through `dependencyEdges` instead and must stay clear of the evidence rule, and claimNextTask has two mirrored gates at lines 266 and 304 whose own comment already says to keep them in sync. src/util/claimGuards.ts is the established home for claim refusal builders and is deliberately free of StateManager imports. Neither prerequisite has landed: the check store and record_check_run belong to task-867f69a6 and the policy helper to task-c484696d, so step 1 reads what they actually delivered rather than trusting this plan.",
+    "risks": "The defect that would pass review is a lookup that is close but not exact — keyed on the task instead of its current candidate, on the candidate id without its tree, on any command, or on any source. Each has its own unit case for exactly that reason, so a regression names which lookup broke instead of failing as one opaque acceptance timeout. Second, this change sits under a function with many callers: the evidence rule must not reach cycle detection, and the existing dependency tests must pass UNMODIFIED, so any need to edit them is evidence that default behaviour moved. Third, the refusal must be thrown here even though the finalizing hold earlier in this epic is returned — the two acceptance cases genuinely differ and generalising from the other one produces a resolved call the capture helper rejects. Fourth, both prerequisites are unlanded, so the consumed helper may arrive in a different shape than assumed; extract rather than copy, and report it. Finally, state the boundary honestly in the completion: this card withholds on RECORDED evidence and re-runs nothing, so a check record that lies about a gate it never ran still releases a dependent — binding that record to an observed run is the runner and receipt work, not this card.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T17:47:44.480Z"
 }

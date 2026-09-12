@@ -983,6 +983,47 @@ export interface Candidate {
   readonly createdAt: string;
 }
 
+// =============================================================================
+// Reviews — which bytes a reviewer actually signed off on
+// =============================================================================
+//
+// A QA decision is worthless unless it names the bytes it was made against. A
+// Review binds one decision to one Candidate, so an approval can never be read
+// as blessing a tree the reviewer never saw. Purely additive: no existing type
+// changed, no schemaVersion bump, no migration (same shape as the Candidate
+// addition above).
+// =============================================================================
+
+/** The two outcomes a reviewer can record. There is no third, and no "pending". */
+export type ReviewDecision = 'approve' | 'reject';
+
+/**
+ * One QA decision about one candidate; persisted at .moe/reviews/<id>.json
+ * (daemon sole-writer, via state/reviewStore.ts only).
+ *
+ * APPEND-ONLY. A review is never edited and never deleted: reviewing a reopened
+ * task again APPENDS a second record. state/reviewStore.ts has no update and no
+ * delete function, and that absence is the rule — a later caller cannot misuse
+ * a function that does not exist.
+ *
+ * `candidateId` is the whole point of the record. It is the candidate that was
+ * CURRENT when the decision landed, which qa_approve/qa_reject have already
+ * checked against the candidate the reviewer said they read.
+ */
+export interface Review {
+  readonly id: string;
+  readonly taskId: string;
+  /** The exact Candidate the decision was made against. */
+  readonly candidateId: string;
+  /** Worker seat that made the call, or `human` on the IDE/human approval path. */
+  readonly reviewerId: string;
+  readonly decision: ReviewDecision;
+  /** What the reviewer said they verified — qa_approve's summary, qa_reject's reason. */
+  readonly summary: string;
+  /** Daemon clock when the decision was recorded. */
+  readonly createdAt: string;
+}
+
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';
 export type ProposalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 

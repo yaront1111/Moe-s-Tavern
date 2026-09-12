@@ -227,6 +227,12 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     }>,
     commentSummary: { total, returned, omitted, truncated, hint?: string }
   } | null,
+  currentCandidate?: Candidate,  // the task's CURRENT candidate — the whole stored record
+                                 // (.moe/candidates/<id>.json), not a projection. Selected as the
+                                 // last by createdAt then id, the same rule record_candidate lists
+                                 // by. Surfaced whenever a candidate exists, at any status; the key
+                                 // is OMITTED (never null) when the task has none. QA passes its
+                                 // `id` to qa_approve/qa_reject to bind the decision to these bytes.
   worker: {
     id, type, status, currentTaskId, lastActivityAt, lastError, errorCount, teamId
   } | null, // lean: excludes chatCursors, modifiedFiles, and branch
@@ -239,6 +245,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 ```
 
 By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
+
+**Reviewed bytes.** `currentCandidate` is the record QA must read before signing off, and its `id` is what `moe.qa_approve` / `moe.qa_reject` bind the decision to. Because it is re-resolved on every call, a reviewer who re-reads a task after the runner recorded a newer candidate sees the new one — and an approval still naming the old one is refused with `CANDIDATE_MISMATCH`. Projects that never call `moe.record_candidate` never see the key.
 
 **Commit evidence.** `commits`/`landing`/`lastCommitOutcome` come from the wrapper's `moe.record_commit` reports (the daemon never runs git). A prerequisite task has landed iff `epicSiblings[*].landed` is true — or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it; uncommitted work in a peer's checkout is not a prerequisite. For a `REVIEW` task the `nextAction` reason tells QA to confirm a completion commit is recorded in `task.commits` (`git show <sha>`) before approving. A RESUME context lists `unattributedPaths` with a `moe.declare_files` hint so the resuming session can claim what its predecessor forgot to report.
 
@@ -1546,7 +1554,8 @@ QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of 
 ```typescript
 {
   taskId: string,
-  summary: string,     // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
+  summary: string,       // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
+  candidateId?: string,  // The candidate you actually reviewed — get_context.currentCandidate.id
   workerId?: string
 }
 ```
@@ -1558,7 +1567,7 @@ The summary is persisted on the task as `reviewSummary`.
 {
   success: true, taskId, status: "DONE", summary, message,
   warning?: string,      // the NO-COMPLETION-COMMIT line, when it fired
-  warnings: string[],    // ALWAYS present ([] when clean): "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging"
+  warnings: string[],    // ALWAYS present ([] when clean): the NO-COMPLETION-COMMIT line "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging" and/or the NO-REVIEWED-CANDIDATE line (see the candidate gate below)
   commitEvidence: {      // task.commits split by kind — a 4-FIELD PROJECTION per entry: { sha, ref, pushed: boolean|null, recordedAt }. Full TaskCommit entries (paths, recordedBy, status…) live in task.commits / get_context.
     completion: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,   // only entries recorded at/after task.reviewStartedAt count against the warning
     checkpoint: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,
@@ -1568,6 +1577,9 @@ The summary is persisted on the task as `reviewSummary`.
 ```
 
 **Notes:**
+- **Reviewed-candidate binding (a hard refusal, unlike the commit gate).** An approval must apply to the bytes the reviewer actually read. Pass `candidateId` — the id from `get_context`'s `currentCandidate` — and if the task has since moved on to a different candidate the call is refused with `-32002` / `CANDIDATE_MISMATCH` **before any write**: no `Review` record, no DONE write, no worker touch, no chat line, a byte-identical task file and candidate files. The refusal's `context` carries `expectedCandidateId` (what you reviewed) and `currentCandidateId` (what the task holds now); re-read the current candidate and decide again. A `candidateId` naming a candidate of a *different* task is a mismatch, not a match. (`MoeError.context` is not forwarded over the MCP wire, so a remote caller reads both ids from the message text.)
+- **A `Review` record is persisted for every bound decision**, approve and reject alike: `{ taskId, candidateId, reviewerId, decision, summary }` at `.moe/reviews/<id>.json` (see docs/SCHEMA.md). `reviewerId` is the caller's `workerId`, or `human` on the IDE/human path. It is written *before* the status flip, so a DONE task always carries the record of which bytes were signed off. Reviews are append-only — reviewing a reopened task again appends a second record.
+- **Incremental adoption.** A task with **no candidate recorded** behaves exactly as it did before this gate existed: the approval lands, no `Review` is written, and `warnings`/`commitEvidence`/`message` are unchanged. When a candidate *does* exist but `candidateId` is omitted, the approval still lands and is still bound to the current candidate, but `warnings` gains `NO-REVIEWED-CANDIDATE: task <id> has current candidate <cand> but qa_approve named none — pass candidateId so the decision is bound to the bytes you actually read`. A present-but-blank or non-string `candidateId` is refused (`INVALID_INPUT`), never treated as omitted.
 - **Finalizing hold (a hard refusal, unlike the commit gate).** While the task has an execution attempt in the `finalizing` phase, approval is refused with `-32002` / `ATTEMPT_FINALIZING` before any mutation — no DONE write, no worker touch, no chat line, a byte-identical task file. The bytes are not landed yet, so DONE would be premature. The hold is scoped **by task, not by worker**, because the IDE/human approval path carries no `workerId` at all and the REVIEW handoff has already cleared `assignedWorkerId`. It is lifted by `moe.finalize_attempt`, and its `context.retryable` is `true` — retry after the runner finalizes rather than escalating. See `moe.finalize_attempt`.
 - **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
@@ -1579,6 +1591,7 @@ The summary is persisted on the task as `reviewSummary`.
 - `summary` missing/empty → `MISSING_REQUIRED` (checked after ownership/context guards)
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to approve`
+- `candidateId` is not the task's current candidate → `-32002` / `CANDIDATE_MISMATCH`, with `context.expectedCandidateId` + `context.currentCandidateId`
 
 ---
 
@@ -1593,6 +1606,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   reason: string,                  // max 2000 chars
   failedDodItems?: string[],       // max 20
   issues?: QAIssue[],              // max 20; type ∈ test_failure|lint|security|missing_feature|regression|other
+  candidateId?: string,            // The candidate you actually reviewed — get_context.currentCandidate.id
   workerId?: string
 }
 ```
@@ -1603,7 +1617,9 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   success: true, taskId, status: "WORKING" | "PLANNING",
   reopenCount, maxReopens, exceededReopenCap: boolean,
   repeatedFailedDodItem?: string,
-  reason, rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
+  reason,
+  warnings?: string[],             // present ONLY when a binding warning fired (see the candidate gate below)
+  rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
   failedDodItems: FailedDodItem[],
   message,
   nextAction
@@ -1611,6 +1627,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
 ```
 
 **Notes:**
+- **Reviewed-candidate binding — identical to `qa_approve`'s.** Pass the `candidateId` you reviewed; a mismatch against the task's current candidate is refused with `-32002` / `CANDIDATE_MISMATCH` before any write (no `Review`, no status flip, no history entry), carrying `context.expectedCandidateId` + `context.currentCandidateId`. A bound rejection persists a `Review` with `decision: "reject"` and `summary` = the rejection `reason`, written before the status flip. A task with no candidate recorded behaves exactly as before and gets no `Review`; an omitted `candidateId` on a task that has one still lands, bound to the current candidate, and adds a `NO-REVIEWED-CANDIDATE` line to `warnings`.
 - Increments `reopenCount` and `metrics.rejectCount`; sets `reopenReason`.
 - Appends a `RejectionHistoryEntry` to `rejectionHistory[]` (newest-first, capped at 20).
 - Populates `failedDodItems[]` (append-only, capped at last 100) — every supplied DoD item is recorded with `rejectedAt` + `rejectedBy`.
@@ -1624,6 +1641,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
 - `reason is required - explain which DoD items failed and why`
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to reject`
+- `candidateId` is not the task's current candidate → `-32002` / `CANDIDATE_MISMATCH`, with `context.expectedCandidateId` + `context.currentCandidateId`
 
 ---
 

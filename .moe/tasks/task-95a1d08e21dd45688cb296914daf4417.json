@@ -1,0 +1,48 @@
+{
+  "id": "task-95a1d08e21dd45688cb296914daf4417",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Label legacy task verification as agent-reported",
+  "description": "Compatibility slice of the human-confirmed CheckRun decomposition. Objective: distinguish an agent's existing complete_task verification claim from runner-reported candidate-bound CheckRun evidence without changing whether legacy projects can complete work.\n\nDeliverable in exactly five owned paths: packages/moe-daemon/src/types/schema.ts extends TaskVerification with optional source:'agent-reported' (optional for old records); tools/completeTask.ts persists that literal after normal validation; tools/getContext.ts projects the literal on both primary task.verification and declared-prerequisite verification; tools/completeTask.test.ts and tools/getContext.test.ts prove the real production writer/readers. Existing missing verification remains null. Existing reports without a source are projected as agent-reported without a read-time disk write. Do not let an imported/manual/caller-provided source label elevate a TaskVerification to runner-observed. The main task's verification projection preserves command/exitCode/outputTail/reportedAt, while the compact prerequisite projection still omits outputTail.\n\nUse existing util/enforcement.ts assertVerificationEvidence UNCHANGED: required evidence, nonzero refusal, command trimming, 500-character command cap and final 2000-character output tail all retain their old semantics. complete_task keeps ownership/step/branch/error precedence and its REVIEW/finalizing transition. Place source:'agent-reported' AFTER spreads so it cannot be overridden, and do not add source to the accepted complete_task verification input schema. No candidate id exists for this legacy path; never synthesize a Candidate or write a fake bound CheckRun. Store the label in the existing task.verification object and expose it there, including when no attempt/candidate/checks directory exists, autoCommit=false or there is no Git repository.\n\nDepends on the store slice ONLY to serialize the shared schema.ts edit and its preceding QA-binding schema/getContext work. The original task-867f69a6 remains the complete recorder DoD gate and will document this behavior in docs/MCP_SERVER.md. NOT in scope: CheckRun store/tool/registry, new commands, verification validation/refusal changes, source authentication, policy/QA/dependency gates, migrations, IDE/wrapper edits, or held-out acceptance-test edits/unskips.\n\nVerification at repo root Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/tools/completeTask.test.ts src/tools/getContext.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/tools/completeTask.test.ts src/tools/getContext.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). Require nonzero counts and exact old-writer/read behavior assertion red, not a compile failure. Do not run build/prebuild/clean or discard peer state.",
+  "definitionOfDone": [
+    "Real complete_task persists task.verification.source exactly agent-reported while preserving command, exitCode, outputTail and reportedAt semantics, proven from disk and a fresh StateManager reload.",
+    "Real get_context exposes agent-reported for both the primary task and declared-prerequisite projections of legacy source-less records without rewriting their files; null/missing verification remains null and sibling outputTail remains omitted.",
+    "Tests prove attempted caller or persisted-label promotion cannot produce runner-observed TaskVerification, and no Candidate/CheckRun/runner identity is fabricated.",
+    "Existing verification validation/refusal behavior and complete_task REVIEW/finalizing transitions remain unchanged, with no edits to util/enforcement.ts or held-out tests.",
+    "Tests cover legacy no-attempt/no-candidate/no-git and autoCommit=false completion paths plus compact sibling projection, preserving existing fields and failures.",
+    "Named focused tests, npm test and tsc all exit 0 with nonzero executed counts; an assertion regression fails against the old source-less writer/readers, and only the five owned files change."
+  ],
+  "taskRails": [
+    "TaskVerification remains candidate-less agent attestation; never upgrade it to runner-observed or manufacture a CheckRun.",
+    "Do not weaken or reimplement assertVerificationEvidence, change its input shape or apply the new CheckRun byte cap to legacy outputTail.",
+    "Preserve landed QA candidate-binding behavior and all foreign hunks when editing getContext/schema.",
+    "No policy gate or held-out-test unskip belongs to this compatibility slice."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-867f69a6cdb748a8ab68fcbeec0de711",
+  "dependsOn": [
+    "task-214bcfa37db24628aab11689764b4ae2"
+  ],
+  "priority": "HIGH",
+  "order": 98,
+  "comments": [
+    {
+      "id": "comment-8d00e727f7454d0d9dfc5a20127c25b5",
+      "author": "architect-2d25447a",
+      "content": "Creation warning reviewed: the word verification triggered the meta/hardening-title heuristic, but this is a production behavior slice, not another audit/test-only row. It changes the existing TaskVerification writer and get_context projections, with its own regression tests. The whole-epic integration/hardening task remains task-808869c56228430ca5b15cb901497544; no evidence-only companion was created.",
+      "timestamp": "2026-09-12T14:12:25.025Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-12T14:11:35.660Z",
+  "updatedAt": "2026-09-12T17:46:33.264Z",
+  "contextFetchedBy": [
+    "architect-2d25447a"
+  ]
+}

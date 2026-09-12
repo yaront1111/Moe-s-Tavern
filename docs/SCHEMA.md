@@ -1028,6 +1028,50 @@ interface Candidate {
 
 ---
 
+## Review
+
+**File:** `.moe/reviews/{review-id}.json` (one file per decision)
+
+One QA decision, bound to the exact [Candidate](#candidate) it was made against. Without the binding an approval issued after reading candidate A silently blesses whatever the task holds by the time it lands; the `candidateId` is what makes the decision mean something. Written by `moe.qa_approve` and `moe.qa_reject` (contracts in docs/MCP_SERVER.md), and only `packages/moe-daemon/src/state/reviewStore.ts` writes the file. Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a candidate never gets a `reviews/` directory and loads an empty collection.
+
+```typescript
+interface Review {
+  readonly id: string;          // "review-<32 hex>" when the daemon generates it; a caller-supplied
+                                // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly taskId: string;
+  readonly candidateId: string; // The Candidate the decision was made against — the task's CURRENT
+                                // candidate, already checked against the one the reviewer named
+  readonly reviewerId: string;  // Worker seat that decided, or "human" on the IDE/human path
+  readonly decision: 'approve' | 'reject';
+  readonly summary: string;     // qa_approve's summary, or qa_reject's reason
+  readonly createdAt: string;   // ISO 8601, the daemon's clock (never the caller's)
+}
+```
+
+**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+
+**Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
+
+**Incremental adoption.** A task with no candidate recorded produces **no** review, and both tools behave exactly as they did before the binding existed. This is deliberate: a project that never records candidates must keep working, and there is nothing truthful to bind a review to.
+
+**Queries.** Reviews are listed per task, ordered by `createdAt` and then `id`, so ties are deterministic.
+
+**Example:**
+
+```json
+{
+  "id": "review-7c6b5a4938271605f4e3d2c1b0a99887",
+  "taskId": "task-t1u2v3w4",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "reviewerId": "qa-8db40c97",
+  "decision": "approve",
+  "summary": "Re-ran npx vitest run src/tools/qaApprove.test.ts: 21 passed. All 7 DoD items verified.",
+  "createdAt": "2026-09-11T03:10:00.000Z"
+}
+```
+
+---
+
 ## Chat Channel
 
 **File:** `.moe/channels/{channel-id}.json`
@@ -1476,6 +1520,14 @@ function generateId(prefix: string): string {
 - `attemptId` must name an existing attempt of the same `taskId` (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`)
 - `baseRevision` and `treeSha` must be 7-40 hex characters. They are validated for shape only and never coerced
 - `deliveryTarget` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars
+- `createdAt` is always the daemon's clock; a caller cannot set it
+
+### Review
+- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record
+- `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
+- `reviewerId` and `summary` must be non-blank strings; a blank or non-string value is refused (`INVALID_INPUT`), never coerced
+- `decision` must be exactly `approve` or `reject`
+- `candidateId` must be the task's CURRENT candidate at decision time, else the decision is refused with `CANDIDATE_MISMATCH` and no record is written
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ---

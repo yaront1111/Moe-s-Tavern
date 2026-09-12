@@ -48,6 +48,7 @@ import type {
   RailProposal,
   ResourceLease,
   ResourceState,
+  Review,
   StepAmendment,
   StepStatus,
   Task,
@@ -383,6 +384,8 @@ export class StateManager {
   attempts = new Map<string, ExecutionAttempt>();
   /** Candidates, keyed by candidate id. Written only via state/candidateStore.ts, which has no update path. */
   candidates = new Map<string, Candidate>();
+  /** Reviews, keyed by review id. Written only via state/reviewStore.ts, which is append-only. */
+  reviews = new Map<string, Review>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -1092,6 +1095,9 @@ export class StateManager {
       this.attempts = loadEntities<ExecutionAttempt>(path.join(this.moePath, 'attempts'));
       // Same tolerance: a project that has never recorded a candidate loads empty.
       this.candidates = loadEntities<Candidate>(path.join(this.moePath, 'candidates'));
+      // Same tolerance again: a project whose QA has never bound a decision to a
+      // candidate loads empty, which is exactly the incremental-adoption case.
+      this.reviews = loadEntities<Review>(path.join(this.moePath, 'reviews'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {
