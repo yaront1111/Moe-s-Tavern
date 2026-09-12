@@ -31,6 +31,15 @@ Deep-dive material trimmed out of `qa.md`. Read this on demand; it is not loaded
 Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. When you find a recurring pattern or a subtle gap the tests didn't catch, `write_memory` a `gotcha-<area>` note (or `edit_memory` an existing one) so the next agent avoids it. Rejection `issues` you record on the task are already visible to the worker via `get_handoff_history`; use Serena memory for the broader, cross-task lesson.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Rejecting: `rejectionDetails[2]` — the nil-guard in `foo.ts:41` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit `abcd123`."
