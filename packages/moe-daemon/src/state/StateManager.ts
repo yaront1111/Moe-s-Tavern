@@ -162,6 +162,7 @@ import {
   postToGeneral,
   postToRoleChannel,
   rejectDecision,
+  resolveChannelRef,
   sendMessage,
   togglePinDone,
   unpinMessage,
@@ -828,6 +829,10 @@ export class StateManager {
 
   getChannels(): ChatChannel[] {
     return getChannels(this);
+  }
+
+  resolveChannelRef(ref: string): ChatChannel | null {
+    return resolveChannelRef(this, ref);
   }
 
   async createChannel(opts: {

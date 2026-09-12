@@ -1,3 +1,4 @@
+import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
@@ -205,6 +206,12 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
 
       if (params.reason) {
         updates.reopenReason = params.reason;
+      } else if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
+        // No reason given for an unblock. If the block had nothing that would
+        // have cleared it on its own, the question it asked is still open, so
+        // the row carries it forward as a plan input rather than vanishing.
+        const carried = carriedBlockQuestion(state, task);
+        if (carried) updates.reopenReason = carried;
       }
 
       // A human moving a task that is parked for human review IS the review

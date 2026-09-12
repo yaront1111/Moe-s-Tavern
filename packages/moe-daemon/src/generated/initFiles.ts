@@ -58,7 +58,7 @@ You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handli
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=c540e2042420 -->
+  'architect.reference.md': `<!-- moe-generated: sha=c16de6533b52 -->
 
 # Architect — Reference
 
@@ -140,6 +140,15 @@ The wrapper lands a \`wip(task-<id>): <title> [status=<STATUS> role=architect cl
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, \`list_memories\` / \`read_memory\` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Confirmed: \`retry-budget = 5\`. Updating step 2 now."
 - "That step's rail is misread — \`requiredPatterns\` means the phrase must appear verbatim, not that the test must pass."
@@ -409,7 +418,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=20b816870e69 -->
+  'qa.reference.md': `<!-- moe-generated: sha=b3eec7c94327 -->
 
 # QA — Reference
 
@@ -449,11 +458,31 @@ Deep-dive material trimmed out of \`qa.md\`. Read this on demand; it is not load
 
 **Why — measured 2026-09-06.** In that measurement, one completion in three reached REVIEW with its bytes only in the dirty tree. A wrapper lands a row only when its CLI process exits on that row, so a session that hopped to another row, or an interactive seat that never exits, can never fire it — an unbounded wait strands those rows forever. Per the governor ruling, \`docs/roles/qa.md\` (269d3fe, 2026-09-06) supersedes \`docs/skills/moe-qa-loop/SKILL.md\` (bf3f8fa, 2026-08-29) on this point, and qa.md's path recipe stays canonical. This is the interim rule until the Wave 1 finalize/candidate work lands.
 
+## A task whose code spans several commits
+
+**Do not assume the newest commit is the whole diff.** Audit from the task's recorded commit ledger — every \`task.commits\` entry, \`checkpoint\` and \`rescue\` as well as \`completion\` — and judge the landed bytes against the task's baseline, not against the completion commit alone. \`git log --all --oneline --grep 'Moe-Task: <taskId>'\` is the cross-check; read \`Moe-Kind:\` in each body rather than the \`feat\`/\`wip\` subject prefix.
+
+**Two situations where a split is legitimate**, both leaving a near-empty \`feat(...)\` completion whose bytes already landed in an earlier \`wip(...) ... recovered\` checkpoint:
+
+1. **A genuine crash.** The previous session died (window close, SIGKILL, a box reboot) without landing. The next pre-flight of that task lands its baseline as \`MOE_CHECKPOINT_RECOVERED\`, and the work continues on top. That recovery path is deliberate — it exists because of the 2026-08-28 lost-code incident.
+2. **A cross-host skip.** The owner's live-session marker was written on a host or pid namespace this seat cannot probe (a WSL seat and a Windows seat sharing the checkout through a mount). The wrapper prints \`MOE_CHECKPOINT_SKIPPED_LIVE_OWNER ... reason=foreign-host\` and refuses to recover; the bytes land later, from a seat that can see that process.
+
+**What is NOT legitimate any more:** a \`role=qa ... recovered\` checkpoint carrying a worker's whole implementation while the worker's own completion holds only a board record. That was the live-owner race fixed on 2026-09-11; the wrapper now stands down with \`MOE_CHECKPOINT_SKIPPED_LIVE_OWNER ... reason=live\` instead. Seeing it again means the guard regressed — reject and say so.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you find a recurring pattern or a subtle gap the tests didn't catch, \`write_memory\` a \`gotcha-<area>\` note (or \`edit_memory\` an existing one) so the next agent avoids it. Rejection \`issues\` you record on the task are already visible to the worker via \`get_handoff_history\`; use Serena memory for the broader, cross-task lesson.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
@@ -485,7 +514,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=00d768586ec5 -->
+  'worker.reference.md': `<!-- moe-generated: sha=e6856d2d3801 -->
 
 # Worker — Reference
 
@@ -590,6 +619,15 @@ Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic,
 Prefer \`edit_memory\` to append to an existing topic file over creating a near-duplicate. There is no BM25 ranking or auto-injection — this naming discipline is what replaces it, so be consistent.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Step 2 is blocked on the \`retry-budget\` constant — do you want \`5\` or the env-var fallback?"
 - "Confirmed I own task-X; starting step 0 now."

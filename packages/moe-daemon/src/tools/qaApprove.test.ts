@@ -117,10 +117,10 @@ describe('moe.qa_approve — NO-COMPLETION-COMMIT soft gate', () => {
     };
   }
 
-  async function seed(commits: TaskCommit[] | undefined) {
+  async function seed(commits: TaskCommit[] | undefined, extra: Record<string, unknown> = {}) {
     h.setupMoeFolder();
     h.createEpic();
-    h.createTask({ id: 'task-1', status: 'REVIEW', reviewStartedAt, ...(commits ? { commits } : {}) });
+    h.createTask({ id: 'task-1', status: 'REVIEW', reviewStartedAt, ...(commits ? { commits } : {}), ...extra });
     await h.state.load();
   }
 
@@ -160,7 +160,9 @@ describe('moe.qa_approve — NO-COMPLETION-COMMIT soft gate', () => {
     expect(gov).not.toHaveBeenCalledWith('governors', expect.stringContaining('NO-COMPLETION-COMMIT'));
   });
 
-  it('ignores a completion commit from a previous attempt (recorded before reviewStartedAt)', async () => {
+  it('ignores a completion commit from a previous attempt on a legacy row with no round marker', async () => {
+    // No rejectionHistory and no workStartedAt, so reviewStartedAt is the
+    // last-resort anchor and an ancient commit still cannot satisfy the gate.
     await seed([commit({ recordedAt: '2026-08-28T08:00:00.000Z' })]);
     const gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
 
@@ -169,6 +171,68 @@ describe('moe.qa_approve — NO-COMPLETION-COMMIT soft gate', () => {
     expect(result.commitEvidence.completion).toEqual([]);
     expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('NO-COMPLETION-COMMIT'));
     expect(h.state.getTask('task-1')!.status).toBe('DONE');
+  });
+
+  // Regression: a worker that commits BY HAND calls record_commit before
+  // complete_task, so its completion commit is recorded AHEAD of reviewStartedAt.
+  // Anchoring the round on reviewStartedAt fired NO-COMPLETION-COMMIT on tasks
+  // whose commit was sitting in task.commits. Observed twice in one session on
+  // 2026-09-11 (algorun task-407a1aff, commit 55s early; task-d51110af, 2m23s early).
+  it('accepts a hand-recorded completion commit landed before reviewStartedAt in the same round', async () => {
+    await seed(
+      [commit({ recordedAt: '2026-08-28T09:59:05.000Z' })],
+      { workStartedAt: '2026-08-28T09:00:00.000Z' }
+    );
+    const gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+    const result = await approve();
+    expect(result.warning).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+    expect(result.commitEvidence.completion).toEqual([
+      { sha: 'abc1234abc1234', ref: 'moe/work-2026-08-28', pushed: true, recordedAt: '2026-08-28T09:59:05.000Z' },
+    ]);
+    expect(gov).not.toHaveBeenCalledWith('governors', expect.stringContaining('NO-COMPLETION-COMMIT'));
+  });
+
+  it('on a reopened task, accepts this round\'s hand-recorded commit and ignores the previous round\'s', async () => {
+    // Round 1 committed at 08:00 then was rejected at 09:30; round 2 committed by
+    // hand at 09:59:05, still ahead of the 10:00 reviewStartedAt.
+    await seed(
+      [
+        commit({ sha: 'old1234old1234', recordedAt: '2026-08-28T08:00:00.000Z' }),
+        commit({ recordedAt: '2026-08-28T09:59:05.000Z' }),
+      ],
+      {
+        workStartedAt: '2026-08-28T07:00:00.000Z',
+        reopenCount: 1,
+        rejectionHistory: [{ reason: 'doc defect', rejectedAt: '2026-08-28T09:30:00.000Z', reopenCount: 1 }],
+      }
+    );
+    const gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+    const result = await approve();
+    expect(result.warning).toBeUndefined();
+    expect(result.commitEvidence.completion).toEqual([
+      { sha: 'abc1234abc1234', ref: 'moe/work-2026-08-28', pushed: true, recordedAt: '2026-08-28T09:59:05.000Z' },
+    ]);
+    expect(gov).not.toHaveBeenCalledWith('governors', expect.stringContaining('NO-COMPLETION-COMMIT'));
+  });
+
+  it('on a reopened task, still warns when only the previous round committed', async () => {
+    await seed(
+      [commit({ sha: 'old1234old1234', recordedAt: '2026-08-28T08:00:00.000Z' })],
+      {
+        workStartedAt: '2026-08-28T07:00:00.000Z',
+        reopenCount: 1,
+        rejectionHistory: [{ reason: 'doc defect', rejectedAt: '2026-08-28T09:30:00.000Z', reopenCount: 1 }],
+      }
+    );
+    const gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+    const result = await approve();
+    expect(result.warning).toBe(expectedWarning);
+    expect(result.commitEvidence.completion).toEqual([]);
+    expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('NO-COMPLETION-COMMIT'));
   });
 
   it('only checkpoint/rescue commits still warn but are listed as evidence', async () => {

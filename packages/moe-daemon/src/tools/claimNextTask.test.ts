@@ -827,6 +827,16 @@ describe('moe.claim_next_task — team-membership refusal and auto-heal', () => 
     const team = await state.createTeam({ name: 'workers', role: 'worker' });
     await state.addTeamMember(team.id, 'w-solo');
 
+    // Age w-solo past the presence window AFTER joining the team (the join
+    // refreshes its heartbeat), so the startup purge actually purges it:
+    // purgeAllWorkers now KEEPS registrations that are still heartbeating, so a
+    // fresh fixture would survive and this scenario would never arise.
+    const solo = state.getWorker('w-solo')!;
+    state.workers.set('w-solo', {
+      ...solo,
+      lastActivityAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+    });
+
     await state.purgeAllWorkers();
     expect(state.getWorker('w-solo')).toBeNull();
     expect(state.getTeam(team.id)?.memberIds).toEqual([]);

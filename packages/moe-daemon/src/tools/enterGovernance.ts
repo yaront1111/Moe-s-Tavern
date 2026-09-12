@@ -4,6 +4,7 @@ import type { ChatChannel } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 import { releaseWorkerTasks } from '../state/workerLifecycle.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
+import { healTeamMembership, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import { logger } from '../util/logger.js';
 
 const GOVERNANCE_DUTIES = [
@@ -32,8 +33,18 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
         throw missingRequired('workerId');
       }
 
+      // Resolve membership through the eviction tombstone as well as the live
+      // record. Every daemon (re)start purges all worker records and empties
+      // team memberIds, so a governor mid-session loses both — and unlike every
+      // other role it has no way back: architects, workers and qa re-register
+      // through the wrapper's claim_next_task pre-flight (which heals via
+      // healTeamMembership), while the governor wrapper calls enter_governance
+      // exactly once at spawn. Looking the worker up and throwing therefore
+      // ended governance for the rest of the session. See
+      // util/teamMembershipHeal.ts.
       const worker = state.getWorker(params.workerId);
-      if (!worker) {
+      const team = resolveEffectiveTeam(state, params.workerId);
+      if (!worker && !team) {
         throw notFound('Worker', params.workerId);
       }
 
@@ -42,21 +53,56 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
       // instead — architects on an empty PLANNING queue get a wait_for_task
       // nextAction.
       //
-      // Resolved through util/workerRole (team role first, then the seat's id
-      // prefix), like every other role-gated tool. The prefix fallback is not a
-      // widening: as workerRole's docblock records, this is a workflow guard
-      // rather than a security boundary — join_team is unauthenticated, so a
-      // seat that wants the governor role can already grant itself one with a
-      // single call, and the fallback hands out nothing new. What the direct
-      // `team.role` read DID do is refuse a GENUINE governor on the role-less
-      // project team the launcher registers every seat into, and then tell it
-      // (below) to go join a governor team — the workaround for that bug.
-      if (resolveWorkerRole(state, params.workerId) !== 'governor') {
+      // MERGE NOTE: both sides of this gate are kept, because they fix two
+      // DIFFERENT ways a genuine governor was refused.
+      //
+      // From main: membership is resolved through the eviction tombstone, so a
+      // governor whose record the restart purge deleted can still re-enter. The
+      // tombstone is durable state written by the purge, not caller input, so
+      // honouring it does not widen who may govern.
+      //
+      // From this branch: when the effective team supplies no role at all, fall
+      // back to util/workerRole, which reads the seat's id prefix, like every
+      // other role-gated tool. That is not a widening either: as workerRole's
+      // docblock records, this is a workflow guard rather than a security
+      // boundary — join_team is unauthenticated, so a seat that wants the
+      // governor role can already grant itself one with a single call. What the
+      // bare `team?.role` read DID do is refuse a genuine governor on the
+      // role-less project team the launcher registers every seat into, and then
+      // tell it (below) to go join a governor team, which is the workaround for
+      // that bug.
+      //
+      // Order matters: an explicit team role is the operator stating the seat's
+      // role and must win over the id prefix.
+      const effectiveRole = team?.role ?? resolveWorkerRole(state, params.workerId);
+      if (effectiveRole !== 'governor') {
         throw notAllowed(
           'enter_governance',
           'enter_governance is governor-only. Architects plan (use moe.claim_next_task with statuses:["PLANNING"], then moe.wait_for_task when empty); workers code; qa verifies. Join a governor team to govern.'
         );
       }
+
+      // Rebuild the record the purge deleted, then restore durable membership.
+      // healTeamMembership needs the record to exist and is a quiet no-op when
+      // membership is already live, so an ordinary re-entry emits no join.
+      if (!worker) {
+        await state.createWorker({
+          id: params.workerId,
+          type: 'CLAUDE',
+          projectId: state.project!.id,
+          epicId: '',
+          currentTaskId: null,
+          status: 'IDLE'
+        });
+        logger.info(
+          // team is non-null here (the guard above throws when BOTH worker and team
+          // are missing), but the role gate no longer narrows it for the compiler:
+          // a governor can now pass via the id-prefix fallback with no team at all.
+          { workerId: params.workerId, teamId: team?.id },
+          'enter_governance rebuilt a purged governor record from its team tombstone'
+        );
+      }
+      await healTeamMembership(state, params.workerId);
 
       // Hold the state mutex so concurrent enter_governance calls don't
       // double-broadcast or race on the worker update. We also re-check the

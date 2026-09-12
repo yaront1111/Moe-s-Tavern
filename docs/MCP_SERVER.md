@@ -557,7 +557,9 @@ All seven are required; `additionalProperties` is `false`.
   touchedFiles: string[],
   inferredPaths: string[],
   unattributedPaths: string[],
-  peerDeclared: { path: string, taskId: string }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED}
+  peerDeclared: { path: string, taskId: string }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED} —
+                              // except a peer that waits on this task (dependsOn ∪ blockedOnTaskIds, transitively) contributes its
+                              // asserted paths only: dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit
   livePeerIds: string[],      // workers ≠ caller, not DEAD, lastActivityAt inside the window (or registered since `since`)
   activePeerIds: string[],
   peersActive: boolean,

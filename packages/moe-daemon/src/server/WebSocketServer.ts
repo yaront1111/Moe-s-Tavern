@@ -2,6 +2,7 @@
 // WebSocketServer - plugin + MCP proxy connections
 // =============================================================================
 
+import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
@@ -365,6 +366,11 @@ export class MoeWebSocketServer {
             }
           }
           // Validation + update inside mutex to prevent TOCTOU race
+          // Set when this edit takes the task OUT of BLOCKED, so the activity
+          // event is TASK_UNBLOCKED rather than a generic TASK_UPDATED that
+          // names neither the transition nor an actor. Declared at the mutex
+          // callback's scope because the update call that consumes it is here.
+          let unblockedFromBoard = false;
           const task = await this.withMutex(async () => {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
@@ -396,12 +402,33 @@ export class MoeWebSocketServer {
                   // src/tools/setTaskStatus.ts.
                   if (existing.status === 'BLOCKED') {
                     const effectiveFrom = existing.blockedFromStatus ?? 'WORKING';
+                    const carriedQuestion = carriedBlockQuestion(this.state, existing);
                     if (newStatus !== effectiveFrom && newStatus !== 'ARCHIVED'
                       && !(VALID_TRANSITIONS[effectiveFrom] ?? []).includes(newStatus)) {
                       throw new Error(`Cannot move task from BLOCKED to ${newStatus}: it was blocked from ${effectiveFrom} and ${effectiveFrom} -> ${newStatus} is not legal. Un-block to ${effectiveFrom} first.`);
                     }
                     safeUpdates = {
                       ...safeUpdates,
+                      // Archive the prose before clearing it, exactly as
+                      // setTaskStatus does. Nulling blockedReason outright
+                      // destroyed the only record of WHY the task was parked,
+                      // so a seat that claimed the row next saw a clean
+                      // PLANNING card and could not tell a resolved block from
+                      // an erased one. Measured 2026-09-11: one row was dragged
+                      // out of BLOCKED twice while its PRODUCT_DECISION_REQUIRED
+                      // question was still unanswered, and the architect
+                      // correctly re-blocked it three times because the board
+                      // left it no way to see that nothing had been decided.
+                      ...(existing.blockedReason ? { priorBlockedReason: existing.blockedReason } : {}),
+                      // A block with no pending lease and no unmet prerequisite
+                      // had nothing that would ever clear it — it was a
+                      // question. Carry it forward as a plan input so the next
+                      // claimer is handed the open question instead of a clean
+                      // card, rather than relying on a human to notice.
+                      // A reason the client supplied wins: it has spoken.
+                      ...(carriedQuestion && !safeUpdates.reopenReason
+                        ? { reopenReason: carriedQuestion }
+                        : {}),
                       blockedReason: null,
                       blockedResourceId: null,
                       blockedOnTaskIds: null,
@@ -409,6 +436,7 @@ export class MoeWebSocketServer {
                       blockedAt: null,
                       ...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),
                     };
+                    unblockedFromBoard = true;
                   }
                   // Entering BLOCKED from the board parks the task in place:
                   // record the restore target and keep the assignee.
@@ -481,7 +509,11 @@ export class MoeWebSocketServer {
                 }
               }
             }
-            return this.state.updateTask(taskId, safeUpdates);
+            return this.state.updateTask(
+              taskId,
+              safeUpdates,
+              unblockedFromBoard ? 'TASK_UNBLOCKED' : undefined
+            );
           });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
           return;

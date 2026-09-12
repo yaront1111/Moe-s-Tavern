@@ -858,9 +858,14 @@ describe('attempt closing on the release paths', () => {
   });
 
   /** A task held by `workerId`, with the worker's record pointing back at it. */
-  function seedHeldTask(taskId: string, workerId: string, overrides: Partial<Task> = {}): void {
+  function seedHeldTask(
+    taskId: string,
+    workerId: string,
+    overrides: Partial<Task> = {},
+    workerOverrides: Partial<Worker> = {},
+  ): void {
     h.createTask({ id: taskId, status: 'WORKING', assignedWorkerId: workerId, ...overrides });
-    h.createWorker({ id: workerId, status: 'CODING', currentTaskId: taskId });
+    h.createWorker({ id: workerId, status: 'CODING', currentTaskId: taskId, ...workerOverrides });
   }
 
   async function openFor(taskId: string, workerId: string): Promise<ExecutionAttempt> {
@@ -1082,7 +1087,13 @@ describe('attempt closing on the release paths', () => {
   it('releases a task that never had an attempt silently on every path (legacy rows predate attempts)', async () => {
     seedHeldTask('task-1', 'worker-a');
     seedHeldTask('task-2', 'worker-b', { order: 2 });
-    seedHeldTask('task-3', 'worker-c', { order: 3 });
+    // worker-c is the only seat here that relies on purgeAllWorkers to give up its
+    // task, so it must look DEAD to the purge. Since the live-worker fix, a
+    // registration still inside the presence window is deliberately kept and its
+    // task stays assigned — a daemon restart is not evidence its agents died. An
+    // ancient lastActivityAt is what makes this a purge of a previous run, which
+    // is the situation the case is about.
+    seedHeldTask('task-3', 'worker-c', { order: 3 }, { lastActivityAt: '2026-01-01T00:00:00.000Z' });
     await h.state.load();
 
     const released = await release({ taskId: 'task-1', workerId: 'worker-a' });

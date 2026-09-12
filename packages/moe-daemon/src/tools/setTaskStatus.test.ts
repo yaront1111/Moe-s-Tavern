@@ -76,6 +76,63 @@ describe('moe.set_task_status', () => {
     expect(task?.reopenReason).toBe('Fix needed');
   });
 
+  describe('an unblock with no reason carries the open question forward', () => {
+    it('carries a question-shaped block into reopenReason', async () => {
+      const tool = setTaskStatusTool(h.state);
+      await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+      await tool.handler({
+        taskId: 'task-1', status: 'BLOCKED',
+        reason: 'PRODUCT_DECISION_REQUIRED: which installed policy is effective',
+      }, h.state);
+
+      // No reason on the way out — the shape that erased the question.
+      await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+
+      const task = h.state.getTask('task-1')!;
+      expect(task.status).toBe('PLANNING');
+      expect(task.blockedReason == null).toBe(true);
+      expect(task.priorBlockedReason).toContain('PRODUCT_DECISION_REQUIRED');
+      // get_context shows reopenReason but status-gates the block quartet, so
+      // this is the field that actually reaches the next claimer.
+      expect(task.reopenReason).toContain('UNANSWERED BLOCK');
+      expect(task.reopenReason).toContain('PRODUCT_DECISION_REQUIRED');
+    });
+
+    it('does not overwrite a reason the caller supplied', async () => {
+      // The governor-ruling path: an unblock that states the answer must keep
+      // stating the answer, not be replaced by a generic "still open" notice.
+      const tool = setTaskStatusTool(h.state);
+      await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+      await tool.handler({
+        taskId: 'task-1', status: 'BLOCKED', reason: 'PRODUCT_DECISION_REQUIRED: reset semantics',
+      }, h.state);
+
+      await tool.handler({
+        taskId: 'task-1', status: 'PLANNING',
+        reason: 'HUMAN RULING: an opt-in-free install is a reset boundary.',
+      }, h.state);
+
+      const task = h.state.getTask('task-1')!;
+      expect(task.reopenReason).toBe('HUMAN RULING: an opt-in-free install is a reset boundary.');
+      expect(task.reopenReason).not.toContain('UNANSWERED BLOCK');
+      // The evidence of what was asked survives either way.
+      expect(task.priorBlockedReason).toContain('reset semantics');
+    });
+
+    it('stays quiet for a resource block, which clears itself', async () => {
+      const tool = setTaskStatusTool(h.state);
+      await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+      await tool.handler({ taskId: 'task-1', status: 'BLOCKED', reason: 'queued on full-suite-gate' }, h.state);
+      await h.state.updateTask('task-1', { blockedResourceId: 'full-suite-gate' });
+
+      await tool.handler({ taskId: 'task-1', status: 'PLANNING' }, h.state);
+
+      const task = h.state.getTask('task-1')!;
+      expect(task.reopenReason == null || !task.reopenReason.includes('UNANSWERED BLOCK')).toBe(true);
+      expect(task.priorBlockedReason).toContain('full-suite-gate');
+    });
+  });
+
   describe('BLOCKED transitions', () => {
     it('WORKING → BLOCKED preserves the assignment and records the restore target', async () => {
       await h.state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-1' });

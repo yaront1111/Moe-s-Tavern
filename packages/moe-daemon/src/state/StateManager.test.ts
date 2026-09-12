@@ -1467,6 +1467,74 @@ describe('StateManager', () => {
         event.payload.workerId === 'worker-missing'
       )).toBe(true);
     });
+
+    // A daemon restart is not evidence its agents died. The daemon can restart
+    // under a live fleet, and deleting a heartbeating registration is
+    // indistinguishable from a crash to that seat: its next tool call is
+    // refused "Unknown sender" and its in-flight task is unassigned under it.
+    it('purgeAllWorkers KEEPS a registration that is still heartbeating', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestTask({ status: 'WORKING', assignedWorkerId: 'worker-live' });
+      createTestWorker({
+        id: 'worker-live',
+        status: 'CODING',
+        currentTaskId: 'task-test123',
+        lastActivityAt: new Date().toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.purgeAllWorkers();
+
+      expect(stateManager.getWorker('worker-live')).not.toBeNull();
+      expect(fs.existsSync(path.join(moePath, 'workers', 'worker-live.json'))).toBe(true);
+      // and its work is not yanked out from under it
+      expect(stateManager.getTask('task-test123')?.assignedWorkerId).toBe('worker-live');
+    });
+
+    it('purgeAllWorkers still deletes a registration past the presence window', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestWorker({
+        id: 'worker-stale',
+        lastActivityAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      });
+      await stateManager.load();
+
+      await stateManager.purgeAllWorkers();
+
+      expect(stateManager.getWorker('worker-stale')).toBeNull();
+      expect(fs.existsSync(path.join(moePath, 'workers', 'worker-stale.json'))).toBe(false);
+    });
+
+    it('purgeAllWorkers keeps a live worker in its team but evicts the purged one', async () => {
+      setupMoeFolder();
+      createTestEpic();
+      createTestWorker({ id: 'worker-live', lastActivityAt: new Date().toISOString() });
+      createTestWorker({
+        id: 'worker-stale',
+        lastActivityAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      });
+      fs.mkdirSync(path.join(moePath, 'teams'), { recursive: true });
+      const team = {
+        id: 'team-test123',
+        projectId: 'proj-test123',
+        name: 't',
+        role: 'worker' as const,
+        memberIds: ['worker-live', 'worker-stale'],
+        maxSize: 10,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(path.join(moePath, 'teams', 'team-test123.json'), JSON.stringify(team, null, 2));
+      await stateManager.load();
+
+      await stateManager.purgeAllWorkers();
+
+      const after = stateManager.getTeam('team-test123');
+      expect(after?.memberIds).toEqual(['worker-live']);
+      expect(after?.formerMemberIds ?? []).toContain('worker-stale');
+    });
   });
 
   describe('updateTask identity hardening', () => {

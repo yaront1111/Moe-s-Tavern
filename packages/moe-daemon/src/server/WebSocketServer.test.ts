@@ -421,6 +421,130 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK out of BLOCKED keeps the reason and logs a real unblock', async () => {
+      // 2026-09-11: a row carrying an unanswered PRODUCT_DECISION_REQUIRED block
+      // was dragged out of BLOCKED twice. The board path nulled the whole block
+      // record, so the next architect to claim it saw a clean PLANNING card with
+      // no trace of the question and correctly re-blocked it three times. The
+      // tool path already archives the prose into priorBlockedReason before
+      // clearing; the board path must not be the one place it is destroyed.
+      const REASON = 'PRODUCT_DECISION_REQUIRED: which installed policy is effective';
+      await state.updateTask('task-1', {
+        status: 'BLOCKED',
+        blockedReason: REASON,
+        blockedFromStatus: 'PLANNING',
+        blockedAt: new Date().toISOString(),
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      // status + order together is the shape a card drag actually sends.
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'PLANNING', order: 1011.4 } },
+      }));
+
+      const updated = (await nextTaskUpdated(nextMessage)).payload;
+      expect(updated.status).toBe('PLANNING');
+      // The OPERATIONAL fields still clear — a later grant or sweep must not
+      // act on a block that is gone.
+      expect(updated.blockedReason == null).toBe(true);
+      expect(updated.blockedAt == null).toBe(true);
+      expect(updated.blockedFromStatus == null).toBe(true);
+      // The prose survives, which is the whole point: the next claimer can see
+      // WHY it was parked and judge whether anything was actually decided.
+      expect(updated.priorBlockedReason).toBe(REASON);
+
+      const stored = state.getTask('task-1');
+      expect(stored?.status).toBe('PLANNING');
+      expect(stored?.priorBlockedReason).toBe(REASON);
+      expect(stored?.blockedReason == null).toBe(true);
+
+      // And the transition is named. A generic TASK_UPDATED told a reader
+      // neither that a block had been cleared nor by what.
+      const events = state.getActivityLog(50).filter((e) => e.taskId === 'task-1');
+      const unblock = events.find((e) => e.event === 'TASK_UNBLOCKED');
+      expect(unblock, 'board unblock must log TASK_UNBLOCKED, not a generic TASK_UPDATED').toBeDefined();
+
+      // This block had no pending lease and no unmet prerequisite, so nothing
+      // would ever have cleared it: the question is still open and the row
+      // carries it forward where get_context will show the next claimer.
+      expect(updated.reopenReason).toContain('UNANSWERED BLOCK');
+      expect(updated.reopenReason).toContain(REASON);
+
+      ws.close();
+    });
+
+    it('UPDATE_TASK out of a RESOURCE block carries no question forward', async () => {
+      // A queued lease clears this row by itself when the grant fires, so a
+      // manual exit loses nothing and a carried question would be noise.
+      await state.updateTask('task-1', {
+        status: 'BLOCKED',
+        blockedReason: 'waiting on full-suite-gate for the daemon leg',
+        blockedResourceId: 'full-suite-gate',
+        blockedFromStatus: 'WORKING',
+        blockedAt: new Date().toISOString(),
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
+      }));
+
+      const updated = (await nextTaskUpdated(nextMessage)).payload;
+      expect(updated.status).toBe('WORKING');
+      // Evidence still kept...
+      expect(updated.priorBlockedReason).toBe('waiting on full-suite-gate for the daemon leg');
+      // ...but not re-asked as an open question.
+      expect(updated.reopenReason == null || !String(updated.reopenReason).includes('UNANSWERED BLOCK')).toBe(true);
+
+      ws.close();
+    });
+
+    it('UPDATE_TASK out of a DEPENDENCY block carries no question while a prerequisite is unmet', async () => {
+      // The dependency sweep restores this row when task-2 lands, so again
+      // nothing is lost by a manual exit.
+      const prereq = await state.createTask({
+        epicId: 'epic-1',
+        title: 'prerequisite still open',
+        description: '',
+        definitionOfDone: [],
+        status: 'WORKING',
+      });
+      // Must be a LIVE task: isDependencySatisfied treats a missing id as
+      // satisfied, so a fabricated id would invert what this arm measures.
+      expect(state.getTask(prereq.id)?.status).toBe('WORKING');
+
+      await state.updateTask('task-1', {
+        status: 'BLOCKED',
+        blockedReason: `BUILD-ORDER BLOCK on ${prereq.id}`,
+        blockedOnTaskIds: [prereq.id],
+        blockedFromStatus: 'WORKING',
+        blockedAt: new Date().toISOString(),
+      });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage();
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
+      }));
+
+      const updated = (await nextTaskUpdated(nextMessage)).payload;
+      expect(updated.status).toBe('WORKING');
+      expect(updated.reopenReason == null || !String(updated.reopenReason).includes('UNANSWERED BLOCK')).toBe(true);
+
+      ws.close();
+    });
+
     it('RELEASE_TASK frees the task and idles the worker (board button path)', async () => {
       await state.createWorker({
         id: 'w-rel',

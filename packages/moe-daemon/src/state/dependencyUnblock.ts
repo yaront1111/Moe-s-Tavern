@@ -47,6 +47,40 @@ export function unmetBlockedOnTaskIds(state: StateManager, task: Pick<Task, 'blo
 }
 
 /**
+ * Prose to carry forward when a block is cleared by hand, or null when nothing
+ * needs carrying.
+ *
+ * A block that names a `blockedResourceId`, or that still has unmet
+ * prerequisites, clears ITSELF: the lease grant or the dependency sweep
+ * restores the row, so a manual exit loses nothing. A block with neither has
+ * nothing that will ever clear it on its own — it was a QUESTION. Clearing that
+ * one silently hands the next claimer a clean card with no trace of what was
+ * asked.
+ *
+ * Measured 2026-09-11: a row carrying an unanswered PRODUCT_DECISION_REQUIRED
+ * block was moved out of BLOCKED twice from the board. Each time the architect
+ * re-claimed it, found no answer, and blocked again — three blocks in four
+ * minutes — because nothing on the row said the question was still open. The
+ * row carrying its own open question forward is what removes the human from
+ * that loop; noticing and re-asking is what we are replacing.
+ */
+export function carriedBlockQuestion(
+  state: StateManager,
+  task: Pick<Task, 'blockedReason' | 'blockedResourceId' | 'blockedOnTaskIds'>
+): string | null {
+  if (!task.blockedReason) return null;
+  // Self-clearing: a grant or the dependency sweep will restore this row, so
+  // the block needs no carry-forward and saying otherwise would be noise.
+  if (task.blockedResourceId) return null;
+  if (unmetBlockedOnTaskIds(state, task).length > 0) return null;
+  return 'UNANSWERED BLOCK, carried forward. This row left BLOCKED with nothing '
+    + 'that would have cleared it on its own: no resource lease was pending and '
+    + 'no prerequisite was unmet. Treat what follows as an OPEN question, not as '
+    + 'history, and do not plan past it on a guess — re-block if it is still '
+    + 'unanswered. ' + task.blockedReason;
+}
+
+/**
  * Every outgoing dependency edge of a task: dependsOn ∪ blockedOnTaskIds. Both
  * fields gate the same thing (this row cannot progress until the target is
  * DONE/ARCHIVED), so a cycle through either — or a mix — starves identically.

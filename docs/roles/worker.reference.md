@@ -101,6 +101,15 @@ Naming convention (keeps a multi-agent fleet's knowledge coherent — one topic,
 Prefer `edit_memory` to append to an existing topic file over creating a near-duplicate. There is no BM25 ranking or auto-injection — this naming discipline is what replaces it, so be consistent.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Step 2 is blocked on the `retry-budget` constant — do you want `5` or the env-var fallback?"
 - "Confirmed I own task-X; starting step 0 now."
