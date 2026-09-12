@@ -882,6 +882,23 @@ export interface ResourceSettings {
  */
 export type ExecutionAttemptPhase = 'running' | 'finalizing' | 'reconciling' | 'closed';
 
+/**
+ * What a runner's sidecar SAYS it is doing when it pings moe.heartbeat:
+ *  - `process`  — the CLI subprocess it launched is still there
+ *  - `provider` — that process is in a call to its model provider
+ *  - `waiting`  — it is parked waiting for input (a human, an approval)
+ *  - `progress` — it observed the execution actually move (output, a tool call)
+ *
+ * A CLAIM, NEVER A VERDICT. Nothing may treat any of these as proof that the
+ * execution is alive: the daemon does not probe a process, and a sidecar can
+ * report `process` for one that died a second ago. At best a kind narrows what
+ * a human or a later probe should ask about — exactly like processStartedAt
+ * and host below. The inverse is equally out of bounds: the absence of a
+ * presence kind is not evidence of death, because a quiet build is not
+ * evidence of a dead worker.
+ */
+export type AttemptPresenceKind = 'process' | 'provider' | 'waiting' | 'progress';
+
 /** One execution of one task; persisted at .moe/attempts/<id>.json (daemon sole-writer). */
 export interface ExecutionAttempt {
   id: string;
@@ -913,6 +930,19 @@ export interface ExecutionAttempt {
    */
   processStartedAt?: string;
   host?: string;
+  /**
+   * Latest presence kind reported for this attempt, and when it was reported.
+   * Both optional: every attempt written before presence existed stays valid,
+   * so there is no migration. Written ONLY by recordAttemptPresence in
+   * state/attemptStore.ts, which deliberately never touches `lastPhaseAt` —
+   * the reconcile-window sweep measures its window from that field, and a 60s
+   * ping that refreshed it would make a reconciling attempt immortal.
+   *
+   * Read the AttemptPresenceKind comment before using either of these: they are
+   * a sidecar's self-report, not verified liveness.
+   */
+  presenceKind?: AttemptPresenceKind;
+  presenceAt?: string;
 }
 
 // =============================================================================

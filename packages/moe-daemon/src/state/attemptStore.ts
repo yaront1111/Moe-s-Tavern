@@ -32,13 +32,25 @@
 // persisted record instead of writing a second one.
 
 import type { StateManager } from './StateManager.js';
-import type { ExecutionAttempt, ExecutionAttemptPhase } from '../types/schema.js';
+import type { AttemptPresenceKind, ExecutionAttempt, ExecutionAttemptPhase } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
 
 /** Shared with the Kotlin/JSON clients' Long; an allocation past this fails closed. */
 export const MAX_ATTEMPT_GENERATION = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The only presence kinds a sidecar may report; anything else is invalid input.
+ * Exported so moe.heartbeat's input schema and this store validate against ONE
+ * list — a second copy would drift the day a fifth kind is added.
+ */
+export const ATTEMPT_PRESENCE_KINDS: ReadonlySet<AttemptPresenceKind> = new Set<AttemptPresenceKind>([
+  'process',
+  'provider',
+  'waiting',
+  'progress',
+]);
 
 /** An attempt in any of these phases still owns its task. Only `closed` is terminal. */
 const OPEN_PHASES: ReadonlySet<ExecutionAttemptPhase> = new Set<ExecutionAttemptPhase>([
@@ -249,6 +261,60 @@ export async function setAttemptPhase(
   }
   // Mutate a private copy so a thrown write cannot have altered published state.
   const updated: ExecutionAttempt = { ...existing, phase, lastPhaseAt: new Date().toISOString() };
+  await state.writeEntity('attempts', updated.id, updated);
+  state.attempts.set(updated.id, updated);
+  return updated;
+}
+
+/**
+ * Record the latest presence kind a runner's sidecar reported for an attempt.
+ *
+ * DELIBERATELY NOT setAttemptPhase, AND THIS MUST NOT BE "SIMPLIFIED" INTO IT.
+ * The phase setter stamps `lastPhaseAt`, and the reconcile-window sweep
+ * (state/sweeps.ts) measures its window from exactly that field. A heartbeat
+ * fires every 60 seconds per seat, so routing presence through the phase setter
+ * would refresh that clock forever: a reconciling attempt would become immortal
+ * and the sweep would silently never fire. Presence therefore writes its own
+ * two fields and nothing else — phase, lastPhaseAt, startedAt and the identity
+ * hints all come through untouched.
+ *
+ * What this records is a CLAIM, not evidence: see AttemptPresenceKind. Storing
+ * it may not be read anywhere as proof the execution is alive.
+ *
+ * Keeps the store's one write-then-publish ordering, so a failed write leaves
+ * the attempt published exactly as it was. Caller must hold state.mutex.
+ */
+export async function recordAttemptPresence(
+  state: StateManager,
+  attemptId: string,
+  kind: AttemptPresenceKind
+): Promise<ExecutionAttempt> {
+  const id = requireNonBlank('attemptId', attemptId);
+  // Refused, never stored: an unknown kind that landed on disk would outlive
+  // the typo and every later reader would have to guess what it meant.
+  if (!ATTEMPT_PRESENCE_KINDS.has(kind)) {
+    throw invalidInput(
+      'presenceKind',
+      `must be one of ${Array.from(ATTEMPT_PRESENCE_KINDS).join(', ')} (got ${JSON.stringify(kind)})`
+    );
+  }
+  const existing = state.attempts.get(id);
+  // A named error, not a silent no-op: the caller decides whether a vanished
+  // attempt is routine (it is, for a heartbeat) or a real fault.
+  if (!existing) {
+    throw new MoeError(
+      MoeErrorCode.NOT_FOUND,
+      `Attempt not found: ${id}`,
+      { attemptId: id },
+      'ATTEMPT_NOT_FOUND'
+    );
+  }
+  // Mutate a private copy so a thrown write cannot have altered published state.
+  const updated: ExecutionAttempt = {
+    ...existing,
+    presenceKind: kind,
+    presenceAt: new Date().toISOString(),
+  };
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
   return updated;

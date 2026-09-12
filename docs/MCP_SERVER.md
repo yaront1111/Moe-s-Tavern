@@ -254,8 +254,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
   taskId: string,
   workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
   steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[],
-  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? },
-  budget?: { wallClockMs?: number }  // soft cap on first-claim → DONE
+  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? }
 }
 ```
 
@@ -270,13 +269,13 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 - **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` and `newFiles` ≤50 entries.
 - **Affected-path existence gate:** every `affectedFiles` entry must exist on disk under the project root, unless some step declares it in `newFiles`. A plan citing a path that exists nowhere is rejected with `INVALID_INPUT`, `context.missingPaths`, `context.projectRoot`, and a message teaching both fixes — correct the path (they are relative to the PROJECT ROOT, so `packages/moe-daemon/src/x.ts`, not `src/x.ts`) or declare files this task creates in that step's `newFiles`. The exemption is plan-wide, so a file created in step 1 may be cited by step 2. `newFiles` still count toward the distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so declaring a path new cannot dodge either gate. The check runs after the rails and plan-size gates, and fails open: an unreadable project root, or any stat error other than `ENOENT`/`ENOTDIR`, is treated as "exists".
 - **Plan-size gate:** oversized plans are rejected with `CONSTRAINT_VIOLATION` — more than 12 steps or more than 10 *distinct* affected files (union across steps) — with `suggestedAction` pointing at `moe.create_task` ("split the task"). Past the softer thresholds (8 steps / 5 distinct files) the response carries a `warnings: string[]` array instead. Thresholds configurable via `project.json` `settings.taskSizing { warnSteps, maxSteps, warnDistinctFiles, maxDistinctFiles }`.
-- `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
+- Plan submission refreshes `metrics.plannedStepCount`.
 - **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count, distinct-file count, any size warnings, a size rubric line, and a DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
 - **Warn-zone persistence + unsupervised size critique:** warn-zone warnings are persisted as `task.planSizeWarnings` (cleared by a compliant resubmit). With `settings.taskSizing.autoCritique: true`, CONTROL mode, and NO governor online, the daemon auto-blocks a warn-zone plan back to `PLANNING` (verdict recorded as `planCritiqueResult` by `moe-daemon-size-critic`, bounded by the same `critiqueBlockCount` cap as governor blocks; at the cap the task rests in `AWAITING_APPROVAL` with a `🛑 HUMAN DECISION REQUIRED` post). The response's `status` is then `"PLANNING"` and `nextAction` routes to a re-plan via `moe-epic-breakdown`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, planRevision, budget, warnings?: string[], message, nextAction }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, planRevision, warnings?: string[], message, nextAction }
 ```
 - `planRevision` is the revision this submission committed (read from the write's own Task, not a later cache read). It is the token a client sends back as `expectedPlanRevision` when it later approves the plan — see [Plan approval — `expectedPlanRevision` compare-and-swap](#plan-approval--expectedplanrevision-compare-and-swap).
 
@@ -977,7 +976,6 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
 
 **Notes:**
 - On first claim the daemon stamps `task.metrics.firstClaimAt` (idempotent).
-- After the claim, the daemon re-evaluates `task.budget` (warn at 80%, escalate at 100% to `#governors`).
 - `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`. Files matching `settings.appendOnlyFiles` (default `["CHANGELOG.md"]`) are dropped from the comparison first, so shared append-only files don't bury the real overlaps; a task whose only overlap was append-only produces no entry at all. Supplying the setting **replaces** the default list, and `[]` disables the suppression — see docs/CONFIGURATION.md.
 - When `task.priorHandoffs` is non-empty, `nextAction.tool` is `moe.get_handoff_history` (instead of `moe.get_context`) so the worker reads the handoff before redoing finished work.
 - `staleHandoffDiskState: true` is returned when the newest handoff carries a `diskState` signature (see `moe.release_task`) and a fresh recompute differs — the working tree moved since that note was written, so its claims (especially a refusal or "blocked by" reason) describe a tree that no longer exists and must be re-verified. `handoffHint` gets a matching sentence appended. The flag is **informational**: the daemon takes no automatic action on it. No flag is emitted when the newest handoff has no `diskState`, when the recompute fails, or when the signatures match — and in those cases no git subprocess runs at all unless a stored signature exists, so ordinary polling claims stay free.
@@ -2147,30 +2145,6 @@ Worker (or governor) hands the task back to the architect for a fresh plan. Snap
 
 ---
 
-### moe.set_task_budget
-
-Set or clear the wall-clock budget on a task. Daemon warns at 80% and escalates at 100% in `#governors`. Re-evaluates the budget immediately, so tightening the cap on an in-flight task fires the warning right away if the new threshold has already been crossed.
-
-**Parameters:**
-```typescript
-{
-  taskId: string,
-  wallClockMs?: number   // soft cap on first-claim → DONE; omit or 0 to clear
-}
-```
-
-`wallClockMs` (when not clearing) must be a finite positive number.
-
-**Returns:**
-```typescript
-{ success: true, taskId, budget: TaskBudget | null }
-```
-
-**Notes:**
-- Preserves existing `warnedAt`/`escalatedAt` marks when the cap is adjusted upward.
-
----
-
 ### moe.submit_plan_critique
 
 Governor-only (team role, else the `governor-` worker-id prefix — see `moe.amend_plan_step`; anything else is `NOT_ALLOWED`). Record a structured critique of a submitted plan. `verdict='block'` flips the task back to `PLANNING` with concerns posted to `#architects`; `verdict='pass'` is informational. **Does not auto-approve** — humans still own approval.
@@ -2388,23 +2362,50 @@ Read the activity log with filtering and pagination — newest first.
 
 ### moe.heartbeat
 
-Liveness ping: refreshes the calling worker's `lastActivityAt` with no other side effects.
+Presence ping: refreshes the calling worker's `lastActivityAt`, optionally records a presence kind on the seat's open execution attempt, and tells a runner when it must reattach.
 
 **Parameters:**
 ```typescript
 {
-  workerId: string      // Required: worker to refresh
+  workerId: string           // Required: worker to refresh
+  presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'
 }
 ```
 
-**Returns:**
+`presenceKind` is what the sidecar reports about itself: `process` — the CLI subprocess it launched is still there; `provider` — that process is in a call to its model provider; `waiting` — it is parked waiting for input (a human, an approval); `progress` — it observed the execution actually move (output, a tool call). The latest one wins; it is stored on the attempt as `presenceKind` + `presenceAt`. Any other value is rejected as invalid input rather than stored.
+
+**Returns — acknowledgement:**
 ```typescript
 { ok: true }
 ```
 
+**Returns — reattach required:**
+```typescript
+{
+  ok: false,
+  reattachRequired: true,
+  reason: 'no-worker-record' | 'no-open-attempt' | 'attempt-reconciling',
+  reattachWith: 'moe.reattach_attempt',
+  attemptId?: string,        // present when an attempt exists (the reconciling case)
+  phase?: string
+}
+```
+
+Exactly three conditions produce it:
+
+| `reason` | Condition |
+|---|---|
+| `no-worker-record` | No worker record for `workerId` — a daemon restart purged the seat and the runner has not re-registered. Returned before any refresh; nothing is created or resurrected. |
+| `no-open-attempt` | The worker exists but owns no open attempt (no current task, the attempt is closed, or the task's open attempt belongs to another seat). |
+| `attempt-reconciling` | The seat's attempt is parked in `reconciling` by a restart that lost sight of it. **No presence is recorded on this path** — a runner that has not proven which process it is does not get to look present. |
+
 **Notes:**
 - Called by the agent-wrapper heartbeat sidecar during long silent local steps (builds, test runs) so a live CLI isn't mistaken for a stale one; not intended to be called by agents directly
-- No-ops safely on a missing or `DEAD` worker record
+- Reattach-required is a **returned value, never an error**, so a sidecar does not log a routine daemon restart as a failure. Recover with `moe.reattach_attempt`
+- `lastActivityAt` is still refreshed for a live worker even when the response is reattach-required — a long silent build must keep looking alive either way. Still no-ops safely on a `DEAD` record
+- An old-style ping that sends no `presenceKind` behaves exactly as before and writes nothing to the attempt, so an un-upgraded wrapper is safe
+- Presence is written without touching the attempt's `lastPhaseAt`. The reconcile-window sweep measures its window from that field, so a 60s ping must never be able to extend it — do not reroute this write through the phase setter
+- A presence kind is the sidecar's **claim about itself, not verified liveness**; the daemon probes no process, and it still never infers death from silence
 
 ## Plugin WebSocket Messages
 
