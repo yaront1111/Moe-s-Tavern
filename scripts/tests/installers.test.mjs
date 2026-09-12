@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const isWindows = process.platform === 'win32';
+// The PowerShell fixtures drive a whole installer run; a loaded Windows CI runner
+// needs more than the original 30s. Override with MOE_INSTALLER_TEST_TIMEOUT_MS.
+const TIMEOUT_MS = Number(process.env.MOE_INSTALLER_TEST_TIMEOUT_MS) || 60000;
 const bash = isWindows ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const shellPath = value => isWindows ? value.replaceAll('\\', '/').replace(/^([A-Z]):/i, (_, drive) => `/${drive.toLowerCase()}`) : value;
 const psQuote = value => `'${value.replaceAll("'", "''")}'`;
@@ -48,20 +51,33 @@ try {
 }
 `);
   return spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', runner], {
-    encoding: 'utf8', timeout: 30000,
+    encoding: 'utf8', timeout: TIMEOUT_MS,
     env: { ...process.env, USERPROFILE: path.join(dir, 'profile'), APPDATA: path.join(dir, 'appdata'), TEMP: path.join(dir, 'temp'), MOE_TEST_NPM_LOG: path.join(dir, 'npm.log') },
   });
 }
 
 function runBash(dir, script, args = []) {
   return spawnSync(bash, [shellPath(path.join(dir, 'scripts', script)), ...args], {
-    cwd: dir, encoding: 'utf8', timeout: 30000,
+    cwd: dir, encoding: 'utf8', timeout: TIMEOUT_MS,
     env: { ...process.env, HOME: shellPath(path.join(dir, 'profile')), PATH: `${path.join(dir, 'bin')}${path.delimiter}${process.env.PATH}`, MOE_TEST_NPM_LOG: shellPath(path.join(dir, 'npm.log')) },
   });
 }
 
+function describeRun(result) {
+  const reason = result.error
+    ? `child failed to run: ${result.error.code || result.error.message}`
+    : result.signal
+      ? `child killed by ${result.signal}`
+      : `exit status ${result.status}`;
+  return `${reason} (timeout ${TIMEOUT_MS}ms)
+${result.stdout || ''}${result.stderr || ''}`;
+}
+
 function succeeded(result) {
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+  // A spawnSync timeout reports status null and sets `error` (ETIMEDOUT). Without
+  // naming it, the failure reads as a bare `null !== 0` and looks like the
+  // installer returned a wrong code rather than never finishing.
+  assert.equal(result.status, 0, describeRun(result));
 }
 
 function samePath(actual, expected) {
