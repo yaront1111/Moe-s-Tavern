@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 const helper = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../install-dependencies.ps1');
 const options = { skip: process.platform !== 'win32' };
 const quote = value => `'${value.replaceAll("'", "''")}'`;
+// The helper runs a full dependency probe under PowerShell; a loaded Windows CI
+// runner needs more than the original 20s. Override with MOE_INSTALLER_TEST_TIMEOUT_MS.
+const TIMEOUT_MS = Number(process.env.MOE_INSTALLER_TEST_TIMEOUT_MS) || 60000;
 
 function run(t, { tools = ['node', 'npm', 'git', 'claude', 'winget'], nodeVersion = 'v24.13.0', args = '', fail = '', jdk = false, ambientJdk = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'moe deps test '));
@@ -88,13 +91,28 @@ $env:JAVA_HOME | Set-Content -LiteralPath ${quote(path.join(dir, 'java-home.txt'
 $env:Path | Set-Content -LiteralPath ${quote(path.join(dir, 'runtime-path.txt'))}
 `);
   const result = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', runner], {
-    encoding: 'utf8', timeout: 20000,
+    encoding: 'utf8', timeout: TIMEOUT_MS,
     env: { ...process.env, USERPROFILE: path.join(dir, 'profile'), APPDATA: path.join(dir, 'appdata'), LOCALAPPDATA: path.join(dir, 'localappdata'), ProgramFiles: path.join(dir, 'programfiles'), JAVA_HOME: '', MOE_GRADLE_HOME: '', MOE_GRADLE_BIN: '' },
   });
-  return { ...result, dir, calls: readFileSync(path.join(dir, 'calls.txt'), 'utf8') };
+  // Read the stub log TOLERANTLY: a child that timed out never wrote it, and an
+  // unconditional read would throw ENOENT here, before pass() can report why the
+  // run actually failed.
+  const callsFile = path.join(dir, 'calls.txt');
+  const calls = existsSync(callsFile) ? readFileSync(callsFile, 'utf8') : '';
+  return { ...result, dir, calls };
 }
 
-function pass(result) { assert.equal(result.status, 0, result.stdout + result.stderr); }
+function pass(result) {
+  // spawnSync reports a timeout as status null plus an `error` (ETIMEDOUT); name it
+  // rather than leaving a bare `null !== 0`.
+  const reason = result.error
+    ? `child failed to run: ${result.error.code || result.error.message}`
+    : result.signal
+      ? `child killed by ${result.signal}`
+      : `exit status ${result.status}`;
+  assert.equal(result.status, 0, `${reason} (timeout ${TIMEOUT_MS}ms)
+${result.stdout || ''}${result.stderr || ''}`);
+}
 
 function assertSelectedJdk(result) {
   const selected = readFileSync(path.join(result.dir, 'java-home.txt'), 'utf8').trim();
