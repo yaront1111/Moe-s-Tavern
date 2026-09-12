@@ -498,6 +498,13 @@ export interface TaskVerification {
   exitCode: number;
   outputTail?: string;
   reportedAt: string; // ISO
+  /**
+   * Always 'agent-reported': this candidate-less evidence is the completing
+   * agent's own claim, never runner-observed CheckRun evidence. complete_task
+   * stamps it on every new report and get_context forces it on every read.
+   * Optional only so records written before the label existed still load.
+   */
+  source?: 'agent-reported';
 }
 
 export type TaskCommitKind = 'completion' | 'checkpoint' | 'rescue';

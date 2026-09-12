@@ -203,11 +203,14 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           ...(declared
             ? {
                 declaredDependency: true,
+                // Always agent-reported, whatever the stored row claims (see the
+                // primary task.verification projection).
                 verification: t.verification
                   ? {
                       command: t.verification.command,
                       exitCode: t.verification.exitCode,
                       reportedAt: t.verification.reportedAt,
+                      source: 'agent-reported',
                     }
                   : null,
                 reviewSummary: t.reviewSummary ?? null,
@@ -337,7 +340,12 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               // its complete_task summary, the aggregated changed-file set, and
               // recent rejection history (newest-first) so repeat failures are
               // visible without digging.
-              verification: task.verification || null,
+              // Legacy verification is candidate-less agent attestation, so it is
+              // always projected as agent-reported: a row predating the label, or
+              // one hand-edited to claim runner-observed, is not upgraded by a
+              // read. A fresh copy, so the label is never written back into state
+              // and a caller mutating the response cannot reach the stored row.
+              verification: task.verification ? { ...task.verification, source: 'agent-reported' } : null,
               ...(task.completionSummary ? { completionSummary: task.completionSummary } : {}),
               filesModified: task.filesModified || [],
               // Git landing evidence: what the wrapper recorded (moe.record_commit),

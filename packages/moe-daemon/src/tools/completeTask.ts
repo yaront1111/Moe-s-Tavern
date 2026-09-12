@@ -159,7 +159,9 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           status: 'REVIEW',
           prLink: params.prLink || task.prLink,
           reviewStartedAt: now,
-          verification: { ...verification, reportedAt: now },
+          // The label goes AFTER the spread: this is the agent's own attestation,
+          // and nothing a caller sends may relabel it runner-observed.
+          verification: { ...verification, reportedAt: now, source: 'agent-reported' },
           filesModified,
           ...(completionSummary ? { completionSummary } : {}),
         },

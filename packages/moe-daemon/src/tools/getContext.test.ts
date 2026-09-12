@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { getContextTool } from './getContext.js';
-import type { TaskCommit } from '../types/schema.js';
+import type { Task, TaskCommit, TaskVerification } from '../types/schema.js';
 
 describe('moe.get_context', () => {
   const h = new ToolTestHarness();
@@ -482,5 +484,156 @@ describe('moe.get_context dependency surface + isEpicFinal', () => {
     expect(result.task.blockedReason).toBe('waiting on task-dep111');
     expect(result.task.blockedOnTaskIds).toEqual(['task-dep111']);
     expect(result.task.blockedFromStatus).toBe('WORKING');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy verification provenance (task-95a1d08e). task.verification is the
+// completing agent's own claim with no candidate or runner behind it, so both
+// projections label it agent-reported: rows written before the label existed
+// and labels hand-edited into a task file (runner-observed included) alike.
+// The label goes on fresh copies at read time. The stored row is never
+// rewritten, and a caller mutating the response cannot reach it.
+// ---------------------------------------------------------------------------
+describe('moe.get_context — legacy verification provenance', () => {
+  const h = new ToolTestHarness();
+  const REPORTED_AT = '2026-09-01T10:00:00.000Z';
+  const PRIMARY = { command: 'npm test', exitCode: 0, outputTail: '12 passed', reportedAt: REPORTED_AT, source: 'agent-reported' };
+  const COMPACT = { command: 'npm test', exitCode: 0, reportedAt: REPORTED_AT, source: 'agent-reported' };
+  const LABELLED_PREREQUISITES = ['task-dep-legacy', 'task-dep-runner', 'task-dep-labelled', 'task-dep-null-label'];
+  const EMPTY_PREREQUISITES = ['task-dep-null', 'task-dep-missing'];
+
+  interface ProvenanceContext {
+    task: {
+      verification: Record<string, unknown> | null;
+      epicSiblings: Array<{ id: string; declaredDependency?: boolean; verification?: Record<string, unknown> | null }>;
+    };
+  }
+
+  beforeEach(() => {
+    h.init();
+    // Seats export MOE_WORKER_ID and get_context treats it as the caller, which
+    // records contextFetchedBy and touches that worker. That bookkeeping has its
+    // own tests; stubbing the caller away isolates the projection here.
+    vi.stubEnv('MOE_WORKER_ID', '');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    h.state.clearEmitter();
+    h.cleanup();
+  });
+
+  /** A stored verification row, including labels the schema does not allow. */
+  function stored(overrides: Record<string, unknown> = {}): TaskVerification {
+    return { command: 'npm test', exitCode: 0, outputTail: '12 passed', reportedAt: REPORTED_AT, ...overrides } as unknown as TaskVerification;
+  }
+
+  /** task-1, one declared prerequisite per stored shape, and one ordinary lower-order sibling. */
+  async function seed(primary: Partial<Task>): Promise<void> {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-plain', status: 'DONE', order: 1, verification: stored() });
+    h.createTask({ id: 'task-dep-legacy', status: 'DONE', order: 2, verification: stored({ outputTail: 'prerequisite tail' }) });
+    h.createTask({ id: 'task-dep-labelled', status: 'DONE', order: 3, verification: stored({ source: 'agent-reported' }) });
+    h.createTask({ id: 'task-dep-null-label', status: 'REVIEW', order: 4, verification: stored({ source: null }) });
+    h.createTask({ id: 'task-dep-null', status: 'WORKING', order: 6, verification: null as unknown as TaskVerification });
+    h.createTask({ id: 'task-dep-missing', status: 'WORKING', order: 7 });
+    h.createTask({ id: 'task-dep-runner', status: 'DONE', order: 9, verification: stored({ source: 'runner-observed' }) });
+    h.createTask({
+      id: 'task-1',
+      status: 'REVIEW',
+      order: 5,
+      dependsOn: ['task-dep-legacy', 'task-dep-runner', 'task-dep-null'],
+      blockedOnTaskIds: ['task-dep-labelled', 'task-dep-null-label', 'task-dep-missing'],
+      ...primary,
+    });
+    await h.state.load();
+  }
+
+  async function read(): Promise<ProvenanceContext> {
+    return await getContextTool(h.state).handler({ taskId: 'task-1' }, h.state) as ProvenanceContext;
+  }
+
+  it.each([
+    ['a row written before the label existed', {}],
+    ['a row already labelled agent-reported', { source: 'agent-reported' }],
+    ['a hand-edited runner-observed label', { source: 'runner-observed' }],
+    ['a null label', { source: null }],
+  ])('labels the primary verification agent-reported for %s', async (_label, label) => {
+    await seed({ verification: stored(label) });
+
+    const result = await read();
+
+    expect(result.task.verification?.source).toBe('agent-reported');
+    expect(result.task.verification).toStrictEqual(PRIMARY);
+  });
+
+  it('adds no outputTail to a primary row stored without one', async () => {
+    await seed({ verification: stored({ outputTail: undefined }) });
+
+    expect((await read()).task.verification).toStrictEqual({
+      command: 'npm test', exitCode: 0, reportedAt: REPORTED_AT, source: 'agent-reported',
+    });
+  });
+
+  it.each([
+    ['missing', {}],
+    ['null', { verification: null as unknown as TaskVerification }],
+  ])('keeps a %s primary verification null instead of fabricating one', async (_label, primary) => {
+    await seed(primary);
+
+    expect((await read()).task.verification).toBeNull();
+  });
+
+  it('labels declared prerequisites agent-reported without outputTail and leaves ordinary siblings bare', async () => {
+    await seed({ verification: stored() });
+
+    const result = await read();
+    const siblings = new Map(result.task.epicSiblings.map((s) => [s.id, s]));
+
+    for (const id of LABELLED_PREREQUISITES) {
+      expect(siblings.get(id)?.declaredDependency, id).toBe(true);
+      expect(siblings.get(id)?.verification?.source, id).toBe('agent-reported');
+      expect(siblings.get(id)?.verification, id).toStrictEqual(COMPACT);
+    }
+    for (const id of EMPTY_PREREQUISITES) {
+      expect(siblings.get(id)?.declaredDependency, id).toBe(true);
+      expect(siblings.get(id)?.verification, id).toBeNull();
+    }
+    expect(siblings.has('task-plain')).toBe(true);
+    expect(siblings.get('task-plain')).not.toHaveProperty('declaredDependency');
+    expect(siblings.get('task-plain')).not.toHaveProperty('verification');
+    // No candidate was ever recorded, so none is projected either.
+    expect(result).not.toHaveProperty('currentCandidate');
+  });
+
+  it('never rewrites or aliases the stored rows it labels, across repeated reads', async () => {
+    await seed({ verification: stored({ source: 'runner-observed' }) });
+    const taskDir = path.join(h.moePath, 'tasks');
+    const rows = () => new Map(fs.readdirSync(taskDir).map((file) => [file, fs.readFileSync(path.join(taskDir, file), 'utf8')]));
+    const ids = ['task-1', ...LABELLED_PREREQUISITES, ...EMPTY_PREREQUISITES];
+    const storedRows = () => ids.map((id) => h.state.getTask(id)?.verification);
+    const rowsBefore = rows();
+    const storedBefore = structuredClone(storedRows());
+    const updateTask = vi.spyOn(h.state, 'updateTask');
+    const touchWorker = vi.spyOn(h.state, 'touchWorker');
+
+    const first = await read();
+    // Tamper with every labelled object this caller was handed.
+    Object.assign(first.task.verification!, { source: 'runner-observed', command: 'tampered' });
+    for (const sibling of first.task.epicSiblings) {
+      if (sibling.verification) Object.assign(sibling.verification, { source: 'runner-observed', command: 'tampered' });
+    }
+    const second = await read();
+
+    expect(second.task.verification).toStrictEqual(PRIMARY);
+    expect(second.task.verification).not.toBe(h.state.getTask('task-1')!.verification);
+    expect(second.task.epicSiblings.find((s) => s.id === 'task-dep-runner')?.verification).toStrictEqual(COMPACT);
+    expect(storedRows()).toStrictEqual(storedBefore);
+    expect(rows()).toStrictEqual(rowsBefore);
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(touchWorker).not.toHaveBeenCalled();
+    expect(h.state.getTask('task-1')!.contextFetchedBy).toBeUndefined();
   });
 });
