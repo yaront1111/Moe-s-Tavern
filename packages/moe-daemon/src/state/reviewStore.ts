@@ -167,9 +167,10 @@ export interface ReviewedCandidateBinding {
  *
  * The decision order is the whole contract, so it is spelled out:
  *   1. No candidate recorded for the task at all → behave exactly as before this
- *      binding existed. Adoption is incremental: a project that never records
- *      candidates must keep working, so this is not a refusal and writes no
- *      Review (there is nothing truthful to bind one to).
+ *      binding existed, WHETHER OR NOT a candidateId was supplied: no refusal, no
+ *      warning and no Review (there is nothing truthful to bind one to). Adoption
+ *      is incremental: a project that never records candidates must keep working,
+ *      so a well-formed id simply binds nothing here.
  *   2. A candidateId is supplied and differs from the current candidate →
  *      CANDIDATE_MISMATCH, thrown to the caller BEFORE any write.
  *   3. A candidate exists but none was supplied → proceed, with a warning, so
@@ -178,6 +179,11 @@ export interface ReviewedCandidateBinding {
  *
  * A candidateId belonging to a DIFFERENT task falls into case 2 automatically:
  * it is compared against THIS task's current candidate, which it cannot equal.
+ *
+ * `null` counts as omitted, as it does for the daemon's other optional arguments
+ * (heartbeat's presenceKind, release_task's handoff fields). Any other present
+ * value is validated BEFORE case 1, so malformed input is refused on every path
+ * and is never read as "omitted".
  */
 export function resolveReviewedCandidate(
   state: StateManager,
@@ -193,15 +199,7 @@ export function resolveReviewedCandidate(
   const candidates = listCandidatesForTask(state, taskId);
   const current = candidates.length > 0 ? candidates[candidates.length - 1] : undefined;
 
-  if (!current) {
-    return supplied
-      ? {
-          warning:
-            `NO-CANDIDATE-RECORDED: ${toolName} named candidate ${supplied} but task ${taskId} has no candidate ` +
-            'recorded, so this decision is not bound to any reviewed bytes',
-        }
-      : {};
-  }
+  if (!current) return {};
 
   if (supplied === undefined) {
     return {

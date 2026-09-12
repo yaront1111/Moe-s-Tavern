@@ -1052,9 +1052,9 @@ interface Review {
 
 **Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
 
-**Incremental adoption.** A task with no candidate recorded produces **no** review, and both tools behave exactly as they did before the binding existed. This is deliberate: a project that never records candidates must keep working, and there is nothing truthful to bind a review to.
+**Incremental adoption.** A task with no candidate recorded produces **no** review — even when the caller names a `candidateId`, which then binds nothing — and both tools behave exactly as they did before the binding existed, adding no warning. This is deliberate: a project that never records candidates must keep working, and there is nothing truthful to bind a review to.
 
-**Queries.** Reviews are listed per task, ordered by `createdAt` and then `id`, so ties are deterministic.
+**Queries.** Reviews are listed per task, ordered by `createdAt` and then `id`, so ties are deterministic. Every read, and the record `recordReview` returns, is a copy: editing it cannot change the stored review.
 
 **Example:**
 
@@ -1525,7 +1525,7 @@ function generateId(prefix: string): string {
 ### Review
 - Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record
 - `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
-- `reviewerId` and `summary` must be non-blank strings; a blank or non-string value is refused (`INVALID_INPUT`), never coerced
+- `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`
 - `candidateId` must be the task's CURRENT candidate at decision time, else the decision is refused with `CANDIDATE_MISMATCH` and no record is written
 - `createdAt` is always the daemon's clock; a caller cannot set it

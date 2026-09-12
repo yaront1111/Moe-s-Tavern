@@ -4,8 +4,21 @@ import path from 'path';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
+import { getContextTool } from './getContext.js';
 import { MoeError } from '../util/errors.js';
-import type { Candidate, TaskCommit } from '../types/schema.js';
+import { getReview, listReviewsForTask, recordReview, type RecordReviewParams } from '../state/reviewStore.js';
+import type { Candidate, Review, TaskCommit } from '../types/schema.js';
+
+/** Capture a refusal's exact identity, failing loudly if the call resolved instead. */
+async function refusalOf(call: Promise<unknown>): Promise<MoeError> {
+  try {
+    await call;
+  } catch (err) {
+    if (err instanceof MoeError) return err;
+    throw err;
+  }
+  throw new Error('expected a MoeError refusal, but the call resolved');
+}
 
 describe('moe.qa_approve', () => {
   const h = new ToolTestHarness();
@@ -259,17 +272,6 @@ describe('moe.qa_approve — reviewed-candidate binding', () => {
     vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
   }
 
-  /** Capture a refusal's exact identity, failing loudly if the call resolved instead. */
-  async function refusalOf(call: Promise<unknown>): Promise<MoeError> {
-    try {
-      await call;
-    } catch (err) {
-      if (err instanceof MoeError) return err;
-      throw err;
-    }
-    throw new Error('expected a MoeError refusal, but the call resolved');
-  }
-
   it('approves against the current candidate and writes exactly one review bound to it', async () => {
     writeCandidate({ id: 'cand-A' });
     await load();
@@ -292,6 +294,34 @@ describe('moe.qa_approve — reviewed-candidate binding', () => {
     expect(typeof reviews[0].createdAt).toBe('string');
     // Bound, so no binding warning — only the pre-existing commit-evidence one.
     expect(result.warnings).toEqual([COMMIT_WARNING]);
+  });
+
+  it('get_context omits the currentCandidate key for a task without one, rather than emitting null', async () => {
+    await load();
+
+    const context = await getContextTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'qa-1' },
+      h.state
+    ) as Record<string, unknown>;
+
+    expect(Object.keys(context)).not.toContain('currentCandidate');
+  });
+
+  it('get_context projects a copy of the whole current candidate, the record QA binds to', async () => {
+    writeCandidate({ id: 'cand-A', createdAt: '2026-09-11T03:00:00.000Z' });
+    const candB = writeCandidate({ id: 'cand-B', createdAt: '2026-09-11T03:05:00.000Z' });
+    await load();
+    const tool = getContextTool(h.state);
+    const read = async (): Promise<Candidate | undefined> =>
+      (await tool.handler({ taskId: 'task-1', workerId: 'qa-1' }, h.state) as { currentCandidate?: Candidate }).currentCandidate;
+
+    const projected = await read();
+    expect(projected).toEqual(candB);
+
+    // A copy: editing the response cannot re-point the bytes an approval is checked against.
+    (projected as { treeSha: string }).treeSha = 'f'.repeat(40);
+    expect(h.state.candidates.get('cand-B')).toEqual(candB);
+    expect(await read()).toEqual(candB);
   });
 
   it('refuses a superseded candidate with CANDIDATE_MISMATCH and writes nothing', async () => {
@@ -353,41 +383,113 @@ describe('moe.qa_approve — reviewed-candidate binding', () => {
     expect(storedReviews()).toEqual([]);
   });
 
-  it('approves an unnamed candidate but adds a NO-REVIEWED-CANDIDATE warning', async () => {
+  /** The binding warning, exactly as each tool words it. */
+  const noReviewedWarning = (tool: 'qa_approve' | 'qa_reject'): string =>
+    `NO-REVIEWED-CANDIDATE: task task-1 has current candidate cand-A but ${tool} named none — pass candidateId so the decision is bound to the bytes you actually read`;
+
+  // `null` is the daemon's "omitted" for an optional argument, so it must bind exactly like a missing key.
+  it.each<[string, Record<string, unknown>]>([
+    ['omitted', {}],
+    ['null', { candidateId: null }],
+  ])('approves with candidateId %s on a task that has a candidate: bound, plus a NO-REVIEWED-CANDIDATE warning', async (_label, extra) => {
     writeCandidate({ id: 'cand-A' });
     await load();
 
     const result = await qaApproveTool(h.state).handler(
-      { taskId: 'task-1', workerId: 'qa-1', summary: SUMMARY },
+      { taskId: 'task-1', workerId: 'qa-1', summary: SUMMARY, ...extra },
       h.state
     ) as ApproveResult;
 
     expect(result.status).toBe('DONE');
-    expect(result.warnings).toEqual([
-      COMMIT_WARNING,
-      'NO-REVIEWED-CANDIDATE: task task-1 has current candidate cand-A but qa_approve named none — pass candidateId so the decision is bound to the bytes you actually read',
-    ]);
+    expect(result.warnings).toEqual([COMMIT_WARNING, noReviewedWarning('qa_approve')]);
     // Still bound to the current candidate, so the audit trail stays complete.
-    expect(projectFields(storedReviews()[0], REVIEW_FIELDS).candidateId).toBe('cand-A');
+    const reviews = storedReviews();
+    expect(reviews.length).toBe(1);
+    expect(projectFields(reviews[0], REVIEW_FIELDS)).toEqual({
+      taskId: 'task-1', candidateId: 'cand-A', reviewerId: 'qa-1', decision: 'approve', summary: SUMMARY,
+    });
   });
 
-  it('refuses a malformed candidateId rather than coercing it to "omitted"', async () => {
+  it('approves a task with no candidate exactly as before even when a candidateId is named, binding nothing', async () => {
+    await load();
+    const tool = qaApproveTool(h.state);
+
+    // Malformed input is refused here too, before the no-candidate shortcut: never read as "omitted".
+    const blank = await refusalOf(tool.handler(
+      { taskId: 'task-1', workerId: 'qa-1', candidateId: '', summary: SUMMARY },
+      h.state
+    ));
+    expect({ code: blank.code, codeName: blank.codeName }).toEqual({ code: -32602, codeName: 'INVALID_INPUT' });
+
+    const result = await tool.handler(
+      { taskId: 'task-1', workerId: 'qa-1', candidateId: 'cand-X', summary: SUMMARY },
+      h.state
+    ) as ApproveResult;
+
+    expect(result.status).toBe('DONE');
+    // The adoption rail: exactly the pre-binding result, with no binding warning of any kind.
+    expect(result.warning).toBe(COMMIT_WARNING);
+    expect(result.warnings).toEqual([COMMIT_WARNING]);
+    expect(result.commitEvidence).toEqual({ completion: [], checkpoint: [], rescue: [] });
+    expect(result.message).toBe('Task task-1 approved and moved to DONE (WARNING: no completion commit recorded — see warnings)');
+    expect(h.state.reviews.size).toBe(0);
+    expect(fs.existsSync(path.join(h.moePath, 'reviews'))).toBe(false);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['omitted', {}],
+    ['null', { candidateId: null }],
+  ])('rejects with candidateId %s on a task that has a candidate: bound, with exactly one NO-REVIEWED-CANDIDATE warning', async (_label, extra) => {
     writeCandidate({ id: 'cand-A' });
     await load();
 
-    const blank = await refusalOf(qaApproveTool(h.state).handler(
-      { taskId: 'task-1', workerId: 'qa-1', candidateId: '   ', summary: SUMMARY },
+    const result = await qaRejectTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'qa-1', reason: 'DoD item 2 fails', ...extra },
       h.state
-    ));
-    expect(blank.code).toBe(-32602);
-    expect(blank.message).toContain('candidateId');
+    ) as { status: string; warnings?: string[] };
 
-    const wrongType = await refusalOf(qaApproveTool(h.state).handler(
-      { taskId: 'task-1', workerId: 'qa-1', candidateId: 42 as unknown as string, summary: SUMMARY },
+    expect(result.status).toBe('WORKING');
+    expect(result.warnings).toEqual([noReviewedWarning('qa_reject')]);
+    const reviews = storedReviews();
+    expect(reviews.length).toBe(1);
+    expect(projectFields(reviews[0], REVIEW_FIELDS)).toEqual({
+      taskId: 'task-1', candidateId: 'cand-A', reviewerId: 'qa-1', decision: 'reject', summary: 'DoD item 2 fails',
+    });
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['omitted', {}],
+    ['cand-X', { candidateId: 'cand-X' }],
+  ])('rejects a task with no candidate (candidateId %s) with no warnings key and no review', async (_label, extra) => {
+    await load();
+
+    const result = await qaRejectTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'qa-1', reason: 'DoD item 2 fails', ...extra },
       h.state
-    ));
-    expect(wrongType.code).toBe(-32602);
-    expect(wrongType.message).toContain('must be a string');
+    ) as Record<string, unknown>;
+
+    expect(result.status).toBe('WORKING');
+    // The `warnings?` key of the qa_reject result is absent — not [], not null, not undefined-valued.
+    expect(Object.keys(result)).not.toContain('warnings');
+    expect(h.state.reviews.size).toBe(0);
+    expect(fs.existsSync(path.join(h.moePath, 'reviews'))).toBe(false);
+  });
+
+  it('refuses a malformed candidateId as INVALID_INPUT rather than coercing it to "omitted"', async () => {
+    writeCandidate({ id: 'cand-A' });
+    await load();
+    const tool = qaApproveTool(h.state);
+    const cases: Array<[unknown, string]> = [
+      ['   ', 'Invalid candidateId: must be a non-blank string'],
+      [42, 'Invalid candidateId: must be a string (got 42)'],
+      ['cand A', 'Invalid candidateId: must contain only alphanumeric characters, hyphens, and underscores'],
+    ];
+
+    for (const [candidateId, message] of cases) {
+      const err = await refusalOf(tool.handler({ taskId: 'task-1', workerId: 'qa-1', candidateId, summary: SUMMARY }, h.state));
+      expect({ code: err.code, codeName: err.codeName, message: err.message })
+        .toEqual({ code: -32602, codeName: 'INVALID_INPUT', message: `[INVALID_INPUT] ${message}` });
+    }
 
     expect(h.state.getTask('task-1')!.status).toBe('REVIEW');
     expect(storedReviews()).toEqual([]);
@@ -463,6 +565,87 @@ describe('moe.qa_approve — reviewed-candidate binding', () => {
     const decisions = storedReviews().map((r) => r.decision).sort();
     expect(decisions).toEqual(['approve', 'reject']);
     expect(h.state.reviews.size).toBe(2);
+  });
+});
+
+// =============================================================================
+// reviewStore — the record's own refusals, list order and read copies
+// =============================================================================
+//
+// Called directly: qa_approve/qa_reject only ever hand the store well-formed
+// fields, so its refusals and readers are reachable from nowhere else.
+describe('reviewStore — refusals, list order and copies', () => {
+  const h = new ToolTestHarness();
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    await h.state.load();
+  });
+  afterEach(() => { vi.useRealTimers(); h.cleanup(); });
+
+  const VALID: RecordReviewParams = {
+    taskId: 'task-1',
+    candidateId: 'cand-A',
+    reviewerId: 'qa-1',
+    decision: 'approve',
+    summary: 'verified',
+  };
+
+  it('refuses each malformed review with its exact code, codeName and message, and writes nothing', async () => {
+    const cases: Array<{ input: unknown; codeName: string; message: string }> = [
+      { input: { ...VALID, decision: 'maybe' }, codeName: 'INVALID_INPUT', message: 'Invalid decision: must be one of approve, reject (got "maybe")' },
+      { input: { ...VALID, reviewerId: '   ' }, codeName: 'INVALID_INPUT', message: 'Invalid reviewerId: must be a non-blank string' },
+      { input: { ...VALID, summary: '' }, codeName: 'INVALID_INPUT', message: 'Invalid summary: must be a non-blank string' },
+      { input: 'not-a-review', codeName: 'INVALID_INPUT', message: 'Invalid review: must be an object (got "not-a-review")' },
+      { input: [VALID], codeName: 'INVALID_INPUT', message: 'Invalid review: must be an object (got a value of type object)' },
+      { input: { ...VALID, taskId: undefined }, codeName: 'MISSING_REQUIRED', message: 'Missing required field: taskId' },
+    ];
+
+    for (const { input, codeName, message } of cases) {
+      const err = await refusalOf(recordReview(h.state, input as RecordReviewParams));
+      // MoeError prefixes every message with its codeName.
+      expect({ code: err.code, codeName: err.codeName, message: err.message })
+        .toEqual({ code: -32602, codeName, message: `[${codeName}] ${message}` });
+    }
+
+    expect(h.state.reviews.size).toBe(0);
+    expect(fs.existsSync(path.join(h.moePath, 'reviews'))).toBe(false);
+  });
+
+  it('lists one task\'s reviews by createdAt then id and leaves other tasks out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-11T03:00:00.000Z'));
+    // Same clock, recorded in REVERSE id order: only the id tie-break can order these two.
+    await recordReview(h.state, { ...VALID, id: 'review-b' });
+    await recordReview(h.state, { ...VALID, id: 'review-a' });
+    await recordReview(h.state, { ...VALID, id: 'review-c', taskId: 'task-2' });
+    // Later clock but the LOWEST id: createdAt must outrank the id.
+    vi.setSystemTime(new Date('2026-09-11T03:05:00.000Z'));
+    await recordReview(h.state, { ...VALID, id: 'review-0', decision: 'reject' });
+
+    const order = (reviews: Review[]): string[] => reviews.map((r) => `${r.id}@${r.createdAt}`);
+    expect(order(listReviewsForTask(h.state, 'task-1'))).toEqual([
+      'review-a@2026-09-11T03:00:00.000Z',
+      'review-b@2026-09-11T03:00:00.000Z',
+      'review-0@2026-09-11T03:05:00.000Z',
+    ]);
+    expect(order(listReviewsForTask(h.state, 'task-2'))).toEqual(['review-c@2026-09-11T03:00:00.000Z']);
+    expect(listReviewsForTask(h.state, 'task-none')).toEqual([]);
+  });
+
+  it('hands out a copy from every read, so a caller cannot edit a stored review', async () => {
+    const recorded = await recordReview(h.state, { ...VALID, id: 'review-a' });
+    const original: Review = { ...recorded };
+    const tamper = (review: Review): void => { (review as { summary: string }).summary = 'tampered'; };
+
+    tamper(recorded);
+    expect(getReview(h.state, 'review-a')).toEqual(original);
+    tamper(getReview(h.state, 'review-a')!);
+    expect(listReviewsForTask(h.state, 'task-1')).toEqual([original]);
+    listReviewsForTask(h.state, 'task-1').forEach(tamper);
+    expect(h.state.reviews.get('review-a')).toEqual(original);
+    expect(getReview(h.state, 'review-missing')).toBeNull();
   });
 });
 
