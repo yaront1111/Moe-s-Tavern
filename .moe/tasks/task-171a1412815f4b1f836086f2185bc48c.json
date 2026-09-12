@@ -84,8 +84,8 @@
       "completedAt": "2026-09-12T14:04:37.118Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8db40c97",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,12 +97,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T18:37:42.241Z",
-  "updatedAt": "2026-09-12T14:05:25.590Z",
+  "updatedAt": "2026-09-12T14:10:32.611Z",
   "metrics": {
     "firstClaimAt": "2026-09-12T13:49:57.720Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-12T14:10:32.611Z",
+    "wallClockMs": 1234891
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
@@ -140,7 +142,42 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+    ".moe/tasks/task-171a1412815f4b1f836086f2185bc48c.json"
   ],
-  "completionSummary": "WIDER AUDIT ANSWER (DoD 4): 64 tools in getTools(), 65 `### moe.<name>` headings before the edit. Documented-but-unregistered = moe.set_task_budget and NOTHING else. Registered-but-undocumented = none. This class is CLOSED, not reduced, and is now enforced every run instead of measured once.\n\ndocs/MCP_SERVER.md: five removals — submit_plan's `budget?: {wallClockMs}` param (258), the `budget.wallClockMs > 0` clause (273; bullet keeps its live plannedStepCount half), `budget` in the return shape (279), the post-claim \"re-evaluates task.budget\" bullet (980), and the whole `### moe.set_task_budget` section + duplicate `---` (2150-2173). REMOVED not annotated: `grep -i budget src/tools/submitPlan.ts` is ZERO, so unlike pacePerStepMs / Task.budget (really still accepted, hence the sibling's \"DEPRECATED — accepted and ignored\") there was no live surface to annotate; the file also keeps no tombstones. Three docs now tell one story.\n\nLIVE LINES UNTOUCHED: three-way sha256 043468c8...fde04a9 across pre-edit quote, `git show HEAD:`, and edited file. Four token budgets now at 859/892/984/2033; `grep -n budget` returns only those.\n\nGUARD (packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, sibling's file extended, no second home): DOCS.mcpServer added; anchor /budget\\.wallClockMs/ added QUALIFIED because bare /wallClockMs/ would condemn the LIVE TaskMetrics.wallClockMs; new describe compares doc headings against a live getTools() call (calling, not source-parsing — recordCandidate.ts hides its name in a TOOL_NAME const); LIVE_TERMS gained minHits because the two `summary preview budget` lines are byte-identical.\n\nEVIDENCE: guard RED first — exit 1, 2 failed/15 passed, naming 258/273/980/2166 and the 2150 heading; GREEN after — 17/17. Full suite `npm --prefix packages/moe-daemon test` exit 0, 115 files / 1561 passed / 4 skipped, no flakes. `npx tsc --noEmit` inside the package exit 0. Five scratch-tree mutations (outside the repo) each bite the intended assertion and restore"
+  "completionSummary": "WIDER AUDIT ANSWER (DoD 4): 64 tools in getTools(), 65 `### moe.<name>` headings before the edit. Documented-but-unregistered = moe.set_task_budget and NOTHING else. Registered-but-undocumented = none. This class is CLOSED, not reduced, and is now enforced every run instead of measured once.\n\ndocs/MCP_SERVER.md: five removals — submit_plan's `budget?: {wallClockMs}` param (258), the `budget.wallClockMs > 0` clause (273; bullet keeps its live plannedStepCount half), `budget` in the return shape (279), the post-claim \"re-evaluates task.budget\" bullet (980), and the whole `### moe.set_task_budget` section + duplicate `---` (2150-2173). REMOVED not annotated: `grep -i budget src/tools/submitPlan.ts` is ZERO, so unlike pacePerStepMs / Task.budget (really still accepted, hence the sibling's \"DEPRECATED — accepted and ignored\") there was no live surface to annotate; the file also keeps no tombstones. Three docs now tell one story.\n\nLIVE LINES UNTOUCHED: three-way sha256 043468c8...fde04a9 across pre-edit quote, `git show HEAD:`, and edited file. Four token budgets now at 859/892/984/2033; `grep -n budget` returns only those.\n\nGUARD (packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, sibling's file extended, no second home): DOCS.mcpServer added; anchor /budget\\.wallClockMs/ added QUALIFIED because bare /wallClockMs/ would condemn the LIVE TaskMetrics.wallClockMs; new describe compares doc headings against a live getTools() call (calling, not source-parsing — recordCandidate.ts hides its name in a TOOL_NAME const); LIVE_TERMS gained minHits because the two `summary preview budget` lines are byte-identical.\n\nEVIDENCE: guard RED first — exit 1, 2 failed/15 passed, naming 258/273/980/2166 and the 2150 heading; GREEN after — 17/17. Full suite `npm --prefix packages/moe-daemon test` exit 0, 115 files / 1561 passed / 4 skipped, no flakes. `npx tsc --noEmit` inside the package exit 0. Five scratch-tree mutations (outside the repo) each bite the intended assertion and restore",
+  "commits": [
+    {
+      "sha": "542f7040fa9a0e0b94a67f93a6922a1488cf3eb6",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-12T13:51:56Z",
+      "paths": [
+        ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+        ".moe/tasks/task-171a1412815f4b1f836086f2185bc48c.json",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-12T14:05:32.438Z",
+      "treeId": "4ecd1753ea83c29fe0cd5382e19948529f315d25",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-de4739a8@2026-09-12T13:51:56Z",
+    "at": "2026-09-12T14:05:32.438Z"
+  },
+  "completedAt": "2026-09-12T14:10:32.611Z",
+  "reviewCompletedAt": "2026-09-12T14:10:32.611Z",
+  "reviewSummary": "APPROVED — 6/6 DoD re-verified myself.\n\nBYTES: task commit 542f704 holds only the guard test + board JSONs; the doc edit landed in PEER commit e1c0732, trailer `Moe-Contested: docs/MCP_SERVER.md (task-171a1412...)`. Hunks split: @@-254/-270/-977/-2147 = this task's 5 removals; @@-2388 (moe.heartbeat) = peer's.\n\n1. grep -c set_task_budget docs/MCP_SERVER.md = 0 (section 2150/2152/2166 + stray `---` gone).\n2. 258, 273 (live plannedStepCount half kept), 279, 980 REMOVED. Justification checked: grep -i budget src/tools/submitPlan.ts EMPTY — submit_plan never accepted/returned budget, so nothing live-but-ignored to annotate (unlike Task.budget, schema.ts:739). DoD's 2nd permitted treatment; no rail-3 breach.\n3. Live token-budget lines unchanged — 3-way sha256 043468c8...fde04a9 over pre-edit 8451e6c (860/893/986/2035), HEAD, worktree (859/892/984/2033). One-line shift = peer hunk +33 vs this task's -31.\n4. Registry audit redone both directions with my own extractor: 64 headings vs 64 getTools() names; comm -23 and comm -13 both EMPTY. Class CLOSED.\n5. Guard bites — proved in an out-of-repo scratch tree, never the shared checkout. Baseline 17/17; PRE-edit doc RED (exit 1, 2 failed/15 passed, naming 258/273/980/2166 + heading 2150); deleting one of the two byte-identical `summary preview budget` lines RED (minHits earns its keep); invented `### moe.frobnicate` heading RED — generic, not name-hardcoded. Torn down junction-first, real node_modules intact.\n6. npm test in packages/moe-daemon: EXIT 0, 115 files / 1561 passed / 4 skipped — matches worker counts. Guard alone exit 0, 17/17.\n\nRAILS: docs-only holds, no daemon/JetBrains/VS Code change beyond the guard. Dirty createTask.ts/.test.ts are a peer's, dirty at claim time, untouched.\n\nFOLLOW-UP (not a defect): moe-vscode/bundled/daemon/tools/setTaskBudget.js still ships the dead tool but is gitignored build output that regenerates."
 }
