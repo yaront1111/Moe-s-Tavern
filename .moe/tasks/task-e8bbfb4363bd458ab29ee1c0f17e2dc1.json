@@ -20,50 +20,79 @@
     {
       "stepId": "step-1",
       "description": "RE-MEASURE THE FOUR CLAIMS, THEN READ WHAT YOU MUST NOT DUPLICATE. Read-only, no edits. Every line number below was measured on 2026-09-11 and these files move, so confirm each before editing. (a) README.md line 145, inside the collapsed 'Launch agents from external terminals' block: 'These examples use Claude Code. For Codex, add -Command codex on Windows or --command codex on macOS/Linux.' (b) docs/GETTING_STARTED.md around line 31 (installer, offering codex and gemini) and around line 85 (launch commands, 'To use Codex, add -Command codex or --command codex'). (c) docs/DEVELOPMENT.md line 173 documents -Command / --command with the four CLI choices, and line 174 documents -GrokExec / --grok-exec including the detail that it exists for roles defaulting to the interactive terminal UI. There is no -CodexExec entry. Note while you are there that --gemini-exec and -Interactive are also absent from that reference; those are REAL gaps but they are NOT this card's scope, so leave them and say so in the completion summary rather than widening. (d) Confirm the behaviour you are about to document, from the source rather than from this plan: scripts/moe-agent.sh around line 394 states codex is interactive for every role unless --codex-exec opts the seat in, and the bash help text around line 299 carries the flag. (e) Read docs/CONFIGURATION.md line 55 and docs/TROUBLESHOOTING.md lines 291-343 in full. They already own the sandbox modes, the full-access default and its measured reasons, the pinned tools-approval mode and the fact that --full-auto is never passed. Your job is to LINK to them. Anything you find yourself retyping from those two pages belongs in a link instead.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Re-measured 2026-09-12, all four claims hold, line numbers barely drifted. (a) README.md:145 \"These examples use Claude Code. For Codex, add `-Command codex`...\" inside the collapsed \"Launch agents from external terminals\" block; README.md:124 is the \"review the changed files and recorded commit in Git\" line the warning must protect. (b) docs/GETTING_STARTED.md:31 installer mention, :85 launch mention (\"These commands default to Claude Code. To use Codex, add `-Command codex`...\"); :95 is that file's recorded-commit check. (c) docs/DEVELOPMENT.md:173 `-Command`/`--command`, :174 `-GrokExec`/`--grok-exec` — no -CodexExec entry; --gemini-exec and -Interactive also absent (real gaps, NOT this card's scope, left alone). (d) scripts/moe-agent.sh:394 comment \"Codex is interactive (TUI) for every role unless --codex-exec opts the seat\" with CODEX_INTERACTIVE=true at :402; help text at :299; MOE_CLI_ARGV_REJECTED at :5656, MOE_DISABLE_ARGV_PROBE at :5648. (e) Read what I must NOT duplicate: docs/CONFIGURATION.md:55 (MOE_CODEX_SANDBOX row — already names the codex-exec opt-in and the interactive default, owns the sandbox modes, the danger-full-access default + both measured reasons, the pinned default_tools_approval_mode, the never-passed --full-auto) and docs/TROUBLESHOOTING.md:285-343 (the --full-auto removal and the Windows sandbox/MCP-approval failure). Link targets resolved: MOE_CODEX_SANDBOX sits under \"### Agent Scripts\", so the anchor is #agent-scripts; link style is docs/CONFIGURATION.md from README, CONFIGURATION.md from docs/GETTING_STARTED.md, ./CONFIGURATION.md from docs/DEVELOPMENT.md (matching each file's existing links). Read-only step, no files touched.\n\nProcess note for later steps: session prompt says prefer Bash for file edits, but mem:gotcha-contested-path-needs-edit-tool-to-land shows a peer-declared path is DROPPED from the landing unless it was written by an editing tool (TOOL tier) — sed/heredoc writes are invisible to attribution. Overriding that guidance deliberately: all three doc edits go through the Edit tool.\n\nShared checkout: 2 pre-existing dirty paths belong to other sessions (packages/moe-daemon/src/tools/createTask.ts and createTask.test.ts) plus daemon-written .moe/ board state. Not mine, not touched, not reverted.",
+      "startedAt": "2026-09-12T13:50:03.573Z",
+      "completedAt": "2026-09-12T13:50:58.879Z"
     },
     {
       "stepId": "step-2",
       "description": "ADD THE FIRST-RUN WARNING TO README.md. Extend the existing sentence at line 145 so an operator choosing codex learns three things in the place they actually decide: a codex seat runs the interactive terminal UI for every role by default; such a seat does not commit anything until the operator closes it, because the launcher makes its commit after the CLI exits; and -CodexExec on Windows or --codex-exec elsewhere is the unattended alternative that lands a commit per task. The second point is the one that earns its place here and it should be the emphasis, because the quick start tells the reader a few lines earlier to 'review the changed files and recorded commit in Git' - which is exactly the check that looks broken when a terminal-UI seat is still open. Frame it as what the operator will SEE, not as an internal mechanism: the task reaches Done on the board while Git shows nothing yet. Keep it to two or three sentences inside the existing collapsed block; this is a first-run page and a wall of caveats there is its own failure. Link the sandbox and approval detail to docs/CONFIGURATION.md rather than restating any of it. Do not describe codex as having a yolo mode, and do not name the bypass-approvals flag - whether Moe should ever offer that is a separate decision and this card must not pre-empt it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "README.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "README.md"
+      ],
+      "note": "Added a two-sentence paragraph after README.md:145 (now 147), still inside the collapsed \"Launch agents from external terminals\" block. Sentence 1 leads with what the operator SEES: a codex seat runs the interactive terminal UI for every role and commits nothing while that UI is open, because the launcher records the commit after the CLI exits, so the task can reach Done on the board while Git still shows no commit for it — that is the exact check README.md:124 sends the reader to do 20 lines earlier. Sentence 2 gives the cure (close the UI) and the unattended alternative, naming -CodexExec / --codex-exec, with the sandbox and approval detail LINKED to docs/CONFIGURATION.md#agent-scripts (the MOE_CODEX_SANDBOX row under \"### Agent Scripts\") rather than restated. No yolo framing anywhere; the bypass-approvals flag is not named. Written with the Edit tool, not Bash, per mem:gotcha-contested-path-needs-edit-tool-to-land.",
+      "startedAt": "2026-09-12T13:51:01.268Z",
+      "completedAt": "2026-09-12T13:51:25.134Z"
     },
     {
       "stepId": "step-3",
       "description": "SAY IT ONCE IN docs/GETTING_STARTED.md. That file offers codex in two places, around line 31 for installation and around line 85 for launching. Write the warning ONCE, at the launch site around line 85 where it is actionable, and from the installer mention at line 31 point forward to it rather than repeating it - a duplicated caveat in a first-run guide ages into two versions that disagree. Match the README wording closely enough that a reader moving between the two pages does not wonder whether they describe different behaviour, without copying it verbatim into a third place. Same constraints as the README: link the sandbox and approval detail rather than restating it, no yolo framing, no bypass flag.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/GETTING_STARTED.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/GETTING_STARTED.md"
+      ],
+      "note": "Warning written ONCE, at the launch site (was line 85, now the paragraph after it) where it is actionable: same two facts and same order as the README paragraph — interactive terminal UI for every role, commits nothing while the UI is open because the launcher records the commit after the CLI exits, task can reach Done while Git shows no commit — then the cure (close the UI) and the unattended alternative -CodexExec / --codex-exec, with sandbox/approval linked to CONFIGURATION.md#agent-scripts. Added a forward clause there (\"expect this when you check the recorded commit below\") because line 95 of this file is the recorded-commit check, the same trap the README paragraph guards. The installer mention at line 31 now POINTS FORWARD (\"If you choose Codex, read the terminal-UI note under [Launch an architect and approve the plan](#launch-an-architect-and-approve-the-plan) ... a codex seat commits at a different moment from the others\") instead of repeating the caveat, so there is one copy to maintain. Anchor verified against the file's own \"## Launch an architect and approve the plan\" heading. Wording deliberately close to the README without being a verbatim third copy. No yolo framing, bypass-approvals flag not named, nothing restated from CONFIGURATION.md or TROUBLESHOOTING.md. Both edits via the Edit tool (TOOL attribution tier).",
+      "startedAt": "2026-09-12T13:51:27.837Z",
+      "completedAt": "2026-09-12T13:51:52.650Z"
     },
     {
       "stepId": "step-4",
       "description": "CLOSE THE FLAG-REFERENCE ASYMMETRY IN docs/DEVELOPMENT.md. Add a -CodexExec / --codex-exec entry in the same shape and register as the -GrokExec / --grok-exec entry at line 174, placed beside it. It should say that the flag forces the codex CLI headless for a seat, that codex seats are interactive for every role by default so this is the only route to headless, that per-task landing needs it, and that the sandbox for that headless launch is chosen by MOE_CODEX_SANDBOX - with a link to docs/CONFIGURATION.md for the modes and the default rather than repeating them. One sentence of error handling belongs here because it is the flag reference and the failure is specific: if the installed codex rejects the wrapper's argv, the seat stops with MOE_CLI_ARGV_REJECTED and a chat escalation instead of relaunch-looping, and MOE_DISABLE_ARGV_PROBE=1 skips that check. Leave --gemini-exec and -Interactive alone; they are genuinely missing too, but adding them is scope this card did not agree to.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/DEVELOPMENT.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "Added the -CodexExec / --codex-exec entry to the \"Key flags:\" list in docs/DEVELOPMENT.md, immediately above the -GrokExec / --grok-exec entry it mirrors (same bullet shape, same register, same one-paragraph density). It states: the flag forces the codex CLI headless (codex exec) for a seat; codex seats are interactive TUI for every role so this is the only route to headless AND the only way a codex seat lands a commit per task (post-flight runs after the CLI exits, a TUI seat exits only when the operator closes it); the headless sandbox comes from MOE_CODEX_SANDBOX with modes/default/reasons LINKED to ./CONFIGURATION.md#agent-scripts, not repeated. Error-handling sentence verified against the source rather than the plan text: scripts/moe-agent.sh:5648-5663 — MOE_CLI_ARGV_REJECTED, a @governors line in #general (GENERAL_CHANNEL_ID), then stop_heartbeat_sidecar + exit 1, with the EXIT trap deregistering the seat and returning the task to the queue; MOE_DISABLE_ARGV_PROBE=1 skips the probe. Scope held: --gemini-exec and -Interactive are still absent from this reference on purpose — real gaps, not this card's scope, to be filed separately. No yolo framing, no bypass-approvals flag. Edit tool used (TOOL attribution tier).",
+      "startedAt": "2026-09-12T13:51:54.639Z",
+      "completedAt": "2026-09-12T13:52:18.835Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY, REVIEW, HAND OFF. (a) Run npm run lint from the repository root - it is a bash script, so Git Bash on Windows - and require exit 0. It lints role docs rather than these three files, so treat a failure as a signal that something unrelated moved rather than as feedback on your edit, and diagnose before re-running. (b) Record a grep showing each of the three files now names the codex exec flag, and a git diff --stat proving the change touches only those three files: no script, no test, no wrapper argv, which is the first task rail. (c) Read all four documents together and check they agree - README, GETTING_STARTED, DEVELOPMENT and CONFIGURATION - since the failure mode of a docs change is not a broken build but two pages that quietly contradict each other. Confirm you restated nothing that CONFIGURATION.md or TROUBLESHOOTING.md already owns, that no page now claims codex has a yolo mode, and that the bypass-approvals flag appears nowhere. (d) Be honest about the epic rail requiring a test that fails on the old behaviour: there is no documentation test harness in this repository and this card does not add one, so that rail cannot be satisfied with an automated red here. State that plainly in the completion summary along with what WAS verified - the lint run, the greps, the diff scope and a human read - so QA judges it on the evidence that exists rather than rejecting on a rail no docs change can meet. Also name the deliberately untouched gaps: --gemini-exec and -Interactive are still absent from the flag reference. Complete through moe.complete_task with all three modified paths listed.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "README.md",
         "docs/GETTING_STARTED.md",
         "docs/DEVELOPMENT.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "README.md",
+        "docs/GETTING_STARTED.md",
+        "docs/DEVELOPMENT.md"
+      ],
+      "note": "(a) `npm run lint` from the repo root: exit 0 — \"OK: docs/roles/architect.md has 38 lines (max 40) / worker.md 25 / qa.md 25\". Nothing unrelated moved.\n\n(b) Grep proves the flag is named in all three files: README.md:147, docs/GETTING_STARTED.md:87, docs/DEVELOPMENT.md:174. `git diff --stat` over the whole tree minus .moe: README.md +2, docs/DEVELOPMENT.md +1, docs/GETTING_STARTED.md +4/-1 — plus packages/moe-daemon/src/tools/createTask{.ts,.test.ts}, which were ALREADY dirty at session start (peer session's debris, flagged in my launch context). I did not touch, stage, revert or stash them. No script, no test, no wrapper argv changed by me.\n\n(c) Adversarial pass found one claim worth checking rather than asserting: I wrote \"this flag is the only route to headless\" in the DEVELOPMENT entry, and the wrapper also has a generic --interactive/--no-interactive pair, so --no-interactive could plausibly have been a second route. Verified it is not: scripts/moe-agent.sh computes CODEX_INTERACTIVE at 401-404 from CODEX_EXEC alone, BEFORE the role-based INTERACTIVE is resolved at 417-423, and never recomputes it (only other use is the banner at 1784) — unlike GROK_INTERACTIVE, which is deliberately computed after and does honour INTERACTIVE. The ps1 twin matches: $codexInteractive = ($cliType -eq \"codex\") -and (-not $CodexExec) at :713. Claim stands on both wrappers.\n\nFour-document read for contradictions: README:147 / GETTING_STARTED:87 / DEVELOPMENT:174 all state the same two facts in the same order, and CONFIGURATION.md:55 independently says \"opt-in per seat via -CodexExec/--codex-exec; codex seats are interactive by default\" while TROUBLESHOOTING.md:343 says \"Codex seats are interactive (TUI) by default again since 0.8.0; headless stays opt-in via -CodexExec / --codex-exec\". No page disagrees. Nothing restated from CONFIGURATION.md:55 or TROUBLESHOOTING.md:285-343 — the sandbox, the danger-full-access default and its two measured reasons, the pinned default_tools_approval_mode and the never-passed --full-auto stay linked only. My DEVELOPMENT error sentence matches CONFIGURATION.md:54's MOE_DISABLE_ARGV_PROBE row without repeating it. Grep for \"yolo|bypass-approvals|dangerously.bypass|full-auto\" across the four files returns only the pre-existing grok --yolo in the -GrokExec entry and CONFIGURATION.md's own --full-auto history: no page attaches a yolo mode to codex and the bypass-approvals flag appears nowhere. All four links verified to resolve: docs/CONFIGURATION.md#agent-scripts from README (root-relative), CONFIGURATION.md#agent-scripts from GETTING_STARTED (docs sibling), ./CONFIGURATION.md#agent-scripts from DEVELOPMENT (its own house style), and the internal #launch-an-architect-and-approve-the-plan pointer — each target heading exists exactly once, so no GitHub -1 suffix.\n\n(d) Epic rail \"every fix lands with a test that fails on the old behaviour\" CANNOT be met here: there is no documentation test harness in this repository and this card does not add one. Honest evidence is the lint exit 0, the greps, the diff scope and the four-document read above; the remaining check is a human read. Deliberately untouched and worth filing: --gemini-exec and -Interactive are still absent from the DEVELOPMENT.md flag reference (real gaps, unagreed scope).\n\nAll three files written with the Edit tool rather than Bash, overriding the session's prefer-Bash guidance, because mem:gotcha-contested-path-needs-edit-tool-to-land shows a peer-declared path is dropped from the landing unless it is in the TOOL tier.",
+      "startedAt": "2026-09-12T13:52:24.170Z",
+      "completedAt": "2026-09-12T13:53:32.355Z"
     }
   ],
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-8db40c97",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Operator instruction: promote and plan. Dependency-free docs card filed after a live probe of codex-cli 0.154.0; nothing here waits on another delivery.",
+  "reopenReason": "Unblocking: the blocker was a SEAT provenance problem, not a task problem. That session launched with no pre-flight task and claimed inside wait_for_task, so it had no per-task baseline and correctly refused to edit — exactly the defect task-80737065 exists to fix. The card itself is sound: five approved steps, zero completed, three declared docs files, no dependencies. A correctly launched task-bound seat can execute it unchanged. If the fleet launches another unbound seat against it, it will block again, which is useful signal rather than harm.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -78,13 +107,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T18:37:11.023Z",
-  "updatedAt": "2026-09-11T21:24:57.983Z",
+  "updatedAt": "2026-09-12T13:54:34.727Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T21:22:13.076Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-11T21:23:36.358Z",
   "planningNotes": {
@@ -101,10 +137,28 @@
   },
   "planApprovedAt": "2026-09-11T21:23:36.423Z",
   "contextFetchedBy": [
-    "worker-2020d87c"
+    "worker-2020d87c",
+    "worker-e67b0dd2",
+    "qa-8db40c97"
   ],
-  "blockedReason": "UNBOUND WRAPPER SESSION, verified before edits. This CLI's original launch context explicitly had no pre-flight task; task was claimed later inside wait_for_task. Fresh expected baseline D:/projexts/moes/.git/moe/baseline/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.tsv is MISSING. Current scripts/moe-agent.ps1 still gates baseline/postflight on preflightTaskId, so this session cannot attest task-bound delivery. No docs/source edits, lint/tests, staging, commits, or baseline fabrication; all five steps remain pending. Requires an actual wrapper task-bound relaunch (prefer -CodexExec), not another conversation turn. This is a seat/provenance blocker, not a task dependency or implementation failure.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-11T21:24:57.983Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "UNBOUND WRAPPER SESSION, verified before edits. This CLI's original launch context explicitly had no pre-flight task; task was claimed later inside wait_for_task. Fresh expected baseline D:/projexts/moes/.git/moe/baseline/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.tsv is MISSING. Current scripts/moe-agent.ps1 still gates baseline/postflight on preflightTaskId, so this session cannot attest task-bound delivery. No docs/source edits, lint/tests, staging, commits, or baseline fabrication; all five steps remain pending. Requires an actual wrapper task-bound relaunch (prefer -CodexExec), not another conversation turn. This is a seat/provenance blocker, not a task dependency or implementation failure.",
+  "blockedOnTaskIds": null,
+  "workStartedAt": "2026-09-12T13:50:03.573Z",
+  "reviewStartedAt": "2026-09-12T13:54:19.550Z",
+  "verification": {
+    "command": "npm run lint",
+    "exitCode": 0,
+    "outputTail": "> lint\n> npm run docs:lint\n\n> docs:lint\n> bash scripts/lint-role-docs.sh\n\nOK: docs/roles/architect.md has 38 lines (max 40)\nOK: docs/roles/worker.md has 25 lines (max 40)\nOK: docs/roles/qa.md has 25 lines (max 40)\nLINT_EXIT=0",
+    "reportedAt": "2026-09-12T13:54:19.550Z"
+  },
+  "filesModified": [
+    "README.md",
+    "docs/GETTING_STARTED.md",
+    "docs/DEVELOPMENT.md"
+  ],
+  "completionSummary": "DOCS ONLY, 3 files. README.md:147 (in the collapsed launch block, after the codex swap sentence at :145) and docs/GETTING_STARTED.md:87 (launch site) now say: a codex seat runs the interactive terminal UI for every role, and commits nothing while that UI is open — the launcher records the commit after the CLI exits, so a task can reach Done on the board while Git shows no commit; close the UI and the commit appears; -CodexExec / --codex-exec is the unattended alternative that lands a commit per task. Each guards its own page's recorded-commit instruction (README:124, GETTING_STARTED:97). Written ONCE in GETTING_STARTED: the installer mention at :31 points forward to #launch-an-architect-and-approve-the-plan instead of duplicating. docs/DEVELOPMENT.md:174 adds the -CodexExec / --codex-exec bullet directly above the -GrokExec one it mirrors, closing the asymmetry, incl. MOE_CLI_ARGV_REJECTED + @governors in #general + MOE_DISABLE_ARGV_PROBE=1. Sandbox/approval detail is LINKED to CONFIGURATION.md#agent-scripts everywhere, never restated.\n\nVERIFIED FRESH THIS SESSION: `npm run lint` exit 0 (architect.md 38/worker.md 25/qa.md 25 lines, max 40). grep -c for the flag: README.md 1, docs/GETTING_STARTED.md 1, docs/DEVELOPMENT.md 1. git diff --stat: README.md +2, docs/DEVELOPMENT.md +1, docs/GETTING_STARTED.md +4/-1 — 3 files, 6 insertions, 1 deletion. No script, no test, no wrapper argv. (packages/moe-daemon/src/tools/createTask{.ts,.test.ts} are dirty from a PEER session, pre-existing at my launch; untouched, unstaged, unreverted.) Four-doc contradiction read done: CONFIGURATION.md:55 and TROUBLESHOOTING.md:343 independently state the same interactive-default/exec-opt-in, no page disagrees; nothing restated from CONFIGURATION.md:54-55 or TROUBLESHOOTING.md:285-343; grep for yolo/bypass/full-auto finds only the pre-existing grok --yolo and CONFIGURATION's own --full-auto history — no page attaches a yolo mode to codex, the bypass-approvals flag appears nowhere; all four lin"
 }

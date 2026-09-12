@@ -144,6 +144,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\moe-agent.ps1 -Rol
 
 These examples use Claude Code. For Codex, add `-Command codex` on Windows or `--command codex` on macOS/Linux. The launchers configure the agent's Moe connection and start the daemon if needed.
 
+A codex seat runs the interactive terminal UI for every role, and it commits nothing while that UI is open — the launcher records the commit after the CLI exits, so the task can reach **Done** on the board while Git still shows no commit for it. Close the terminal UI and the commit appears; to run a codex seat unattended so it lands a commit per task, add `-CodexExec` on Windows or `--codex-exec` on macOS/Linux (that headless launch has its own sandbox and approval settings — see [`MOE_CODEX_SANDBOX`](docs/CONFIGURATION.md#agent-scripts)).
+
 </details>
 
 <details>
