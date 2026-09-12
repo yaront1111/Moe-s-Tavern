@@ -114,6 +114,8 @@ Three tools are deliberately **guard-exempt** even though the proxy injects `wor
 
 `moe.record_candidate` is likewise exempt from the ownership guard and allowed in every task status, for the same post-`complete_task` reason. Instead, the **attempt** fence guards it: a caller whose attempt has been superseded cannot record (see its section).
 
+`moe.record_check_run` has no ownership, status or attempt gate at all: a runner reports checks after the attempt that offered the bytes has closed, when QA may already own the task. Binding guards it instead: the named candidate must exist and the reported tree must be exactly that candidate's (see its section).
+
 ---
 
 ## Tools (Implemented)
@@ -197,7 +199,7 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
   task: {
     id, title, description, definitionOfDone, taskRails, status, implementationPlan,
     planSizeWarnings?: string[],        // present when the latest submit_plan drew warn-zone size warnings
-    verification: { command, exitCode, outputTail?, reportedAt } | null, // complete_task evidence — QA re-runs the command
+    verification: { command, exitCode, outputTail?, reportedAt, source: "agent-reported" } | null, // complete_task evidence — QA re-runs the command; always agent-reported (see Verification provenance)
     completionSummary?: string,         // worker's complete_task summary (≤2000 chars) — persisted, no longer discarded
     dependsOn?: string[],               // structural prerequisites (create_task / set_task_dependencies) — gate WORKING-status claims until all are DONE/ARCHIVED
     dependsOnUnmet?: string[],          // the dependsOn subset not yet DONE/ARCHIVED (present alongside dependsOn)
@@ -211,7 +213,7 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     landing?: { lastCompletion?: { sha, ref, pushed, recordedAt }, lastCheckpoint?: { sha, recordedAt } },
     rescueRefsHint?: string,            // present when any commit is kind "rescue": how to recover from refs/moe/rescue/<taskId>/*
     epicSiblings?: Array<{ id, title, order, status, landing?: { lastCompletion? }, landed: boolean,
-                           verification?: { command, exitCode, reportedAt }, reviewSummary?: string, completionSummary?: string }>,
+                           verification?: { command, exitCode, reportedAt, source: "agent-reported" } | null, reviewSummary?: string, completionSummary?: string }>,
                                         // same epic, lower order, ≤20 — PLUS every task named by this task's dependsOn/blockedOnTaskIds,
                                         // regardless of the lower-order filter and the 20-cap; landed = a pushed completion commit or
                                         // status REVIEW/DONE. Prerequisite evidence is READ HERE — never via HEAD greps
@@ -247,6 +249,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
 
 **Reviewed bytes.** `currentCandidate` is the record QA must read before signing off, and its `id` is what `moe.qa_approve` / `moe.qa_reject` bind the decision to. Because it is re-resolved on every call, a reviewer who re-reads a task after the runner recorded a newer candidate sees the new one — and an approval still naming the old one is refused with `CANDIDATE_MISMATCH`. Projects that never call `moe.record_candidate` never see the key.
+
+**Verification provenance.** `task.verification` is the completing agent's own `complete_task` claim, bound to no candidate or tree, so both projections — `task.verification` and a declared prerequisite's `epicSiblings[].verification` — carry `source: "agent-reported"` whatever the stored row says. A row persisted before the label existed, or one hand-edited to claim `runner-observed`, reads the same way. The label is set on a fresh copy and never written back. Absent verification is `null`, and the compact `epicSiblings` projection still omits `outputTail`. Runner-observed results for a candidate's exact tree are a separate record, written with `moe.record_check_run`.
 
 **Commit evidence.** `commits`/`landing`/`lastCommitOutcome` come from the wrapper's `moe.record_commit` reports (the daemon never runs git). A prerequisite task has landed iff `epicSiblings[*].landed` is true — or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it; uncommitted work in a peer's checkout is not a prerequisite. For a `REVIEW` task the `nextAction` reason tells QA to confirm a completion commit is recorded in `task.commits` (`git show <sha>`) before approving. A RESUME context lists `unattributedPaths` with a `moe.declare_files` hint so the resuming session can claim what its predecessor forgot to report.
 
@@ -429,7 +433,8 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 **Notes:**
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
 - `summary` is persisted as `task.completionSummary` (it used to be accepted and silently discarded) and surfaced via `moe.get_context` — both on the task itself and on the `epicSiblings` entries of every dependent task, so a later task can read what its prerequisite actually delivered without grepping HEAD.
-- The evidence is persisted as `task.verification` (with `reportedAt`), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier the wrapper commits regardless of its baseline; `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself and never runs git.
+- The evidence is persisted as `task.verification` (with `reportedAt`, and `source: "agent-reported"` stamped after validation), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier the wrapper commits regardless of its baseline; `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself and never runs git.
+- **Candidate-less, agent-reported evidence.** `task.verification` names no candidate or tree, so the daemon labels it `source: "agent-reported"` on every write and every read (see **Verification provenance** under `moe.get_context`). There is no `source` input: fields a caller adds inside `verification` are not stored. Validation is unchanged: `command` at most 500 characters, `exitCode` exactly 0, and the tail kept to its last 2000 *characters*, unlike the 16384-byte UTF-8 tail of a `CheckRun`. Runner-observed results for a candidate's exact tree are recorded separately with `moe.record_check_run`.
 - **The commit happens after the CLI exits.** `complete_task` only flips the status; the wrapper's post-flight lands the completion commit (`feat|fix(task-<id>): <title>` with `Moe-Task`/`Moe-Kind: completion`/`Moe-Session`/`Moe-Status` trailers), pushes it and reports it via `moe.record_commit` seconds later. A QA that wakes on the REVIEW write can see an empty `task.commits` for that window — `qa_approve` warns (`NO-COMPLETION-COMMIT`) rather than rejecting. If QA raced ahead and the task is already `DONE` when the wrapper looks, the completion commit still lands (`Moe-Status: DONE`).
 - **Branch policy** (`settings.consolidationBranch`, a literal branch name or a `*` glob such as `moe/work-*`; case-sensitive, anchored at both ends). Unset or empty disables the check entirely and no `branchPolicy` key appears in the response. When it is set there are three outcomes: `currentBranch` matches → completion proceeds and the response carries `branchPolicy: { pattern, currentBranch, matched: true }`; `currentBranch` does not match → `CONSTRAINT_VIOLATION` whose message starts `BRANCH-POLICY-FAIL:` and names both branches, thrown **before** the task update so the task stays `WORKING` with no verification persisted; `currentBranch` missing or blank → **never blocked**, a one-line warning is posted to `#governors` and the response carries `branchPolicy: { pattern, matched: null, warning }`.
 - `currentBranch` is reported by the agent (the CLI), not by the wrapper: the wrapper's landing happens *after* this call, on the branch its safe-branch step picks (a literal `consolidationBranch` doubles as that peel target; otherwise `moe/work-<YYYY-MM-DD>`), and the branch it actually landed on arrives afterwards as `record_commit.ref` / `task.commits[].ref`. That is why an absent `currentBranch` warns instead of failing.
@@ -673,6 +678,84 @@ All seven are required; `additionalProperties` is `false`.
 - `-32002 CANDIDATE_IMMUTABLE`: the `id` already exists and a field differs. The message names the differing fields; record the change under a new id.
 - `-32602 INVALID_INPUT`: a malformed field, such as a bad sha shape, a blank or padded `deliveryTarget`, an invalid `id`, a `generation` that is not a positive integer, or non-object arguments
 - `-32602 MISSING_REQUIRED`: `taskId`, `attemptId`, `baseRevision`, `treeSha` or `deliveryTarget` is absent or `null`
+
+---
+
+### moe.record_check_run
+
+**Runner-called.** Records what a check reported about one frozen `Candidate`'s exact bytes as an immutable `CheckRun` (docs/SCHEMA.md `## CheckRun`), so a later gate can ask about exactly those bytes instead of about a task. Each run is one file at `.moe/checks/<id>.json`. A candidate accumulates runs, grouped by `candidateId`: running a check again is a new record under a new id, and failures stay in the history next to passes. This tool only records; whether a run satisfies any gate is decided later, by policy.
+
+**Parameters:**
+```typescript
+{
+  id?: string,             // optional check-run id, [A-Za-z0-9_-]{1,128}. Supply one and reuse it so a crash retry is idempotent;
+                           // when omitted the daemon generates "check-<32 hex>"
+  candidateId: string,     // [A-Za-z0-9_-]{1,128}: the Candidate whose bytes were checked; it must already exist
+  treeSha: string,         // /^[0-9a-f]{7,40}$/i: the tree the check ran against, as reported; must equal the candidate's treeSha exactly
+  command: string,         // the command that was run, verbatim (never trimmed, never run by the daemon); non-blank, ≤500 chars
+  exitCode: number,        // any safe integer: zero, positive or negative. A failing run is recorded like a passing one
+  outputTail?: string,     // the end of the output, stored as its final 16384 UTF-8 BYTES; absent is stored as ""
+  runnerId: string,        // [A-Za-z0-9_-]{1,128}: the runner the report names. Reported, not authenticated; need not be a registered worker
+  source: "runner-observed" | "agent-reported", // REQUIRED declared provenance; there is no default
+  workerId?: string        // caller (auto-injected by proxy); not evidence, and not stored on the run
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, checkRun: CheckRun, duplicate: boolean }
+// checkRun: the stored record { id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source, createdAt }
+// duplicate: true when an identical run already existed under this id; it is returned unchanged and nothing is written
+```
+
+**Example.** A runner reports a FAILING gate under an id it chose:
+```json
+{
+  "id": "check-cand3f9d-gate-1",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "command": "node gate.cjs",
+  "exitCode": 1,
+  "outputTail": "1 failing: expected 0 lint errors, found 3",
+  "runnerId": "runner-pilot",
+  "source": "runner-observed"
+}
+```
+The run is recorded, so the call succeeds even though the check failed:
+```json
+{
+  "success": true,
+  "checkRun": {
+    "id": "check-cand3f9d-gate-1",
+    "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+    "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "command": "node gate.cjs",
+    "exitCode": 1,
+    "outputTail": "1 failing: expected 0 lint errors, found 3",
+    "runnerId": "runner-pilot",
+    "source": "runner-observed",
+    "createdAt": "2026-09-11T03:20:00.000Z"
+  },
+  "duplicate": false
+}
+```
+Sending the identical report again, for example after a runner crash, returns the same `checkRun` (same `createdAt`) with `"duplicate": true` and writes nothing.
+
+**Notes:**
+- **Recorded, not approved.** `success: true` only acknowledges that the run was persisted. A nonzero `exitCode` is acknowledged exactly like a pass. The tool never marks a task `DONE`, never approves a review and never releases a dependent task.
+- **`source` is declared provenance.** The daemon never executes `command` and does not authenticate the caller, so `runner-observed` is what the report says, not proof that the command ran or of who ran it. `source` is required, never defaulted, and never inferred from `workerId`.
+- **Bound to one candidate's tree.** The candidate must exist and `treeSha` must be exactly its tree, with no prefix match and no case folding. No candidate is created on the caller's behalf, and a run recorded for one candidate or tree is never rebound to another.
+- **Immutable, with an idempotent retry.** Re-recording an existing `id` is compared field by field after normalization: the bounded tail, and `""` for an absent one. An identical report returns the stored run (`duplicate: true`, original `createdAt`) and writes nothing. Any difference is refused, so a changed result (another exit code, command, tail or source) is a new run and needs a fresh `id`. If the daemon generated the id, a retry records a second run.
+- **Output tail: 16384 UTF-8 bytes, not characters.** The kept portion is the end of the log and always starts on a whole character; malformed input such as a lone UTF-16 surrogate is first normalized to U+FFFD. This bound is deliberately different from `complete_task`'s `verification.outputTail`, which still keeps the last 2000 characters. Details: docs/SCHEMA.md `## CheckRun`.
+- `createdAt` is the daemon's clock, never the caller's. The tool emits no activity event, no chat line and no board broadcast.
+- **No ownership, status or attempt gate.** The runner reports after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. The tool is not `blocking`, so dispatch serializes it under the state mutex: two concurrent identical reports make one write and one `duplicate: true`.
+
+**Errors.** Checked in this order, and every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName` (sent as `error.data.codeName`):
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a missing or differently spelled `source`, a string or fractional `exitCode`, an invalid `id`/`candidateId`/`runnerId`, a `treeSha` that is not 7-40 hex, a blank or over-500-character `command`, a non-string `outputTail`, or non-object arguments. Nothing is coerced.
+- `-32001 CANDIDATE_NOT_FOUND`: `candidateId` names no candidate
+- `-32002 CHECK_RUN_TREE_MISMATCH`: `treeSha` is not exactly the candidate's tree. The message names both trees.
+- `-32002 CHECK_RUN_IMMUTABLE`: the `id` already holds a different run. The message names the differing fields; record the change under a new id.
+- A failed write (a full disk, a permission error) reaches the caller as a `-32000` error carrying the write's message. No run is recorded or published, and no success is returned.
 
 ---
 

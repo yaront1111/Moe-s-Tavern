@@ -410,6 +410,9 @@ interface Task {
     exitCode: number;            // Always 0 (non-zero is rejected at complete_task)
     outputTail?: string;         // Last ≤2000 chars of its output
     reportedAt: string;          // ISO timestamp
+    source?: 'agent-reported';   // The completing agent's own claim, bound to no candidate or tree: complete_task
+                                 // stamps it on every new report and get_context forces it on every read. Optional
+                                 // only so older rows still load. Runner-observed results are CheckRun records instead
   };
   filesModified?: string[];      // ASSERTED paths: completed steps' modifiedFiles ?? affectedFiles (complete_task)
                                  // ∪ non-inferred paths landed via moe.record_commit
@@ -1076,7 +1079,7 @@ interface Review {
 
 **File:** `.moe/checks/{check-run-id}.json` (one file per run)
 
-What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; no MCP tool records one yet (`moe.record_check_run` is a later slice). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
+What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; a runner records one through the `moe.record_check_run` MCP tool (docs/MCP_SERVER.md). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
 
 ```typescript
 interface CheckRun {

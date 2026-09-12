@@ -19,49 +19,71 @@
     {
       "stepId": "step-1",
       "description": "VERIFY THE SPLIT PRODUCERS AND FREEZE THE REMAINING WIRE CONTRACT (read-only). Re-fetch context and prove Candidate task-4d7074c001af47e881572e9efae30a41, CheckRun-store task-214bcfa37db24628aab11689764b4ae2 and legacy-label task-95a1d08e21dd45688cb296914daf4417 actually landed (landing.merged or matching Moe-Task trailer), not merely green in a shared tree. If a producer is undelivered, report_blocked naming it; do not implement its files here. Read the delivered checkRunStore exports/type/bounds, legacy completeTask/getContext labels, and acceptance.test.ts's frozen record_check_run payload. This parent retains ALL six original DoD items through those producers and owns ONLY recordCheckRun.ts, recordCheckRun.test.ts, tools/index.ts and docs/MCP_SERVER.md. The new store is contracted to validateCheckRunParams(unknown), recordCheckRun(state,params)->{checkRun,duplicate}, getCheckRun/listCheckRunsForCandidate and MAX_CHECK_LOG_BYTES=16384; verify the actual signatures and flag material drift rather than compensating with aliases. Read recordCandidateTool, getTools, McpAdapter.handle and existing registry.test.ts. Record HEAD/status/foreign paths; no peer cleanup. Required payload fields are candidateId,treeSha,command,exitCode,runnerId,source; optional id/outputTail/workerId. source has no default. No taskId/attemptId/generation requirement: the frozen acceptance caller intentionally supplies none and can report against a completed candidate attempt.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only verification, HEAD 7e1e293 (board-only wip commit on top of 31c7536), branch moe/work-2026-09-10.\n\nPRODUCERS: all three landed, not just green.\n- Candidate task-4d7074c0: landing.merged, b2061c8 plus d408634.\n- CheckRun store task-214bcfa3: merged, fac1e3d pushed.\n- Legacy label task-95a1d08e: merged, 31c7536 pushed, DONE. The Moe-Task trailer is found for each.\n\nSTORE CONTRACT (checkRunStore.ts): exactly as planned, no drift.\n- MAX_CHECK_LOG_BYTES = 16384.\n- validateCheckRunParams(raw: unknown) returns ValidCheckRunParams (outputTail normalized).\n- recordCheckRun(state, params: RecordCheckRunParams) returns Promise<{checkRun, duplicate}>, and validates again internally, idempotently.\n- getCheckRun and listCheckRunsForCandidate.\n- Refusals: CANDIDATE_NOT_FOUND -32001 {candidateId}; CHECK_RUN_TREE_MISMATCH -32002 {candidateId, expectedTreeSha, actualTreeSha}; CHECK_RUN_IMMUTABLE -32002 {checkRunId, differingFields}.\n- writeEntity runs before map.set.\n\nLEGACY: completeTask.ts:164 stamps source agent-reported; getContext.ts:213 (compact prerequisite, no tail) and :348 (primary, fresh copy) force it.\n\nWIRE: McpAdapter maps a MoeError to {code, message, data: {tool, codeName}}, dropping context. Any other error becomes -32000 {tool}. Handlers run under state.runExclusive unless blocking.\n\nFROZEN PAYLOAD (acceptance.test.ts:1359/1387, via getTools + runExclusive): {id, candidateId: 'cand-P-current', treeSha: 'c3'x20, command: 'node gate.cjs', exitCode: 0, outputTail, runnerId: 'runner-pilot', source}. It carries no task, attempt or worker identity.\n\nDOCS COUPLING: taskTimeBudgetDocs.test.ts fails when MCP_SERVER.md documents an UNREGISTERED tool, so the registry entry must land before the docs section. registry.test.ts fails when a *Tool factory is unregistered, so the tool file and the index entry land together.\n\nSCOPE NOTE: docs/SCHEMA.md:1079 says \"no MCP tool records one yet\" and becomes stale once the tool lands. SCHEMA.md:408 lacks the legacy source; comment-1938cc2c asks this task to decide. Step 4 will make a minimal section-local fix and explain it.\n\nFOREIGN DIRT, untouched: .moe/tasks for 7265e1fc, 80737065, 95a1d08e, e5a45262 and fa46784f; untracked epic-3b8eb56d, .moe/resources/, and tasks 9e851d4e and bfe2f04e. Live peers: governor, plus qa-9dc36824 and worker-b88fa8e8, both idle. Nobody holds the colliding task b1c98508 or c484696d.",
+      "startedAt": "2026-09-12T22:21:54.518Z",
+      "completedAt": "2026-09-12T22:27:06.706Z"
     },
     {
       "stepId": "step-2",
       "description": "WRITE PRODUCTION-BOUND TOOL REGRESSIONS FIRST. Create recordCheckRun.test.ts using ToolTestHarness, real Candidate/store fixtures and the registered production handler under state.runExclusive; include a real McpAdapter.handle smoke path to verify wire registration and error serialization. Exact assertions: getTools exposes moe.record_check_run once and its blocking flag is not true; both source literals persist unchanged with matching candidate/tree; zero, positive and negative safe-integer exit codes are recorded exactly, and success:true acknowledges persistence even for a failed check, never daemon approval. Commands and runnerId remain reported values, optional outputTail becomes empty string, optional id is generated. Invoke the frozen payload verbatim without worker/attempt/task identity and prove it works for a closed attempt/REVIEW task now held by QA, without changing task/attempt status, owner, verification or candidate bytes. Add no-write refusals for missing candidate (-32001/CANDIDATE_NOT_FOUND), wrong tree (-32002/CHECK_RUN_TREE_MISMATCH with candidateId/expectedTreeSha/actualTreeSha), malformed source/IDs/numbers/logs, and mismatched same-id content (-32002/CHECK_RUN_IMMUTABLE after a valid tree). Assert the exact error number AND codeName and persisted bytes/map contents. An identical normalized same-id retry must return duplicate:true, preserve the original timestamp/bytes and cause no second write; a new id creates a second independent record for the same candidate. Spy only for injected I/O failure: store write failure must reach the caller unchanged and leave no record/map entry or false success. Include ASCII and emoji tails over 16384 UTF-8 bytes, exact persisted suffix and byte cap, proving the HANDLER reaches the production normalizer. No fake store, copied validator, subprocess/check execution or held-out-file edits. Missing exports/compile failures are not red evidence; meaningful registration/no-write/source-preservation mutations are demonstrated at the final gate.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
-      ]
+      ],
+      "note": "I wrote the tests first, in a scratch copy outside the repo at D:/moe-867f-scratch/packages/moe-daemon/src/tools/recordCheckRun.test.ts, taken at HEAD 7e1e293 with node_modules junctioned.\n- Why scratch: a test file committed to the shared checkout before the tool exists would turn every peer's npm test red.\n- The repo copy lands in step 3, in the same burst as the tool and its index entry, so modifiedFiles is empty here and all three paths are reported on step 3.\n\nWHAT THE TESTS EXERCISE (33 cases)\n- The tool is reached only through getTools() under state.runExclusive, or through a real McpAdapter.handle. There is no static import of the tool module, so on the old code each case fails a real assertion, never an import or compile error.\n- Registration: registered exactly once; blocking is false.\n- inputSchema:\n  - exact property set, required [candidateId, treeSha, command, exitCode, runnerId, source], additionalProperties false;\n  - source enum with no default;\n  - exitCode type integer with no minimum;\n  - no createdAt property.\n- MCP smoke: listed with its schema, a call succeeds, and CANDIDATE_NOT_FOUND arrives as {code -32001, message, data {tool, codeName}}.\n- Frozen held-out payloads: both recorded verbatim on a REVIEW task held by qa-1 whose attempt is closed. Only the 2 new check files appear, and the task, attempt and candidate bytes are unchanged, including status, owner and verification.\n- Acknowledgement: 4 rows covering both source literals and exit codes 0, 1, -1 and 137. Each returns exactly {success, checkRun, duplicate} and the task stays REVIEW.\n- Reported values: command kept verbatim, runnerId need not be a worker, absent tail stored as '', generated check-<32hex> id, caller createdAt ignored in favour of the daemon clock, workerId not stored.\n- Missing source is refused MISSING_REQUIRED whatever the workerId (none, runner-pilot, worker-1).\n- Binding refusals checked exactly by {code, codeName, message, context}: CANDIDATE_NOT_FOUND -32001, and CHECK_RUN_TREE_MISMATCH -32002 with the other candidate's tree.\n- 12 malformed-input rows, each checked for [code, codeName] with nothing written.\n- Retry: an identical same-id call returns duplicate:true with the original createdAt and bytes, and makes no writeEntity call.\n- CHECK_RUN_IMMUTABLE with its exact context; a fresh id then records a second run.\n- Concurrency: two identical adapter calls return duplicate [false, true] with one write.\n- Injected write failure: rejects with the same error object, arrives on the wire as -32000 {tool}, and leaves the snapshot unchanged.\n- UTF-8 tail through the handler: ASCII over the cap keeps a×16384; an emoji log keeps 😀×4095+z. Byte counts are exact, and a retry with a different preamble replays.\n- The tool source contains no child-process calls.\n\nRED EVIDENCE (vitest in scratch against the unchanged code): exit 1, 33 of 33 failed, 0 errors.\n- 29: \"moe.record_check_run must be registered in getTools(): expected undefined to be defined\"\n- 1: \"expected [] to have a length of 1\"\n- 1: McpAdapter \"{code: -32601}\" (Tool not found) where [undefined, undefined] was expected\n- 1: rejects.toBe(injected) received the AssertionError instead\n- 1: \"tools/recordCheckRun.ts must exist\"\n- The raw JSON is copied to %TEMP%/moe-867f-red.json.\n\nThe file is 361 lines, over the 300-line guide, in line with sibling tests (checkRunStore.test.ts is 550). Every block maps to a planned assertion.",
+      "startedAt": "2026-09-12T22:29:50.933Z",
+      "completedAt": "2026-09-12T22:34:22.304Z"
     },
     {
       "stepId": "step-3",
       "description": "ADD THE MINIMAL REGISTERED RECORDER. Create tools/recordCheckRun.ts exporting recordCheckRunTool in the existing ToolDefinition factory shape. Use type-only StateManager/ToolDefinition imports and the delivered store rather than duplicating validation, UTF-8 truncation, candidate matching or persistence. Input schema documents id (optional validated entity id for crash retry), candidateId and runnerId (bounded entity ids, runnerId need not be a registered worker), treeSha (7-40 hex), command (nonblank, maximum 500 characters, not trimmed/reinterpreted), exitCode (signed safe integer, zero is not required), optional string outputTail (stored UTF-8 suffix <=16384 bytes), required explicit source enum runner-observed|agent-reported, and optional proxy-injected workerId (not evidence provenance). additionalProperties:false; no caller-createdAt field. The handler delegates validation/recording to the actual store contract and returns {success:true,checkRun,duplicate}; success is record acknowledgement only. source is declared report provenance, NOT authenticated runner identity or a command observed by the daemon. Do not infer source from workerId, default missing source, mutate existing task.verification, look up a newer candidate, enforce the current configured command, gate by task owner/status/current attempt, or call any process/Git API. Persist both passes and failures; later policy determines whether this exact candidate/tree/command/source is sufficient. Error handling is propagation: do not catch I/O or MoeError as a success/empty result; the existing McpAdapter maps them. Do NOT set blocking:true: the dispatch mutex protects check-then-write/replay. Add the factory import and exactly one entry in getTools() in tools/index.ts, preserving all sibling registrations. Do not alter the store/schema/legacy producers to make these tests pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.ts",
         "packages/moe-daemon/src/tools/index.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "note": "Added the registered recorder.\n\nNEW tools/recordCheckRun.ts (95 lines, LF)\n- Exports `recordCheckRunTool` in the ToolDefinition factory shape.\n- Imports: ToolDefinition, StateManager and CheckRunSource are type-only; MAX_CHECK_LOG_BYTES, recordCheckRun and validateCheckRunParams are values from the delivered store.\n- The handler is 3 lines:\n  - `params = validateCheckRunParams(args)`\n  - `{checkRun, duplicate} = await recordCheckRun(state, params)`\n  - `return {success: true, checkRun, duplicate}`\n- Not in the handler:\n  - no copied validation, UTF-8 cut, candidate or tree check, or persistence;\n  - no try/catch, so a MoeError or I/O error propagates;\n  - no ownership, status or attempt gate;\n  - no workerId-to-source inference and no source default;\n  - no task.verification access;\n  - no process or git API;\n  - not blocking.\n- inputSchema:\n  - properties: id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source, workerId;\n  - exitCode is `integer` with no minimum;\n  - source enum is `Object.keys(SOURCES)`, where `SOURCES: Record<CheckRunSource, true>`, so tsc fails if the type gains a source that is not listed;\n  - required: [candidateId, treeSha, command, exitCode, runnerId, source];\n  - additionalProperties false, and no createdAt.\n- The descriptions interpolate MAX_CHECK_LOG_BYTES, so the cap is never retyped.\n\ntools/index.ts: +2 lines, 0 deletions (git numstat 2/0): one import after recordCandidate, and one getTools entry after recordCandidateTool(state). All sibling registrations are preserved.\n\ntools/recordCheckRun.test.ts: copied byte-identical (cmp) from the step-2 scratch copy. The tool file, the index entry and this copy landed within about a minute, so the shared checkout was never left with an unregistered factory or a failing test.\n\nGREEN (repo, cwd packages/moe-daemon, vitest RUN root D:/projexts/moes/packages/moe-daemon)\n- `npx vitest run src/tools/recordCheckRun.test.ts src/tools/registry.test.ts src/state/checkRunStore.test.ts src/util/taskTimeBudgetDocs.test.ts`\n- Result: Test Files 4 passed (4), Tests 141 passed (141), exit 0.\n- Breakdown: 33 new + 2 registry + 89 store + 17 docs guard.\n- `npx tsc --noEmit -p tsconfig.json`: exit 0. This covers the tool file only; tsc excludes tests.\n\nThe scratch tree is synced with the repo tool and index for the step-5 mutation runs. No store, schema, legacy or peer files were touched.",
+      "startedAt": "2026-09-12T22:35:23.049Z",
+      "completedAt": "2026-09-12T22:36:28.626Z"
     },
     {
       "stepId": "step-4",
       "description": "DOCUMENT THE USABLE WIRE AND COMPATIBILITY BOUNDARY. In docs/MCP_SERVER.md add the moe.record_check_run section beside the existing record_candidate section using current house style: complete JSON input/output examples including explicit source, a recorded nonzero exitCode with success:true, optional caller id and duplicate retry, .moe/checks/<id>.json grouping by candidate, exact bounds and refusal names/numbers, and write-error propagation. Document the 16384-byte UTF-8 suffix cap (not 16384 characters), normalization and preservation of complete characters; link the producer's docs/SCHEMA.md CheckRun section instead of rewriting it. State that idempotency compares normalized stored fields and a changed run uses a fresh id. Explain that source is reported provenance, the daemon never executes/authenticates the check, and this tool neither marks a task DONE nor releases dependents. Add a small note to the existing complete_task/get_context evidence documentation: TaskVerification stays candidate-less agent-reported, newly persisted and legacy-projected source is forced to that value, old validation/2000-character tail behavior stays unchanged, absent verification remains null and compact prerequisite projections still omit the tail. Do not silently advertise a new complete_task source input. Preserve all recently landed plan-revision/attempt/QA docs and all unrelated budget terminology; no broad documentation cleanup.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Docs are edited section by section; nothing else was touched.\n\ndocs/MCP_SERVER.md (LF, +86/-3)\n1. **New `### moe.record_check_run` section**, between record_candidate and declare_files, in house style:\n   - Runner-called; `.moe/checks/<id>.json`; a candidate accumulates runs grouped by candidateId.\n   - Full Parameters block with exact bounds, an explicit source enum with no default, and workerId marked as not evidence.\n   - Returns block.\n   - A JSON request/response example for a FAILING gate (exitCode 1 still returns `success: true`) under a caller-chosen id, plus the duplicate retry.\n   - Notes: recorded, not approved (never DONE, never releases dependents); source is declared provenance (never executed or authenticated, never inferred from workerId); bound to the exact tree of one candidate; immutable with a normalized idempotent retry, so a changed result needs a fresh id; a daemon-generated id plus a retry gives a second run; the 16384 UTF-8 BYTE tail cuts on whole characters and normalizes lone surrogates, deliberately unlike complete_task's 2000 characters (links SCHEMA.md `## CheckRun`); daemon clock with no event; no ownership, status or attempt gate; not blocking, so concurrent identical calls make one write.\n   - Errors listed in order with numbers and codeNames (-32602 INVALID_INPUT/MISSING_REQUIRED, -32001 CANDIDATE_NOT_FOUND, -32002 CHECK_RUN_TREE_MISMATCH, -32002 CHECK_RUN_IMMUTABLE). A failed write propagates as -32000 with nothing recorded.\n2. **Ownership & Ordering:** one paragraph. record_check_run has no ownership, status or attempt gate; binding guards it instead.\n3. **get_context:**\n   - Both verification shapes now show `source: \"agent-reported\"`; the epicSiblings entry also shows `| null`, matching getContext.ts:208-215.\n   - A new **Verification provenance** paragraph: candidate-less agent claim; both projections forced to agent-reported, including legacy or hand-edited rows; fresh copy never written back; absent stays null; compact siblings omit outputTail; runner evidence uses record_check_run.\n4. **complete_task:**\n   - The persistence sentence now names the stamped source.\n   - A new bullet: no source input, fields a caller adds inside verification are not stored (enforcement.ts:294 builds its own return object), validation unchanged (500-char command, exitCode 0, last 2000 CHARACTERS), and the CheckRun byte cap is different.\n   - No new source input is advertised. All plan-revision, attempt and QA docs and budget terms are untouched.\n\ndocs/SCHEMA.md (CRLF, +4/-1) — scope growth beyond the plan's four paths, explained\n- Line 1079 said \"no MCP tool records one yet (`moe.record_check_run` is a later slice)\". This task makes that false, so the clause now says a runner records one through the moe.record_check_run MCP tool.\n- The `task.verification` shape (line 408) gained `source?: 'agent-reported'` with a comment. Child task-95a1d08e's comment-1938cc2c explicitly asked this parent to decide on SCHEMA.md:408.\n- The CheckRun section was not rewritten, only that one clause.\n\nVERIFICATION\n- git diff -U0 shows only the 4 intended lines removed (MCP 200/214/432, SCHEMA 1079).\n- EOL counts: SCHEMA.md 1737 CRLF / 0 lone LF; MCP_SERVER.md 0 CRLF.\n- Repo run (pwd packages/moe-daemon, RUN root D:/projexts/moes/packages/moe-daemon):\n  - `npx vitest run src/util/taskTimeBudgetDocs.test.ts src/tools/recordCheckRun.test.ts src/tools/registry.test.ts src/state/checkRunStore.test.ts`\n  - Result: Test Files 4 passed, Tests 141 passed, exit 0.\n  - The docs-to-registry guard and the budget-term guards stay green.\n- The scratch docs are synced.",
+      "startedAt": "2026-09-12T22:37:41.611Z",
+      "completedAt": "2026-09-12T22:41:36.345Z"
     },
     {
       "stepId": "step-5",
       "description": "ONE FINAL VERIFICATION GATE, WITH MUTATION RED. Load regression-check/verification-before-completion. First demonstrate the new tests kill task-local mutations only: remove this registry entry, return success without recording, and force all source inputs to runner-observed. Restore each owned mutation and verify exact restoration; never mutate the producer store or peer files. No missing-module/compilation failure counts as the red. Run this exact completion command from repo root on Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). The named store/tool files explicitly appear, satisfying the original task gate; compatibility/registry tests audit the producer composition. Require every command exit 0 and record focused/full Test Files and Tests counts with nonzero executed tests; distinguish remaining held-out skips from passes. This wire change and original DoD require the whole daemon suite even though it is mid-epic. Note tsc excludes test files; do not claim it type-checks them. Do not build/prebuild/clean (prebuild deletes shared dist), narrow npm test, discard peer failures or edit held-out tests. Tests clean only verified temporary roots using Node paths, clear every StateManager emitter/timer and restore spies/clocks. On Windows preserve native paths, actual exit codes and scoped cleanup; no cross-shell filesystem deletion. Inspect all original DoD evidence: landed CheckRun schema/store/cap plus real registered tool plus legacy source writer/readers.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
         "packages/moe-daemon/src/tools/recordCheckRun.ts",
         "packages/moe-daemon/src/tools/index.ts"
-      ]
+      ],
+      "startedAt": "2026-09-12T22:42:31.385Z"
     },
     {
       "stepId": "step-6",
@@ -76,7 +98,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-62409c0c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -112,17 +134,24 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:42.561Z",
-  "updatedAt": "2026-09-12T22:07:14.732Z",
+  "updatedAt": "2026-09-12T22:42:31.385Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "governor-6c1e1bf2"
+    "governor-6c1e1bf2",
+    "worker-62409c0c"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T21:22:41.594Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4
   },
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-12T14:15:28.545Z",
   "planningNotes": {
@@ -142,5 +171,6 @@
       "docs/MCP_SERVER.md"
     ]
   },
-  "planApprovedAt": "2026-09-12T14:15:28.608Z"
+  "planApprovedAt": "2026-09-12T14:15:28.608Z",
+  "workStartedAt": "2026-09-12T22:21:54.519Z"
 }
