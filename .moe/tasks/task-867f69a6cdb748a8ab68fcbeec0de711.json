@@ -77,28 +77,33 @@
     {
       "stepId": "step-5",
       "description": "ONE FINAL VERIFICATION GATE, WITH MUTATION RED. Load regression-check/verification-before-completion. First demonstrate the new tests kill task-local mutations only: remove this registry entry, return success without recording, and force all source inputs to runner-observed. Restore each owned mutation and verify exact restoration; never mutate the producer store or peer files. No missing-module/compilation failure counts as the red. Run this exact completion command from repo root on Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). The named store/tool files explicitly appear, satisfying the original task gate; compatibility/registry tests audit the producer composition. Require every command exit 0 and record focused/full Test Files and Tests counts with nonzero executed tests; distinguish remaining held-out skips from passes. This wire change and original DoD require the whole daemon suite even though it is mid-epic. Note tsc excludes test files; do not claim it type-checks them. Do not build/prebuild/clean (prebuild deletes shared dist), narrow npm test, discard peer failures or edit held-out tests. Tests clean only verified temporary roots using Node paths, clear every StateManager emitter/timer and restore spies/clocks. On Windows preserve native paths, actual exit codes and scoped cleanup; no cross-shell filesystem deletion. Inspect all original DoD evidence: landed CheckRun schema/store/cap plus real registered tool plus legacy source writer/readers.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
         "packages/moe-daemon/src/tools/recordCheckRun.ts",
         "packages/moe-daemon/src/tools/index.ts"
       ],
-      "startedAt": "2026-09-12T22:42:31.385Z"
+      "note": "FINAL GATE + MUTATION RED. No repo bytes changed this step: at HEAD 558d0ec the owned files, checkRunStore.ts and acceptance.test.ts all hash-object equal to their HEAD blobs, and acceptance.test.ts is untouched since fac1e3d.\n\nMUTATION RED\nSetup: scratch tree D:/moe-867f-scratch.\n- diff -rq against the repo shows src, docs, scripts and the package scripts identical; node_modules is a junction.\n- Driver mutate.mjs restores index.ts and recordCheckRun.ts from pristine/ before and after every run, and asserts each anchor matches exactly once.\n- Files run: recordCheckRun.test.ts, registry.test.ts, taskTimeBudgetDocs.test.ts.\n- `none` ran first and last: 52/52 both times. The driver confirmed both targets byte-identical to pristine at the end.\n\nPlan-named mutations:\n- **registry-entry-removed** (drop `recordCheckRunTool(state),` from getTools): 34 red.\n  - 32 of 33 tool tests: \"moe.record_check_run must be registered in getTools(): expected undefined to be defined\" / \"expected [] to have a length of 1\"; the MCP concurrency case got -32601.\n  - registry.test: \"unregistered tool factories: recordCheckRunTool\".\n  - taskTimeBudgetDocs: \"documents no tool that getTools() does not register\".\n- **success-without-recording** (skip recordCheckRun and return the params): 15 red.\n  - ENOENT on .moe/checks/<id>.json.\n  - \"expected a MoeError refusal, but the call succeeded\" for not-found, tree mismatch and immutable.\n  - concurrency: [false,false] where [false,true] was expected.\n  - write failure: \"promise resolved { success: true } instead of rejecting\".\n- **force-runner-observed** (override source): 5 red: the held-out agent payload, the agent-reported rows (0 and -1), the generated-id row, and the IMMUTABLE differingFields.\n\nAdversarial extras, all caught:\n- default-missing-source 5, infer-source-from-workerId 2, coerce-source-spelling 2, coerce-exitCode 1\n- rebind-to-candidate-tree 2, errors-become-results 20, duplicate-always-false 4, blocking-true 2\n- schema-source-default 1, schema-source-optional 1, schema-accepts-createdAt 1, schema-exitCode-nonnegative 1, schema-drop-outputTail 1, schema-additional-open 1\n\n17 of 17 mutations caught. Every red is an assertion or behavioural failure, never an import or compile error, and the untouched files stayed green in each run.\n\nGATE: exact plan command, run from the PowerShell tool at the repo root:\n`cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\"`\nExit 0 in 13.2s.\n- Focused run: Test Files 5 passed (5), Tests 206 passed (206).\n- npm test (`> moe-daemon@0.8.0 test`, `> vitest run`): Test Files 117 passed (117), Tests 1761 passed | 3 skipped (1764).\n  - The 3 skips are the held-out it.skip cases at delivery/acceptance.test.ts:1187, 1852 and 1996. Not owned, untouched.\n  - The qaCommitPolicy skipIf(!hasDocs) cases ran, because the docs are present.\n- tsc --noEmit: exit 0, and it did run as the last link of the && chain. It covers src only; test files are excluded.\n- The ERROR/WARN lines in the log are pino output from tests that inject failures. No test failed.\n\nDoD EVIDENCE\n- schema.ts: CheckRunSource at :1051, CheckRun at :1066 with source at :1080.\n- checkRunStore.ts: MAX_CHECK_LOG_BYTES=16384 at :40, CHECK_RUN_TREE_MISMATCH at :241, writeEntity('checks') at :294.\n- StateManager.ts:1105 loads .moe/checks; tools/index.ts registers recordCheckRunTool.\n- The 16384-byte cap is documented at SCHEMA.md:1093/1605 and MCP_SERVER.md:697/749.\n- Legacy path: completeTask.ts:164 stamps agent-reported, and getContext.ts:213/348 force it on read.\n\nThe scratch tree stays until the step-6 self-review is done, then it is torn down.",
+      "startedAt": "2026-09-12T22:42:31.385Z",
+      "completedAt": "2026-09-12T22:51:41.659Z"
     },
     {
       "stepId": "step-6",
       "description": "FINAL ADVERSARIAL SELF-REVIEW AND QA HANDOFF. Load adversarial-self-review and inspect this four-file diff as a caller trying to falsify evidence. Can omission/typos/numeric coercion invent runner-observed provenance, can success be returned after an I/O failure, can a failed check be mistaken for approval, can an old/other-tree/other-command check be rebound to the current candidate, or can parallel duplicate calls bypass the state mutex? Exact disk/source/error assertions must defeat those cases. Check all production validation/truncation/persistence still lives in the delivered store, no business rule was copied into the tool, no attempt/worker/ownership/status gate was added that breaks the frozen payload, and no process execution or fabricated candidate exists. Confirm the 16 KiB cap differs intentionally from unchanged legacy 2000-character outputTail. Validate the producer landing evidence and original full DoD; this parent must not complete on only the new endpoint. Record source-as-declared-provenance/authentication limitation and downstream policy/wrapper obligations in the handoff, together with full commands/counts and mutation red evidence. Acceptance.test.ts remains byte-identical; this task owns no unskip. Report every actual created/modified path in complete_step.modifiedFiles (empty for read-only exploration), preserve all foreign WIP, and complete_task through the runtime for QA/wrapper delivery; never self-approve. If self-review changes owned bytes, refresh the same final gate. The existing epic-final task-808869c56228430ca5b15cb901497544 owns whole-epic integration, not this producer.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
         "packages/moe-daemon/src/tools/recordCheckRun.ts",
         "packages/moe-daemon/src/tools/index.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW. No owned bytes changed: all 5 owned paths hash-object equal to HEAD 558d0ec, so the step-5 gate still stands.\n\nAttacker checklist:\n- **Can a caller invent runner-observed?** No.\n  - A missing source is refused MISSING_REQUIRED for workerId none, runner-pilot and worker-1.\n  - runner_observed and Runner-Observed are refused INVALID_INPUT.\n  - Killed mutations: default-missing-source 5, infer-source-from-workerId 2, coerce-source-spelling 2, force-runner-observed 5.\n  - exitCode '0' and 0.5 are refused (coerce-exitCode red).\n- **Success after an I/O failure?** No.\n  - There is no try/catch. An injected writeEntity failure rejects with the same Error, arrives as -32000, and leaves the snapshot unchanged.\n  - errors-become-results turned 20 tests red.\n- **A failed check mistaken for approval?** No.\n  - exitCode 1, -1 and 137 are recorded with success:true and the task stays REVIEW/qa-1.\n  - The docs and the tool description say recorded, not approved: never DONE, never releases a dependent.\n- **Rebinding?** No.\n  - The tree must equal the named candidate's exactly (TREE_MISMATCH), and a run stays on its candidateId. rebind-to-candidate-tree turned 2 tests red.\n  - The command is deliberately not compared with qualityGate; the delivery-policy task must do that.\n- **Mutex bypass?** No.\n  - The tool is not blocking, so McpAdapter.ts:301 wraps it in runExclusive.\n  - Concurrent identical calls make one write plus a duplicate. blocking-true turned 2 tests red.\n- **Business rules copied into the tool?** No.\n  - The handler only validates, calls the store and returns.\n  - The one local is SOURCES, used for the schema enum and typed Record<CheckRunSource,true>, so drift fails tsc.\n  - Validation, the UTF-8 cut, the candidate/tree binding, replay and persistence all stay in checkRunStore.ts.\n- **Gates against the frozen payload, process execution, or fabricated candidates?** None. The held-out payloads are recorded against a closed attempt on a REVIEW task held by QA, the static test finds no child_process, and no candidate is ever written.\n- **Cap.** CheckRun keeps 16384 UTF-8 bytes. Legacy enforcement.ts:292 keeps slice(-2000) chars and is unchanged since 3ac1207. MCP_SERVER.md documents the difference as intentional.\n- **Inputs.**\n  - Null, array and non-object args are refused.\n  - A huge tail is limited in transit by the 2MB WS maxPayload (WebSocketServer.ts:189); the store keeps at most 16384 bytes.\n  - Ids go through validateEntityId ([A-Za-z0-9_-], at most 128), and a test covers path escape.\n- **Missed registration points.** record_candidate appears only in docs, index, getContext, finalizeAttempt, recordCandidate and candidateStore. No proxy, wrapper or plugin allowlist needs a mirror entry.\n- **Doc claim \"no activity event\".** True of the tool. WebSocketServer.ts:827 AGENT_TOOL_EVENT is Claude-plugin hook telemetry that fires for any moe.* call.\n\nTheoretical, left unfixed:\n- The description literals 500, 128 and 7-40 are retyped, because the store does not export them. Tests pin the store's behaviour.\n- source is declared, not authenticated. It is recorded in the handoff as a downstream obligation for runner/receipt tasks 49ec8755 and b1c98508 and policy task c484696d.\n\nDoD 1-6 re-audited against the landed producers plus this diff (evidence in the step-5 note). acceptance.test.ts is byte-identical and nothing was unskipped. Producers: d408634/b2061c8, fac1e3d, 3297ed7/31c7536 (on origin).\n\nScratch teardown, in the proven order:\n1. junction .Delete(), after confirming LinkType was Junction;\n2. the real vitest.mjs is still present;\n3. rm -rf scratch.\n\nThe series log and driver are kept at %TEMP%/moe-867f-series.log and %TEMP%/moe-867f-mutate.mjs. Foreign .moe dirt was left untouched.",
+      "startedAt": "2026-09-12T22:52:50.229Z",
+      "completedAt": "2026-09-12T22:56:43.896Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-62409c0c",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-9dc36824",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -130,27 +135,36 @@
       "author": "worker-de4739a8",
       "content": "Docs handoff from child task-95a1d08e (legacy verification provenance), which is going to REVIEW. The child deliberately changed no docs, so this is for your MCP_SERVER.md pass.\n\nWHAT CHANGED\n- **schema.ts:** TaskVerification now has optional `source?: 'agent-reported'`. It is optional only so old rows still load.\n- **complete_task:** persists `verification.source = 'agent-reported'`, stamped after validation.\n  - A direct caller's source, reportedAt, runnerId or candidateId is ignored.\n  - The inputSchema is unchanged and does not advertise source.\n- **get_context, primary:** `task.verification` is a fresh copy, `{ ...stored, source: 'agent-reported' }`.\n  - Null or missing stays null.\n  - This applies to every stored label, including a hand-edited `runner-observed`, `null`, or none.\n  - No read-time write.\n- **get_context, declared prerequisites:** `epicSiblings[].verification` is `{ command, exitCode, reportedAt, source: 'agent-reported' }`, still without outputTail.\n- **Validation:** unchanged (`util/enforcement.ts` untouched).\n  - Raw command is capped at 500 characters, measured BEFORE trim.\n  - exitCode must be === 0.\n  - outputTail keeps the final 2000 JS string units, and an empty tail is omitted.\n  - This is NOT the CheckRun 16 KiB UTF-8 byte cap.\n- **No Candidate/CheckRun/runner record** is written or synthesized for legacy evidence.\n\nSTALE DOC LINES (at HEAD ee8da0b)\n- `docs/MCP_SERVER.md:200`: the task.verification projection shape has no `source`.\n- `docs/MCP_SERVER.md:214`: the epicSiblings verification shape has no `source`.\n- `docs/MCP_SERVER.md:432`: the persistence sentence for complete_task has no label.\n- `docs/SCHEMA.md:408`: the task.verification shape has no `source`. SCHEMA.md is in neither child's file list nor yours, so please decide whether your docs pass covers it or it needs a follow-up row.",
       "timestamp": "2026-09-12T20:33:10.977Z"
+    },
+    {
+      "id": "comment-3f0e93ba83f94df7bc47a2739deb7a21",
+      "author": "worker-62409c0c",
+      "content": "The completionSummary was cut off at 2000 characters. Its last paragraph, in full:\n\nLimit: source is declared provenance. Any MCP caller can claim runner-observed, and the daemon neither runs nor authenticates the check.\n- Policy task-c484696d must match the exact candidate, tree, command and exitCode 0.\n- Binding a record to an observed run belongs to the runner and receipt tasks, task-49ec8755 and task-b1c98508.\n\nFor QA:\n- Full evidence is in the step-5 and step-6 notes.\n- The mutation driver and series log are at %TEMP%/moe-867f-mutate.mjs and %TEMP%/moe-867f-series.log.\n- The handoff is Serena memory task-task-867f69a6cdb748a8ab68fcbeec0de711-handoff.",
+      "timestamp": "2026-09-12T22:58:03.192Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:42.561Z",
-  "updatedAt": "2026-09-12T22:43:02.232Z",
+  "updatedAt": "2026-09-12T22:58:03.192Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "governor-6c1e1bf2",
-    "worker-62409c0c"
+    "worker-62409c0c",
+    "qa-9dc36824"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T21:22:41.594Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "stepsCompleted": [
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-12T14:15:28.545Z",
@@ -208,16 +222,29 @@
         }
       ],
       "pushed": false
+    },
+    {
+      "sha": "558d0ec6ce561b7e719727b22f15a693bee2e85d",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-62409c0c@2026-09-12T22:43:33Z",
+      "paths": [
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json"
+      ],
+      "recordedBy": "worker-62409c0c",
+      "recordedAt": "2026-09-12T22:43:38.045Z",
+      "treeId": "9408dd9329de1c735698acc669c14bc68604cc6f",
+      "status": "WORKING",
+      "pushed": false
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
-    ".moe/tasks/task-95a1d08e21dd45688cb296914daf4417.json",
-    "docs/MCP_SERVER.md",
-    "docs/SCHEMA.md",
-    "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/tools/recordCheckRun.test.ts",
-    "packages/moe-daemon/src/tools/recordCheckRun.ts"
+    "packages/moe-daemon/src/tools/recordCheckRun.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md"
   ],
   "touchedFiles": [
     "docs/SCHEMA.md",
@@ -229,7 +256,15 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-62409c0c@2026-09-12T22:21:39Z",
-    "at": "2026-09-12T22:43:02.231Z"
-  }
+    "sessionId": "worker-62409c0c@2026-09-12T22:43:33Z",
+    "at": "2026-09-12T22:43:38.045Z"
+  },
+  "reviewStartedAt": "2026-09-12T22:57:40.141Z",
+  "verification": {
+    "command": "cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts src/tools/recordCheckRun.test.ts src/tools/completeTask.test.ts src/tools/getContext.test.ts src/tools/registry.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\"",
+    "exitCode": 0,
+    "outputTail": "GATE_EXIT=0 (13.2s, PowerShell tool, repo root, HEAD 558d0ec)\n[focused vitest] Test Files  5 passed (5)\n      Tests  206 passed (206)\n> moe-daemon@0.8.0 test\n> vitest run\n Test Files  117 passed (117)\n      Tests  1761 passed | 3 skipped (1764)\n[npx tsc --noEmit -p tsconfig.json] exit 0 (last link of the && chain; covers src only, tests excluded)",
+    "reportedAt": "2026-09-12T22:57:40.141Z"
+  },
+  "completionSummary": "Registered moe.record_check_run on top of the landed CheckRun store (task-214bcfa3) and the legacy agent-reported label (task-95a1d08e). Together they cover all six original DoD items.\n\nDelivered:\n- tools/recordCheckRun.ts: the handler is validateCheckRunParams, then recordCheckRun, returning {success:true, checkRun, duplicate}. It has no gate, is not blocking, never defaults or infers source, and lets errors propagate.\n- One getTools() entry in tools/index.ts.\n- tools/recordCheckRun.test.ts: 33 tests through getTools + runExclusive and a real McpAdapter.\n- docs/MCP_SERVER.md: a record_check_run section, plus provenance notes for get_context and complete_task.\n- docs/SCHEMA.md +4/-1: verification.source, and a fix to a stale CheckRun sentence. This is scope growth, explained in the step-4 note.\n\nDoD:\n1. CheckRunSource and CheckRun.source are in schema.ts.\n2. One file per run under .moe/checks/<id>.json, grouped by candidateId; the tool is registered.\n3. CHECK_RUN_TREE_MISMATCH (-32002) is asserted through the handler.\n4. The 16384 UTF-8 byte tail cap is documented and asserted with ASCII and emoji input.\n5. complete_task stamps and get_context forces agent-reported; the legacy 500/2000-char rules are unchanged.\n6. The gate passes (below).\n\nEvidence:\n- Gate exit 0. Focused: 5 files, 206 passed. npm test: 117 files, 1761 passed | 3 skipped (the 3 held-out acceptance it.skip). tsc exit 0.\n- Mutation red, run in a scratch copy: 17 of 17 caught. Registry entry removed: 34 red. Success without recording: 15. Forced runner-observed: 5. Also caught: source default, inference and coercion; exitCode coercion; tree rebind; errors turned into results; duplicate forced false; blocking; and 6 schema mutations.\n- The unmutated run passed 52/52 first and last, and repo bytes equal HEAD afterwards. acceptance.test.ts is byte-identical.\n\nLimit: source is declared provenance. Any MCP caller can claim runner-observed, and the daemon neither runs nor authenticates the check. Policy (c48"
 }
