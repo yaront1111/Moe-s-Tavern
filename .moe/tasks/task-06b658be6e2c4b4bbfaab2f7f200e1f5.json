@@ -112,8 +112,8 @@
       "completedAt": "2026-09-12T14:00:45.007Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-813933f7",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,12 +128,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:10.694Z",
-  "updatedAt": "2026-09-12T14:01:42.282Z",
+  "updatedAt": "2026-09-12T14:04:17.094Z",
   "metrics": {
     "firstClaimAt": "2026-09-12T13:49:44.491Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T14:04:17.094Z",
+    "wallClockMs": 872603
   },
   "stepsCompleted": [
     "step-1",
@@ -176,7 +178,59 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/heartbeat.test.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+    ".moe/tasks/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.json"
+  ],
+  "completionSummary": "moe.heartbeat now reports presence and demands reattachment.\n\nWHAT LANDED (5 files): optional `presenceKind` of `process|provider|waiting|progress` on the ping, stored on the seat's open attempt as `presenceKind`+`presenceAt` (latest wins). Three conditions now return `{ ok:false, reattachRequired:true, reason, reattachWith:'moe.reattach_attempt', attemptId?, phase? }` instead of acknowledging: `no-worker-record`, `no-open-attempt` (also when the task's open attempt belongs to another seat), `attempt-reconciling`. Acknowledgement is still exactly `{ ok:true }`.\n\nTHREE THINGS QA SHOULD WEIGH:\n1. A presence kind is a SELF-REPORT, not verified liveness. The daemon probes no process; a sidecar can report `process` for one that died a second ago. The inverse also still holds — silence is not evidence of death. Commented that way in schema.ts and documented in MCP_SERVER.md.\n2. The wrapper does NOT send the field yet (sibling card). `scripts/moe-agent.sh:1895` still discards the response, so the new data is INERT until that lands — which is also why `ok:false` cannot break an un-upgraded wrapper. scripts/ is untouched here.\n3. Presence is written by a new `recordAttemptPresence` in attemptStore.ts that deliberately BYPASSES `setAttemptPhase`. The phase setter stamps `lastPhaseAt`, and the reconcile-window sweep (sweeps.ts:218) measures from that field — routing a 60s ping through it would make a reconciling attempt immortal and silently kill that sweep. A test asserts the stored `lastPhaseAt` bytes before/after.\n\nAlso preserved on purpose: `touchWorker` still runs for a live worker even when the answer is reattach-required (a long silent build must not start looking dead); reattach-required is RETURNED, never thrown; no `blocking:true`, no new `runExclusive` (McpAdapter.ts:301 already dispatches non-blocking tools inside the mutex); an old-style ping performs ZERO extra writes (asserted on file bytes + mtime); an unknown kind is refused, never stored.\n\n⚠️ SHARED CHECKOUT:",
+  "commits": [
+    {
+      "sha": "e1c0732d8e84258a511193994cd02deedac3e7ed",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-12T13:51:35Z",
+      "paths": [
+        ".moe/tasks/task-06b658be6e2c4b4bbfaab2f7f200e1f5.json",
+        ".moe/tasks/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/heartbeat.test.ts",
+        "packages/moe-daemon/src/tools/heartbeat.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-12T14:02:17.427Z",
+      "treeId": "9bec5bc7069de1445d6c458fe24862d778a79d76",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-171a1412815f4b1f836086f2185bc48c"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/heartbeat.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/heartbeat.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "moe.heartbeat now reports presence and demands reattachment.\n\nWHAT LANDED (5 files): optional `presenceKind` of `process|provider|waiting|progress` on the ping, stored on the seat's open attempt as `presenceKind`+`presenceAt` (latest wins). Three conditions now return `{ ok:false, reattachRequired:true, reason, reattachWith:'moe.reattach_attempt', attemptId?, phase? }` instead of acknowledging: `no-worker-record`, `no-open-attempt` (also when the task's open attempt belongs to another seat), `attempt-reconciling`. Acknowledgement is still exactly `{ ok:true }`.\n\nTHREE THINGS QA SHOULD WEIGH:\n1. A presence kind is a SELF-REPORT, not verified liveness. The daemon probes no process; a sidecar can report `process` for one that died a second ago. The inverse also still holds — silence is not evidence of death. Commented that way in schema.ts and documented in MCP_SERVER.md.\n2. The wrapper does NOT send the field yet (sibling card). `scripts/moe-agent.sh:1895` still discards the response, so the new data is INERT until that lands — which is also why `ok:false` cannot break an un-upgraded wrapper. scripts/ is untouched here.\n3. Presence is written by a new `recordAttemptPresence` in attemptStore.ts that deliberately BYPASSES `setAttemptPhase`. The phase setter stamps `lastPhaseAt`, and the reconcile-window sweep (sweeps.ts:218) measures from that field — routing a 60s ping through it would make a reconciling attempt immortal and silently kill that sweep. A test asserts the stored `lastPhaseAt` bytes before/after.\n\nAlso preserved on purpose: `touchWorker` still runs for a live worker even when the answer is reattach-required (a long silent build must not start looking dead); reattach-required is RETURNED, never thrown; no `blocking:true`, no new `runExclusive` (McpAdapter.ts:301 already dispatches non-blocking tools inside the mutex); an old-style ping performs ZERO extra writes (asserted on file bytes + mtime); an unknown kind is refused, never stored.\n\n⚠️ SHARED CHECKOUT:"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-12T13:51:35Z",
+    "at": "2026-09-12T14:02:17.427Z"
+  },
+  "completedAt": "2026-09-12T14:04:17.094Z",
+  "reviewCompletedAt": "2026-09-12T14:04:17.094Z",
+  "reviewSummary": "Re-ran every gate. Card command `npx vitest run src/tools/heartbeat.test.ts` EXIT=0, 17/17. Full `npm test` EXIT=0, 115 files, 1561 passed | 4 skipped. `tsc --noEmit` EXIT=0. Completion commit e1c0732 (Moe-Kind: completion) verified via git show; it landed mid-review, so the 5 in-scope files went dirty-to-committed under me. Diff read line by line, +516/-62 across the 5 planned files, no drift.\n\nDoD 1-4: four optional kinds recorded on the caller's own open attempt, latest-wins; missing worker, no open attempt, and reconciling each return reattach-required; a kindless ping still returns {ok:true}. DoD 5: no blocking key and no runExclusive in heartbeat.ts (only a comment saying it is neither); the no-extra-write test compares the attempt file's full bytes AND mtimeMs, not an inference.\n\nThe architect's trap is genuinely avoided: presence goes through its own recordAttemptPresence writer, never setAttemptPhase, so lastPhaseAt is untouched and a 60s ping cannot make a reconciling attempt immortal against the sweeps.ts window. The guard asserts the stored disk value before/after plus the published copy. Also checked: moe.reattach_attempt is really registered (tools/index.ts:118), so reattachWith names a live tool; touchWorker still fires for a live worker even on reattach paths, with its own test, so a long silent build keeps looking alive; a missing worker creates nothing on disk; unknown kinds refused twice against one shared set; reattach returned, never thrown. No forbidden patterns; both schema fields optional, no migration.\n\nOne accepted addition past the plan: an attempt owned by another worker also answers no-open-attempt, with its own test — strictly narrowing, documented.\n\nHonest boundary: the field is inert. moe-agent.sh:1895 sends no presenceKind and discards the response, so ok:false cannot break today's sidecar; acting on it is the sibling wrapper card. A presence kind stays a self-report, not verified liveness. Full audit in the Serena handoff memory."
 }
