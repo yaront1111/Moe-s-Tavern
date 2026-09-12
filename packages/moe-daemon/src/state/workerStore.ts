@@ -27,6 +27,7 @@ import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
+import { closeOpenAttempts, listAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
@@ -265,6 +266,13 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
         }, 'WORKER_RELEASED');
       } catch (error) {
         logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
+        continue; // Still assigned: it keeps its seat, and so its attempt.
+      }
+      // The deleted worker's seat is given up, so its attempt ends too.
+      try {
+        await closeOpenAttempts(state, task.id);
+      } catch (error) {
+        logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released by worker deletion');
       }
     }
 
@@ -297,14 +305,45 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
 }
 
 /**
- * Purge all workers at startup. Since the daemon is (re)starting,
- * no workers are connected yet — all existing files are guaranteed stale.
- * Any remaining task assignments are orphaned after the purge, so clear them
- * explicitly with activity events to make the tasks claimable.
+ * Worker seats that still own a non-closed attempt, so the startup purge can
+ * spare them.
+ *
+ * The WORKER RECORD is what survives a restart, deliberately: it is the stable
+ * identity, persisted separately from the attempt, so a reattaching runner
+ * finds the same seat it left rather than a seat rebuilt out of an attempt
+ * file. The attempt only says which seats to keep.
+ *
+ * Reads the attempt phase and nothing else. Never lastActivityAt, never any
+ * other idle signal — a quiet build is not evidence of a dead worker, so
+ * silence must never decide whether a seat is spared.
+ */
+function workersHoldingOpenAttempts(state: StateManager): Set<string> {
+  const held = new Set<string>();
+  for (const attempt of listAttempts(state)) {
+    if (attempt.phase === 'closed') continue;
+    held.add(attempt.workerId);
+  }
+  return held;
+}
+
+/**
+ * Purge stale workers at startup. Since the daemon is (re)starting, a worker
+ * record is stale UNLESS its seat still owns a non-closed attempt — which after
+ * reconcileRunningAttempts means an execution the daemon has lost sight of but
+ * has NOT established is gone. Those seats are spared whole: file, map entry,
+ * currentTaskId, and their task left WORKING and assigned, because destroying
+ * them would hand live work to a second worker while the first is still
+ * running (the exact restart-during-a-long-build failure).
+ *
+ * Every other worker keeps the original behaviour exactly — deleted, and its
+ * orphaned assignment released with activity events so the task is claimable.
+ * That is the legacy path for every project that predates attempts, where no
+ * attempt record exists at all.
  */
 export async function purgeAllWorkers(state: StateManager): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const workersDir = path.join(state.moePath, 'workers');
+    const spared = workersHoldingOpenAttempts(state);
     let deletedCount = 0;
     let keptCount = 0;
 
@@ -328,6 +367,14 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     }
 
     // Delete only registrations with no live process behind them.
+
+    // MERGE NOTE: two independent reasons to spare a seat, and the union wins.
+    // main keeps a registration that is still heartbeating; this branch keeps
+    // one that holds an open execution attempt. Both sides argue the same
+    // direction - fail toward KEEPING - and a seat matching either test has a
+    // live process behind it, so deleting it would decapitate real work.
+    const keptIds = new Set<string>([...liveWorkerIds, ...spared]);
+
     try {
       if (fs.existsSync(workersDir)) {
         const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
@@ -338,6 +385,7 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
             continue;
           }
           try {
+            if (spared.has(path.basename(file, '.json'))) continue;
             const workerFile = path.join(workersDir, file);
             // Suppress the watcher echo so our own delete doesn't re-trigger load().
             state.fileWatcher?.ignorePath(workerFile);
@@ -352,9 +400,11 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
       logger.error({ error }, 'Failed to read workers directory during purge');
     }
 
-    // Drop only the purged records from the map; live ones stay registered.
+    // Drop only the purged records from the map; kept ones stay registered
+    // UNCHANGED - deleting the others in place never rewrites a survivor, so a
+    // held record stays byte-identical: the hold must not rewrite what it protects.
     for (const workerId of [...state.workers.keys()]) {
-      if (!liveWorkerIds.has(workerId)) state.workers.delete(workerId);
+      if (!keptIds.has(workerId)) state.workers.delete(workerId);
     }
 
     // Clear assignedWorkerId references that are now orphaned.
@@ -387,22 +437,36 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
         } catch (error) {
           logger.error({ error, taskId: task.id }, 'Failed to clear orphan task assignedWorkerId during worker purge');
         }
+        // Every purged seat is given up, so its attempt closes as well — even
+        // when the task write above failed, because the in-memory task is
+        // already unassigned. Its own try/catch for the same reason the write
+        // has one: this runs on every daemon start, and one unwritable attempt
+        // record must not abort startup for the rest of the fleet.
+        try {
+          await closeOpenAttempts(state, task.id);
+        } catch (error) {
+          logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released during worker purge');
+        }
       }
     }
 
-    // Clear stale memberIds from teams; all worker records have been purged.
-    // Each cleared id is tombstoned so a returning worker rejoins its own team
-    // instead of coming back as a solo — see util/teamMembershipHeal.ts.
+    // Clear the memberIds of the purged workers from teams. Each cleared id is
+    // tombstoned so a returning worker rejoins its own team instead of coming
+    // back as a solo — see util/teamMembershipHeal.ts. A SPARED seat never left
+    // its team, so it stays a member and is not tombstoned: its identity has to
+    // survive whole, and a spared worker with no team would be re-derived into
+    // the wrong role on its next claim. When every member is spared there is
+    // nothing to write at all, which keeps the record byte-identical.
     for (const team of state.teams.values()) {
       if (team.memberIds.length === 0) continue;
-      // Evict only members whose registration was actually purged. A live
-      // worker that keeps its record must keep its membership too, or it comes
-      // back as a solo and loses its team's role.
-      const evicted = team.memberIds.filter((id) => !liveWorkerIds.has(id));
+      // Evict only members whose registration was actually purged. A kept
+      // worker must keep its membership too, or it comes back as a solo and
+      // loses its team's role.
+      const evicted = team.memberIds.filter((id) => !keptIds.has(id));
       if (evicted.length === 0) continue;
       const updated = {
         ...team,
-        memberIds: team.memberIds.filter((id) => liveWorkerIds.has(id)),
+        memberIds: team.memberIds.filter((id) => keptIds.has(id)),
         formerMemberIds: withEvictionTombstones(team, evicted),
         updatedAt: new Date().toISOString()
       };

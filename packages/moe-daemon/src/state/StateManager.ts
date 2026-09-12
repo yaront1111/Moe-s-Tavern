@@ -33,11 +33,14 @@ import { AsyncLocalStorage } from 'async_hooks';
 import type {
   ActivityEvent,
   ActivityEventType,
+  Candidate,
   ChatChannel,
   ChatMessage,
+  CheckRun,
   Decision,
   DecisionStatus,
   Epic,
+  ExecutionAttempt,
   ImplementationStep,
   MoeStateSnapshot,
   PinEntry,
@@ -46,6 +49,7 @@ import type {
   RailProposal,
   ResourceLease,
   ResourceState,
+  Review,
   StepAmendment,
   StepStatus,
   Task,
@@ -110,16 +114,21 @@ import {
 } from './taskStore.js';
 import {
   checkBlockedTimeouts,
+  checkReconcileWindow,
   checkStaleWorkers,
   isStaleResolvedProposal,
   purgeResolvedProposals,
+  DEFAULT_RECONCILE_WINDOW_MS,
   PROPOSAL_PURGE_INTERVAL_MS,
   PROPOSAL_SNAPSHOT_RETENTION_MS,
+  RECONCILE_WINDOW_CHECK_INTERVAL_MS,
   startBlockedTimeoutCheck,
   startProposalPurgeInterval,
+  startReconcileWindowCheck,
   startStaleWorkerWatcher,
   stopBlockedTimeoutCheck,
   stopProposalPurgeInterval,
+  stopReconcileWindowCheck,
   stopStaleWorkerWatcher,
 } from './sweeps.js';
 import {
@@ -351,6 +360,13 @@ export interface StateManagerOptions {
    * Defaults to staleWorkerTimeoutMs.
    */
   reviewStaleTimeoutMs?: number;
+  /**
+   * How long an attempt may sit in the `reconciling` phase without a runner
+   * reattaching before the sweep closes it and releases its task for ONE
+   * successor. Bounds that phase and nothing else — see reconcileWindowMs
+   * below for why this is not a fourth idle timeout.
+   */
+  reconcileWindowMs?: number;
 }
 
 export class StateManager {
@@ -366,6 +382,14 @@ export class StateManager {
   channels = new Map<string, ChatChannel>();
   decisions = new Map<string, Decision>();
   resources = new Map<string, ResourceState>();
+  /** Execution attempts, keyed by attempt id. Mutated only via state/attemptStore.ts. */
+  attempts = new Map<string, ExecutionAttempt>();
+  /** Candidates, keyed by candidate id. Written only via state/candidateStore.ts, which has no update path. */
+  candidates = new Map<string, Candidate>();
+  /** Reviews, keyed by review id. Written only via state/reviewStore.ts, which is append-only. */
+  reviews = new Map<string, Review>();
+  /** Check runs, keyed by check-run id. Written only via state/checkRunStore.ts, which has no update or delete path. */
+  checkRuns = new Map<string, CheckRun>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -398,6 +422,8 @@ export class StateManager {
   proposalPurgeInterval?: NodeJS.Timeout;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   staleWorkerInterval?: NodeJS.Timeout;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  reconcileWindowInterval?: NodeJS.Timeout;
   // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
   // until the staleness clears (worker becomes alive again) or the assignment
   // moves to a different task.
@@ -409,12 +435,15 @@ export class StateManager {
   staleWorkerTimeoutMs: number;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   reviewStaleTimeoutMs: number;
+  /** @internal — reached by the extracted state/* modules; not part of the supported API. */
+  reconcileWindowMs: number;
   // True when the constructor caller passed an explicit override (tests, mainly).
   // Explicit constructor options always win over .moe/project.json settings —
   // otherwise load() would silently clobber a test's chosen timeout with
   // whatever normalizeProject defaults to.
   private readonly staleWorkerTimeoutMsExplicit: boolean;
   private readonly reviewStaleTimeoutMsExplicit: boolean;
+  private readonly reconcileWindowMsExplicit: boolean;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   mentionRouter: MentionRouter;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -435,6 +464,21 @@ export class StateManager {
     // than the pre-existing record prune would, so this is purely additive.
     this.reviewStaleTimeoutMsExplicit = options.reviewStaleTimeoutMs !== undefined;
     this.reviewStaleTimeoutMs = options.reviewStaleTimeoutMs ?? this.staleWorkerTimeoutMs;
+    // 2 hours. This window exists so a task cannot be parked in `reconciling`
+    // FOREVER — it is NOT a death detector and must never be read as one. The
+    // daemon is state-only and cannot probe a process; only the wrapper's exit
+    // trap (moe.deregister_worker) can establish that a runner stopped, and
+    // that path already closes the attempt. So the only job left is a bound for
+    // the case where no such declaration ever arrives.
+    //
+    // Deliberately far longer than a daemon restart plus a runner relaunch
+    // (seconds to a minute or two), and 4x staleWorkerTimeoutMs, so it can
+    // never be mistaken for a fourth idle timeout. A short default would turn
+    // this into the idle-based auto-release for WORKING/PLANNING that a task
+    // rail forbids: a quiet build is not evidence of a dead worker. The clock
+    // is the ATTEMPT's lastPhaseAt, never a worker's lastActivityAt.
+    this.reconcileWindowMsExplicit = options.reconcileWindowMs !== undefined;
+    this.reconcileWindowMs = options.reconcileWindowMs ?? DEFAULT_RECONCILE_WINDOW_MS;
     this.mentionRouter = new MentionRouter(4);
   }
 
@@ -453,6 +497,7 @@ export class StateManager {
     this.stopBlockedTimeoutCheck();
     this.stopProposalPurgeInterval();
     this.stopStaleWorkerWatcher();
+    this.stopReconcileWindowCheck();
     this.subscribers.clear();
     this.subscriberErrorCounts.clear();
     this.emitter = undefined;
@@ -623,8 +668,14 @@ export class StateManager {
     return deleteTask(this, taskId);
   }
 
-  async approveTask(taskId: string): Promise<Task> {
-    return approveTask(this, taskId);
+  /**
+   * `expectedPlanRevision` is the OPTIONAL compare-and-swap token: the plan
+   * revision the approver actually reviewed. Typed `unknown` so an untyped /ws
+   * payload cannot smuggle a malformed value past validation — taskStore is the
+   * single authority that decodes it. Omit it for the legacy token-free path.
+   */
+  async approveTask(taskId: string, expectedPlanRevision?: unknown): Promise<Task> {
+    return approveTask(this, taskId, expectedPlanRevision);
   }
 
   async rejectTask(taskId: string, reason: string): Promise<Task> {
@@ -670,6 +721,18 @@ export class StateManager {
 
   stopStaleWorkerWatcher(): void {
     return stopStaleWorkerWatcher(this);
+  }
+
+  startReconcileWindowCheck(intervalMs = RECONCILE_WINDOW_CHECK_INTERVAL_MS): void {
+    return startReconcileWindowCheck(this, intervalMs);
+  }
+
+  stopReconcileWindowCheck(): void {
+    return stopReconcileWindowCheck(this);
+  }
+
+  async checkReconcileWindow(nowMs = Date.now()): Promise<ExecutionAttempt[]> {
+    return checkReconcileWindow(this, nowMs);
   }
 
   async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
@@ -1035,6 +1098,16 @@ export class StateManager {
       this.decisions = loadEntities<Decision>(path.join(this.moePath, 'decisions'));
       this.proposals = loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
       this.resources = loadEntities<ResourceState>(path.join(this.moePath, 'resources'));
+      // loadEntities tolerates a missing directory, so a project that has never
+      // opened an attempt simply loads an empty map — no scaffolding needed.
+      this.attempts = loadEntities<ExecutionAttempt>(path.join(this.moePath, 'attempts'));
+      // Same tolerance: a project that has never recorded a candidate loads empty.
+      this.candidates = loadEntities<Candidate>(path.join(this.moePath, 'candidates'));
+      // Same tolerance again: a project whose QA has never bound a decision to a
+      // candidate loads empty, which is exactly the incremental-adoption case.
+      this.reviews = loadEntities<Review>(path.join(this.moePath, 'reviews'));
+      // And again: a project that has never recorded a check run loads empty.
+      this.checkRuns = loadEntities<CheckRun>(path.join(this.moePath, 'checks'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {
@@ -1061,6 +1134,7 @@ export class StateManager {
     this.startBlockedTimeoutCheck();
     this.startProposalPurgeInterval();
     this.startStaleWorkerWatcher();
+    this.startReconcileWindowCheck();
   }
 
   /**
@@ -1080,6 +1154,17 @@ export class StateManager {
     if (!this.reviewStaleTimeoutMsExplicit && !this.staleWorkerTimeoutMsExplicit
       && typeof project.settings.reviewStaleTimeoutMs === 'number') {
       this.reviewStaleTimeoutMs = project.settings.reviewStaleTimeoutMs;
+    }
+    // reconcileWindowMs chains off nothing — it is an independent bound on the
+    // `reconciling` phase, so an explicit constructor option is the only thing
+    // that blocks it. Positivity is checked here rather than left to
+    // normalizeProject's sanitizer: a 0 or negative window would fire on every
+    // reconciling attempt the instant it was parked, which is precisely the
+    // auto-release a task rail forbids. Reject it and keep the default.
+    const configuredWindow = project.settings.reconcileWindowMs;
+    if (!this.reconcileWindowMsExplicit && typeof configuredWindow === 'number'
+      && Number.isFinite(configuredWindow) && configuredWindow > 0) {
+      this.reconcileWindowMs = configuredWindow;
     }
   }
 

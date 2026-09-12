@@ -8,6 +8,132 @@ import type {
     TaskPriority,
 } from '../types/moe';
 
+// =============================================================================
+// Blocker presentation
+// =============================================================================
+
+/**
+ * Why a BLOCKED task is parked. Each cause clears differently, which is the
+ * whole point of naming it: a dependency wait clears itself when its
+ * prerequisites finish, a resource wait clears on the lease grant, and a plain
+ * external block needs a person.
+ *
+ * This is a copy of the contract the JetBrains plugin ships and owns
+ * (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt,
+ * task-aec72949166b42a99b4279ba4615ac4b); the precedence is not re-derived
+ * here. It lives beside the only TypeScript renderer that consumes it, the way
+ * the JetBrains rule lives in its own `toolwindow` package rather than in the
+ * model. media/board.js and media/taskDetail.js are plain browser scripts with
+ * no bundler, so they cannot import it and each carries its own copy;
+ * tests/task-blocker-visibility.test.cjs drives one shared fixture table
+ * through all three, so drift fails a test instead of shipping.
+ */
+export type BlockCause = 'RESOURCE_WAIT' | 'DEPENDENCY_WAIT' | 'EXTERNAL_BLOCK';
+
+/** The only status that can carry a live block. */
+export const BLOCKED_STATUS = 'BLOCKED';
+
+/** Short cause label: the card chip, and the detail headline. */
+export const BLOCK_CAUSE_LABEL: Record<BlockCause, string> = {
+    RESOURCE_WAIT: 'Resource wait',
+    DEPENDENCY_WAIT: 'Dependency wait',
+    EXTERNAL_BLOCK: 'External block',
+};
+
+/** What clears each cause — the only actionable part of a parked task. */
+export const BLOCK_CAUSE_CLEARS: Record<BlockCause, string> = {
+    RESOURCE_WAIT: 'Clears automatically when the shared resource lease is granted.',
+    DEPENDENCY_WAIT:
+        'Clears automatically when every recorded prerequisite reaches a finished state (DONE or ARCHIVED).',
+    EXTERNAL_BLOCK: 'Needs a person: a human or governor has to clear this block.',
+};
+
+export const ATTENTION_LABEL = 'Awaiting human review';
+export const ATTENTION_CLEARS = 'Needs a person: a human or QA has to review this task.';
+export const BLOCKER_SECTION_TITLE = 'Blocker';
+export const BLOCKER_REASON_LABEL = 'Reported reason';
+export const BLOCKER_REASON_MISSING = 'No reason was recorded.';
+export const BLOCKER_PREREQUISITES_LABEL = 'Prerequisites recorded as waited on';
+export const BLOCKER_RESOURCE_LABEL = 'Resource';
+export const BLOCKER_FROM_STATUS_LABEL = 'Blocked from';
+export const BLOCKER_BLOCKED_AT_LABEL = 'Blocked at';
+
+/** A non-blank string, or null for anything else: missing, null, wrong type. */
+function nonBlankString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+/**
+ * The prerequisite ids the task RECORDED as waited on, in the order the daemon
+ * sent them, duplicates kept, each id verbatim.
+ *
+ * These are NOT "unfinished tasks" — the daemon counts finished, archived and
+ * deleted ids as satisfied — so no caller may present them as a count of
+ * outstanding work. Blank entries can never identify a task and are dropped, so
+ * a list of nothing but blanks falls through to the next cause. A missing, null
+ * or wrong-shaped field yields an empty list rather than throwing.
+ */
+export function blockedPrerequisiteIds(task: Task): string[] {
+    const ids: unknown = task?.blockedOnTaskIds;
+    if (!Array.isArray(ids)) {
+        return [];
+    }
+    return ids.filter((id: unknown): id is string => nonBlankString(id) !== null);
+}
+
+/**
+ * Why `task` is parked, or null when it is not actively blocked.
+ *
+ * The status gate is load-bearing: a task that has left BLOCKED usually still
+ * carries its blocker fields, and rendering those as a live block is worse than
+ * rendering nothing.
+ *
+ * Within BLOCKED the order is fixed: a resource wait wins over a dependency
+ * wait, because the daemon's dependency auto-unblock deliberately skips
+ * resource-waiting rows and the lease grant clears all block metadata, so a row
+ * carrying both is really waiting on the lease. A blank or whitespace-only
+ * resource id falls through to the dependency branch. Total function: no input
+ * shape throws, and nothing here reads a clock or parses blockedAt as a date.
+ */
+export function blockCause(task: Task): BlockCause | null {
+    if (!task || task.status !== BLOCKED_STATUS) {
+        return null;
+    }
+    if (nonBlankString(task.blockedResourceId) !== null) {
+        return 'RESOURCE_WAIT';
+    }
+    if (blockedPrerequisiteIds(task).length > 0) {
+        return 'DEPENDENCY_WAIT';
+    }
+    return 'EXTERNAL_BLOCK';
+}
+
+/**
+ * The daemon's own attention flag, read verbatim. Never inferred from status,
+ * from the reason text or from a critique verdict, and honoured on any status —
+ * the QA reject path normally sets it on a REVIEW task, and it survives a task
+ * leaving BLOCKED.
+ */
+export function needsHumanAttention(task: Task): boolean {
+    return task?.needsHumanReview === true;
+}
+
+/**
+ * The recorded facts about the block, captioned, in the JetBrains order. Each
+ * one is omitted when missing or blank, and blockedAt is passed through exactly
+ * as sent: no date parsing, no reformatting.
+ */
+export function blockerFacts(task: Task): string[] {
+    const facts: string[] = [];
+    const resource = nonBlankString(task?.blockedResourceId);
+    if (resource) { facts.push(`${BLOCKER_RESOURCE_LABEL}: ${resource}`); }
+    const fromStatus = nonBlankString(task?.blockedFromStatus);
+    if (fromStatus) { facts.push(`${BLOCKER_FROM_STATUS_LABEL}: ${fromStatus}`); }
+    const blockedAt = nonBlankString(task?.blockedAt);
+    if (blockedAt) { facts.push(`${BLOCKER_BLOCKED_AT_LABEL}: ${blockedAt}`); }
+    return facts;
+}
+
 /**
  * Task Detail Panel - a full-featured editor panel for viewing and editing tasks.
  *
@@ -611,6 +737,12 @@ export class TaskDetailPanel implements vscode.Disposable {
             margin-left: 16px;
             font-size: 12px;
         }
+        .blocker-cause { font-weight: bold; }
+        .blocker-text {
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
     </style>
 </head>
 <body>
@@ -623,6 +755,12 @@ export class TaskDetailPanel implements vscode.Disposable {
     </div>
 
     <div class="main-content">
+        <!-- Blocker / attention: read-only, and first, because "why did this
+             stop" is the question a parked task raises. Live-refreshed in
+             media/taskDetail.js; the wrapper stays even when empty so the
+             update handler has one node of its own to fill and to clear. -->
+        <div id="blockerSection">${this.renderBlocker(task)}</div>
+
         <!-- Editable fields -->
         <div class="field-row">
             <div class="field" style="flex:0 0 140px;">
@@ -694,6 +832,56 @@ export class TaskDetailPanel implements vscode.Disposable {
 </html>`;
     }
 
+    /**
+     * The read-only blocker / attention section, or '' when the task is neither
+     * actively blocked nor flagged for human review.
+     *
+     * Display only: no unblock action, no retry, no navigation to the
+     * prerequisites, no network or state lookup. Every daemon-supplied string —
+     * the reason, the recorded prerequisite ids, the resource id, the source
+     * status and the timestamp — goes through `escapeHtml`, because a
+     * blockedReason is arbitrary agent-written text. The element order matches
+     * the JetBrains dialog so the two IDEs read the same.
+     *
+     * media/taskDetail.js rebuilds exactly this node sequence from DOM text
+     * nodes on every live update.
+     */
+    private renderBlocker(task: Task): string {
+        const cause = blockCause(task);
+        const attention = needsHumanAttention(task);
+        if (!cause && !attention) {
+            return '';
+        }
+        const parts: string[] = [];
+        // Only titled "Blocker" when there really is a live block: a task
+        // flagged for review is not necessarily blocked.
+        parts.push(`<div class="section-title">${escapeHtml(cause ? BLOCKER_SECTION_TITLE : ATTENTION_LABEL)}</div>`);
+        if (cause) {
+            parts.push(`<div class="blocker-cause">${escapeHtml(BLOCK_CAUSE_LABEL[cause])}</div>`);
+            parts.push(`<div class="muted-text">${escapeHtml(BLOCK_CAUSE_CLEARS[cause])}</div>`);
+            parts.push(`<div class="field-label">${escapeHtml(BLOCKER_REASON_LABEL)}</div>`);
+            // A missing or blank reason shows the neutral fallback, never an
+            // empty element.
+            parts.push(`<div class="blocker-text">${escapeHtml(nonBlankString(task.blockedReason) || BLOCKER_REASON_MISSING)}</div>`);
+        }
+        if (attention) {
+            parts.push(`<div class="blocker-cause">${escapeHtml(ATTENTION_LABEL)}</div>`);
+            parts.push(`<div class="muted-text">${escapeHtml(ATTENTION_CLEARS)}</div>`);
+        }
+        if (cause) {
+            const ids = blockedPrerequisiteIds(task);
+            if (ids.length > 0) {
+                parts.push(`<div class="field-label">${escapeHtml(BLOCKER_PREREQUISITES_LABEL)}</div>`);
+                parts.push(`<div class="blocker-text">${escapeHtml(ids.join('\n'))}</div>`);
+            }
+            const facts = blockerFacts(task);
+            if (facts.length > 0) {
+                parts.push(`<div class="blocker-text">${escapeHtml(facts.join('\n'))}</div>`);
+            }
+        }
+        return parts.join('');
+    }
+
     private renderSteps(steps: Array<{ stepId: string; description: string; status: string; affectedFiles?: string[] }>): string {
         if (steps.length === 0) {
             return '<p class="muted-text">No implementation steps defined</p>';
@@ -723,12 +911,11 @@ export class TaskDetailPanel implements vscode.Disposable {
 
     private renderMetrics(task: Task): string {
         const metrics = task.metrics;
-        const budget = task.budget;
         const handoffs = task.priorHandoffs || [];
         const failedDod = task.failedDodItems || [];
         const critique = task.planCritiqueResult;
 
-        if (!metrics && !budget && handoffs.length === 0 && failedDod.length === 0 && !critique) {
+        if (!metrics && handoffs.length === 0 && failedDod.length === 0 && !critique) {
             return '';
         }
 
@@ -760,10 +947,6 @@ export class TaskDetailPanel implements vscode.Disposable {
         }
         if (metrics?.rejectCount != null) {
             kpis.push(kpi('Rejects', String(metrics.rejectCount)));
-        }
-        if (budget?.wallClockMs != null) {
-            const remaining = Math.max(0, budget.wallClockMs - (usedMs ?? 0));
-            kpis.push(kpi('Budget remaining', `${humaniseDuration(remaining)} / ${humaniseDuration(budget.wallClockMs)}`));
         }
         if (kpis.length > 0) {
             parts.push(`<div class="kpi-row">${kpis.join('')}</div>`);

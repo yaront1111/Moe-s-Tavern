@@ -28,7 +28,7 @@ bash scripts/install-mac.sh --global --skip-mcp --with-plugin
 
 The installer installs missing Node.js/npm, Git, the selected agent CLI, and JDK 17, then builds the daemon, proxy, and plugin. macOS/Linux also provision Python3, curl, and tar; Linux installs tmux for team terminals. Existing supported tools are reused. Node 18 is upgraded because current build tools require newer Node.js.
 
-Claude Code is installed by default. To choose another CLI, add `-AgentCommand codex` or `-AgentCommand gemini` on Windows; add `--agent codex` or `--agent gemini` on macOS/Linux. Use `none` to skip provider CLI installation.
+Claude Code is installed by default. To choose another CLI, add `-AgentCommand codex` or `-AgentCommand gemini` on Windows; add `--agent codex` or `--agent gemini` on macOS/Linux. Use `none` to skip provider CLI installation. If you choose Codex, read the terminal-UI note under [Launch an architect and approve the plan](#launch-an-architect-and-approve-the-plan) before your first run — a codex seat commits at a different moment from the others.
 
 `--skip-mcp` leaves project MCP setup to the agent launcher. Keep the Moe folder on disk. New terminals load the installed command paths; on macOS/Linux, refresh an already open terminal with:
 
@@ -83,6 +83,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\moe-agent.ps1 -Rol
 ```
 
 These commands default to Claude Code. To use Codex, add `-Command codex` or `--command codex`, respectively. The launcher sets up the project's MCP connection and starts the daemon when needed.
+
+A codex seat runs the interactive terminal UI for every role, and it commits nothing while that UI is open — the launcher records the commit after the CLI exits, so a task can reach **Done** on the board while Git still shows no commit for it. Close the terminal UI and the commit appears; expect this when you check the recorded commit below. To run a codex seat unattended so it lands a commit per task, add `-CodexExec` or `--codex-exec` (that headless launch has its own sandbox and approval settings — see [`MOE_CODEX_SANDBOX`](CONFIGURATION.md#agent-scripts)).
 
 Wait for **Awaiting Approval** on the task card in the **Planning** column. Open the task, read its steps and affected files, then click **Approve** if the plan matches your request. If it needs changes, reject it with specific feedback. No implementation should start while the plan is waiting for your approval in CONTROL mode.
 

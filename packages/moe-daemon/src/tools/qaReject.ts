@@ -5,6 +5,7 @@ import { MAX_REOPENS_DEFAULT } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { resetPlanStepsToPending } from '../util/reopen.js';
+import { recordReview, resolveReviewedCandidate } from '../state/reviewStore.js';
 
 const VALID_ISSUE_TYPES: QAIssueType[] = [
   'test_failure', 'lint', 'security', 'missing_feature', 'regression', 'other'
@@ -41,6 +42,10 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
           },
           description: 'Structured list of issues found during review'
         },
+        candidateId: {
+          type: 'string',
+          description: 'The candidate you actually reviewed (get_context.currentCandidate.id). Refused with CANDIDATE_MISMATCH if the task has moved on to a different candidate, so a rejection names the bytes it judged. Optional only for projects that record no candidates.'
+        },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
       },
       required: ['taskId', 'reason'],
@@ -52,6 +57,7 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         reason?: string;
         failedDodItems?: string[];
         issues?: QAIssue[];
+        candidateId?: string;
         workerId?: string;
       };
 
@@ -107,6 +113,13 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
       // circles. No-ops on the human path (assignedWorkerId null).
       assertContextFetched(task, params.workerId, 'qa_reject');
       const handoffWorkerId = task.assignedWorkerId || params.workerId;
+
+      // Same hard candidate gate as qa_approve, for the same reason: a rejection
+      // must name the bytes it judged, or the worker re-reads feedback written
+      // against a tree that no longer exists. Refuses BEFORE every write —
+      // nothing here has mutated state yet — and a task with no candidate
+      // recorded behaves exactly as it did before the gate existed.
+      const binding = resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_reject');
 
       // Dedupe + trim the failed-DoD payload up front. Two callers listing the
       // same item twice in ONE rejection must not fake a "same item failed
@@ -243,6 +256,19 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
           : {}),
       };
 
+      // Same ordering as qa_approve: the Review lands before the status flip, so
+      // a reopened task can never carry a reject with no record of which
+      // candidate was judged. Awaited, never swallowed.
+      if (binding.candidateId) {
+        await recordReview(state, {
+          taskId: task.id,
+          candidateId: binding.candidateId,
+          reviewerId: params.workerId || 'human',
+          decision: 'reject',
+          summary: params.reason,
+        });
+      }
+
       const updated = await state.updateTask(
         params.taskId,
         updatePayload,
@@ -348,6 +374,9 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         needsHumanReview: updated.needsHumanReview ?? false,
         repeatedFailedDodItem: triggeredBySameItem ? repeatedItem : undefined,
         reason: params.reason,
+        // Additive and only when non-empty, so the result shape every existing
+        // caller reads is unchanged: an unbound rejection is visible, not silent.
+        ...(binding.warning ? { warnings: [binding.warning] } : {}),
         rejectionDetails,
         rejectionHistory: updatedHistory,
         failedDodItems: updated.failedDodItems ?? nextFailedItems,

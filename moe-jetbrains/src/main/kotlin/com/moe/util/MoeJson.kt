@@ -12,6 +12,7 @@ import com.moe.model.EpicMetricsAggregate
 import com.moe.model.FailedDodItem
 import com.moe.model.HandoffNote
 import com.moe.model.ImplementationStep
+import com.moe.model.MAX_SAFE_PLAN_REVISION
 import com.moe.model.MetricsAggregate
 import com.moe.model.MoeState
 import com.moe.model.PlanCritiqueResult
@@ -19,14 +20,17 @@ import com.moe.model.Project
 import com.moe.model.ProjectSettings
 import com.moe.model.RailProposal
 import com.moe.model.Task
-import com.moe.model.TaskBudget
 import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
+import com.moe.model.TaskSizingThresholds
 import com.moe.model.TaskVerification
 import com.moe.model.Team
 import com.moe.model.Worker
+import java.math.BigDecimal
 
 object MoeJson {
+    private val MAX_SAFE_PLAN_REVISION_DECIMAL: BigDecimal = BigDecimal.valueOf(MAX_SAFE_PLAN_REVISION)
+
     private fun JsonObject.getStringOrNull(key: String): String? {
         val element = get(key) ?: return null
         if (element.isJsonNull) return null
@@ -91,6 +95,22 @@ object MoeJson {
         return try { element.asBoolean } catch (_: Exception) { default }
     }
 
+    /**
+     * Honours the value ONLY when it is a real JSON boolean, so a `default` of
+     * true reproduces the daemon's `settings.X !== false` and a default of false
+     * reproduces `settings.X === true` for every JSON shape.
+     *
+     * [getBooleanOrDefault] cannot be used for landing policy: Gson's `asBoolean`
+     * routes a JSON string through `Boolean.parseBoolean`, turning `"no"` into
+     * false where the daemon's `"no" !== false` is true.
+     */
+    private fun getStrictBooleanOrDefault(obj: JsonObject, key: String, default: Boolean): Boolean {
+        val element = obj.get(key) ?: return default
+        if (!element.isJsonPrimitive) return default
+        val primitive = element.asJsonPrimitive
+        return if (primitive.isBoolean) primitive.asBoolean else default
+    }
+
     private fun JsonObject.getStringListOrDefault(key: String, default: List<String> = emptyList()): List<String> {
         val element = get(key)
         if (element == null || element.isJsonNull || !element.isJsonArray) return default
@@ -115,6 +135,57 @@ object MoeJson {
         }
     }
 
+    /**
+     * Strict readers for the task blocker metadata only. The permissive getters above
+     * read `asString` from any JSON primitive, so a numeric 42 would become the task id
+     * "42" and `true` the reason "true"; these honour real JSON strings and nothing else.
+     */
+    private fun JsonObject.getStrictStringOrNull(key: String): String? {
+        val element = get(key)
+        if (element == null || !element.isJsonPrimitive) return null
+        val primitive = element.asJsonPrimitive
+        return if (primitive.isString) primitive.asString else null
+    }
+
+    /**
+     * Reads the plan revision an approval must quote back. Absent means a legacy
+     * task, effective 0; anything present that is not an exact integer in
+     * `0..MAX_SAFE_PLAN_REVISION` yields null so the value stays unusable instead
+     * of collapsing into an approvable 0 or a truncated revision.
+     *
+     * Neither [getLongOrNull] nor `asLong` can be used: Gson coerces there, so
+     * "17" becomes 17 and 9007199254740991.1 truncates to a valid-looking
+     * revision. The original decimal literal is re-read exactly as [BigDecimal]
+     * and only [BigDecimal.longValueExact] may convert it.
+     */
+    private fun JsonObject.getPlanRevisionOrNull(key: String): Long? {
+        val element = get(key) ?: return 0L
+        if (!element.isJsonPrimitive) return null
+        val primitive = element.asJsonPrimitive
+        if (!primitive.isNumber) return null
+        return try {
+            val decimal = BigDecimal(primitive.asString)
+            if (decimal.signum() < 0 || decimal > MAX_SAFE_PLAN_REVISION_DECIMAL) {
+                null
+            } else {
+                decimal.longValueExact()
+            }
+        } catch (_: NumberFormatException) {
+            null
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
+    /** Keeps only real JSON string members, in order; `[]` and all-invalid arrays give an empty list. */
+    private fun JsonObject.getStrictStringListOrNull(key: String): List<String>? {
+        val element = get(key)
+        if (element == null || !element.isJsonArray) return null
+        return element.asJsonArray.mapNotNull {
+            if (it.isJsonPrimitive && it.asJsonPrimitive.isString) it.asString else null
+        }
+    }
+
     private fun parseColumnLimits(settingsJson: JsonObject): Map<String, Int>? {
         val columnLimits = settingsJson.get("columnLimits")
             ?.takeIf { it.isJsonObject }
@@ -130,20 +201,65 @@ object MoeJson {
         }.toMap().takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * Mirrors `resolveTaskSizing` in `packages/moe-daemon/src/util/planSize.ts`:
+     * each threshold must be a positive int or the default is used, and a max
+     * below its warn is lifted to the warn value so a partial hand edit of
+     * project.json cannot render an inverted band.
+     */
+    private fun parseTaskSizing(settingsJson: JsonObject): TaskSizingThresholds {
+        val sizing = settingsJson.get("taskSizing")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: JsonObject()
+        val warnSteps = sizing.getIntOrNull("warnSteps")?.takeIf { it > 0 } ?: 8
+        val warnDistinctFiles = sizing.getIntOrNull("warnDistinctFiles")?.takeIf { it > 0 } ?: 5
+        return TaskSizingThresholds(
+            warnSteps = warnSteps,
+            maxSteps = maxOf(warnSteps, sizing.getIntOrNull("maxSteps")?.takeIf { it > 0 } ?: 12),
+            warnDistinctFiles = warnDistinctFiles,
+            maxDistinctFiles = maxOf(
+                warnDistinctFiles,
+                sizing.getIntOrNull("maxDistinctFiles")?.takeIf { it > 0 } ?: 10
+            )
+        )
+    }
+
+    /**
+     * `.moe/project.json` is hand-editable, so no read here may throw: every
+     * value guards its JSON type and falls back to the daemon's own default. A
+     * malformed settings block must degrade to defaults, never crash the state
+     * parse and blank the board.
+     */
     private fun parseProjectSettings(settingsJson: JsonObject?): ProjectSettings {
         val settings = settingsJson ?: JsonObject()
         val approvalMode = settings.getStringOrDefault("approvalMode", "CONTROL")
             .takeIf { it in setOf("CONTROL", "SPEED", "TURBO") }
             ?: "CONTROL"
+        val attribution = settings.get("attribution")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?: JsonObject()
         return ProjectSettings(
             approvalMode = approvalMode,
             speedModeDelayMs = settings.getIntOrDefault("speedModeDelayMs", 2000),
-            autoCreateBranch = getBooleanOrDefault(settings, "autoCreateBranch", true),
-            branchPattern = settings.getStringOrDefault("branchPattern", "moe/{epicId}/{taskId}"),
-            commitPattern = settings.getStringOrDefault("commitPattern", "feat({epicId}): {taskTitle}"),
             agentCommand = settings.getStringOrDefault("agentCommand", "claude").ifBlank { "claude" },
             enableAgentTeams = getBooleanOrDefault(settings, "enableAgentTeams", false),
-            columnLimits = parseColumnLimits(settings)
+            columnLimits = parseColumnLimits(settings),
+            autoCommit = getStrictBooleanOrDefault(settings, "autoCommit", true),
+            checkpointCommits = getStrictBooleanOrDefault(settings, "checkpointCommits", true),
+            checkpointPush = getStrictBooleanOrDefault(settings, "checkpointPush", true),
+            commitBoardState = getStrictBooleanOrDefault(settings, "commitBoardState", true),
+            commitHooks = getStrictBooleanOrDefault(settings, "commitHooks", false),
+            consolidationBranch = settings.getStringOrDefault("consolidationBranch", "").trim(),
+            qualityGate = settings.getStringOrDefault("qualityGate", "").trim(),
+            qualityGateScope = settings.getStringOrDefault("qualityGateScope", "epicFinal")
+                .takeIf { it in setOf("epicFinal", "everyTask") }
+                ?: "epicFinal",
+            attributionUndeclared = attribution.getStringOrDefault("undeclared", "solo")
+                .takeIf { it in setOf("solo", "never", "always") }
+                ?: "solo",
+            taskSizing = parseTaskSizing(settings)
         )
     }
 
@@ -265,13 +381,19 @@ object MoeJson {
                 reopenCount = obj.getIntOrDefault("reopenCount", 0),
                 taskRails = obj.getStringListOrNull("taskRails"),
                 metrics = parseTaskMetrics(obj),
-                budget = parseTaskBudget(obj),
                 priorHandoffs = parseHandoffs(obj),
                 failedDodItems = parseFailedDodItems(obj),
                 planCritiqueResult = parsePlanCritiqueResult(obj),
                 planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
                 verification = parseVerification(obj),
-                reviewSummary = obj.getStringOrNull("reviewSummary")
+                reviewSummary = obj.getStringOrNull("reviewSummary"),
+                needsHumanReview = getStrictBooleanOrDefault(obj, "needsHumanReview", false),
+                blockedReason = obj.getStrictStringOrNull("blockedReason"),
+                blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
+                blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
+                blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
+                blockedAt = obj.getStrictStringOrNull("blockedAt"),
+                planRevision = obj.getPlanRevisionOrNull("planRevision")
             )
         }
     }
@@ -289,17 +411,6 @@ object MoeJson {
             wallClockMs = m.getLongOrNull("wallClockMs"),
             firstClaimAt = m.getStringOrNull("firstClaimAt"),
             doneAt = m.getStringOrNull("doneAt")
-        )
-    }
-
-    private fun parseTaskBudget(obj: JsonObject): TaskBudget? {
-        val element = obj.get("budget") ?: return null
-        if (element.isJsonNull || !element.isJsonObject) return null
-        val b = element.asJsonObject
-        return TaskBudget(
-            wallClockMs = b.getLongOrNull("wallClockMs"),
-            warnedAt = b.getStringOrNull("warnedAt"),
-            escalatedAt = b.getStringOrNull("escalatedAt")
         )
     }
 
@@ -426,13 +537,19 @@ object MoeJson {
             reopenCount = obj.getIntOrDefault("reopenCount", 0),
             taskRails = obj.getStringListOrNull("taskRails"),
             metrics = parseTaskMetrics(obj),
-            budget = parseTaskBudget(obj),
             priorHandoffs = parseHandoffs(obj),
             failedDodItems = parseFailedDodItems(obj),
             planCritiqueResult = parsePlanCritiqueResult(obj),
             planSizeWarnings = obj.getStringListOrNull("planSizeWarnings"),
             verification = parseVerification(obj),
-            reviewSummary = obj.getStringOrNull("reviewSummary")
+            reviewSummary = obj.getStringOrNull("reviewSummary"),
+            needsHumanReview = getStrictBooleanOrDefault(obj, "needsHumanReview", false),
+            blockedReason = obj.getStrictStringOrNull("blockedReason"),
+            blockedOnTaskIds = obj.getStrictStringListOrNull("blockedOnTaskIds"),
+            blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
+            blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
+            blockedAt = obj.getStrictStringOrNull("blockedAt"),
+            planRevision = obj.getPlanRevisionOrNull("planRevision")
         )
     }
 

@@ -1,5 +1,12 @@
 package com.moe.model
 
+/**
+ * Largest plan revision that survives a round trip through the daemon's JSON
+ * numbers, i.e. `Number.MAX_SAFE_INTEGER`. Anything above it cannot be trusted
+ * to mean what the daemon sent, so it is rejected rather than truncated.
+ */
+const val MAX_SAFE_PLAN_REVISION: Long = 9007199254740991L
+
 data class MoeState(
     val project: Project,
     val epics: List<Epic>,
@@ -17,15 +24,48 @@ data class Project(
     val settings: ProjectSettings? = null
 )
 
+/**
+ * The plugin's parsed view of `.moe/project.json` `settings`.
+ *
+ * Every default here must track the daemon, which applies its own defaults at
+ * read time rather than at init: the landing booleans come from the `policy`
+ * block of `packages/moe-daemon/src/tools/getCommitScope.ts` (`!== false` for
+ * [autoCommit]/[checkpointCommits]/[checkpointPush]/[commitBoardState], `=== true`
+ * for [commitHooks], `?? 'solo'` for [attributionUndeclared]), [qualityGateScope]
+ * falls back to `epicFinal` in `scripts/moe-agent.sh`, and [taskSizing] mirrors
+ * `packages/moe-daemon/src/util/planSize.ts`. A snapshot missing a key must still
+ * construct a valid object, so no field is nullable without a default.
+ *
+ * `autoCreateBranch`, `branchPattern` and `commitPattern` are deliberately absent:
+ * they are inert legacy keys that no longer affect landing. No wrapper creates a
+ * branch per task (they peel onto [consolidationBranch] else the shared
+ * `moe/work-<YYYY-MM-DD>`) and no commit subject derives from `commitPattern`.
+ * The daemon still accepts and stores them, so existing project.json files load.
+ */
 data class ProjectSettings(
     val approvalMode: String = "CONTROL",
     val speedModeDelayMs: Int = 2000,
-    val autoCreateBranch: Boolean = true,
-    val branchPattern: String = "moe/{epicId}/{taskId}",
-    val commitPattern: String = "feat({epicId}): {taskTitle}",
     val agentCommand: String = "claude",
     val enableAgentTeams: Boolean = false,
-    val columnLimits: Map<String, Int>? = null
+    val columnLimits: Map<String, Int>? = null,
+    val autoCommit: Boolean = true,
+    val checkpointCommits: Boolean = true,
+    val checkpointPush: Boolean = true,
+    val commitBoardState: Boolean = true,
+    val commitHooks: Boolean = false,
+    val consolidationBranch: String = "",
+    val qualityGate: String = "",
+    val qualityGateScope: String = "epicFinal",
+    val attributionUndeclared: String = "solo",
+    val taskSizing: TaskSizingThresholds = TaskSizingThresholds()
+)
+
+/** Plan-size bands from `settings.taskSizing`; defaults mirror `util/planSize.ts`. */
+data class TaskSizingThresholds(
+    val warnSteps: Int = 8,
+    val maxSteps: Int = 12,
+    val warnDistinctFiles: Int = 5,
+    val maxDistinctFiles: Int = 10
 )
 
 data class Epic(
@@ -79,12 +119,6 @@ data class TaskVerification(
     val reportedAt: String? = null
 )
 
-data class TaskBudget(
-    val wallClockMs: Long? = null,
-    val warnedAt: String? = null,
-    val escalatedAt: String? = null
-)
-
 data class HandoffNote(
     val from: String? = null,
     val to: String? = null,
@@ -130,9 +164,8 @@ data class Task(
     val stepsCompleted: List<String>? = null,
     val reopenCount: Int = 0,
     val taskRails: List<String>? = null,
-    // Schema additions for budget + metrics surface (rendered when present)
+    // Schema additions for the metrics surface (rendered when present)
     val metrics: TaskMetrics? = null,
-    val budget: TaskBudget? = null,
     val priorHandoffs: List<HandoffNote>? = null,
     val failedDodItems: List<FailedDodItem>? = null,
     val planCritiqueResult: PlanCritiqueResult? = null,
@@ -141,7 +174,21 @@ data class Task(
     val planSizeWarnings: List<String>? = null,
     // complete_task verification evidence + qa_approve summary (audit trail).
     val verification: TaskVerification? = null,
-    val reviewSummary: String? = null
+    val reviewSummary: String? = null,
+    // Daemon blocker/attention metadata, display data only: kept exactly as sent,
+    // never inferred from status. needsHumanReview is independent of BLOCKED.
+    val needsHumanReview: Boolean = false,
+    val blockedReason: String? = null,
+    val blockedOnTaskIds: List<String>? = null,
+    val blockedResourceId: String? = null,
+    val blockedFromStatus: String? = null,
+    val blockedAt: String? = null,
+    // Revision of the plan the daemon currently holds, used to prove an approval
+    // reviewed THIS plan. Two absent-looking cases are deliberately distinct:
+    // a daemon payload with no field at all is a legacy task, effective 0; a
+    // present but malformed field parses to null — unusable, and a reviewing UI
+    // must refuse it rather than approve against an assumed 0.
+    val planRevision: Long? = 0L
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.

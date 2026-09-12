@@ -9,7 +9,14 @@ case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOU
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WRAPPER="$ROOT_DIR/scripts/moe-agent.sh"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t moe-postflight)"
-cleanup() { rm -rf "$TMP_DIR"; }
+# Background children a scenario spawns as a GENUINE probe target (scenario M2
+# needs a real live process id, not a fabricated one). Killed on EXIT so a
+# failing case cannot leak a ten-minute sleep onto the box.
+LIVE_PIDS=""
+cleanup() {
+  for _p in $LIVE_PIDS; do kill "$_p" 2>/dev/null || true; done
+  rm -rf "$TMP_DIR"
+}
 trap cleanup EXIT
 
 if ! command -v timeout >/dev/null 2>&1; then
@@ -118,7 +125,21 @@ switch (tool) {
   case 'join_team': ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
+  case 'chat_read': {
+    // FAKE_MENTION=1 models one unread message tagging the caller. The record
+    // is also appended to the store the wrapper re-reads bodies from, so the
+    // mention passes provenance instead of degrading to a delivery marker.
+    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
+      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+      const dir = path.join(moe, 'messages');
+      ensureDir(dir);
+      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
+      ok({ messages: [msg], cursor: null, truncated: 0 });
+      break;
+    }
+    ok({ messages: [], cursor: null, truncated: 0 });
+    break;
+  }
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
@@ -138,6 +159,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-blocked', title: 'Blocked smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.wait_for_task', reason: 'One task per worker: you already hold task-blocked (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
+      // Nothing claimable and nothing held: the board state that used to make
+      // the wrapper launch a CLI and tell it to claim itself.
+      ok({ hasNext: false });
     } else {
       ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
     }
@@ -150,6 +175,11 @@ switch (tool) {
     // so a stale id silently answers with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the real fallback: some OTHER task comes back.
+    if (!args.taskId) {
+      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
+      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
+      break;
+    }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
@@ -1360,6 +1390,215 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario M] ok"
 
+  # Scenario M2 -- the live-session guard on scenario M's recovery predicate.
+  # "A baseline that never reached a completed landing" is true for a CRASHED
+  # session AND for one that is still running and about to commit: a worker
+  # calls complete_task, the task flips to REVIEW, and a QA seat claims it
+  # inside the window before the worker's CLI exits and its post-flight
+  # commits. The old predicate made that QA pre-flight land the live worker's
+  # entire implementation as its own `... recovered` checkpoint -- measured
+  # twice on 2026-09-11 (ac6c9dc carried util/enforcement.ts +144 and
+  # util/enforcement.test.ts +472; b5925e2 carried delivery/acceptance.test.ts
+  # +2184), leaving each worker's feat(...) completion holding only a board
+  # record. The live-session marker beside the baseline discriminates the two.
+  # Five sub-cases: (a) and (b) are the fix; (c), (d) and (e) are the behaviour
+  # that must NOT move and are asserted before AND after it.
+  echo "[scenario M2] a live owner's baseline is skipped; a dead one still recovers"
+
+  # The fixtures below must spell the marker exactly as moe-agent.sh writes it,
+  # so the case proves the real probe rather than a private harness format.
+  live_marker_ns() {
+    case "$(uname -s 2>/dev/null)" in
+      MINGW*|MSYS*|CYGWIN*) printf 'msys' ;;
+      *) printf 'posix' ;;
+    esac
+  }
+  live_marker_host() {
+    hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+  }
+  live_marker_start() { # $1 = pid -- /proc starttime (field 22), '' when unreadable
+    [ -r "/proc/$1/stat" ] || return 0
+    sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}' | tr -d '[:space:]'
+  }
+  write_live_marker() { # $1 dir, $2 taskId, $3 pid, $4 start token, [$5 host], [$6 ns]
+    local dir="$1" tid="$2" pid="$3" start="$4" host ns
+    host="${5:-$(live_marker_host)}"
+    ns="${6:-$(live_marker_ns)}"
+    mkdir -p "$dir/.git/moe/baseline"
+    printf '#moe-live v1 task=%s pid=%s host=%s ns=%s worker=worker-owner session=worker-owner@2026-09-11T10:27:44Z start=%s\n' \
+      "$tid" "$pid" "$host" "$ns" "$start" > "$dir/.git/moe/baseline/$tid.live"
+  }
+  write_lingering_baseline() { # $1 dir, $2 taskId -- the shape scenario M builds inline
+    local dir="$1" tid="$2" p
+    mkdir -p "$dir/.git/moe/baseline"
+    {
+      printf '#moe-baseline v1 task=%s at=2026-01-01T00:00:00Z head=%s landed=0\n' "$tid" "$(git -C "$dir" rev-parse HEAD)"
+      for p in .moe/project.json .moe/messages/chan-general.jsonl .moe/tasks/task-postflight.json ".moe/tasks/$tid.json"; do
+        [ -f "$dir/$p" ] || continue
+        printf 'B\t%s\t%s\n' "$(git -C "$dir" hash-object -- "$p")" "$p"
+      done
+    } > "$dir/.git/moe/baseline/$tid.tsv"
+  }
+  make_m2_project() { # $1 dir, $2 taskId, $3 record status -- baseline + dirty impl.txt
+    local dir="$1" tid="$2" st="$3"
+    make_scope_project "$dir" '["ignored.txt"]'
+    write_task_record "$dir" '["impl.txt"]' "$st" '[]' "$tid"
+    echo impl > "$dir/impl.txt"
+    write_lingering_baseline "$dir" "$tid"
+  }
+  # Subjects of every commit carrying this task, written to a FILE: never pipe
+  # a producer into `grep -q` under `set -o pipefail` -- the reader exits at the
+  # first match, the writer dies with SIGPIPE, the pipeline status is 141 and
+  # the guard silently reads false in exactly the case it exists for.
+  m2_subjects() { # $1 dir, $2 taskId, $3 out file
+    git -C "$1" log --pretty=%s --fixed-strings --grep="Moe-Task: $2" > "$3" 2>/dev/null || : > "$3"
+  }
+
+  # A REAL long-lived child: a fabricated id would pass against a wrapper that
+  # never probes at all, or that probes the wrong process table.
+  sleep 600 &
+  M2_LIVE_PID=$!
+  LIVE_PIDS="$LIVE_PIDS $M2_LIVE_PID"
+  M2_LIVE_START="$(live_marker_start "$M2_LIVE_PID")"
+  M2_HOST="$(live_marker_host)"
+  M2_SKIP_LINE="MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-resume pid=$M2_LIVE_PID host=$M2_HOST worker=worker-owner reason=live"
+
+  # M2-a: the measured race, on the real claim shape -- a qa seat claiming a
+  # task that is already at REVIEW while its worker's CLI is still running.
+  SCOPE_M2A_DIR="$TMP_DIR/scope-m2a"
+  make_m2_project "$SCOPE_M2A_DIR" task-resume REVIEW
+  write_live_marker "$SCOPE_M2A_DIR" task-resume "$M2_LIVE_PID" "$M2_LIVE_START"
+  set +e
+  FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=REVIEW run_scope_wrapper "$SCOPE_M2A_DIR" "$TMP_DIR/scope-m2a.out" /bin/true qa qa-scope-m2
+  scope_m2a_code=$?
+  set -e
+  [ "$scope_m2a_code" -eq 0 ] || scope_fail M2 "(a) wrapper exited with $scope_m2a_code" "$TMP_DIR/scope-m2a.out"
+  if grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m2a.out"; then
+    scope_fail M2 "(a) the second seat recovered a LIVE owner's baseline" "$TMP_DIR/scope-m2a.out"
+  fi
+  if ! grep -Fq "$M2_SKIP_LINE" "$TMP_DIR/scope-m2a.out"; then
+    scope_fail M2 "(a) expected the exact skip line [$M2_SKIP_LINE]" "$TMP_DIR/scope-m2a.out"
+  fi
+  m2a_skip_line="$(grep -Fn "$M2_SKIP_LINE" "$TMP_DIR/scope-m2a.out" | head -n1 | cut -d: -f1)"
+  m2a_launch_line="$(grep -n 'Starting claude' "$TMP_DIR/scope-m2a.out" | head -n1 | cut -d: -f1)"
+  if [ -n "$m2a_launch_line" ] && [ "$m2a_skip_line" -ge "$m2a_launch_line" ]; then
+    scope_fail M2 "(a) the skip decision must be taken BEFORE the CLI launch" "$TMP_DIR/scope-m2a.out"
+  fi
+  # The pre-flight is the only producer of a `... recovered` subject, so its
+  # absence IS the fix and its presence IS the defect.
+  m2_subjects "$SCOPE_M2A_DIR" task-resume "$TMP_DIR/m2a-subjects.txt"
+  if grep -q ' recovered$' "$TMP_DIR/m2a-subjects.txt"; then
+    scope_fail M2 "(a) a '... recovered' checkpoint was landed while the owner was alive" "$TMP_DIR/scope-m2a.out"
+  fi
+  # The owner's claim must survive: a seat that stands down must not stamp its
+  # own id over the marker, or the NEXT seat would see a dead owner and steal.
+  [ -f "$SCOPE_M2A_DIR/.git/moe/baseline/task-resume.live" ] || scope_fail M2 "(a) the live owner's marker was deleted by the seat that stood down" "$TMP_DIR/scope-m2a.out"
+  if ! grep -Fq "pid=$M2_LIVE_PID" "$SCOPE_M2A_DIR/.git/moe/baseline/task-resume.live"; then
+    scope_fail M2 "(a) the live owner's marker was overwritten by the seat that stood down" "$TMP_DIR/scope-m2a.out"
+  fi
+
+  # M2-b: the same guard on the idle (BLOCKED-hold) path, where the pre-flight
+  # is the ONLY git actor -- so the dirty bytes and the baseline are observable
+  # directly after the run instead of inferred from commit subjects.
+  SCOPE_M2B_DIR="$TMP_DIR/scope-m2b"
+  make_m2_project "$SCOPE_M2B_DIR" task-blocked BLOCKED
+  write_live_marker "$SCOPE_M2B_DIR" task-blocked "$M2_LIVE_PID" "$M2_LIVE_START"
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2B_DIR" "$TMP_DIR/scope-m2b.out" /bin/true worker worker-scope-m2b
+  scope_m2b_code=$?
+  set -e
+  [ "$scope_m2b_code" -eq 0 ] || scope_fail M2 "(b) wrapper exited with $scope_m2b_code" "$TMP_DIR/scope-m2b.out"
+  if grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2b.out"; then
+    scope_fail M2 "(b) the idle path recovered a LIVE owner's baseline" "$TMP_DIR/scope-m2b.out"
+  fi
+  if ! grep -Fq "MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-blocked pid=$M2_LIVE_PID host=$M2_HOST worker=worker-owner reason=live" "$TMP_DIR/scope-m2b.out"; then
+    scope_fail M2 "(b) expected the named skip line on the idle path" "$TMP_DIR/scope-m2b.out"
+  fi
+  m2_subjects "$SCOPE_M2B_DIR" task-blocked "$TMP_DIR/m2b-subjects.txt"
+  if [ -s "$TMP_DIR/m2b-subjects.txt" ]; then
+    cat "$TMP_DIR/m2b-subjects.txt" >&2
+    scope_fail M2 "(b) no commit at all may be landed for a live owner's task" "$TMP_DIR/scope-m2b.out"
+  fi
+  git -C "$SCOPE_M2B_DIR" status --porcelain > "$TMP_DIR/m2b-status.txt" 2>/dev/null || : > "$TMP_DIR/m2b-status.txt"
+  if ! grep -q '^?? impl\.txt$' "$TMP_DIR/m2b-status.txt"; then
+    cat "$TMP_DIR/m2b-status.txt" >&2
+    scope_fail M2 "(b) impl.txt must still be present AND unstaged so the real owner can land it" "$TMP_DIR/scope-m2b.out"
+  fi
+  [ -f "$SCOPE_M2B_DIR/.git/moe/baseline/task-blocked.tsv" ] || scope_fail M2 "(b) the baseline must be left intact on a skip" "$TMP_DIR/scope-m2b.out"
+  if ! grep -Fq ' landed=0' "$SCOPE_M2B_DIR/.git/moe/baseline/task-blocked.tsv"; then
+    scope_fail M2 "(b) a skip must not mark the live owner's baseline landed" "$TMP_DIR/scope-m2b.out"
+  fi
+
+  # M2-c: THE BEHAVIOUR THAT MUST NOT MOVE. A genuine crash leaves a marker
+  # whose process is gone; the 2026-08-28 lost-code path must recover it
+  # exactly as before. Spawn and reap a real child so the id is definitively
+  # dead rather than merely unlikely.
+  sleep 600 &
+  M2_DEAD_PID=$!
+  M2_DEAD_START="$(live_marker_start "$M2_DEAD_PID")"
+  kill "$M2_DEAD_PID" 2>/dev/null || true
+  wait "$M2_DEAD_PID" 2>/dev/null || true
+  SCOPE_M2C_DIR="$TMP_DIR/scope-m2c"
+  make_m2_project "$SCOPE_M2C_DIR" task-blocked BLOCKED
+  write_live_marker "$SCOPE_M2C_DIR" task-blocked "$M2_DEAD_PID" "$M2_DEAD_START"
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2C_DIR" "$TMP_DIR/scope-m2c.out" /bin/true worker worker-scope-m2c
+  scope_m2c_code=$?
+  set -e
+  [ "$scope_m2c_code" -eq 0 ] || scope_fail M2 "(c) wrapper exited with $scope_m2c_code" "$TMP_DIR/scope-m2c.out"
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2c.out"; then
+    scope_fail M2 "(c) a crashed owner's baseline MUST still be recovered" "$TMP_DIR/scope-m2c.out"
+  fi
+  scope_m2c_sha="$(git -C "$SCOPE_M2C_DIR" log --format=%H --fixed-strings --grep='Moe-Task: task-blocked' | head -n1)"
+  [ -n "$scope_m2c_sha" ] || scope_fail M2 "(c) the crash recovery landed no commit" "$TMP_DIR/scope-m2c.out"
+  scope_m2c_files="$(git -C "$SCOPE_M2C_DIR" show --pretty=format: --name-only "$scope_m2c_sha" | sed '/^$/d' | sort | tr '\n' ' ')"
+  if [ "$scope_m2c_files" != ".moe/tasks/task-blocked.json impl.txt " ]; then
+    scope_fail M2 "(c) the crash recovery must carry EXACTLY the own record + impl.txt; got [$scope_m2c_files]" "$TMP_DIR/scope-m2c.out"
+  fi
+  if [ -f "$SCOPE_M2C_DIR/.git/moe/baseline/task-blocked.live" ]; then
+    scope_fail M2 "(c) a stale marker must be deleted once its process is proven gone" "$TMP_DIR/scope-m2c.out"
+  fi
+
+  # M2-d: process-id REUSE. A live id whose recorded start token does not match
+  # the process now holding it is a recycled id, not the owner -- it must
+  # recover, or a long-lived box would suppress crash recovery by coincidence.
+  if [ -z "$M2_LIVE_START" ]; then
+    echo "[scenario M2] (d) SKIPPED: this platform exposes no process start token, so the probe is identity-only by design"
+  else
+    SCOPE_M2D_DIR="$TMP_DIR/scope-m2d"
+    make_m2_project "$SCOPE_M2D_DIR" task-blocked BLOCKED
+    write_live_marker "$SCOPE_M2D_DIR" task-blocked "$M2_LIVE_PID" "${M2_LIVE_START}999"
+    set +e
+    FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2D_DIR" "$TMP_DIR/scope-m2d.out" /bin/true worker worker-scope-m2d
+    scope_m2d_code=$?
+    set -e
+    [ "$scope_m2d_code" -eq 0 ] || scope_fail M2 "(d) wrapper exited with $scope_m2d_code" "$TMP_DIR/scope-m2d.out"
+    if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2d.out"; then
+      scope_fail M2 "(d) a recycled process id must NOT be mistaken for the owner" "$TMP_DIR/scope-m2d.out"
+    fi
+  fi
+
+  # M2-e: BACK-COMPATIBILITY. Every task in flight when this change lands has a
+  # baseline and no marker; those must keep recovering exactly as today.
+  SCOPE_M2E_DIR="$TMP_DIR/scope-m2e"
+  make_m2_project "$SCOPE_M2E_DIR" task-blocked BLOCKED
+  if [ -e "$SCOPE_M2E_DIR/.git/moe/baseline/task-blocked.live" ]; then
+    echo "fixture error: the no-marker case must have no marker" >&2
+    exit 1
+  fi
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2E_DIR" "$TMP_DIR/scope-m2e.out" /bin/true worker worker-scope-m2e
+  scope_m2e_code=$?
+  set -e
+  [ "$scope_m2e_code" -eq 0 ] || scope_fail M2 "(e) wrapper exited with $scope_m2e_code" "$TMP_DIR/scope-m2e.out"
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2e.out"; then
+    scope_fail M2 "(e) a baseline with NO marker must recover exactly as before" "$TMP_DIR/scope-m2e.out"
+  fi
+
+  kill "$M2_LIVE_PID" 2>/dev/null || true
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario M2] ok"
+
   # Scenario N -- scenario B under PLUMBING: the temp-index landing must leave
   # a peer's pre-staged shared-index entry alone AND the index refresh must
   # make `git status` clean for exactly the landed paths.
@@ -2194,12 +2433,77 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario Z2] ok"
 
+  # Scenario AA -- the reproduction. No claimable task, single-shot run (the
+  # harness always passes --no-loop, which is exactly the shape whose fast path
+  # used to be gated off): the wrapper must do its own waiting and launch
+  # NOTHING rather than hand a CLI a prompt telling it to claim. A CLI that ran
+  # here would have edited with no baseline and landed nothing.
+  echo "[scenario AA] a taskless single-shot run never launches an unbound CLI"
+  SCOPE_AA_DIR="$TMP_DIR/scope-aa"
+  make_scope_project "$SCOPE_AA_DIR" '[]'
+  set +e
+  # The single-shot wait is bounded by MOE_TASKLESS_WAIT_SEC; 5s keeps the
+  # scenario inside the harness's per-wrapper timeout instead of idling for the
+  # 300s production default.
+  FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 run_scope_wrapper "$SCOPE_AA_DIR" "$TMP_DIR/scope-aa.out" "$FILE_CLI" worker worker-scope-aa
+  scope_aa_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""
+  [ "$scope_aa_code" -eq 0 ] || scope_fail AA "wrapper exited with $scope_aa_code" "$TMP_DIR/scope-aa.out"
+  if [ -f "$SCOPE_AA_DIR/session-new.txt" ]; then
+    scope_fail AA "a CLI was launched with no task bound -- it would edit with no baseline and land nothing" "$TMP_DIR/scope-aa.out"
+  fi
+  grep -Fq 'MOE_TASKLESS_NO_LAUNCH reason=idle' "$TMP_DIR/scope-aa.out" \
+    || scope_fail AA "the suppressed launch must be named, not silent" "$TMP_DIR/scope-aa.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AA] ok"
+
+  # Scenario AB -- the adoption alarm. The one legitimate taskless launch is a
+  # chat-only session answering a routed mention; it holds no task and so has no
+  # baseline by design. If it nonetheless ends holding one and left the tree
+  # dirty, the wrapper must REFUSE under a named code, leave the bytes alone
+  # (no invented baseline, no staging) and page #governors.
+  echo "[scenario AB] a chat-only session that adopts a task refuses to land, loudly"
+  SCOPE_AB_DIR="$TMP_DIR/scope-ab"
+  make_scope_project "$SCOPE_AB_DIR" '[]'
+  echo peer-base > "$SCOPE_AB_DIR/peer-mod.txt"
+  git -C "$SCOPE_AB_DIR" add peer-mod.txt >/dev/null
+  git -C "$SCOPE_AB_DIR" commit -qm peer-base >/dev/null
+  echo peer-dirty > "$SCOPE_AB_DIR/peer-mod.txt"
+  scope_ab_head="$(git -C "$SCOPE_AB_DIR" rev-parse HEAD)"
+  set +e
+  FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_ADOPTED_TASK_ID=task-adopted MOE_TASKLESS_WAIT_SEC=5 \
+    run_scope_wrapper "$SCOPE_AB_DIR" "$TMP_DIR/scope-ab.out" "$FILE_CLI" worker worker-scope-ab
+  scope_ab_code=$?
+  set -e
+  FAKE_CLAIM_MODE=""; FAKE_MENTION=""; FAKE_ADOPTED_TASK_ID=""
+  [ "$scope_ab_code" -eq 0 ] || scope_fail AB "wrapper exited with $scope_ab_code" "$TMP_DIR/scope-ab.out"
+  [ -f "$SCOPE_AB_DIR/session-new.txt" ] \
+    || scope_fail AB "the chat-only session was never launched, so the adoption path was not exercised" "$TMP_DIR/scope-ab.out"
+  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted' "$TMP_DIR/scope-ab.out" \
+    || scope_fail AB "an adopted task with a dirty tree must refuse under the named code, not exit silently" "$TMP_DIR/scope-ab.out"
+  if [ "$(git -C "$SCOPE_AB_DIR" rev-parse HEAD)" != "$scope_ab_head" ]; then
+    scope_fail AB "the refusal still moved the branch -- nothing may land without a baseline" "$TMP_DIR/scope-ab.out"
+  fi
+  if ! git -C "$SCOPE_AB_DIR" status --porcelain | grep -q '^?? session-new\.txt$'; then
+    git -C "$SCOPE_AB_DIR" status --porcelain >&2 || true
+    scope_fail AB "the adopted session's bytes must stay in the working tree, unstaged" "$TMP_DIR/scope-ab.out"
+  fi
+  if ! git -C "$SCOPE_AB_DIR" status --porcelain | grep -q '^ M peer-mod\.txt$'; then
+    git -C "$SCOPE_AB_DIR" status --porcelain >&2 || true
+    scope_fail AB "the peer's dirty file must be untouched by the refusal" "$TMP_DIR/scope-ab.out"
+  fi
+  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted' "$SCOPE_AB_DIR/.moe/messages/chan-general.jsonl" \
+    || scope_fail AB "the refusal must page #governors, not just print" "$TMP_DIR/scope-ab.out"
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AB] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 25 ]; then
-    echo "Expected 25 commit-scope scenarios (A-P, R-U, W-Z, Z2); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 28 ]; then
+    echo "Expected 28 commit-scope scenarios (A-P, M2, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

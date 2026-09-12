@@ -1,0 +1,359 @@
+{
+  "id": "task-b6c48bf029bf4170a603a91c12451df7",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Open and close an attempt on the claim and release paths",
+  "description": "Objective: put the attempt record on the real lifecycle so every subsequent rule has something to fence against.\n\nDeliverable: packages/moe-daemon/src/tools/claimNextTask.ts opens an attempt when it hands a task to a worker and returns the attempt id and generation in its result, and the release paths close it. The close path is shared, so route it through the existing release routing rather than duplicating logic: tools/releaseTask.ts, deregisterWorker.ts and the worker purge in state/workerStore.ts all end the attempt they own.\n\nNot in scope: the finalizing phase, restart reconciliation and heartbeat changes; each is its own sibling task. Do not change which statuses are claimable or the existing nextStatusForRelease routing.\n\nDepends on the attempt store and the fencing guard.\n\nVerification: npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "claim_next_task opens an attempt for the claimed task and returns its id and generation in the tool result",
+    "release_task, deregister_worker and the worker purge each close the attempt they own, leaving no attempt in phase running for an unassigned task",
+    "A second claim of the same task after a release opens generation N+1 rather than reusing the closed attempt",
+    "Existing claim behaviour is unchanged: claimable statuses, alreadyAssigned resume, dependency gating and nextStatusForRelease routing all keep their current test coverage green",
+    "New cases cover claim-opens, release-closes and the generation increment",
+    "npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not change claimable statuses, dependency gating or nextStatusForRelease routing.",
+    "Attempt closing must go through one shared helper, not three copies."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE PREREQUISITES AND MAP EVERY RELEASE SITE (read-only, no edits). The attempt store already exists in the working tree from the prerequisite task but was not landed at planning time, so confirm it before building on it: `git log --oneline --grep 'Moe-Task: task-c97afcd55d7d41d08b9730e214b648dd'` and read packages/moe-daemon/src/state/attemptStore.ts. Its API is `openAttempt(state, { taskId, workerId, runnerId, workspace, id?, processStartedAt?, host? })`, `getAttempt`, `listAttempts(state, taskId?)`, `currentAttempt(state, taskId)` returning the one non-closed attempt or null, and `setAttemptPhase(state, attemptId, phase)` where closed is terminal and re-asserting the same phase is a deliberate no-op. Note the named refusals you must handle: ATTEMPT_ALREADY_OPEN, ATTEMPT_ID_TASK_MISMATCH, ATTEMPT_CLOSED, ATTEMPT_NOT_FOUND, ATTEMPT_GENERATION_EXHAUSTED. Confirm StateManager declares the attempts map (line 370) and loads it in `load()` (line 1044), and confirm the daemon start sequence loads before it purges, or the purge will see no attempts to close. Then locate every site that unassigns a task, because the definition of done says NO attempt may stay running for an unassigned task: src/tools/releaseTask.ts line 250, src/state/workerLifecycle.ts line 133 inside `deregisterWorker`, and src/state/workerStore.ts at line 263 in the worker-deletion loop and line 347 inside `purgeAllWorkers`. IMPORTANT SCOPE NOTE for the step note and for QA: the task description names src/tools/deregisterWorker.ts, but that tool is a 42-line delegator; the real release logic lives in src/state/workerLifecycle.ts, so that is the file this plan edits. Also read the claim assignment site at src/tools/claimNextTask.ts line 278 and the result object near line 429, and confirm whether the explicit-taskId claim funnels through the same assignment write or a second one. Produce no diff in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts"
+      ],
+      "note": "Read-only; no diff. PREREQS LANDED: c97afcd5 = fbeb076 (attempt store), a135d4d6 = ac6c9dc/7cdcf2e (fencing guard assertAttemptCurrent in util/enforcement.ts). attemptStore API confirmed exactly as planned (openAttempt/getAttempt/listAttempts/currentAttempt/setAttemptPhase, named refusals). StateManager.attempts :370, loaded in load() :1044; daemon start index.ts:500 load() runs BEFORE :501 purgeAllWorkers, so the purge sees attempts. UNASSIGN SITES (release family): releaseTask.ts:250 (the plugin RELEASE_TASK at WebSocketServer.ts:587 delegates to this tool); workerLifecycle.ts:133 releaseWorkerTasks, shared by deregisterWorker AND enter_governance (enterGovernance.ts:66); workerStore.ts:263 deleteWorker loop (called by sweeps.ts:363 and StateManager.deleteWorker); workerStore.ts:347 purgeAllWorkers. tools/deregisterWorker.ts is a 42-line delegator, so workerLifecycle.ts is the file edited. CLAIM: explicit-taskId and ranked claims share ONE assignment write (claimNextTask.ts:278). The claim path also unassigns at :234 (dead/missing owner) and :248 (replaceExisting takeover); after :234 a solo-claim skip can leave the dead owner's attempt open on an unassigned task, so both eviction sites will also close via the shared helper (same in-scope file). OUT OF SCOPE, deliberately not wired (claim recovery closes a leftover; siblings own): taskStore.ts:310-316 auto-unassign on any status change (complete_task/submit_plan/qa_*/set_task_status), sweeps.ts:255/259/302, unblockWorker.ts:109 seat-only, qaReject.ts:237. SCOPE FINDING: untracked packages/moe-daemon/src/delivery/acceptance.test.ts (live WIP of task-30df41a8, NOT touched) names THIS task as unskip owner of criterion 5 and freezes: claim returns TOP-LEVEL attemptId+generation; release_task accepts attemptId+generation and refuses a stale generation with -32002 ATTEMPT_SUPERSEDED writing nothing. So the claim result uses exactly those top-level keys (the plan's sibling-of-task placement), and release_task gains the landed assertAttemptCurrent fence (same file, additive, absent identity tolerated). NOT adding claim args runnerId/workspace/processStartedAt/host (plan rejected them; reattach sibling task-58f7db9a owns). Both named test files hoist vi.mock('../util/diskState.js'); new cases never touch disk-state, so the mock is inert for them.",
+      "startedAt": "2026-09-11T10:35:01.036Z",
+      "completedAt": "2026-09-11T10:48:38.846Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING CASES FIRST AND CAPTURE RED PROOF. Extend the two test files named in this task's verification command, using the existing ToolTestHarness fixtures already used in those files rather than a new harness. In src/tools/claimNextTask.test.ts add: a successful claim returns an attempt id and generation in the tool result and leaves exactly one attempt for that task in phase running, with the attempt's taskId and workerId asserted exactly; the generation of a first claim is 1; a claim of a task whose prior attempt was closed by a release opens generation 2, not a reused record; an alreadyAssigned resume does NOT open a second attempt, proven by counting attempts for that task before and after; and a claim that loses the optimistic assignment race leaves no attempt behind, which is the case that would otherwise poison the winner. In src/tools/releaseTask.test.ts add: release_task closes the attempt it owns and leaves no non-closed attempt for the now-unassigned task; deregister_worker does the same for every task the worker held; the daemon purge does the same across all tasks; a release of a task that has no attempt at all is a silent no-op rather than an error, since legacy rows predate attempts; and a repeated close is idempotent. Put the deregister and purge cases in this file deliberately rather than creating new files, because these two files are the named verification command and neither src/tools/deregisterWorker.test.ts nor src/state/workerStore.test.ts exists. Assert exact phases and generations, never truthiness. Run `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` from packages/moe-daemon and SAVE the failing output — the epic rail requires a test that fails on the old behavior, and here the old behavior genuinely returns no attempt at all.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "note": "RED captured. `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` (packages/moe-daemon) -> EXIT=1, Test Files 2 failed (2), Tests 21 failed | 65 passed (86). All 21 are behavioural AssertionErrors (0 TypeError/ReferenceError): 'expected undefined to be 1' x5, 'expected undefined to be 2' x2, \"expected [[1,'worker-a','running']] to deeply equal [[1,'worker-a','closed']]\" x4 plus the dead-owner/bystander/two-open variants, 'promise resolved ... instead of rejecting' x3 (attempt-write failure, compensation failure, stale/malformed release identity). Baseline before any edit: npm.cmd test EXIT=0, 106 files passed | 1 skipped, 1352 tests passed | 6 skipped. New describe 'moe.claim_next_task — execution attempts' (12 cases, ToolTestHarness): claim opens one running gen-1 attempt with exact taskId/workerId/runnerId/workspace, identity returned TOP-LEVEL beside task (not inside); gen 2 as a new record after release_task; resume by explicit taskId adopts (same id, gen 1, one record); alreadyAssigned refusal opens nothing; constructed race loser leaves nothing and the winner then gets gen 1; an open attempt left by a given-up seat is closed and gen 2 opened; the same worker does NOT adopt its own leftover when it did not hold the seat; replaceExisting takeover closes the incumbent; a dead owner's attempt closes even when the solo-claim block then skips the row; attempt-write failure fails the claim and gives the seat back; a failed compensation never masks the original error; a claim with no workerId opens nothing. New describe 'attempt closing on the release paths' (12 cases): release_task closes and keeps the record on disk; closes regardless of routing (all-steps-done -> REVIEW); refused release leaves it running; closes EVERY open attempt (two-open fixture), deregister_worker closes the worker's tasks only, deleteWorker closes, startup purge closes over records loaded from disk (index.ts load-then-purge order), purge survives one unwritable attempt record, legacy no-attempt rows release silently on all three paths and create no attempts dir, repeated close rewrites nothing (bytes equal), stale gen-1 release after re-claim as gen 2 refused -32002 ATTEMPT_SUPERSEDED with task/worker/both attempt files byte-identical plus the current-generation positive control, malformed identity (generation 0, 129-char attemptId) refused INVALID_INPUT. The hoisted vi.mock('../util/diskState.js') in both files is inert for these cases (no stored diskState is ever read).",
+      "startedAt": "2026-09-11T10:48:45.711Z",
+      "completedAt": "2026-09-11T10:57:17.992Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADD THE ONE SHARED CLOSE HELPER. A task rail forbids three copies of the closing logic, so add a single exported function to packages/moe-daemon/src/state/attemptStore.ts — the store is where it belongs, and every release site already has a StateManager handle. It takes the state and a task id, reads `currentAttempt`, returns null when the task has no non-closed attempt, and otherwise moves that attempt to the closed phase through the existing `setAttemptPhase`, returning the closed record. Two properties matter and both need a comment saying why: it is idempotent, because an exit trap and a purge can both fire for the same task and a second call must be a no-op rather than an error; and it is tolerant of a task that never had an attempt, because every row created before this feature has none and a release of one must not start failing. Do not add a transition table, do not touch the generation, and do not delete records — a closed attempt is the history the generation counter depends on, since generations are allocated over every prior attempt including closed ones. Keep the store's existing write-then-publish ordering by reusing setAttemptPhase rather than writing directly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts"
+      ],
+      "note": "Added the ONE shared close helper `closeOpenAttempts(state, taskId): Promise<ExecutionAttempt[]>` after setAttemptPhase in state/attemptStore.ts (+35/-1, CRLF preserved, no diagnostics). Idempotent (a second call finds nothing open: no write, no error) and tolerant (a task with no attempt record returns []), both commented with the why. Never deletes, never touches generation, no transition table; every close goes through setAttemptPhase so the store's write-then-publish order holds and a failed write throws with the attempt still published as open (caller decides fatality). ONE DELIBERATE DEVIATION from the step text: it closes EVERY non-closed attempt of the task and returns the closed records (empty array = nothing open) instead of closing only currentAttempt() and returning one-or-null — a release gives the seat up, so no open attempt may survive, and currentAttempt() names only the highest if a restored backup ever left two open (test 'release_task closes every open attempt of the task, not only the newest' pins this). Also refreshed the store header's stale 'whoever wires claim/release adds activity/emit' sentence: still no activity row or event (no consumer yet; that lands with the first consumer, e.g. the board attempt view). Behaviour is exercised through the release paths in the step-2 tests; they go green in step 5.",
+      "startedAt": "2026-09-11T10:57:20.477Z",
+      "completedAt": "2026-09-11T10:58:06.531Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "OPEN THE ATTEMPT ON THE CLAIM PATH AND RETURN IT. In packages/moe-daemon/src/tools/claimNextTask.ts, immediately AFTER the assignment write at line 278 succeeds and inside the same exclusive section, open the attempt for the claimed task. The ordering is deliberate and must be commented: the attempt is opened after the assignment, not before, because the assignment write is an optimistic race and an attempt opened by the loser would sit in the running phase and make the winner's open fail with ATTEMPT_ALREADY_OPEN — the loser must leave nothing behind. Fill the store's required fields from what the claim actually knows: the claiming worker id for both the worker and the runner identity, and the project root as the workspace, each with a comment that a distinct runner identity and per-attempt workspace arrive with the later reattachment work and are deliberately not invented here. Error handling has three arms. If the open refuses with ATTEMPT_ALREADY_OPEN and the open attempt belongs to this same worker, adopt it and return its id and generation — that is a resume, not a second execution. If it belongs to a worker that no longer holds the task, close it through the shared helper and open a fresh one, which is the crash-recovery path that produces the next generation. Any other failure is fatal to the claim: best-effort compensate by clearing the assignment you just wrote, inside its own try/catch so a failed compensation cannot mask the original error, then rethrow — a claim that cannot record its attempt is exactly the silent state this epic exists to remove. Add the attempt id and generation to the successful result object near line 429 as a sibling of the task object, not inside it, since that object mirrors the persisted task shape. Change nothing about claimable statuses, the alreadyAssigned resume, dependency gating or ranking; the resume path returns before the assignment write and must therefore open nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ],
+      "note": "Claim path wired (claimNextTask.ts, +93, CRLF kept, no diagnostics). Module helpers keep the 475-line handler from growing: openClaimAttempt(state, taskId, workerId, resumingOwnSeat) and handBackUnrecordedClaim(). The open happens right AFTER the single assignment write (the one site both explicit-taskId and ranked claims use), inside the same runExclusive, with the ordering rationale commented (a race loser opening first would poison the winner with ATTEMPT_ALREADY_OPEN). runnerId = workerId, workspace = state.projectPath, commented as placeholders until the reattachment work. Arms: (1) nothing open -> fresh; (2) ATTEMPT_ALREADY_OPEN + open attempt is this worker's + this worker ALREADY held the seat before the write -> adopt; (3) ATTEMPT_ALREADY_OPEN otherwise -> closeOpenAttempts + open the successor. REFINEMENT vs step text: arm 2 also requires the claimer to have held the seat before this claim (resumingOwnSeat, read before the write). Without it, a same-worker re-claim after a release whose close failed, or after complete_task->REVIEW->qa_reject->WORKING, would inherit the old generation; test 'never adopts its own open attempt when it did not already hold the seat' pins it. Any other open failure: hand the seat back (only when not resuming; own try/catch, logged, never masks) then rethrow. Also closes via the shared helper at the claim's two eviction unassigns (dead/missing owner :292, replaceExisting takeover :310) — the dead-owner branch can be followed by a solo-claim skip that would otherwise leave an unassigned row with a running attempt. Result: TOP-LEVEL attemptId + generation beside task (absent when no workerId). alreadyAssigned refusal, claimable statuses, dependsOn gating and ranking untouched. SCOPE: claimNextTask.contract.test.ts 'keeps claim response lean' pinned the exact top-level key set; updated it to add exactly 'attemptId' and 'generation' (the DoD requires them in the result; its no-project/epic/rails/memory and exact task-key assertions are unchanged). Green: claimNextTask.test.ts 36/36; claimNextTask.test.ts + .contract + .race = 3 files, 66/66 EXIT=0; waitForTask/attemptStore/enforcement green. docs/MCP_SERVER.md deliberately NOT edited: it is dirty with a live peer's uncommitted hunks (task-4d7074c0), so any edit would land contested; recorded for handoff.",
+      "startedAt": "2026-09-11T10:58:09.722Z",
+      "completedAt": "2026-09-11T11:01:34.757Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "CLOSE THE ATTEMPT ON EVERY RELEASE PATH THROUGH THAT ONE HELPER. Call the shared helper from each site found in step 1, immediately after the write that unassigns the task, so an observer never sees an unassigned task with a running attempt: src/tools/releaseTask.ts at line 250; src/state/workerLifecycle.ts at line 133 inside `deregisterWorker`, which must close the attempt for every task that worker held; and src/state/workerStore.ts at both line 263 in the worker-deletion loop and line 347 inside `purgeAllWorkers`. The purge is the one with real error handling constraints: it runs on every daemon start and its existing per-worker try/catch exists so one unwritable record cannot abort startup for the whole fleet, so wrap each close the same way and log a failure instead of throwing. Keep `nextStatusForRelease` routing exactly as it is — a task rail forbids changing it — and do not make closing conditional on the routed status: an attempt is closed because the seat was given up, not because of where the task landed. Do not add a close to any path that does not unassign the task, and leave the blocked-hold and resource-grant paths alone, since a parked task keeps its seat and therefore keeps its attempt. Re-run the two named test files; every case from step 2 must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ],
+      "note": "Every release path closes through closeOpenAttempts, right AFTER its unassign write and unconditionally on routed status (nextStatusForRelease untouched): releaseTask.ts assigned path (also serves the board's WS RELEASE_TASK), workerLifecycle.ts releaseWorkerTasks (serves deregister_worker AND enter_governance), workerStore.ts deleteWorker loop and purgeAllWorkers. Each close is its own try/catch + log, never thrown: the release is already durable and the next claim closes a leftover. A failed unassign now `continue`s so its seat and attempt are kept. The purge closes even when its task write failed (the in-memory row is already unassigned) and one unwritable attempt record cannot abort startup. The unassigned-repair path of release_task closes nothing (it gives up no seat), and blocked-hold/resource-grant paths are untouched. SCOPE ADDITION (explained in step 1): release_task accepts optional attemptId (bounded at 128 chars before use, since ATTEMPT_SUPERSEDED echoes it) + generation and runs the landed assertAttemptCurrent right after the ownership gates, before any mutation; no identity stays the legacy unfenced path. GREEN (shared checkout): `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` EXIT=0, 2 files, 89/89 (3 cases added this step: takeover eviction closes even if the reassign write then fails; purge closes even when the task write fails; a failed unassign keeps the attempt on deregister and deletion). ISOLATED PROOF in a throwaway worktree at 037473c (junctioned node_modules, removed after; nothing mutated in the shared tree): old code + new tests = 23 failed | 66 passed (89); new code = 89/89; acceptance criterion 5 (src/delivery/acceptance.test.ts, landed in 44f6ba8) unskipped IN THE WORKTREE ONLY: old code 'expected undefined to be 1', new code 1 passed | 5 skipped; with the fence removed it fails 'expected a MoeError refusal, but the call resolved' = the named STALE RELEASE LANDS counterexample. 16 mutants, all killed, each naming the exact test: each of the 6 closes removed, adopt without resume gate, compensation removed, close-only-current, fence removed, length bound removed, both continues removed, purge close skipped on a failed write, open before the assignment write (9 failures incl. the race-loser case). Harness: %TEMP%/b6c48_mut.mjs, logs %TEMP%/b6c48_mut_*.log.",
+      "startedAt": "2026-09-11T11:01:37.151Z",
+      "completedAt": "2026-09-11T11:08:35.666Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "RUN THE NAMED GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run the task's own command first: `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts`. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, and also `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with test counts strictly greater than the pre-change baseline. Pay specific attention to pre-existing claim, release, deregister and restart-purge tests: the definition of done requires their current coverage to stay green, so a green run here is the proof that claimable statuses, the alreadyAssigned resume, dependency gating and release routing were not disturbed. If the prerequisite attempt-store work has not landed and the suite fails on its tests rather than yours, say so explicitly rather than editing that file. Keep the exact commands, exit codes and counts for the `verification` argument of moe.complete_task, and keep the earlier red output as the fails-on-old-code proof.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh runs from packages/moe-daemon, exit codes captured on their own lines (not through a filter): (1) named gate `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` -> GATE_EXIT=0, Test Files 2 passed (2), Tests 89 passed (89). (2) full suite `npm.cmd test` -> FULL_EXIT=0, Test Files 108 passed | 1 skipped (109), Tests 1436 passed | 6 skipped (1442). Pre-change baseline this session: 106 passed | 1 skipped (107) files, 1352 passed | 6 skipped (1358) tests; +84 = my 27 new cases plus a live peer's new candidateStore/recordCandidate test files in this shared tree (count drift expected; 0 failures is the bar). The 1 skipped file / 6 skipped tests are the held-out acceptance file's it.skip cases. (3) `npx tsc --noEmit -p tsconfig.json` -> TSC_EXIT=0. All pre-existing claim (claimNextTask.test.ts, .contract, .race), wait_for_task, release_task, deregister/purge-touching (StateManager, sweeps, enterGovernance, team-heal purge) and attemptStore/enforcement suites are green: claimable statuses, alreadyAssigned resume, dependsOn gating, ranking and nextStatusForRelease routing unchanged. The ERROR/WARN log lines in the full run ('Failed to close the attempt of a task released during worker purge', 'claim_next_task: could not hand back the assignment...') are my tests' deliberate failure injections. Prerequisites were landed (fbeb076, ac6c9dc), so no prerequisite-test failure to report. Red (fails-on-old-code) proof kept from step 2 (21 failed | 65 passed shared tree) and step 5 (23 failed | 66 passed in an isolated worktree at the old code). No files changed in this step.",
+      "startedAt": "2026-09-11T11:08:38.987Z",
+      "completedAt": "2026-09-11T11:09:29.635Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: no path can leave a task unassigned while an attempt for it is still in a non-closed phase, including the deletion loop and the startup purge; a claim that loses the assignment race leaves no attempt behind to poison the winner; a resume of a task this worker already holds adopts its existing attempt instead of opening a second; a second claim after a genuine release gets a strictly greater generation and never reuses a closed record; closing is genuinely idempotent and a legacy task with no attempt releases silently; the purge still cannot be aborted by one bad record; every close goes through the single shared helper with no second copy of the logic; and nothing changed claimable statuses, dependency gating or the release routing. Confirm the attempt store is only read and extended by its one new helper, that no git or process action was added to the daemon, and that the finalizing phase, restart reconciliation and heartbeat behavior were left entirely to their sibling tasks. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and summarize for QA: where the attempt opens and closes, the exact recovery arms on the claim path, and the honest boundary that an attempt record fences daemon mutations only and cannot stop an already-running external process from writing files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts"
+      ],
+      "note": "ADVERSARIAL REVIEW — read the whole diff (commit c7f6593 carries every source change; the later wip commits are board-state only). Step 7 itself produced NO diff; modifiedFiles lists the task's files so attribution stays ASSERTED.\n\nFRESH VERIFICATION (this session, exit codes captured on their own line, not through a filter):\n1. Named gate `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` -> GATE_EXIT=0, Test Files 2 passed (2), Tests 89 passed (89).\n2. `npx tsc --noEmit -p tsconfig.json` -> TSC_EXIT=0, no output.\n3. `npm test` -> FULL_EXIT=1, Test Files 1 failed | 108 passed | 1 skipped, Tests 5 failed | 1441 passed. The ONE failing file is `src/util/taskTimeBudgetDocs.test.ts`, which is UNTRACKED debris from another live session (task-0d11e05f, time-budget removal) in this shared checkout — `git ls-files --error-unmatch` says \"Did you forget to 'git add'?\". Its failures are doc-lint assertions over docs/SCHEMA.md line 742, a line that is identical at HEAD and untouched by my commit; zero overlap with attempts.\n4. Same suite minus that foreign file: `npx vitest run --exclude '**/taskTimeBudgetDocs.test.ts'` -> EXCL_EXIT=0, Test Files 108 passed | 1 skipped, Tests 1436 passed.\n\nCHECKLIST, each confirmed by reading code, not by assuming:\n- No plan-named path leaves a task unassigned with a non-closed attempt. releaseTask.ts:338 (after the unassign write), workerLifecycle.releaseWorkerTasks:146, workerStore.deleteWorker:273, workerStore.purgeAllWorkers:377, plus BOTH claim-path eviction branches (claimNextTask.ts:298 dead-owner clear, :314 live-incumbent eviction) — the eviction close sits at the clear, not at the later reassignment, because the solo-claim check can still skip that row.\n- Race loser leaves nothing behind: the open happens strictly AFTER the assignment write, so a loser throws at the write and never reaches openAttempt.\n- Resume adopts: `resumingOwnSeat` is read from state BEFORE the write (claimNextTask.ts:344); both eviction branches already nulled the assignment, so they can never be mistaken for a resume. arm 2 returns the existing attempt.\n- Generation strictly increases: nothing deletes a record; the crash-recovery arm closes then opens, so the next generation is max(prior)+1.\n- Idempotent + legacy-tolerant: closeOpenAttempts skips non-OPEN_PHASES, so a second call writes nothing and a task with no record returns [].\n- Purge cannot be aborted by one bad record: its own try/catch per task, mirroring the existing write's. Verified `state.tasks.set(...)` precedes `writeEntity`, so the comment \"in-memory task is already unassigned\" is accurate, and index.ts:500 `state.load()` precedes index.ts:501 `purgeAllWorkers()`, so attempts ARE loaded before the purge tries to close them.\n- One helper only: `grep -rn closeOpenAttempts` shows one definition (attemptStore.ts:277) and call sites only; no second copy of the logic.\n- Untouched: claimable statuses, dependsOn gating, nextStatusForRelease routing, blocked-hold and resource-grant paths. No git or process action added to the daemon. attemptStore is read + extended by exactly one new exported function.\n- Siblings left alone: no finalizing phase, no restart reconciliation, no heartbeat change.\n\nTWO THINGS QA MUST SEE, both deliberate:\n(a) SCOPE GROWTH, declared: releaseTask.ts also gained optional `attemptId`/`generation` params wired to `assertAttemptCurrent` (the guard sibling task-a135d4d6 landed enforcement.ts with ZERO call sites — commit ac6c9dc/7cdcf2e touch only enforcement.ts + its test). Rationale: a delayed release from generation N arriving after a re-claim as N+1 would strip the live claim AND close the live attempt through the very helper this task adds, so the close is only safe behind the currency gate. It is opt-in and backwards compatible — omitted identity, or a task with no attempt record at all, both take the legacy unfenced path (verified by reading assertAttemptCurrent's two early returns).\n(b) HONEST GAP, left to siblings: other sites that unassign a task still leave the attempt open — taskStore.ts:315 (the auto-clear on ANY status change, which is what complete_task WORKING->REVIEW and qa_approve hit; that is the finalizing-phase sibling's job), sweeps.ts:255/259/302 (worker-timeout park and the REVIEW self-heal), qaReject.ts:237 (park-for-human) and unblockWorker.ts:109 (seat-freeing block). This is transient staleness, not a correctness break: the claim path's arm-3 recovery closes a leftover and opens the successor generation before handing the seat out, so a stale record can never poison a later claim.\nDocs were NOT updated (docs/MCP_SERVER.md is dirty from another session and the plan has no docs step) — flagging rather than touching a foreign dirty file.\n\nShared-checkout debris untouched as instructed: docs/MCP_SERVER.md, docs/SCHEMA.md, packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, .moe/resources/, and several peer task records.",
+      "startedAt": "2026-09-11T11:09:32.751Z",
+      "completedAt": "2026-09-11T12:16:44.636Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Operator instruction 2026-09-11: promote the three attempt-chain roots out of human-gated BACKLOG so an idle architect seat can plan them. dependsOn (task-c97afcd5 and task-a135d4d6) continues to gate any WORKING claim; planning is not dependency-gated.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c97afcd55d7d41d08b9730e214b648dd",
+    "task-a135d4d63554410286a369a95e60c2a8"
+  ],
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [
+    {
+      "id": "comment-c8156d1468e64614afb55f3426006511",
+      "author": "governor-983e1bae",
+      "content": "GOVERNOR NOTE — read before wiring the guard into claim/release. The guard you depend on (task-a135d4d6, assertAttemptCurrent in util/enforcement.ts) made two behavioral decisions beyond its plan's literal text. Both are tested and correct, but your wiring must respect them or it will refuse legitimate calls.\n\n1. NO UNASSIGNED-TASK EARLY RETURN. A caller presenting an attempt identity against an UNASSIGNED task is refused. The intent is right: a released task must not let a zombie back in. The consequence for you: never call assertAttemptCurrent in a release handler AFTER the task has been unassigned. Fence first, then unassign. Order matters, and getting it backwards will refuse every release.\n\n2. CLOSED ATTEMPTS ARE REFUSED, NOT TOLERATED. A task whose attempts all exist but are CLOSED is refused. Only a task with NO attempt record at all gets the legacy tolerance (listAttempts().length === 0). So once your claim path opens an attempt and your release path closes it, that task is fenced from then on. Nothing falls back to \"no current attempt = allow\". If a test of yours expects a post-release mutation to pass, the test is wrong, not the guard.\n\nAlso: generation must be POSITIVE. 0 is INVALID_INPUT, matching the attempt store's floor of 1. Do not seed attempts at generation 0.\n\nSource: worker-de4739a8's REVIEW handoff on task-a135d4d6, 2026-09-11 10:27. If QA changes any of this before DONE, the guard's final code wins over this note. Re-read enforcement.ts at your step 1.",
+      "timestamp": "2026-09-11T10:28:03.724Z"
+    },
+    {
+      "id": "comment-c33593e32b154dd395af610cfdf6fc5a",
+      "author": "governor-983e1bae",
+      "content": "NOTE FOR THIS TASK'S QA REVIEWER — this is not a defect in this task's work.\n\nThe held-out acceptance file (src/delivery/acceptance.test.ts, case 5 \"delayed generation N\") names this task as its UNSKIP OWNER, with the counterexample \"stale release lands\". This task's Definition of Done does not contract that refusal. It covers opening, closing and generation bump only, and release_task gains no fencing here.\n\nSo judge this task against its own six DoD items and approve it if it meets them. Do NOT mark acceptance case 5 as delivered, and do not reject this task for leaving case 5 skipped. The release_task fencing needs a separate owner, and the architects have been asked to file it (see #architects, 2026-09-11 ~11:09). Until that task exists, case 5's owner comment is pointing at the wrong task.",
+      "timestamp": "2026-09-11T11:09:51.264Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:03.865Z",
+  "updatedAt": "2026-09-11T12:23:23.324Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:53:53.467Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 7,
+    "doneAt": "2026-09-11T12:22:49.027Z",
+    "wallClockMs": 8935560
+  },
+  "contextFetchedBy": [
+    "architect-31b9f5b1",
+    "architect-2d25447a",
+    "worker-010099ab",
+    "qa-8db40c97"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:57:09.316Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Opening the attempt BEFORE the assignment write, which is the epic's durable-first ordering — rejected after reading the store: the assignment is an optimistic race, and an attempt opened by the loser would sit in the running phase and make the WINNER's open fail with ATTEMPT_ALREADY_OPEN. Opening after the write is the only ordering that cannot poison another claimer, and the missing-attempt window is repaired by the adopt/close recovery arms on the next claim. (2) Closing the attempt inside each of the four release sites directly — forbidden by a task rail and genuinely worse, since the idempotence and the no-attempt tolerance would then need four copies. (3) Putting the shared helper in a new module — rejected: it is store logic, every caller already holds a StateManager, and the store file is where the write-then-publish ordering lives. (4) Deleting attempt records on close — rejected outright: generations are allocated as the maximum over EVERY prior attempt including closed ones, so deleting a record would reissue a generation an in-flight caller still believes is exclusively its own, which is the exact failure a fencing token prevents. (5) Adding runnerId and workspace as new tool arguments — rejected as speculative: the store requires both non-blank, so the claim fills them from what it knows and a comment points at the later reattachment task. (6) Failing the claim outright when the attempt cannot be opened — kept only for unexpected errors, with a best-effort compensating unassign, because the two known refusals have honest recoveries.",
+    "codebaseInsights": "The attempt store is already written in the working tree by the prerequisite task (unlanded at planning time) and its API is exact: openAttempt with taskId/workerId/runnerId/workspace and an optional caller-supplied id for idempotent repair, getAttempt, listAttempts, currentAttempt returning the single non-closed attempt, and setAttemptPhase where closed is terminal and re-asserting the same phase is a documented no-op. Named refusals to handle: ATTEMPT_ALREADY_OPEN, ATTEMPT_ID_TASK_MISMATCH, ATTEMPT_CLOSED, ATTEMPT_NOT_FOUND, ATTEMPT_GENERATION_EXHAUSTED. StateManager declares the attempts map at line 370 and loads it at line 1044. There are FOUR sites that unassign a task, not three: releaseTask.ts:250, workerLifecycle.ts:133 inside deregisterWorker, and workerStore.ts at 263 (worker deletion) and 347 (purgeAllWorkers). The task description names src/tools/deregisterWorker.ts, but that file is a 42-line delegator whose logic lives in workerLifecycle.ts — flagged in step 1 so QA is not surprised by the file list. purgeAllWorkers builds its updated task by hand instead of going through updateTask and deliberately keeps a per-worker try/catch so one bad record cannot abort startup. The claim assigns at claimNextTask.ts:278 inside runExclusive and builds its result near line 429, where the task object mirrors the persisted shape, so the attempt belongs beside it rather than inside it. Neither src/tools/deregisterWorker.test.ts nor src/state/workerStore.test.ts exists, which is why the deregister and purge cases go into releaseTask.test.ts — the file this task's verification command actually names.",
+    "risks": "Seven distinct files is the floor, not scope creep: the task itself names four release call sites, the store helper has one home, and the verification command names two test files. The claim path is the dangerous edit — the resume path returns before the assignment write and must open nothing, or every idle wrapper poll would burn a generation. Closing must key on the seat being given up, not on where nextStatusForRelease routed the task, and must NOT fire on the blocked-hold or resource-grant paths, where the worker keeps its seat and therefore its attempt. The startup purge runs before any wrapper reconnects and must keep its per-worker error handling, or one unwritable attempt record aborts fleet startup. A closed attempt must never be deleted, since generation allocation reads every prior record. Assert exact generations and phases in tests; a truthiness assertion passes against a reused record. Finally, do not overstate the result: an attempt record fences daemon mutations only and cannot stop an already-running external CLI from writing shared files, which the epic's own architecture notes say out loud.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:57:09.387Z",
+  "workStartedAt": "2026-09-11T10:35:01.036Z",
+  "commits": [
+    {
+      "sha": "c7f65938d7dba3854bd3f3b1d43cd8b11a9ad27e",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T10:34:34Z",
+      "paths": [
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T11:11:24.820Z",
+      "treeId": "f5991825cd17c304357e01fa003b4cea8710daea",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "4f563ff07c9f6fbe1e2a8c617cffd7f7fe0d017b",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T11:11:55Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T11:12:01.740Z",
+      "treeId": "0d26795fcebd9eac720d8125c51dfaccdc8c261a",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "dc25947c8416fe32bb9dbc28cfca6ba415629994",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T11:13:02Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T11:13:06.037Z",
+      "treeId": "4b6886928e2ad3667a7ccb85752ab4cc3a0c4960",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "db92a89a445d9d8a1f8f0377af7a71b5e8c24b12",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T11:15:07Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T11:15:14.282Z",
+      "treeId": "d4834103dbe680fd5590832d2fd39c9c291310c3",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "7aa05749b4dcf3d91b29d62e784c972450c02dff",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:17:23Z",
+      "paths": [
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:17:26.570Z",
+      "treeId": "3509758f62b9c1de7cfc919dd932f98a0ac2f504",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "8f994c36f055459905360d89915aa439930efc07",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-010099ab@2026-09-11T12:12:36Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "worker-010099ab",
+      "recordedAt": "2026-09-11T12:18:15.643Z",
+      "treeId": "79c0c2534dccf63c9bdf10e5ed1930f073f7f2bc",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "39918bcb0266b8642d108bed712652c559225716",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T12:17:23Z",
+      "paths": [
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T12:23:23.324Z",
+      "treeId": "57466819f140fadde4bbbe08c7963b37ffdea65a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/tools/releaseTask.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.contract.test.ts",
+    ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+    ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/attemptStore.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T12:17:23Z",
+    "at": "2026-09-11T12:23:23.324Z"
+  },
+  "reviewStartedAt": "2026-09-11T12:17:17.296Z",
+  "verification": {
+    "command": "npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\n     Tests  89 passed (89)\n  Start at  15:13:57\n  Duration  2.31s (tests 79%, transform 17%, import 4%)\nGATE_EXIT=0\n\nAlso fresh this session, from packages/moe-daemon:\n  npx tsc --noEmit -p tsconfig.json -> TSC_EXIT=0 (no output)\n  npm test -> FULL_EXIT=1, Test Files 1 failed | 108 passed | 1 skipped (110), Tests 5 failed | 1441 passed | 6 skipped (1452). The single failing file is src/util/taskTimeBudgetDocs.test.ts, which is UNTRACKED debris from another live session in this shared checkout (git ls-files --error-unmatch: \"Did you forget to 'git add'?\"); its assertions are doc-lint checks over docs/SCHEMA.md:742, a line identical at HEAD and untouched by this task.\n  npx vitest run --exclude '**/taskTimeBudgetDocs.test.ts' -> EXCL_EXIT=0, Test Files 108 passed | 1 skipped (109), Tests 1436 passed | 6 skipped (1442).",
+    "reportedAt": "2026-09-11T12:17:17.296Z"
+  },
+  "completionSummary": "Attempt records now ride the real claim/release lifecycle. All source landed in commit c7f6593 (later wip commits are board-state only).\n\nWHERE IT OPENS. claimNextTask.ts opens the attempt immediately AFTER the single assignment write (the one site both ranked and explicit-taskId claims funnel through), never before it: that write is an optimistic race, and an attempt opened by the loser would sit in phase running and make the WINNER's open fail with ATTEMPT_ALREADY_OPEN. The successful result carries attemptId and generation as SIBLINGS of `task` (task mirrors the persisted row). runnerId is filled from the worker id and workspace from the project root, each commented as placeholders the reattachment sibling replaces.\n\nTHREE RECOVERY ARMS on the claim path (helper openClaimAttempt): (1) nothing open -> open fresh, generation = max over all prior + 1; (2) ATTEMPT_ALREADY_OPEN on a genuine resume of a seat this worker already held -> ADOPT the open attempt, because a respawned CLI is the same execution, not a second one (`resumingOwnSeat` is read from state BEFORE the assignment write, so the two eviction branches — which null the assignment first — can never be mistaken for a resume); (3) ATTEMPT_ALREADY_OPEN otherwise -> close via the shared helper and open the successor generation (crash recovery). Anything else is fatal to the claim: a best-effort compensating unassign in its own try/catch, then rethrow — handing out an execution the daemon has no record of is exactly the silent state this epic removes.\n\nWHERE IT CLOSES. One shared helper, `closeOpenAttempts(state, taskId)` in attemptStore.ts (a task rail forbids copies; grep shows one definition). Idempotent (a second call writes nothing) and tolerant (a pre-attempts task returns []); it never deletes, because generations are allocated over every prior record including closed ones. Called right after the unassign write at: releaseTask.ts:338, workerLifecycle.releaseWorkerTasks:146 (serves deregister_worker), wor",
+  "completedAt": "2026-09-11T12:22:49.027Z",
+  "reviewCompletedAt": "2026-09-11T12:22:49.027Z",
+  "reviewSummary": "APPROVED. Re-ran from packages/moe-daemon: gate `npx vitest run src/tools/claimNextTask.test.ts src/tools/releaseTask.test.ts` GATE_EXIT=0 (89 tests); `npm test` FULL_EXIT=0 (109 files, 1446 tests); `tsc --noEmit` TSC_EXIT=0 — the taskTimeBudgetDocs debris the worker saw failing now passes. All source is in checkpoint c7f6593 (8 files, +822/-5); completion 8f994c36 is board-JSON only (known QA-preflight-recovered pattern, not missing code); both pushed, tree == HEAD for src.\n\nDoD 6/6: (1) claimNextTask.ts:~370 opens the attempt inside runExclusive and AFTER the assignment write, returns attemptId+generation beside `task` (contract key set updated). (2) Four unassign sites close after their write — releaseTask.ts:338, workerLifecycle:146 (deregister_worker), workerStore:273 (deleteWorker), :377 (purge); each `continue`-guarded so a FAILED unassign keeps seat+attempt, purge keeps per-record try/catch so one bad record cannot abort startup. (3) Generation increment asserted as exact tuples ([1,closed],[2,running]) plus a disk read, not truthiness. (4) Claimable statuses, dependency gating, nextStatusForRelease untouched; green suite proves existing coverage intact. (5) Edges: alreadyAssigned opens nothing, lost race leaves nothing (control: winner gets generation 1), eviction-then-failed-write, ENOSPC hands the seat back, idempotent re-close, legacy no-attempt release silent. Rails: ONE helper (single closeOpenAttempts, 7 callers); OPEN_PHASES covers running/finalizing/reconciling; closed records never deleted; no git in the daemon.\n\nNoted, not blocking: release_task also gained optional attemptId/generation on assertAttemptCurrent (beyond plan, backward compatible — no identity = legacy no-op, enforcement.ts:159-166 — tested); MCP_SERVER.md claim/release sections lack the new fields (follow-up); sweeps.ts:255/302, qaReject.ts:237, unblockWorker.ts:109 and seat-freeing report_blocked still leave a running attempt on an unassigned row, self-healed by the next claim."
+}

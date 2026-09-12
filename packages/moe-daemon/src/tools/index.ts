@@ -23,6 +23,8 @@ import { archiveEpicTool } from './archiveEpic.js';
 import { searchTasksTool } from './searchTasks.js';
 import { setTaskStatusTool } from './setTaskStatus.js';
 import { claimNextTaskTool } from './claimNextTask.js';
+import { finalizeAttemptTool } from './finalizeAttempt.js';
+import { reattachAttemptTool } from './reattachAttempt.js';
 import { deleteTaskTool } from './deleteTask.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
@@ -62,6 +64,7 @@ import { listResourcesTool } from './listResources.js';
 import { waitForResourceTool } from './waitForResource.js';
 import { getCommitScopeTool } from './getCommitScope.js';
 import { recordCommitTool } from './recordCommit.js';
+import { recordCandidateTool } from './recordCandidate.js';
 import { declareFilesTool } from './declareFiles.js';
 import { setTaskDependenciesTool } from './setTaskDependencies.js';
 
@@ -111,6 +114,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     archiveTaskTool(state),
     archiveEpicTool(state),
     claimNextTaskTool(state),
+    finalizeAttemptTool(state),
+    reattachAttemptTool(state),
     deleteTaskTool(state),
     qaApproveTool(state),
     qaRejectTool(state),
@@ -150,6 +155,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     waitForResourceTool(state),
     getCommitScopeTool(state),
     recordCommitTool(state),
+    recordCandidateTool(state),
     declareFilesTool(state),
     setTaskDependenciesTool(state),
   ];

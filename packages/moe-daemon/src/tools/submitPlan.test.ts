@@ -932,3 +932,488 @@ describe('moe.submit_plan', () => {
   });
 });
 
+
+import { amendPlanStepTool } from './amendPlanStep.js';
+
+/**
+ * Daemon-owned plan revision: a monotonic counter stamped inside the same task
+ * write that persists the plan/DoD surface. Covers the producer contract only —
+ * approval-side expectedPlanRevision checks live in the CAS slice.
+ */
+describe('planRevision', () => {
+  const h = new ToolTestHarness();
+  const PLAN_STEP = { description: 'Do the thing', affectedFiles: ['file.ts'] };
+  type SubmitResult = { success: boolean; status: string; stepCount: number; planRevision: number };
+
+  beforeEach(() => h.init());
+  afterEach(() => {
+    clearAllSpeedModeTimeouts();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  async function boot(opts: { settings?: Record<string, unknown>; tasks?: Partial<Task>[] } = {}): Promise<void> {
+    const project = h.setupMoeFolder();
+    if (opts.settings) {
+      fs.writeFileSync(
+        path.join(h.moePath, 'project.json'),
+        JSON.stringify({ ...project, settings: { ...project.settings, ...opts.settings } }, null, 2)
+      );
+    }
+    h.createEpic();
+    for (const overrides of opts.tasks ?? [{ status: 'PLANNING' as const }]) {
+      h.createTask(overrides);
+    }
+    await h.state.load();
+  }
+
+  function taskFile(taskId = 'task-1'): string {
+    return path.join(h.moePath, 'tasks', `${taskId}.json`);
+  }
+
+  function persistedBytes(taskId = 'task-1'): string {
+    return fs.readFileSync(taskFile(taskId), 'utf8');
+  }
+
+  function persistedTask(taskId = 'task-1'): Task {
+    return JSON.parse(persistedBytes(taskId)) as Task;
+  }
+
+  function submit(
+    taskId = 'task-1',
+    steps: { description: string; affectedFiles?: string[] }[] = [PLAN_STEP]
+  ): Promise<SubmitResult> {
+    return submitPlanTool(h.state).handler({ taskId, steps }, h.state) as Promise<SubmitResult>;
+  }
+
+  /** submit_plan only accepts PLANNING, so a resubmission needs the real transition first. */
+  async function backToPlanning(taskId = 'task-1'): Promise<void> {
+    await h.state.updateTask(taskId, { status: 'PLANNING' });
+  }
+
+  /** Replace the in-memory stored stamp — the value updateTask has to decode. */
+  function injectStoredRevision(value: unknown, taskId = 'task-1'): void {
+    const task = h.state.getTask(taskId);
+    if (!task) throw new Error(`fixture task missing: ${taskId}`);
+    h.state.tasks.set(taskId, { ...task, planRevision: value as number });
+  }
+
+  function recordTaskEvents(): { events: { type: string; planRevision?: number }[]; stop: () => void } {
+    const events: { type: string; planRevision?: number }[] = [];
+    const stop = h.state.subscribe((event) => {
+      const payload = event.payload as Partial<Task> | undefined;
+      events.push({ type: event.type, planRevision: payload?.planRevision });
+    });
+    return { events, stop };
+  }
+
+  async function captureError(promise: Promise<unknown>): Promise<unknown> {
+    try {
+      await promise;
+      throw new Error('expected the call to reject');
+    } catch (error) {
+      return error;
+    }
+  }
+
+  it('createTask owns the initial revision and ignores a caller-supplied stamp', async () => {
+    await boot();
+
+    const created = await h.state.createTask({
+      epicId: 'epic-1',
+      title: 'Fresh task',
+      planRevision: 7,
+      implementationPlan: [{ stepId: 'step-1', description: 'seeded', status: 'PENDING', affectedFiles: [] }],
+    });
+
+    expect(created.planRevision).toBe(0);
+    expect(persistedTask(created.id).planRevision).toBe(0);
+  });
+
+  it('treats a legacy record with no stored stamp as 0 and produces 1 on first submission', async () => {
+    await boot();
+    expect(persistedTask().planRevision).toBeUndefined();
+    expect(h.state.getTask('task-1')?.planRevision).toBeUndefined();
+
+    const result = await submit();
+
+    expect(result.planRevision).toBe(1);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+    expect(persistedTask().planRevision).toBe(1);
+  });
+
+  it('increments on an identical resubmission', async () => {
+    await boot();
+    await submit();
+    await backToPlanning();
+
+    const second = await submit();
+
+    expect(second.planRevision).toBe(2);
+    expect(persistedTask().planRevision).toBe(2);
+  });
+
+  it('increments on a changed resubmission', async () => {
+    await boot();
+    await submit();
+    await backToPlanning();
+
+    const second = await submit('task-1', [PLAN_STEP, { description: 'Extra step' }]);
+
+    expect(second.planRevision).toBe(2);
+  });
+
+  it('keeps independent counters per task', async () => {
+    await boot({ tasks: [{ id: 'task-1', status: 'PLANNING' }, { id: 'task-2', status: 'PLANNING' }] });
+    await submit('task-1');
+    await backToPlanning('task-1');
+    await submit('task-1');
+
+    const other = await submit('task-2');
+
+    expect(other.planRevision).toBe(1);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+  });
+
+  it('returns and persists the revision in CONTROL mode', async () => {
+    await boot({ settings: { approvalMode: 'CONTROL' } });
+
+    const result = await submit();
+
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(result.planRevision).toBe(1);
+    expect(persistedTask().planRevision).toBe(1);
+  });
+
+  it('does not increment again for the immediate TURBO approval write', async () => {
+    await boot({ settings: { approvalMode: 'TURBO' } });
+
+    const result = await submit();
+
+    expect(result.status).toBe('WORKING');
+    expect(result.planRevision).toBe(1);
+    expect(h.state.getTask('task-1')?.status).toBe('WORKING');
+    expect(persistedTask().planRevision).toBe(1);
+  });
+
+  it('does not increment again for the delayed SPEED approval write', async () => {
+    await boot({ settings: { approvalMode: 'SPEED', speedModeDelayMs: 10 } });
+
+    const result = await submit();
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(result.planRevision).toBe(1);
+
+    const deadline = Date.now() + 5000;
+    while (h.state.getTask('task-1')?.status !== 'WORKING' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(h.state.getTask('task-1')?.status).toBe('WORKING');
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+    expect(persistedTask().planRevision).toBe(1);
+  });
+
+  it('publishes the stamped revision on the TASK_UPDATED event', async () => {
+    await boot();
+    const { events, stop } = recordTaskEvents();
+
+    await submit();
+    stop();
+
+    const updates = events.filter((event) => event.type === 'TASK_UPDATED');
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].planRevision).toBe(1);
+  });
+
+  it('survives a daemon restart', async () => {
+    await boot();
+    await submit();
+
+    const reloaded = new StateManager({ projectPath: h.testDir });
+    await reloaded.load();
+
+    expect(reloaded.getTask('task-1')?.planRevision).toBe(1);
+  });
+
+  it('never resets on reopen and advances once when reopen clears step evidence', async () => {
+    await boot();
+    await submit();
+    await h.state.updateTask('task-1', { status: 'WORKING' });
+    const executed = (h.state.getTask('task-1')?.implementationPlan ?? []).map((step) => ({
+      ...step,
+      status: 'COMPLETED' as const,
+      completedAt: new Date().toISOString(),
+      modifiedFiles: ['file.ts'],
+    }));
+    await h.state.updateTask('task-1', { implementationPlan: executed, stepsCompleted: ['step-1'] });
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+
+    const reopened = await h.state.reopenTask('task-1', 'needs rework');
+
+    expect(reopened.planRevision).toBe(3);
+    expect(reopened.implementationPlan[0].status).toBe('PENDING');
+  });
+
+  it('leaves the revision unchanged when reopen rewrites nothing', async () => {
+    await boot();
+    await submit();
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+
+    const reopened = await h.state.reopenTask('task-1', 'human reopen');
+
+    expect(reopened.planRevision).toBe(1);
+  });
+
+  it('increments once for an amend_plan_step write', async () => {
+    await boot();
+    await submit();
+    await h.state.updateTask('task-1', { status: 'WORKING' });
+
+    await amendPlanStepTool(h.state).handler({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      description: 'Amended instructions',
+      reason: 'clarify the seam',
+      workerId: 'architect-test',
+    }, h.state);
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+    expect(persistedTask().planRevision).toBe(2);
+  });
+
+  it('increments once for a definitionOfDone-only write', async () => {
+    await boot();
+    await submit();
+
+    await h.state.updateTask('task-1', { definitionOfDone: ['A brand new DoD item'] });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+  });
+
+  it('increments once for a steps-only write', async () => {
+    await boot();
+    await submit();
+    const rewritten = (h.state.getTask('task-1')?.implementationPlan ?? []).map((step) => ({
+      ...step,
+      description: 'Rewritten instructions',
+    }));
+
+    await h.state.updateTask('task-1', { implementationPlan: rewritten });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+  });
+
+  it('increments exactly once when steps and definitionOfDone change in one write', async () => {
+    await boot();
+    await submit();
+    const rewritten = (h.state.getTask('task-1')?.implementationPlan ?? []).map((step) => ({
+      ...step,
+      description: 'Rewritten again',
+    }));
+
+    await h.state.updateTask('task-1', {
+      implementationPlan: rewritten,
+      definitionOfDone: ['Also changed'],
+    });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+  });
+
+  it('does not increment when the sanitized surface is unchanged', async () => {
+    await boot();
+    await submit();
+    const current = h.state.getTask('task-1');
+
+    await h.state.updateTask('task-1', {
+      implementationPlan: current?.implementationPlan,
+      definitionOfDone: current?.definitionOfDone,
+    });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+  });
+
+  it('does not increment when only object key order differs', async () => {
+    await boot();
+    await submit();
+    const reordered = (h.state.getTask('task-1')?.implementationPlan ?? []).map((step) => ({
+      affectedFiles: step.affectedFiles,
+      status: step.status,
+      description: step.description,
+      stepId: step.stepId,
+    }));
+
+    await h.state.updateTask('task-1', { implementationPlan: reordered });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+  });
+
+  it('does not increment for comment-only or status-only writes', async () => {
+    await boot();
+    await submit();
+
+    await h.state.updateTask('task-1', {
+      comments: [{ id: 'comment-1', author: 'human', content: 'noted', timestamp: new Date().toISOString() }],
+    });
+    await h.state.updateTask('task-1', { status: 'PLANNING' });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+  });
+
+  it('does not increment when the plan and DoD keys are omitted or undefined', async () => {
+    await boot();
+    await submit();
+
+    await h.state.updateTask('task-1', { description: 'metadata only' });
+    await h.state.updateTask('task-1', { implementationPlan: undefined, definitionOfDone: undefined });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+  });
+
+  it('ignores a caller-supplied stamp instead of forging or resetting the revision', async () => {
+    await boot();
+    await submit();
+
+    await h.state.updateTask('task-1', { planRevision: 99 });
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+
+    await h.state.updateTask('task-1', { planRevision: 0, definitionOfDone: ['Forced change'] });
+    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+  });
+
+  it.each([
+    ['null', null],
+    ['a string', 'nope'],
+    ['a negative number', -1],
+    ['a fraction', 0.5],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['an unsafe integer', Number.MAX_SAFE_INTEGER + 2],
+  ])('refuses a stored revision that is %s with INVALID_INPUT', async (_label, stored) => {
+    await boot();
+    injectStoredRevision(stored);
+    const before = persistedBytes();
+
+    const error = await captureError(submit());
+
+    expect(error).toBeInstanceOf(MoeError);
+    expect((error as MoeError).codeName).toBe('INVALID_INPUT');
+    expect((error as MoeError).code).toBe(MoeErrorCode.INVALID_INPUT);
+    expect((error as MoeError).message).toContain('planRevision');
+    expect(persistedBytes()).toBe(before);
+  });
+
+  it('refuses a malformed stamp that was loaded from disk', async () => {
+    await boot({ tasks: [{ status: 'PLANNING', planRevision: 'nope' as unknown as number }] });
+
+    const error = await captureError(submit());
+
+    expect((error as MoeError).codeName).toBe('INVALID_INPUT');
+    expect(persistedTask().planRevision).toBe('nope' as unknown as number);
+  });
+
+  it('refuses a required bump at MAX_SAFE_INTEGER with PLAN_REVISION_EXHAUSTED', async () => {
+    await boot();
+    injectStoredRevision(Number.MAX_SAFE_INTEGER);
+    const before = persistedBytes();
+    const { events, stop } = recordTaskEvents();
+
+    const error = await captureError(submit());
+    stop();
+
+    expect(error).toBeInstanceOf(MoeError);
+    expect((error as MoeError).codeName).toBe('PLAN_REVISION_EXHAUSTED');
+    expect((error as MoeError).code).toBe(MoeErrorCode.STATE_CONFLICT);
+    expect(persistedBytes()).toBe(before);
+    expect(events).toHaveLength(0);
+    expect(h.state.getTask('task-1')?.status).toBe('PLANNING');
+  });
+
+  it('allows a metadata-only write at MAX_SAFE_INTEGER', async () => {
+    await boot();
+    injectStoredRevision(Number.MAX_SAFE_INTEGER);
+
+    await h.state.updateTask('task-1', { description: 'metadata only' });
+
+    expect(h.state.getTask('task-1')?.planRevision).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('allows the last available increment', async () => {
+    await boot();
+    injectStoredRevision(Number.MAX_SAFE_INTEGER - 1);
+
+    const result = await submit();
+
+    expect(result.planRevision).toBe(Number.MAX_SAFE_INTEGER);
+    expect(persistedTask().planRevision).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('leaves revision, bytes and publication untouched when validation refuses the plan', async () => {
+    await boot();
+    await submit();
+    await backToPlanning();
+    const before = persistedBytes();
+    const cached = h.state.getTask('task-1');
+    const { events, stop } = recordTaskEvents();
+
+    await expect(submit('task-1', [])).rejects.toThrow('plan cannot be empty');
+    stop();
+
+    expect(persistedBytes()).toBe(before);
+    expect(h.state.getTask('task-1')).toBe(cached);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+    expect(events).toHaveLength(0);
+  });
+
+  it('does not advance the revision when the primary task write fails on submission', async () => {
+    await boot();
+    const before = persistedBytes();
+    const { events, stop } = recordTaskEvents();
+    const writeSpy = vi
+      .spyOn(h.state, 'writeEntity')
+      .mockRejectedValueOnce(new Error('simulated task write failure'));
+
+    await expect(submit()).rejects.toThrow('simulated task write failure');
+    stop();
+
+    expect(h.state.getTask('task-1')?.planRevision).toBeUndefined();
+    expect(persistedBytes()).toBe(before);
+    expect(h.state.getTask('task-1')?.status).toBe('PLANNING');
+    expect(events).toHaveLength(0);
+
+    writeSpy.mockRestore();
+    const retry = await submit();
+    expect(retry.planRevision).toBe(1);
+  });
+
+  it('does not advance the revision when the primary task write fails on an in-place change', async () => {
+    await boot();
+    await submit();
+    const writeSpy = vi
+      .spyOn(h.state, 'writeEntity')
+      .mockRejectedValueOnce(new Error('simulated task write failure'));
+
+    await expect(h.state.updateTask('task-1', { definitionOfDone: ['Changed once'] }))
+      .rejects.toThrow('simulated task write failure');
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
+    expect(h.state.getTask('task-1')?.definitionOfDone).toEqual(['Tests pass', 'Code reviewed']);
+
+    writeSpy.mockRestore();
+    const retried = await h.state.updateTask('task-1', { definitionOfDone: ['Changed once'] });
+    expect(retried.planRevision).toBe(2);
+  });
+
+  it('gives queued surface changes successive revisions', async () => {
+    await boot();
+    await submit();
+
+    const results = await Promise.all([
+      h.state.runExclusive(() => h.state.updateTask('task-1', { definitionOfDone: ['Queued A'] })),
+      h.state.runExclusive(() => h.state.updateTask('task-1', { definitionOfDone: ['Queued B'] })),
+    ]);
+
+    expect(results.map((task) => task.planRevision).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([2, 3]);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(3);
+  });
+});

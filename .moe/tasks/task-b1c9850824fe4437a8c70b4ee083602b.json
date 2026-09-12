@@ -1,0 +1,157 @@
+{
+  "id": "task-b1c9850824fe4437a8c70b4ee083602b",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Record a delivery receipt and recheck when the target moved",
+  "description": "Objective: prove where the code went, and refuse to trust a check that ran against a base the target has since left behind.\n\nDeliverable: a DeliveryReceipt type in schema.ts with a store under .moe/receipts/ and a record_delivery_receipt tool registered in getTools(). A receipt carries: candidateId, target name, target revision before and after, the landed revision, and the push result when the policy requires one. Both wrappers record it as part of landing. When the target revision moved between the check run and the landing, the wrapper reconstructs the candidate against the new tip and reruns the gate; a cached check result is reused only when the candidate tree and base both match.\n\nNot in scope: batch or queued integration of several candidates, which is Wave 2. Recovery matters here: a crash between the ref update and the receipt write must reconcile to the existing result on the next pass rather than landing twice.\n\nUnskips the acceptance case \"a crash between an external effect and its bookkeeping does not repeat the effect\".\n\nVerification: npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon, then bash scripts/tests/postflight.sh.",
+  "definitionOfDone": [
+    "DeliveryReceipt is declared in schema.ts, persisted under .moe/receipts/, and record_delivery_receipt is registered in getTools()",
+    "A receipt records target before and after, the landed revision and the push result, and both wrappers write one on every successful landing",
+    "A target that moved between check and landing forces a rebuilt candidate and a rerun gate; a cached result is reused only on an exact candidate tree and base match",
+    "Replaying the landing after a crash between ref update and receipt write reconciles to the existing receipt instead of landing a second time",
+    "The acceptance case for a crash between effect and bookkeeping is unskipped and passes unchanged",
+    "npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts passes, npm test in packages/moe-daemon stays green, and bash scripts/tests/postflight.sh passes"
+  ],
+  "taskRails": [
+    "Reconciliation must be idempotent: never land the same candidate twice after a crash.",
+    "Wave 2 owns queued or batched integration; this task handles one candidate at a time."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "READ THE PINNED RECORD SHAPE AND THE IDIOM TO COPY (read-only, no edits). This card is now the daemon half only; read the scope-split comment on it first so you do not build wrapper behaviour. The record shape is already fixed by a held-out test rather than by this card's prose: in src/delivery/acceptance.test.ts, acceptance criterion 2 writes a receipt fixture with exactly the fields id, candidateId, target, targetBefore, targetAfter, landedRevision and pushResult, with pushResult explicitly null when no push was required. Read that fixture and treat those names as the contract, because the policy evaluation in task-c484696d and the wrapper in the sibling card both read records written to that shape. Then read the two stores that define the house idiom: src/state/attemptStore.ts and src/state/resourceStore.ts. Both are stateless exported functions taking the state handle first, both assume the CALLER holds the state mutex and say so in a header comment, and both write in one order per mutation, persist through writeEntity and only then publish into the in-memory map, so a crash can never expose a record that is not on disk. Note attemptStore's caller-suppliable id: re-opening with the same id returns the persisted record instead of writing a second one, which is exactly the idempotency primitive this card owes the wrapper's crash replay. Read StateManager.ts around lines 386 and 1097, where the candidates and reviews maps are declared and loaded through loadEntities, and confirm that no receipts map exists yet while checks belongs to task-867f69a6 rather than to you. Read getTools() in src/tools/index.ts for the registration shape, and the section formats in docs/SCHEMA.md and docs/MCP_SERVER.md. Produce no diff in this step.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING TESTS FIRST AND CAPTURE RED PROOF. Create packages/moe-daemon/src/state/receiptStore.test.ts, which this card's narrowed verification command names, using the existing ToolTestHarness convention. Cover, with exact assertions rather than truthiness: recording a receipt persists exactly the seven contract fields under .moe/receipts/ and publishes it into the in-memory map, with pushResult preserved as null when no push was required and preserved verbatim when one was; the record is readable back by id and findable by its candidate; a second call for the same candidate returns the EXISTING receipt, writes no second file and leaves the stored bytes byte-identical, which is the primitive the wrapper's crash replay depends on, so compare raw file bytes before and after rather than comparing objects; a second call that contradicts the stored receipt, naming the same candidate but a different landed revision or a different target, is refused with a named error rather than silently overwriting the record of what actually happened; a missing or blank candidate id, target or landed revision is refused as invalid input; and a failed persist leaves nothing in the map, which the harness can force by making the write reject, proving the persist-before-publish ordering rather than assuming it. Add one case proving a receipt survives a reload, by writing through the store and then loading a fresh StateManager over the same folder. Run `npx vitest run src/state/receiptStore.test.ts` from packages/moe-daemon and SAVE the failing output as the epic rail's fails-on-old-behaviour evidence; this is a new store, so record which import or symbol is missing, and establish the behavioural red by mutation in step 6 instead.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/receiptStore.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DECLARE THE TYPE AND GIVE THE STORE A HOME. In packages/moe-daemon/src/types/schema.ts add an exported DeliveryReceipt interface carrying exactly the contract fields read in step 1: the receipt id, the candidate it belongs to, the target name, the target revision before and after, the landed revision, and the push result, which is nullable because a policy that requires no push legitimately records none. Do not invent extra fields; anything a later card needs it can add. Comment the record honestly, in the same spirit as the attempt store's note on its process hints: a receipt is the daemon's record of what a wrapper REPORTED about a landing it performed, and the daemon neither performs nor verifies that landing, so nothing may treat a receipt as independent proof that the code is where it says. Then declare the receipts map in StateManager.ts beside the candidates and reviews maps, with the same comment style noting it is mutated only through the store module, and load it in the same place through loadEntities, so an additive record type survives a restart with no migration and no schemaVersion change. Document the type in docs/SCHEMA.md in the existing section format, with the field list, the nullable push result and one example record.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "WRITE THE STORE AS AN IDEMPOTENT RECORDER. Create packages/moe-daemon/src/state/receiptStore.ts as stateless exported functions taking the StateManager first, mirroring attemptStore and resourceStore, with a header comment stating what the record is for, that the caller must hold the state mutex and why the store cannot enforce that alone, and the ordering rule. Export a recorder plus a read by id and a lookup by candidate. The recorder's order is the whole point and must be commented as such: first validate the inputs and refuse a blank candidate id, target or landed revision as invalid input; then look for an existing receipt for that candidate and, when one is found, compare it against what the caller is reporting — an identical report returns the stored record and writes absolutely nothing, while a contradicting one throws a named error rather than overwriting the record of what actually happened, because a second landing is the failure this epic exists to prevent and silently rewriting the receipt would hide it; only when nothing exists for that candidate does it persist through writeEntity and then publish into the map, in that order, so a failed write leaves no receipt anywhere. Error handling is fail-closed: a write that rejects propagates with the map untouched, and the caller retries rather than assuming success. Enforce at most one receipt per candidate, since the wrapper's crash replay asks this store whether the landing already happened and two records for one candidate would make that question unanswerable. Add no git action, no process action and no target inspection: the daemon records what it is told and the wrapper remains the only actor that touches a ref.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/receiptStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADD THE TOOL AND REGISTER IT. Create packages/moe-daemon/src/tools/recordDeliveryReceipt.ts following the shape of the neighbouring tool modules: an exported factory returning a ToolDefinition named `moe.record_delivery_receipt`, an input schema declaring the contract fields with additionalProperties false and the push result optional, and a handler whose whole body runs inside state.runExclusive and delegates to the store rather than reimplementing any rule. Do NOT mark it blocking. Return the recorded receipt along with whether this call created it or matched an existing one, because the sibling wrapper card needs to tell a fresh landing from a reconciled replay and inferring that from an absent error is exactly the ambiguity that makes crash recovery land twice. Describe it in the tool description as wrapper-called and not for agents, the way the other landing-side tools are described. Then register it in getTools() in src/tools/index.ts, which a definition-of-done item requires and without which the tool is silently invisible to MCP. Document it in docs/MCP_SERVER.md in the existing per-tool format: purpose, parameters, returns, and notes covering that it is idempotent per candidate, that a contradicting report is refused by name rather than overwriting, that the created-or-matched flag is how a replay is recognised, and the boundary that the daemon records a reported landing and verifies nothing about the target itself.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "RUN THE GATE AND ESTABLISH THE RED BY MUTATION. From packages/moe-daemon run this card's narrowed command: `npx vitest run src/state/receiptStore.test.ts`. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Because this is a new store there is no old behaviour to fail against directly, so establish the red by mutation, restoring the checkout after each one and re-verifying with a separate status check rather than trusting the edit: remove the existing-receipt short circuit so a repeat call writes a second time and name the test that fails; make the contradiction check pass through so a differing report overwrites the stored record and name the test that fails; swap the persist-before-publish order so a rejected write still leaves a record in the map and name the test that fails; and drop the one-receipt-per-candidate rule and name the test that fails. Do NOT touch src/delivery/acceptance.test.ts: criterion 6 moved to the sibling card with the wrapper work, so every skip state in that file stays exactly as it is. Keep the commands, exit codes, counts and the four mutation results for the verification argument of moe.complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: a repeated identical report writes zero bytes, checked by comparing the stored file before and after rather than by trusting the store's short circuit; a contradicting report for the same candidate is refused by name and cannot overwrite the record of what actually happened; no candidate can end up with two receipts, since the wrapper's crash replay asks this store whether the landing already happened; every mutation persists before it publishes, so a rejected write leaves the map clean and a crash cannot expose a receipt that is not on disk; the field names match the held-out fixture exactly, because the policy evaluation and the wrapper both read that shape and a renamed field breaks them silently; a null push result is preserved as null rather than dropped or coerced; the tool is registered, is not blocking, and returns whether it created or matched so a replay is recognisable; and nothing in this card gained a git action, a process action or any inspection of a real ref. Confirm the file count is the eight in scope and that no wrapper, harness or acceptance-case change crept in. Then call moe.complete_task with the verification evidence, list every modified path in modifiedFiles, and tell QA plainly: that four definition-of-done items moved to task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 under the split recorded in this card's comment and are deliberately absent here, that this card delivers the idempotent recording primitive the replay depends on rather than the replay itself, and the honest boundary that a receipt is what a wrapper reported about a landing it performed — the daemon verifies nothing about the target, so a receipt cannot prove on its own that the code is where it claims.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/receiptStore.ts",
+        "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/state/receiptStore.test.ts"
+      ]
+    }
+  ],
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Operator asked for next architect work; no BACKLOG card is dependency-ready. Chose this one because it owns Wave 1 acceptance criterion 6 (crash between an external effect and its bookkeeping), so a held-out contract exists to plan against. The alternative ready-ish card, task-49ec8755, owns no acceptance case and sits in the wrapper/script domain, so planning it blind is riskier. Both dependsOn targets remain unlanded and still gate any WORKING claim.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c484696db72c4ce4855dfc599a7b2072"
+  ],
+  "priority": "HIGH",
+  "order": 140,
+  "comments": [
+    {
+      "id": "comment-25467e45da6846c0a032aac3d95295d3",
+      "author": "architect-31b9f5b1",
+      "content": "SCOPE SPLIT 2026-09-12, applying the operator's earlier ruling that a card at the size gate's ceiling is split rather than planned whole (same decision taken for task-58f7db9a). This card needed roughly twelve files spanning TypeScript, both launcher scripts and two shell harnesses.\n\nNew sibling: task-bfe2f04ea25941cbbeaa9d07bd4dc1e7, \"Land receipts from both wrappers and reconcile a crash between the ref move and the receipt\". It dependsOn this card and task-49ec8755.\n\nTHIS CARD KEEPS the daemon side only: the DeliveryReceipt type in schema.ts, the store under .moe/receipts/, moe.record_delivery_receipt registered in getTools(), receiptStore.test.ts, and the docs. Definition-of-done item 1 stays here in full.\n\nMOVED TO THE SIBLING, and NOT deliverable here. QA must not fail this card for them:\n- \"A receipt records target before and after, the landed revision and the push result, and both wrappers write one on every successful landing\" — the daemon half keeps the record shape and its validation; the both-wrappers-write-one half is the sibling's.\n- \"A target that moved between check and landing forces a rebuilt candidate and a rerun gate; a cached result is reused only on an exact candidate tree and base match\"\n- \"Replaying the landing after a crash between ref update and receipt write reconciles to the existing receipt instead of landing a second time\" — this card still delivers the IDEMPOTENT RECORDING primitive the replay relies on; the replay itself is wrapper behaviour.\n- \"The acceptance case for a crash between effect and bookkeeping is unskipped and passes unchanged\"\n\nWhy the acceptance case moved: criterion 6 (src/delivery/acceptance.test.ts, describe at line 1982) executes the ACTUAL platform wrapper, generates its shims at runtime and kills the whole process tree while the receipt request is in flight. A daemon-only half cannot satisfy it. This card's verification narrows to `npx vitest run src/state/receiptStore.test.ts` plus the package suite; the sibling owns acceptance.test.ts, postflight.sh and parity-check.sh.\n\nBOARD TOPOLOGY, for a governor rather than me to settle: task-9e851d4e (JetBrains detail) and task-808869c5 (epic-final integration pass) both dependsOn this card only. If the intent was \"after receipts actually land\", the sibling id should be added to their dependsOn, otherwise the integration pass can run before the wrapper half exists. I have not edited another card's dependencies; flagging it here and in #architects.",
+      "timestamp": "2026-09-12T18:47:40.076Z"
+    },
+    {
+      "id": "comment-4c9801642b7f4ef0bcb41d27189e184e",
+      "author": "architect-31b9f5b1",
+      "content": "PLAN FILE-COUNT CORRECTION, from the architect who submitted it.\n\nThe submitted plan records distinctFileCount 10 and carries the size warning, but its real WRITE scope is eight files. The inflation is mine: step 1 is a read-only exploration step and I listed the files it reads in affectedFiles, so src/delivery/acceptance.test.ts and src/state/attemptStore.ts are counted as touched when the plan explicitly forbids editing either.\n\nThe eight files this card actually writes:\n- packages/moe-daemon/src/types/schema.ts\n- packages/moe-daemon/src/state/StateManager.ts\n- packages/moe-daemon/src/state/receiptStore.ts (new)\n- packages/moe-daemon/src/state/receiptStore.test.ts (new)\n- packages/moe-daemon/src/tools/recordDeliveryReceipt.ts (new)\n- packages/moe-daemon/src/tools/index.ts\n- docs/SCHEMA.md\n- docs/MCP_SERVER.md\n\nTwo files appear in the plan as READ-ONLY and must not be modified: src/delivery/acceptance.test.ts, whose criterion 6 moved to task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 and whose skip states all stay as they are, and src/state/attemptStore.ts, which is read only for its store idiom. Step 7 says \"the eight in scope\" and that is the number to hold the work to; if a ninth or tenth path shows up in a completed step's modifiedFiles, that is drift, not licence from the recorded count.\n\nNo replan: the steps themselves are unchanged and correct, and resubmitting would churn a task already auto-approved into WORKING.",
+      "timestamp": "2026-09-12T18:49:38.227Z"
+    },
+    {
+      "id": "comment-12deecdfc7924b7cabc85fba909680c3",
+      "author": "governor-6c1e1bf2",
+      "content": "GOVERNOR: the BOARD TOPOLOGY question in comment-25467e45 is settled (governor-6c1e1bf2, 2026-09-12T22:11Z).\n- THIS CARD: dependsOn task-49ec8755 REMOVED. After the split this card writes daemon files only and its plan forbids wrapper edits. The gate-rerun work that needed 49ec8755 lives on task-bfe2f04e, which keeps that dependency. This card is still gated on task-c484696d (shared schema.ts / StateManager.ts / tools/index.ts / docs).\n- task-808869c5 (epic-final integration pass): task-bfe2f04e ADDED to its dependsOn, so the integration pass cannot run before the wrapper receipts / crash-replay half exists. 49ec8755 is covered transitively.\n- task-9e851d4e (JetBrains detail): unchanged, depends on this card only. The UI needs the receipt record shape, not wrapper writes.",
+      "timestamp": "2026-09-12T22:11:27.838Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:02:52.486Z",
+  "updatedAt": "2026-09-12T22:11:27.838Z",
+  "contextFetchedBy": [
+    "architect-2d25447a",
+    "governor-6c1e1bf2"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T18:46:32.548Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 10
+  },
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T18:49:18.259Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Planning the card whole: it needed roughly twelve files across TypeScript, both launcher scripts and two shell harnesses, past the size gate's ceiling. The operator already ruled on this exact shape for task-58f7db9a, so the ruling was applied rather than re-asked: the wrapper half became task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 and this card keeps the daemon side. (2) Keeping the acceptance case here: impossible — criterion 6 executes the ACTUAL platform wrapper, generates its shims at runtime and kills the whole process tree mid-request, so a daemon-only half cannot satisfy it. The case moved with the wrapper work, which is also why this card's verification narrows to the store test plus the package suite. (3) Letting a repeat report overwrite the stored receipt: rejected outright. A second landing is the exact failure this epic exists to prevent, so an identical report is a no-op that returns the stored record and a contradicting one is a named refusal; silently rewriting would erase the evidence that it happened twice. (4) Allowing more than one receipt per candidate: rejected, because the wrapper's crash replay asks this store whether the landing already happened and two records make that unanswerable. (5) Inventing extra receipt fields for future cards: rejected — the field names are pinned by a held-out fixture that two other cards read, so the shape is copied exactly and later cards add what they need. (6) Having the daemon inspect the real ref to confirm a landing: forbidden by an epic rail keeping the daemon state-only; it records what it is told and says so in the type's comment.",
+    "codebaseInsights": "The receipt shape is already fixed by a held-out test rather than by this card's prose: acceptance criterion 2 writes a receipt fixture with exactly id, candidateId, target, targetBefore, targetAfter, landedRevision and pushResult, the last explicitly null when no push was required. Both the delivery-policy evaluation in task-c484696d and the sibling wrapper card read records in that shape, so a renamed field breaks them silently. attemptStore.ts and resourceStore.ts define the house idiom this store must copy: stateless functions taking the state handle first, a header comment stating that the CALLER holds the state mutex and why the store cannot enforce it alone, and one write order per mutation — writeEntity then map.set — so a crash cannot expose a record that is not on disk. attemptStore's caller-suppliable id, where re-opening with the same id returns the persisted record instead of writing a second, is precisely the idempotency primitive this card owes the wrapper's crash replay. StateManager already declares and loads the candidates and reviews maps around lines 386 and 1097 through loadEntities, so receipts follows that pattern additively with no migration; checks is task-867f69a6's, not this card's.",
+    "risks": "The field names are the highest-risk detail: they are asserted by a fixture this card must not edit and read by two other cards, so drift is silent rather than loud. The second risk is the overwrite direction — making a repeat report update the stored receipt looks like sensible upsert behaviour and would destroy the evidence of a double landing, so an identical report is a byte-zero no-op and a contradicting one is refused by name. Byte comparison, not object comparison, is what proves the no-op. Third, this is a new store with no old behaviour to fail against, so the red must be established by mutation, with four named mutants covering the short circuit, the contradiction check, the persist-before-publish order and the one-per-candidate rule. Fourth, do not touch the acceptance file: criterion 6 belongs to the sibling now, and unskipping it here would fail on wrapper behaviour this card deliberately does not build. Finally, state the boundary in the completion: a receipt is what a wrapper REPORTED about a landing it performed, the daemon verifies nothing about the target, and four definition-of-done items live on the sibling card.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "docs/SCHEMA.md",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T18:49:18.324Z"
+}

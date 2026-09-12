@@ -1,0 +1,294 @@
+{
+  "id": "task-e7f534f147b74650ba06c2b98c022afb",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Parse task blocker metadata in JetBrains",
+  "description": "Objective: expose the daemon's existing six blocker/attention fields to JetBrains without changing lifecycle or UI. Deliverable: backward-compatible Task fields and matching mappings in BOTH MoeJson.parseState -> parseTasks (snapshot) and MoeJson.parseTask (single-task update), pinned by JUnit fixtures. Own only moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, and moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Add needsHumanReview Boolean default false; blockedReason, blockedResourceId, blockedFromStatus, blockedAt nullable String default null; blockedOnTaskIds nullable List<String> default null. Preserve valid string values, order and timestamps as sent; do not parse dates or infer flags from status, critique or reason text. For new fields only, error handling must reject wrong primitive kinds rather than coercing numbers/booleans into IDs or string true into human attention; filter malformed array members without rejecting the task. Keep unrelated permissive parser helpers/fields unchanged. Dependency on the time-cap model retirement is shared-file sequencing (Models/MoeJson/MoeJsonTest), not a new runtime dependency; recheck its landed evidence before modifying those paths. NOT in scope: daemon/schema persistence, UI badges, lifecycle/claim/unblock actions, serialization protocol redesign or other settings. Exact fresh verification from repository root on Windows PowerShell: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE . macOS/Linux equivalent: (cd moe-jetbrains && ./gradlew test). Serialize shared Gradle runs; preserve foreign WIP. No implementation plan or approval is implied by this BACKLOG split.",
+  "definitionOfDone": [
+    "Task has all six optional/defaulted fields, and existing call sites compile without supplying them; no daemon behavior or persisted data changes.",
+    "MoeJsonTest proves a populated BLOCKED fixture preserves needsHumanReview, blockedReason, blockedOnTaskIds, blockedResourceId, blockedFromStatus and blockedAt identically through both parseState snapshot and parseTask update paths; a Gson JSON round-trip retains all six.",
+    "JUnit covers omitted, explicit null and wrong-type new fields; false/null defaults are safe, mixed dependency arrays retain only string members, and malformed metadata never drops the otherwise valid task.",
+    "JUnit proves a later WORKING payload with cleared/omitted blocker fields does not retain prior block metadata; a REVIEW payload with needsHumanReview=true preserves attention independently of BLOCKED.",
+    "Regression fixtures exercise production parsers and fail on the prior field-dropping behavior; all pre-existing parser/time-cap retirement tests remain unchanged and passing.",
+    "Full moe-jetbrains Gradle test passes with fresh exit code 0 and nonzero test counts using the exact command in the description; completion reports all modified paths."
+  ],
+  "taskRails": [
+    "Display-data contract only: do not change report_blocked, auto-unblock, nextStatusForRelease or daemon lifecycle rules.",
+    "Update both JetBrains Task parser paths; do not refactor unrelated parsing behavior or reintroduce retired task time-cap fields.",
+    "No shared build-output deletion, broad staging, or edits to foreign WIP."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Confirm the worker's wrapper baseline and refresh prerequisite landing before modifying the three owned paths. task-435683c2df8f47e7b77a77dc51ba62e9 is shared-file sequencing, not a runtime requirement: accept get_context.epicSiblings entry landing.merged=true or git log on the current integration branch with --grep 'Moe-Task: task-435683c2df8f47e7b77a77dc51ba62e9'. As of 2026-09-11 that prerequisite is still PLANNING with landing.merged false and no task-tagged commit, and the retired budget field is still present at MoeJson.kt:330/491 and Models.kt:168 - so re-measure rather than trusting this note. If neither landing form is present, report the dependency wait through Moe rather than edit ahead of the retirement. Read the landed Task, parseState -> parseTasks, parseTask and all MoeJsonTest tests; preserve the retirement regressions and live metrics. Record foreign dirty paths in the step note, but do not treat unrelated work in progress as a stop condition or touch or stage it. Own only these three existing files; no new files, daemon, UI, service, build-script or settings edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Read-only. Wrapper baseline fresh: .git/moe/baseline/task-e7f534f1….tsv at=2026-09-11T10:40:57Z head=0fc21ec (this session worker-85674160). Prerequisite task-435683c2 LANDED: git log moe/work-2026-09-10 --grep 'Moe-Task: task-435683c2…' -> e09bcb6 feat(...)[qa self-land] (+ e0ed8ca, a5d037d). Retirement verified in live code: Task (Models.kt:138-171) has no budget/TaskBudget; MoeJson has no parseTaskBudget. Two Task constructors only: private parseTasks (MoeJson.kt:298-337, via parseState) and public parseTask (451-485). getStrictBooleanOrDefault at 103-108 guards primitive.isBoolean. getStringOrNull/getStringListOrNull coerce any primitive (trap confirmed). Dispatcher TASK_UPDATED replaces same-id task (MoeMessageDispatcher.kt:115), no merge. Daemon schema.ts:747-791 names match the six fields (priorBlockedReason exists but is out of scope). MoeJsonTest has 10 tests incl. 5 retirement tests + helpers parseTask/parseSnapshotTask/liveTaskJson. Owned 3 paths clean vs HEAD; nothing staged. Foreign dirty (untouched): .moe/tasks/{30df41a8,4d7074c0,9d731a5e,b6c48bf0,dd739724,e7f534f1}.json, untracked .moe/epics/epic-3b8eb56d….json, .moe/resources/, .moe/tasks/{808869c5,9e851d4e}.json, moe-vscode/tests/task-time-budget.test.cjs, packages/moe-daemon/src/delivery/. Collision notice with task-0ad3744e (Models.kt/MoeJson.kt) — no dirty bytes from it. Resource jetbrains-gradle free.",
+      "startedAt": "2026-09-11T10:32:00.276Z",
+      "completedAt": "2026-09-11T10:42:24.644Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add JUnit 4 red-first fixture coverage in MoeJsonTest only, preserving all pre-existing methods unchanged. Use real JsonParser input, MoeJson.parseState with a tasks array, and MoeJson.parseTask for every fixture; assert task count, identity and exact values, not merely equality of two possibly broken parsers. For a compilable pre-model red, inspect the actual parsed Task through GsonBuilder().serializeNulls().create().toJsonTree rather than referencing the six absent properties: assert every new key exists and equals its independent expected JsonElement. Named tests: (1) populated blocker metadata survives snapshot and update - BLOCKED, needsHumanReview true, a multiline Unicode reason, ordered duplicate dependency ids, a resource id, blockedFromStatus and an offset or fractional timestamp preserved exactly. (2) A Gson round trip preserves blocker metadata: serialize each parsed Task, deserialize back to Task, compare all six fields by JSON and by Task equality, and feed the resulting object back through both production parsers. (3) Missing and explicit null metadata use the false and null defaults and retain the otherwise valid task. (4) Wrong metadata kinds are ignored independently: each string field rejects a number, boolean, object and array; the attention flag rejects the strings true and false, a number, object and array; the dependency list rejects every non-array shape. Keep valid companion fields and task identity intact, including a snapshot carrying a second valid task. (5) Dependency arrays retain only real JSON strings in original order including duplicates, empty and whitespace strings; an empty or all-invalid array yields an empty list, while an omitted, null or wrong-shape array yields null. (6) Successive populated BLOCKED then WORKING payloads, once with the metadata omitted and once with explicit false and null, produce fresh cleared tasks through both entry points, and the earlier parsed object is asserted unchanged. (7) Attention is independent of status, reason and critique: REVIEW with the flag true is preserved; BLOCKED with a human-sounding reason but no flag stays false; supplied blocker strings remain data even on a non-BLOCKED status, including empty and unknown strings and a blockedAt that is not a date. Add one narrow legacy-control assertion showing a numeric title still parses as the string 42 and a string-valued hasPendingQuestion still follows the existing permissive helper, so this task's strictness is visibly scoped to the new fields. Error handling is the point of this step: every malformed shape has an asserted outcome and none of them may drop the parent task. Before implementation, coordinate exclusive shared Gradle use, then run the focused class and record an expected ASSERTION failure for field loss - not an unresolved symbol, compilation or environment failure. Windows from the repository root: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest; exit $LASTEXITCODE. Unix: (cd moe-jetbrains && ./gradlew test --tests com.moe.util.MoeJsonTest). Load test-driven-development for this step. No shared output deletion.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "MoeJsonTest: +301 lines, 0 deletions (existing 10 tests byte-unchanged; CRLF kept). Added 8 tests: (1) populated blocker metadata survives snapshot and update parsing; (2) a gson round trip preserves blocker metadata; (3) absent blocker metadata parses to false and null defaults; (4) wrong-kind blocker metadata is ignored field by field (25 one-field cases incl. single-member arrays [\"x\"]/[true] that Gson asString/asBoolean unwrap, -7.5, string \"true\"; snapshot with a valid neighbour task); (5) blocker dependency arrays keep only real strings in order (mixed/empty/all-invalid/10k-element; omitted/null/wrong-shape -> null); (6) a cleared payload does not inherit earlier blocker metadata; (7) human attention is independent of status reason and critique; plus control `legacy task fields keep their permissive coercion` (title 42 -> \"42\", hasPendingQuestion \"true\" -> true). Inspection via GsonBuilder().serializeNulls().toJsonTree(task) vs independently built expected JsonObject (all six keys required), so it compiles on the old model. RED under jetbrains-gradle lease: `$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest` -> EXIT=1, compileTestKotlin executed, fresh XML 10:50:15Z: tests=18 failures=7 errors=0 skipped=0; all 7 = java.lang.AssertionError at MoeJsonTest.kt:510 \"…: parsed Task dropped needsHumanReview\" (field loss). The 11 passes = 10 pre-existing + legacy control. Lease released.",
+      "startedAt": "2026-09-11T10:42:27.361Z",
+      "completedAt": "2026-09-11T10:50:36.745Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Append six immutable defaulted properties to the END of the landed Task constructor, preserving existing parameter ordering and every existing call site: needsHumanReview: Boolean = false; blockedReason: String? = null; blockedOnTaskIds: List<String>? = null; blockedResourceId: String? = null; blockedFromStatus: String? = null; blockedAt: String? = null. Add only a short display-data comment if it helps. Do not restore retired time-cap types or fields, do not alter TaskMetrics, and do not add any status-derived behavior. The constructor defaults plus the Gson fixtures from the preceding step are what establish backward compatibility without changing a single existing constructor call.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt"
+      ],
+      "note": "Appended six defaulted vals at the END of Task (after reviewSummary): needsHumanReview: Boolean = false; blockedReason: String? = null; blockedOnTaskIds: List<String>? = null; blockedResourceId: String? = null; blockedFromStatus: String? = null; blockedAt: String? = null, plus a 2-line display-data comment. Existing parameter order untouched; no retired time-cap type/field restored; TaskMetrics untouched; no status-derived logic. +9/-1 (only the reviewSummary trailing comma), CRLF kept. Only two Task constructor sites exist (MoeJson.kt parseTasks/parseTask), both named-arg, so defaults keep them compiling — compile evidence comes from the step-4/5 Gradle run (no separate Gradle slot spent on an intermediate state).",
+      "startedAt": "2026-09-11T10:50:39.462Z",
+      "completedAt": "2026-09-11T10:50:56.187Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Map all six properties in BOTH Task constructor calls: the private parseTasks used by parseState (around line 299) and the public parseTask used for individual task messages (around line 464). Reuse the existing getStrictBooleanOrDefault(obj, \"needsHumanReview\", false) unchanged - it already honours only a real JSON boolean. Introduce narrowly scoped private helpers getStrictStringOrNull and getStrictStringListOrNull for these new fields ONLY, because the existing getStringListOrNull accepts any primitive and would turn a numeric 42 into the id string \"42\". Scalar error handling: a missing, null or non-primitive value, or a primitive whose isString is false, returns null; read asString only after the kind guard. Array error handling: a missing, null or non-array value returns null; for a real array make one mapNotNull pass accepting only elements that are a primitive with isString true, keeping every valid string verbatim and in order, so an empty array and an all-invalid array both yield an empty list. Use the strict string helper for blockedReason, blockedResourceId, blockedFromStatus and blockedAt, and the strict list helper for blockedOnTaskIds. Do not trim, normalize, sort, deduplicate, validate status vocabularies, parse dates, infer the attention flag, or carry metadata over from a prior payload. The kind guards are what stop malformed metadata from throwing or dropping its parent task - do not add a broad task-level catch. Leave every unrelated helper and its callers exactly as they are; do not unify or refactor the two parsers and do not change snapshot or single-task id behavior. Add one concise comment on the new strict helpers explaining the primitive-coercion trap they exist to avoid. No documentation file is needed in this data-only slice; record the contract in the completion summary and handoff note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "note": "MoeJson.kt +35/-2: new private JsonObject.getStrictStringOrNull (missing/null/non-primitive/non-string primitive -> null; asString only after isString guard) and getStrictStringListOrNull (missing/null/non-array -> null; one mapNotNull pass keeping only string primitives verbatim, order+duplicates kept; [] and all-invalid -> emptyList), with one why-comment on the primitive-coercion trap. Both Task constructors (private parseTasks via parseState, public parseTask) map needsHumanReview = getStrictBooleanOrDefault(obj, \"needsHumanReview\", false) (reused unchanged) + blockedReason/blockedResourceId/blockedFromStatus/blockedAt via strict string helper + blockedOnTaskIds via strict list helper. No trim/sort/dedupe/date parse/status inference; no broad catch; unrelated helpers/callers and id defaults untouched; parsers not unified. GREEN focused (lease held): `$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.MoeJsonTest` EXIT=0, compileKotlin+compileTestKotlin+test executed, fresh XML 10:51:44Z tests=18 failures=0 errors=0 skipped=0. Mutation probe (8 mutations of MoeJson.kt, each a focused run, pristine restored + sha256 verified 5bd571f5…): permissive list helper, permissive boolean helper, array-unwrapping string helper, nested-array-unwrapping list helper, empty->null, distinct(), trim(), snapshot parser dropping blockedAt — all EXIT=1 with AssertionErrors, SURVIVORS=[].",
+      "startedAt": "2026-09-11T10:51:13.348Z",
+      "completedAt": "2026-09-11T10:53:43.850Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "One final regression gate over the whole JetBrains package, because the Definition of Done requires it even though this task is not epic-final. Serialize shared Gradle execution first: check Moe resource and peer coordination, agree the same task-keyed resource id with any other active JetBrains builder, acquire it through Moe before running and release it on success or failure; follow the report_blocked resource nextAction if queued, and never cancel another task's process or delete caches or build output. From the repository root on Windows run EXACTLY: & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE . On macOS or Linux: (cd moe-jetbrains && ./gradlew test). Require a fresh exit 0, actual :test execution, newly written JUnit XML, positive executed test and class counts and zero failures or errors; report skipped counts separately. Record the exact command, exit code, output tail and counts for the verification argument of complete_task. A cached UP-TO-DATE result is NOT fresh execution: if you hit one, inside the same exclusive slot run the focused MoeJsonTest selection with a task-local --rerun, then rerun the exact unfiltered command above, since the changed test filter invalidates the final test inputs - and verify real execution. Do not substitute that supplemental command for the exact completion command. On a compilation, test or interprocess failure keep the real exit code and output, diagnose without changing unrelated code, and rerun after fixing what you own or report the real blocker. Every previous parser test and any landed retirement test must remain unchanged and green. No daemon or VS Code gate is relevant here because neither is touched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Final gate under jetbrains-gradle lease (acquired 10:51:34Z, released after run; resource list showed no holders/queue). From repo root PowerShell: `$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE` (GRADLE_OPTS is process-scoped client heap for the known Jansi %TEMP% OOM, per mem gotcha-jetbrains-gradle-client-oom). START 10:53:55Z -> EXIT=0, BUILD SUCCESSFUL in 3s, `> Task :compileKotlin` and `> Task :test` executed (not UP-TO-DATE; 6 executed, 5 up-to-date). All 11 JUnit XML files freshly written 10:53:57-58Z: 11 classes / 117 tests / 0 skipped / 0 failures / 0 errors (MoeJsonTest 18, TaskTimingPresentationTest 22, MoeDaemonSupervisorTest 15, MoeProjectInitializerTest 17, TerminalAgentLauncherTest 20, MoeSettingsDialogTest 8, MoeProjectConnectionTest 5, MetricsPanelTest 4, CreateTaskDialogTest 3, MoeProjectRegistryTest 3, MoeProjectServiceTest 2) = prior 109 + 8 new. Only pre-existing Kotlin warnings in unrelated toolwindow files. Read-only step. New foreign WIP observed and untouched: moe-vscode/{media/board.js,src/panels/TaskDetailPanel.ts,src/providers/BoardViewProvider.ts,src/types/moe.ts}, packages/moe-daemon/src/{state/StateManager.ts,tools/claimNextTask.test.ts,types/schema.ts}, untracked packages/moe-daemon/src/state/candidateStore*.ts.",
+      "startedAt": "2026-09-11T10:53:47.848Z",
+      "completedAt": "2026-09-11T10:54:23.444Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review and QA handoff, scoped to these three paths. Load adversarial-self-review and read the owned diff against the landed baseline: both parser mappings are present; real boolean and string kinds are enforced for the new metadata ONLY; omitted, null, empty, all-invalid, negative-number and large-array inputs are all safe; the list pass stays linear and preserves order and duplicates; repeated and interleaved parses share no state; an earlier parsed Task is never mutated; REVIEW attention stays independent of BLOCKED; a freshly cleared payload cannot inherit prior data; and a supplied string is never reinterpreted as policy. Confirm legacy permissiveness, metrics, the retired-field removal and every prior test are untouched, and that no foreign work in progress was edited or staged. Confirm you hold both the exact assertion-red evidence for the old field-dropping behavior and the fresh final green evidence; a build failure is not a regression red and stale XML is not a new test run. If the review changes owned code, refresh the same final verification evidence before completing. Report every actually created or modified path in complete_step.modifiedFiles, empty for read-only steps. Record the contract, the prerequisite landing evidence, the commands and counts, all three modified paths and any caveats in the completion summary and handoff. Finish through complete_task with verification so QA receives delivered work; never mark implementation complete by blocking, and do no self-approval, broad staging, foreign-file commits, UI or lifecycle work, or whole-epic documentation sweep.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Adversarial review of owned diff (Models +9/-1, MoeJson +35/-2, MoeJsonTest +301/-0; only removed lines are the 3 trailing-comma rewrites). Both parser mappings present; strict kinds only on the six new fields (getStringOrNull/getStringListOrNull/getBooleanOrDefault and all callers untouched; legacy control test green). Inputs: omitted/null/{}/[]/all-invalid/-7.5/10k-element arrays safe and tested; helpers cannot throw (guards before asJsonPrimitive/asString, && short-circuit); single linear mapNotNull keeps order+dupes. Stateless object + immutable Task: no shared state across repeated/interleaved parses; earlier-task-unchanged asserted. REVIEW attention independent of BLOCKED; cleared payloads (omitted and explicit false/null) produce defaults; strings never interpreted. Retired budget absent (grep main src: none); TaskMetrics untouched; git diff --check clean; nothing staged; foreign WIP untouched. Evidence held: RED assertion-only (18 tests/7 failures/0 errors, \"parsed Task dropped needsHumanReview\") and fresh final GREEN (11 classes/117 tests/0 fail/0 err/0 skip, XML 10:53:57-58Z). Owned mtimes (≤10:53:29Z) predate the gate start 10:53:55Z; MoeJson sha256 5bd571f5… = green bytes. Mutation probe 8/8 killed. Caveats (theoretical, for consumers): Gson's lenient reader turns an unquoted token into a JSON string, which the strict helper then accepts (daemon never emits one); values are verbatim/unescaped, so the UI task must not feed blockedReason into HTML-interpreting Swing text. MoeJsonTest now 764 lines (plan forbade new files). VS Code parity is already carded as task-c6e2eca5 (VS client keeps raw payloads, nothing dropped). No code changed in this step, so verification did not need a refresh.",
+      "startedAt": "2026-09-11T10:54:26.298Z",
+      "completedAt": "2026-09-11T10:55:59.345Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor clearing a session-scoped block. worker-104791d9 blocked because its CLI launched idle and claimed mid-session, so the wrapper took no per-task baseline and would run no post-flight for this task (moe-agent.ps1 binds both to preflightTaskId only). The task itself has no blocker: its only dependency task-435683c2 is DONE. Returning it to WORKING-unassigned so a seat whose wrapper pre-flight claims it gets a baseline and a landing. Defect filed separately as task-80737065. Zero source edits were made under the block.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-aec72949166b42a99b4279ba4615ac4b",
+  "dependsOn": [
+    "task-435683c2df8f47e7b77a77dc51ba62e9"
+  ],
+  "priority": "HIGH",
+  "order": 4.8,
+  "comments": [
+    {
+      "id": "comment-aa0af508ff194d198d98cd1dc70c1191",
+      "author": "architect-0dc7194c",
+      "content": "Read-only architecture complete; required human REPL approach confirmation remains unanswered, so no submit_plan/approval/source edits/tests occurred. Proposed six-step, three-file plan: (1) recheck actual time-cap prerequisite landing and preserve foreign WIP, (2) red-first production parser/Gson JUnit fixtures for exact six-field preservation/roundtrip/defaults/wrong kinds/mixed arrays/clearing/independent attention/legacy permissiveness, (3) append defaulted Task properties, (4) reuse getStrictBooleanOrDefault and add strict new-field-only string/list getters in BOTH Task parser paths, (5) serialized fresh exact full JetBrains Gradle gate with positive executed counts, (6) adversarial review and complete_task QA handoff. Missing/null/non-array dependencies -> null; real empty/all-invalid array -> []; valid strings stay verbatim, ordered and duplicated. Required question was asked in the REPL, not via chat: may I submit this data-only approach? Complete ready-to-refresh draft payload and evidence are in Serena memory task-task-e7f534f147b74650ba06c2b98c022afb-handoff. Prerequisite task-435683c2df8f47e7b77a77dc51ba62e9 is still PLANNING/unlanded; this gates later edits, not planning. No speculative UI/lifecycle or serialization-policy changes.",
+      "timestamp": "2026-09-10T18:27:03.747Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:20.514Z",
+  "updatedAt": "2026-09-11T11:03:57.007Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T18:21:49.963Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T11:03:17.759Z",
+    "wallClockMs": 60087796
+  },
+  "contextFetchedBy": [
+    "architect-0dc7194c",
+    "architect-8b93cc67",
+    "worker-104791d9",
+    "worker-85674160",
+    "qa-813933f7"
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Step-1 requires the worker wrapper baseline; this session has no verified task-bound preflight/delivery tracking. Its supplied instructions file moe-codex-instructions-worker-40728.md explicitly says preflight had no claimable task. I waited and claimed this task only at 2026-09-11 10:31 UTC. The only task baseline (.git/moe/baseline/task-e7f534f147b74650ba06c2b98c022afb.tsv) is the architect snapshot at=2026-09-10T18:21:50Z, head=93e5222adcfac6b43babdb4902ba9d7c6fd4334d, landed=0. Current wrapper scripts/moe-agent.ps1:4176 baselines only preflightOk + preflightTaskId; :5015 postflights only preflightTaskId. An in-CLI claim cannot establish that wrapper boundary. Do not hand-create the baseline or bypass attribution. Need a fresh wrapper-bound task launch, with this block cleared for resume.\n\nPrerequisite is NOT blocked: get_context confirms time-cap retirement DONE/landed=true/merged=true at e09bcb64439d55903babb0f0e9f0556098de3f06. All three owned files are clean against HEAD 7cdcf2e9f5d09097d62bcfd1e0661f25130cb0e4. No source edits, test runs or completed steps. Step-1 remains the resume point. Foreign WIP untouched. Evidence/handoff saved in Serena task-task-e7f534f147b74650ba06c2b98c022afb-handoff; governor notified via msg-8c855bb9df794e399e5d2c9030742340.",
+  "blockedOnTaskIds": null,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:34:40.343Z",
+  "planningNotes": {
+    "approachesConsidered": "This is the six-step, three-file draft architect-0dc7194c produced read-only on 2026-09-10, preserved in Serena memory and in task comment comment-aa0af508ff194d198d98cd1dc70c1191. It was never submitted: that session blocked on a human confirmation in the terminal that no one answered, with no blockedOnTaskIds and no resource, so nothing would ever have auto-cleared it. The governor ruled the block invalid because this project runs in TURBO, where plans auto-approve and a per-plan keyboard confirmation contradicts the configured policy. I re-verified every structural claim in the draft against the live files before submitting rather than forwarding it on trust, and the claims hold. Substantive alternatives already rejected in that draft and still rejected here: changing the shared permissive getters, which would alter unrelated fields; merging the two parsers, which differ in scope and id defaults; and pushing malformed-data policy into a global Gson configuration. Tests deliberately inspect serialized production parser output so they compile against the old model and fail on real field loss before any implementation exists.",
+    "codebaseInsights": "Re-verified live on 2026-09-11 against branch moe/work-2026-09-10, confirming the prior architect's read: Task at Models.kt:144-178 carries no blocker or attention fields and still holds the pre-retirement budget field at line 168. MoeJson.parseTasks (line 299, used by parseState) and MoeJson.parseTask (line 464, used for single-task messages) construct Task independently, so both need the mapping. getStrictBooleanOrDefault at line 104 already honours only a real JSON boolean and carries a comment explaining why Gson's asBoolean cannot be trusted - reuse it as-is. The permissive counterparts are the trap this task must avoid: getStringListOrNull accepts any primitive and reads asString, so a numeric 42 silently becomes the id string \"42\"; getBooleanOrDefault routes a JSON string through Boolean.parseBoolean. Hence strict helpers scoped to the six new fields only, leaving every existing field's permissiveness exactly as it is. MoeMessageDispatcher routes STATE_SNAPSHOT to parseState and TASK_UPDATED/TASK_CREATED to parseTask, replacing matching tasks rather than merging fields, so no dispatcher change is needed and a cleared payload really must clear. Gradle uses Gson 2.14.0 with JUnit 4.13.2 and useJUnit. The prerequisite task-435683c2df8f47e7b77a77dc51ba62e9 is still PLANNING with landing.merged false and no task-tagged commit, which gates editing the shared files but not planning.",
+    "risks": "Guard ONLY the new metadata. Do not repair unrelated malformed entries in the task array and do not infer or hide metadata from status, reason text or a critique result. Gson omits nulls by default, which would make the default-value tests vacuous - serializeNulls plus explicit key-existence assertions is what catches absence on the old model. Keep three array outcomes distinct: a real empty array and an all-invalid array both yield an empty list, while omitted, null and non-array yield null; collapsing those is the most likely wrong implementation. The shared file set moves under the time-cap retirement work, so re-read the landed state before editing and preserve whatever landed in the meantime along with any foreign work in progress. Gradle output is shared infrastructure on this box: serialize it through the Moe resource protocol, never delete a peer's cache, and treat an UP-TO-DATE result as no test run at all. The red proof must be an assertion failure, not a compile error, or it proves nothing about field dropping.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:34:40.408Z",
+  "workStartedAt": "2026-09-11T10:32:00.276Z",
+  "commits": [
+    {
+      "sha": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T10:40:53Z",
+      "paths": [
+        ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        ".moe/tasks/task-4d7074c001af47e881572e9efae30a41.json",
+        ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json",
+        ".moe/tasks/task-a135d4d63554410286a369a95e60c2a8.json",
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json",
+        ".moe/tasks/task-e5a45262acf3428ba5fb4a7864391c0d.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T10:40:56.947Z",
+      "treeId": "ded1550689a913c9b5f18bf7af53cf0dcdb40eb8",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "38572f101100850876bd7e4280c7d225fe085125",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T10:57:41Z",
+      "paths": [
+        ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T10:57:43.811Z",
+      "treeId": "c51113026637c5fd915b175b88d87280cf492559",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        },
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "1d210b21262a42cbd532726eef6d6bdeae0b9577",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T10:40:53Z",
+      "paths": [
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T10:58:00.879Z",
+      "treeId": "7559bb66084880b9237a546223d6c5d168c2454e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        },
+        {
+          "path": "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+          "taskId": "task-0ad3744e77bd43b08b9c0b63293912a6"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "8d2ac40818c37c5d8e9e6faffc9c4dd71643f160",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T10:57:41Z",
+      "paths": [
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T11:03:57.007Z",
+      "treeId": "9100077a88a626023bfb2f33200537d770a8b7ae",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    ".moe/tasks/task-30df41a802754b65ac29d04fa031b769.json",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T10:57:41Z",
+    "at": "2026-09-11T11:03:57.007Z"
+  },
+  "reviewStartedAt": "2026-09-11T10:56:42.923Z",
+  "verification": {
+    "command": "$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE",
+    "exitCode": 0,
+    "outputTail": "START=2026-09-11T10:53:55Z\n> Task :compileKotlin\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 3s\n11 actionable tasks: 6 executed, 5 up-to-date\nEXIT=0\nFresh JUnit XML (all 11 files written 10:53:57-58Z): 11 classes, 117 tests, 0 skipped, 0 failures, 0 errors (MoeJsonTest 18 = 10 existing + 8 new; TaskTimingPresentationTest 22; prior total 109). GRADLE_OPTS only raises the gradlew client heap (Jansi %TEMP% OOM workaround).",
+    "reportedAt": "2026-09-11T10:56:42.923Z"
+  },
+  "completionSummary": "JetBrains Task now carries the daemon's six blocker/attention fields as display data. Models.kt: appended needsHumanReview: Boolean=false; blockedReason, blockedResourceId, blockedFromStatus, blockedAt: String?=null; blockedOnTaskIds: List<String>?=null at the END of Task (no call-site changes; retired budget not restored; TaskMetrics untouched). MoeJson.kt: both constructors (private parseTasks via parseState, public parseTask) map them. needsHumanReview uses the existing getStrictBooleanOrDefault (real JSON boolean only). The four strings use the new private getStrictStringOrNull (real JSON string only, else null). The ids use the new getStrictStringListOrNull: missing/null/non-array gives null; an array keeps its string members verbatim, in order, with duplicates; [] and all-invalid arrays give []. No trim, sort, dedupe, date parsing or status inference; the legacy permissive helpers are untouched. Contract: values are kept verbatim and unescaped, and a payload without metadata clears it (the dispatcher replaces tasks rather than merging). MoeJsonTest.kt: 8 new tests (populated snapshot+update, Gson round trip, omitted/null defaults, 25 wrong-kind cases with a valid neighbour task, dependency arrays incl. 10k members, cleared payload, attention independence, legacy-coercion control); the 10 existing tests are unchanged. Red before the model change (focused): 18 tests, 7 failed, 0 errors, all AssertionError \"parsed Task dropped needsHumanReview\". Mutation probe killed 8/8. Final gate is fresh: 11 classes, 117 tests, 0 failures/errors/skips. Prerequisite task-435683c2 landed as e09bcb6. Modified: moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt. Caveats: UI code must not put these strings into HTML-rendering Swing text; VS Code parity is carded as task-c6e2eca5.",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+  ],
+  "completedAt": "2026-09-11T11:03:17.759Z",
+  "reviewCompletedAt": "2026-09-11T11:03:17.759Z",
+  "reviewSummary": "All 6 DoD items + task/epic/global rails verified. Landed+pushed: 38572f1 (qa-recovered ckpt: MoeJsonTest +301/-0) + 1d210b2 (worker completion: Models.kt +9/-1, MoeJson.kt +35/-2); HEAD==origin/moe/work-2026-09-10, owned paths clean vs HEAD. Diff 0fc21ec..HEAD: six defaulted vals appended at END of Task (names match daemon schema.ts); both Task constructors (parseTasks via parseState, parseTask) map them; needsHumanReview reuses getStrictBooleanOrDefault; new private getStrictStringOrNull/getStrictStringListOrNull used only for new fields; legacy helpers + callers untouched; no retired time-cap field; only 2 Task( call sites; plugin never serializes Task back (MoeCommandSender builds explicit payloads) and dispatcher replaces by id, so no daemon/persisted-data change. Independent red: new MoeJsonTest vs 0fc21ec Models.kt+MoeJson.kt compiles, fails 7/18 AssertionError 'parsed Task dropped needsHumanReview', 0 errors. Independent mutation probe (focused MoeJsonTest under jetbrains-gradle lease) killed 7/7: snapshot permissive boolean, update-path permissive id list, snapshot blockedFromStatus cross-wired, string helper without primitive guard (throws), status-inferred attention, list helper keeping numbers, update-path blockedResourceId dropped; pristine bytes restored (sha256 + git diff clean). Gate: exact `$env:GRADLE_OPTS='-Xmx512m'; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; exit $LASTEXITCODE` - first run :test UP-TO-DATE (not counted); after mutant runs re-ran exact command: :test executed, BUILD SUCCESSFUL, exit 0, fresh XML 11:01:47-48Z: 11 classes, 117 tests, 0 failures/errors/skipped (MoeJsonTest 18 = 10 unchanged + 8 new). Forbidden-pattern scan clean. Scope = 3 owned files + board JSON."
+}

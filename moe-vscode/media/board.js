@@ -16,6 +16,53 @@
             return status === 'BLOCKED' ? 'WORKING' : status;
         }
 
+        // Why a BLOCKED card is parked, and what will clear it. This is a copy
+        // of the contract the JetBrains plugin owns
+        // (toolwindow/TaskBlockerPresentation.kt), held canonically in
+        // src/panels/TaskDetailPanel.ts. This file is a plain browser script
+        // with no bundler, so it cannot import that module; the copies are
+        // pinned together by tests/task-blocker-visibility.test.cjs, which
+        // drives one fixture table through all three.
+        const BLOCK_CAUSE_LABEL = {
+            RESOURCE_WAIT: 'Resource wait',
+            DEPENDENCY_WAIT: 'Dependency wait',
+            EXTERNAL_BLOCK: 'External block'
+        };
+        const BLOCK_CAUSE_CLEARS = {
+            RESOURCE_WAIT: 'Clears automatically when the shared resource lease is granted.',
+            DEPENDENCY_WAIT: 'Clears automatically when every recorded prerequisite reaches a finished state (DONE or ARCHIVED).',
+            EXTERNAL_BLOCK: 'Needs a person: a human or governor has to clear this block.'
+        };
+        const ATTENTION_LABEL = 'Awaiting human review';
+        const ATTENTION_CLEARS = 'Needs a person: a human or QA has to review this task.';
+
+        // A non-blank string, or null for anything else: missing, null, wrong
+        // type. Nothing below may throw on a malformed payload.
+        function nonBlankString(value) {
+            return typeof value === 'string' && value.trim() !== '' ? value : null;
+        }
+
+        // The prerequisite ids the task RECORDED as waited on: order kept,
+        // duplicates kept, each id verbatim, blanks dropped. Never a count of
+        // unfinished work — the daemon counts finished, archived and deleted
+        // ids as satisfied.
+        function blockedPrerequisiteIds(task) {
+            const ids = task && task.blockedOnTaskIds;
+            if (!Array.isArray(ids)) { return []; }
+            return ids.filter(id => nonBlankString(id) !== null);
+        }
+
+        // Status gate first: a task that has left BLOCKED usually still carries
+        // its blocker fields, and showing those as a live block is worse than
+        // showing nothing. Inside BLOCKED a resource wait wins over a
+        // dependency wait, because the lease grant is what actually clears it.
+        function blockCause(task) {
+            if (!task || task.status !== 'BLOCKED') { return null; }
+            if (nonBlankString(task.blockedResourceId) !== null) { return 'RESOURCE_WAIT'; }
+            if (blockedPrerequisiteIds(task).length > 0) { return 'DEPENDENCY_WAIT'; }
+            return 'EXTERNAL_BLOCK';
+        }
+
         // Restore persisted webview state if available
         const savedState = vscode.getState() || {};
         let currentState = null;
@@ -806,12 +853,10 @@
             return seconds + 's';
         }
 
-        function budgetSuffix(task) {
-            var budget = task.budget;
+        function elapsedSuffix(task) {
             var metrics = task.metrics;
-            var capMs = budget && budget.wallClockMs;
             var firstClaimAt = metrics && metrics.firstClaimAt;
-            if (capMs == null && !firstClaimAt) { return ''; }
+            if (!firstClaimAt) { return ''; }
 
             var usedMs = metrics && metrics.wallClockMs;
             if (usedMs == null && firstClaimAt) {
@@ -824,30 +869,17 @@
             }
             usedMs = usedMs == null ? 0 : usedMs;
 
-            var ratio = capMs && capMs > 0 ? usedMs / capMs : 0;
-            var mark = '✓';            // ✓ green
-            if (capMs == null) {
-                mark = '';
-            } else if (ratio > 1.0) {
-                mark = '✗';            // ✗ red
-            } else if (ratio >= 0.8) {
-                mark = '⚠';            // ⚠ yellow
-            }
-            var text = capMs != null
-                ? humaniseDurationMs(usedMs) + '/' + humaniseDurationMs(capMs)
-                : humaniseDurationMs(usedMs);
-            var label = '[' + text + (mark ? ' ' + mark : '') + ']';
-            var tooltip = capMs != null
-                ? 'Budget: used ' + humaniseDurationMs(usedMs) + ' of ' + humaniseDurationMs(capMs)
-                : 'Wall-clock: ' + humaniseDurationMs(usedMs);
-            return '  <span class="task-budget" title="' + escapeHtml(tooltip) + '">' + escapeHtml(label) + '</span>';
+            var text = humaniseDurationMs(usedMs);
+            var label = '[' + text + ']';
+            var tooltip = 'Wall-clock: ' + text;
+            return '  <span class="task-elapsed" title="' + escapeHtml(tooltip) + '">' + escapeHtml(label) + '</span>';
         }
 
         function renderTaskCard(task, epics, columnStatus) {
             const taskId = escapeHtml(task.id);
             const titleText = escapeHtml(task.title || '');
             const taskStatus = escapeHtml(task.status || '');
-            const budgetHtml = budgetSuffix(task);
+            const elapsedHtml = elapsedSuffix(task);
 
             // Description preview (first ~120 chars)
             let descHtml = '';
@@ -884,9 +916,21 @@
             }
 
             // Blocked badge: BLOCKED cards are display-mapped into the Working
-            // column, so mark them with a distinct amber chip.
-            if (task.status === 'BLOCKED') {
-                chips += '<span class="chip chip-blocked" title="Waiting on a shared-resource lease or a human">BLOCKED</span>';
+            // column, so the amber chip has to say WHY the card is parked and
+            // what will clear it. A blockedReason is arbitrary agent-written
+            // text and stays off the card entirely — it belongs in the detail.
+            const cause = blockCause(task);
+            if (cause) {
+                chips += '<span class="chip chip-blocked" title="' + escapeHtml(BLOCK_CAUSE_CLEARS[cause]) + '">'
+                    + escapeHtml(BLOCK_CAUSE_LABEL[cause]) + '</span>';
+            }
+
+            // Entirely independent of the block, and honoured on any status:
+            // the daemon's own attention flag, normally set by the QA reject
+            // path on a REVIEW task. Never inferred from status or reason text.
+            if (task.needsHumanReview === true) {
+                chips += '<span class="chip chip-question" title="' + escapeHtml(ATTENTION_CLEARS) + '">'
+                    + escapeHtml(ATTENTION_LABEL) + '</span>';
             }
 
             // Status sub-chip (if task status differs from column; BLOCKED
@@ -968,7 +1012,7 @@
                      data-status="${taskStatus}"
                      data-drag="task">
                     <div class="task-title-row">
-                        <div class="task-title">${titleText}${budgetHtml}</div>
+                        <div class="task-title">${titleText}${elapsedHtml}</div>
                         ${navHtml}
                     </div>
                     ${descHtml}

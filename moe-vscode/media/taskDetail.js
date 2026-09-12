@@ -13,6 +13,119 @@
             .replace(/'/g, '&#039;');
     }
 
+    // Why a BLOCKED task is parked, and what will clear it. Copy of the
+    // contract the JetBrains plugin owns (toolwindow/TaskBlockerPresentation.kt)
+    // that src/panels/TaskDetailPanel.ts holds canonically and media/board.js
+    // also carries: this is a plain browser script with no bundler, so it
+    // cannot import that module.
+    // tests/task-blocker-visibility.test.cjs drives one fixture table through
+    // all three copies, so drift fails a test rather than shipping.
+    var BLOCK_CAUSE_LABEL = {
+        RESOURCE_WAIT: 'Resource wait',
+        DEPENDENCY_WAIT: 'Dependency wait',
+        EXTERNAL_BLOCK: 'External block'
+    };
+    var BLOCK_CAUSE_CLEARS = {
+        RESOURCE_WAIT: 'Clears automatically when the shared resource lease is granted.',
+        DEPENDENCY_WAIT: 'Clears automatically when every recorded prerequisite reaches a finished state (DONE or ARCHIVED).',
+        EXTERNAL_BLOCK: 'Needs a person: a human or governor has to clear this block.'
+    };
+    var ATTENTION_LABEL = 'Awaiting human review';
+    var ATTENTION_CLEARS = 'Needs a person: a human or QA has to review this task.';
+    var BLOCKER_SECTION_TITLE = 'Blocker';
+    var BLOCKER_REASON_LABEL = 'Reported reason';
+    var BLOCKER_REASON_MISSING = 'No reason was recorded.';
+    var BLOCKER_PREREQUISITES_LABEL = 'Prerequisites recorded as waited on';
+    var BLOCKER_RESOURCE_LABEL = 'Resource';
+    var BLOCKER_FROM_STATUS_LABEL = 'Blocked from';
+    var BLOCKER_BLOCKED_AT_LABEL = 'Blocked at';
+
+    // A non-blank string, or null for anything else: missing, null, wrong type.
+    function nonBlankString(value) {
+        return typeof value === 'string' && value.trim() !== '' ? value : null;
+    }
+
+    // The prerequisite ids the task RECORDED as waited on: order kept,
+    // duplicates kept, each id verbatim, blanks dropped. Never a count of
+    // unfinished work — the daemon counts finished, archived and deleted ids
+    // as satisfied.
+    function blockedPrerequisiteIds(task) {
+        var ids = task && task.blockedOnTaskIds;
+        if (!Array.isArray(ids)) { return []; }
+        return ids.filter(function(id) { return nonBlankString(id) !== null; });
+    }
+
+    // Status gate first: a task that has left BLOCKED usually still carries its
+    // blocker fields, and showing those as a live block is worse than showing
+    // nothing. Inside BLOCKED a resource wait wins over a dependency wait,
+    // because the lease grant is what actually clears it.
+    function blockCause(task) {
+        if (!task || task.status !== 'BLOCKED') { return null; }
+        if (nonBlankString(task.blockedResourceId) !== null) { return 'RESOURCE_WAIT'; }
+        if (blockedPrerequisiteIds(task).length > 0) { return 'DEPENDENCY_WAIT'; }
+        return 'EXTERNAL_BLOCK';
+    }
+
+    // The recorded facts, captioned, in the same order the initial render uses.
+    // blockedAt is passed through exactly as sent: never parsed as a date.
+    function blockerFacts(task) {
+        var facts = [];
+        var resource = nonBlankString(task.blockedResourceId);
+        if (resource) { facts.push(BLOCKER_RESOURCE_LABEL + ': ' + resource); }
+        var fromStatus = nonBlankString(task.blockedFromStatus);
+        if (fromStatus) { facts.push(BLOCKER_FROM_STATUS_LABEL + ': ' + fromStatus); }
+        var blockedAt = nonBlankString(task.blockedAt);
+        if (blockedAt) { facts.push(BLOCKER_BLOCKED_AT_LABEL + ': ' + blockedAt); }
+        return facts;
+    }
+
+    // One line of the blocker section. Daemon-supplied content arrives as a DOM
+    // text node, never as a markup string: a blockedReason is arbitrary
+    // agent-written text.
+    function blockerLine(cssClass, text) {
+        var line = document.createElement('div');
+        line.className = cssClass;
+        line.textContent = text;
+        return line;
+    }
+
+    // Rebuild the read-only blocker/attention section from the updated task.
+    // Touches ONLY #blockerSection: the title, description and Definition of
+    // Done inputs are never reassigned, because a human may be mid-edit.
+    // Clearing first is what makes an unblocked task lose its section while the
+    // independent attention flag can keep its own.
+    function renderBlocker(task) {
+        var container = document.getElementById('blockerSection');
+        if (!container) { return; }
+        container.textContent = '';
+        if (!task) { return; }
+        var cause = blockCause(task);
+        var attention = task.needsHumanReview === true;
+        if (!cause && !attention) { return; }
+        container.appendChild(blockerLine('section-title', cause ? BLOCKER_SECTION_TITLE : ATTENTION_LABEL));
+        if (cause) {
+            container.appendChild(blockerLine('blocker-cause', BLOCK_CAUSE_LABEL[cause]));
+            container.appendChild(blockerLine('muted-text', BLOCK_CAUSE_CLEARS[cause]));
+            container.appendChild(blockerLine('field-label', BLOCKER_REASON_LABEL));
+            container.appendChild(blockerLine('blocker-text', nonBlankString(task.blockedReason) || BLOCKER_REASON_MISSING));
+        }
+        if (attention) {
+            container.appendChild(blockerLine('blocker-cause', ATTENTION_LABEL));
+            container.appendChild(blockerLine('muted-text', ATTENTION_CLEARS));
+        }
+        if (cause) {
+            var ids = blockedPrerequisiteIds(task);
+            if (ids.length > 0) {
+                container.appendChild(blockerLine('field-label', BLOCKER_PREREQUISITES_LABEL));
+                container.appendChild(blockerLine('blocker-text', ids.join('\n')));
+            }
+            var facts = blockerFacts(task);
+            if (facts.length > 0) {
+                container.appendChild(blockerLine('blocker-text', facts.join('\n')));
+            }
+        }
+    }
+
     function isAgentAuthor(author) {
         if (!author) { return false; }
         var lower = author.toLowerCase();
@@ -195,6 +308,10 @@
                 badge.textContent = task.status.toLowerCase().replace(/_/g, ' ').replace(/^./, function(c) { return c.toUpperCase(); });
                 currentTaskStatus = task.status;
             }
+            // Refresh the read-only blocker/attention section, which also
+            // clears it when the task leaves BLOCKED. The attention indicator
+            // stays up until its own flag clears.
+            renderBlocker(task);
             // Update plan section
             renderSteps(task.implementationPlan);
             // Update comments section

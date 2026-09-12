@@ -21,6 +21,7 @@ import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
+import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { sanitizeString, sanitizeStringArray } from '../util/sanitize.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
@@ -38,6 +39,112 @@ import { runDependencyUnblock } from './dependencyUnblock.js';
 export const MAX_TASK_DEPENDENCY_IDS = 20;
 
 const CREATED_BY_VALUES = new Set(['HUMAN', 'WORKER', 'ARCHITECT', 'QA', 'GOVERNOR']);
+
+/**
+ * Upper bound of the plan-revision domain — a JS safe integer, which is also
+ * what the Kotlin/JSON clients can carry as a Long without truncation.
+ */
+const MAX_PLAN_REVISION = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Read a task's persisted plan revision. An absent stamp is a record written
+ * before the field existed and reads as 0. Anything else outside the
+ * non-negative safe-integer domain fails CLOSED (no coercion, no reset): a
+ * corrupted stamp must not silently pass an approval-freshness comparison.
+ */
+function decodeStoredPlanRevision(task: Task): number {
+  const stored = task.planRevision;
+  if (stored === undefined) return 0;
+  if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 0) {
+    throw invalidInput(
+      'planRevision',
+      `stored revision for task ${task.id} is not a non-negative safe integer (got ${String(stored)})`
+    );
+  }
+  return stored;
+}
+
+/**
+ * Validate a CALLER-SUPPLIED approval token. Typed `unknown` on purpose: it
+ * arrives from an untyped /ws payload, so this is the one place that decides
+ * what a token is. Error handling contract: only a non-negative safe integer
+ * passes; null, strings, booleans, fractional, negative, unsafe and non-finite
+ * values throw INVALID_INPUT. Never coerce, and never degrade a malformed
+ * token into the token-free legacy approval — that would turn a typo into an
+ * unchecked approval.
+ */
+function decodeSuppliedPlanRevision(value: unknown, taskId: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidInput(
+      'expectedPlanRevision',
+      `approval token for task ${taskId} must be a non-negative safe integer (got ${String(value)}); ` +
+        'omit the field entirely to approve without a revision check'
+    );
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Structural comparison of two SANITIZED plan/DoD surfaces. Array order is
+ * significant (a reordered plan is a different plan), object key insertion
+ * order is not (re-serializing the same step is not a mutation). Compares
+ * every retained key, so step execution fields and amendment entries count.
+ */
+function sameSanitizedSurface(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameSanitizedSurface(item, b[index]));
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every(
+      (key) => Object.prototype.hasOwnProperty.call(b, key) && sameSanitizedSurface(a[key], b[key])
+    );
+  }
+  return false;
+}
+
+/**
+ * The revision to stamp into this write. Bumps once for a plan submission and
+ * once for any write that actually changes the sanitized steps/DoD — a write
+ * that does both still advances by one. `undefined` for either field means the
+ * caller did not supply it, so it cannot be a change.
+ *
+ * Error handling: a malformed stored stamp (INVALID_INPUT, via the decode
+ * above) and an exhausted counter (STATE_CONFLICT / PLAN_REVISION_EXHAUSTED)
+ * both throw BEFORE any persistence, leaving the task exactly as it was.
+ */
+function derivePlanRevision(
+  task: Task,
+  updates: Partial<Task>,
+  event: ActivityEventType | undefined
+): number {
+  const current = decodeStoredPlanRevision(task);
+  const planChanged =
+    updates.implementationPlan !== undefined &&
+    !sameSanitizedSurface(updates.implementationPlan, sanitizeImplementationPlan(task.implementationPlan));
+  const dodChanged =
+    updates.definitionOfDone !== undefined &&
+    !sameSanitizedSurface(updates.definitionOfDone, sanitizeStringArray(task.definitionOfDone, 50, 1000));
+  if (event !== 'PLAN_SUBMITTED' && !planChanged && !dodChanged) {
+    return current;
+  }
+  if (current >= MAX_PLAN_REVISION) {
+    throw new MoeError(
+      MoeErrorCode.STATE_CONFLICT,
+      `Plan revision for task ${task.id} is exhausted at ${MAX_PLAN_REVISION} and cannot be advanced`,
+      { taskId: task.id, currentRevision: current, maxPlanRevision: MAX_PLAN_REVISION },
+      'PLAN_REVISION_EXHAUSTED'
+    );
+  }
+  return current + 1;
+}
 
 export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
   if (!state.project) {
@@ -79,6 +186,9 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     definitionOfDone,
     taskRails: Array.isArray(input.taskRails) ? input.taskRails.slice(0, 100) : [],
     implementationPlan: sanitizeImplementationPlan(input.implementationPlan),
+    // Daemon-owned: a new task starts at 0 whatever the caller passed (and
+    // whatever initial plan it shipped with) — the first submission is 1.
+    planRevision: 0,
     status: input.status || 'BACKLOG',
     assignedWorkerId: input.assignedWorkerId || null,
     branch: input.branch || null,
@@ -125,6 +235,10 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // on-disk filename (map keyed by taskId, written to `${taskId}.json`).
   delete (sanitized as Record<string, unknown>).id;
   delete (sanitized as Record<string, unknown>).createdAt;
+  // planRevision is derived below from what this write actually changes. Strip
+  // any caller-supplied value (MCP tool, plugin UPDATE_TASK) so a client can
+  // neither forge a newer stamp nor reset an older one.
+  delete (sanitized as Record<string, unknown>).planRevision;
   if (sanitized.title !== undefined) {
     sanitized.title = sanitizeString(sanitized.title, 'title', 500);
   }
@@ -201,9 +315,17 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
     ? { ...normalizedUpdates, assignedWorkerId: null }
     : normalizedUpdates;
 
+  // Derive the plan revision from the sanitized surface, BEFORE any write, so a
+  // malformed stored stamp or an exhausted counter refuses the whole update
+  // instead of persisting half of it. The stamp travels in the same fresh Task
+  // object — and therefore the same writeEntity call — as the plan/DoD it
+  // versions, so a reader can never see one without the other.
+  const planRevision = derivePlanRevision(task, finalUpdates, event);
+
   const updated: Task = {
     ...task,
     ...finalUpdates,
+    planRevision,
     updatedAt: new Date().toISOString()
   };
 
@@ -323,7 +445,11 @@ export async function deleteTask(state: StateManager, taskId: string): Promise<T
   return task;
 }
 
-export async function approveTask(state: StateManager, taskId: string): Promise<Task> {
+export async function approveTask(
+  state: StateManager,
+  taskId: string,
+  expectedPlanRevision?: unknown
+): Promise<Task> {
   // NOTE: callers MUST hold the StateManager mutex (e.g. via
   // WebSocketServer.withMutex / state.runExclusive) so that the status
   // re-check and updateTask happen atomically. The mutex is non-reentrant,
@@ -332,6 +458,27 @@ export async function approveTask(state: StateManager, taskId: string): Promise<
   if (!task) throw new Error(`Task not found: ${taskId}`);
   if (task.status !== 'AWAITING_APPROVAL') {
     throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
+  }
+  // Compare-and-swap on the plan revision the approver actually reviewed.
+  // ABSENCE is the only legacy opt-out (SPEED/TURBO auto-approval,
+  // set_task_status relaxed mode, an old client) — a supplied token is always
+  // validated and compared. This whole block runs BEFORE cancelSpeedModeTimeout
+  // and before any write, so a refusal cancels no pending timer, mutates no
+  // bytes and publishes nothing.
+  if (expectedPlanRevision !== undefined) {
+    const supplied = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
+    // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
+    // stored stamp still fails closed as INVALID_INPUT.
+    const current = decodeStoredPlanRevision(task);
+    if (supplied !== current) {
+      throw new MoeError(
+        MoeErrorCode.STATE_CONFLICT,
+        `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
+          'Re-open the plan, review the current revision and approve again.',
+        { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
+        'PLAN_REVISION_MISMATCH'
+      );
+    }
   }
   cancelSpeedModeTimeout(taskId);
   const updated = await state.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');

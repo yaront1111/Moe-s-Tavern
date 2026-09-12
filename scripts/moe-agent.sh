@@ -126,6 +126,16 @@ cleanup_temp() {
     if [ "$(type -t teardown_rescue)" = "function" ]; then
         teardown_rescue || true
     fi
+    # Drop this session's live-session marker. This is the union of BOTH
+    # abnormal exit paths -- the INT/TERM trap ends in `exit 0`, which fires
+    # this EXIT trap -- so a Ctrl+C, a window close through SIGTERM or a
+    # `set -e` abort all clear the claim here. Leaving one behind would
+    # suppress the next seat's legitimate crash recovery until a human deleted
+    # the file. (A hard SIGKILL still runs nothing; there the marker's own
+    # process probe is what reports it dead.)
+    if [ "$(type -t live_marker_remove)" = "function" ]; then
+        live_marker_remove "${PREFLIGHT_TASK_ID:-}" || true
+    fi
     # Gracefully release any task this worker still holds so the next agent can
     # claim it immediately. This is best-effort and never blocks exit. There is
     # NO idle-timeout fallback for hard crashes where this trap never runs: the
@@ -1679,7 +1689,7 @@ fi
 # All roles -> Opus 5. Override per role via project.json settings.models.{role}.
 RESOLVED_MODEL="$MODEL"
 if [ -z "$RESOLVED_MODEL" ] && [ -f "$PROJECT_JSON" ] && [ -n "$PYTHON_CMD" ]; then
-    RESOLVED_MODEL=$("$PYTHON_CMD" -c "
+    RESOLVED_MODEL=$($PYTHON_CMD -c "
 import json, sys
 try:
     with open(sys.argv[1], 'r', encoding='utf-8') as f:
@@ -1753,6 +1763,15 @@ fi
 if [ "$NO_LOOP" = true ]; then
     LOOP_ENABLED=false
 fi
+# How long a SINGLE-SHOT wrapper run keeps re-claiming before it gives up and
+# exits without launching anything. A looping run does not use this: its outer
+# relaunch loop is the wait. Same name and same default in moe-agent.ps1.
+MOE_TASKLESS_WAIT_SEC="${MOE_TASKLESS_WAIT_SEC:-300}"
+case "$MOE_TASKLESS_WAIT_SEC" in ''|*[!0-9]*) MOE_TASKLESS_WAIT_SEC=300 ;; esac
+if [ "$MOE_TASKLESS_WAIT_SEC" -lt 5 ] 2>/dev/null; then MOE_TASKLESS_WAIT_SEC=5; fi
+if [ "$MOE_TASKLESS_WAIT_SEC" -gt 600 ] 2>/dev/null; then MOE_TASKLESS_WAIT_SEC=600; fi
+MOE_TASKLESS_POLL_SEC=5
+if [ "$MOE_TASKLESS_POLL_SEC" -gt "$MOE_TASKLESS_WAIT_SEC" ] 2>/dev/null; then MOE_TASKLESS_POLL_SEC="$MOE_TASKLESS_WAIT_SEC"; fi
 
 # Grok launch mode, printed once (the ps1 twin prints it beside the polling gate).
 if [ "$CLI_TYPE" = "grok" ]; then
@@ -2222,6 +2241,191 @@ baseline_mark_landed() {
     baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 1 || true
     rm -f "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 2>/dev/null || true
     return 0
+}
+
+# ---- live-session marker ----------------------------------------------------
+# `<gitdir>/moe/baseline/<taskId>.live`, a sibling of the per-task baseline,
+# written by the pre-flight that takes that baseline and removed by every exit
+# that ends this session's ownership of the task.
+#
+# It exists because the recovery predicate ("a baseline that never reached a
+# completed landing") is true in TWO different worlds: the previous session
+# crashed, and the previous session is STILL RUNNING and about to commit. On
+# 2026-09-11 the second world cost two tasks their completion diffs -- a QA
+# seat claimed a REVIEW task inside the window between complete_task and the
+# worker wrapper's post-flight, and its pre-flight landed the live worker's
+# whole implementation as a `role=qa ... recovered` checkpoint. The marker is
+# the only local fact that discriminates them: is the process that wrote it
+# still running in this checkout.
+#
+# One header line, same shape as the baseline header:
+#   #moe-live v1 task=<id> pid=<n> host=<h> ns=<n> worker=<id> session=<sid> start=<tok>
+# `start` is a per-process start token, which is what makes the probe safe
+# against process-id REUSE on a long-lived box. `ns` names the pid NAMESPACE
+# the id belongs to: a Git Bash pid is invisible to PowerShell's Get-Process
+# and vice versa, and a WSL seat and a Windows seat share this checkout through
+# a mount with the SAME host name -- without it a foreign-namespace id would be
+# probed against the wrong process table and a live owner could read as dead,
+# which is the byte-loss direction. Twin: the ps1 Get-MoeLiveMarkerPath family.
+live_marker_path() {
+    printf '%s/moe/baseline/%s.live' "$MOE_GITDIR" "$1"
+}
+
+live_marker_ns() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) printf 'msys' ;;
+        *) printf 'posix' ;;
+    esac
+}
+
+live_marker_host() {
+    hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+}
+
+# proc_start_token PID -- a stable per-process start token, or '' when this
+# platform does not expose one cheaply. /proc/<pid>/stat field 22 (starttime in
+# clock ticks) is present on Linux, on WSL and on MSYS/Git Bash; the comm field
+# can contain spaces and parentheses, so the fields are counted after the LAST
+# ')'. MSYS `ps` has no `-o`, so there is deliberately no second source: an
+# empty token degrades the probe to identity alone, which the probe documents.
+proc_start_token() {
+    [ -r "/proc/$1/stat" ] || return 0
+    sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}' | tr -d '[:space:]'
+}
+
+# live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
+# Best-effort by design: a marker that cannot be written is a warning and the
+# session proceeds. The marker prevents a misattributed commit; refusing to run
+# without one would be strictly worse than the defect it prevents.
+MOE_LIVE_MARKER_LINE=""
+live_marker_write() {
+    local tid="$1" f dir line
+    MOE_LIVE_MARKER_LINE=""
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    f="$(live_marker_path "$tid")"
+    dir="$(dirname "$f")"
+    mkdir -p "$dir" 2>/dev/null || {
+        echo -e "${YELLOW}[WARN]${NC} [attribution] could not create $dir for the live-session marker of $tid -- a peer's pre-flight may recover this session's work as a checkpoint."
+        return 0
+    }
+    line="$(printf '#moe-live v1 task=%s pid=%s host=%s ns=%s worker=%s session=%s start=%s' \
+        "$tid" "$$" "$(live_marker_host)" "$(live_marker_ns)" "${WORKER_ID:-}" "${MOE_SID:-}" "$(proc_start_token "$$")")"
+    if printf '%s\n' "$line" > "$f.tmp.$$" 2>/dev/null && mv -f "$f.tmp.$$" "$f" 2>/dev/null; then
+        MOE_LIVE_MARKER_LINE="$line"
+    else
+        rm -f "$f.tmp.$$" 2>/dev/null || true
+        echo -e "${YELLOW}[WARN]${NC} [attribution] could not write the live-session marker for $tid -- a peer's pre-flight may recover this session's work as a checkpoint."
+    fi
+    return 0
+}
+
+# live_marker_remove TASKID -- drop OUR claim. Only ours: a byte-identical
+# match against the line this session wrote. A peer that claimed the same task
+# after us owns the file, and deleting its marker would re-arm the exact theft
+# this whole mechanism prevents.
+live_marker_remove() {
+    local tid="$1" f
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    [ -n "$MOE_LIVE_MARKER_LINE" ] || return 0
+    f="$(live_marker_path "$tid")"
+    [ -f "$f" ] || return 0
+    if [ "$(head -n1 "$f" 2>/dev/null)" = "$MOE_LIVE_MARKER_LINE" ]; then
+        rm -f "$f" 2>/dev/null || true
+        MOE_LIVE_MARKER_LINE=""
+    fi
+    return 0
+}
+
+# live_marker_clear TASKID -- unconditional delete, ignoring ownership. Only
+# two callers may use it: the DONE/ARCHIVED prune (the task is over -- nothing
+# left to protect) and the `stale` branch of the recovery gate (the owner is
+# PROVEN gone). Never call it on a live owner. Twin: Clear-MoeLiveMarkerFile.
+live_marker_clear() {
+    [ -n "${1:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    rm -f "$(live_marker_path "$1")" 2>/dev/null || true
+    return 0
+}
+
+# proc_alive PID -- 0 when that id belongs to a running process. /proc is
+# authoritative where it exists (Linux, WSL and MSYS/Git Bash all have it), so
+# an absent /proc/<pid> is a definitive "gone" and the crash path keeps working
+# unchanged. `kill -0` is the fallback elsewhere; it answers EPERM for another
+# user's process, which reads as gone -- acceptable because a marker is only
+# ever written by a seat running as the same user in the same checkout.
+proc_alive() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ] || return 1
+    if [ -d /proc ]; then
+        [ -d "/proc/$1" ] && return 0
+        return 1
+    fi
+    kill -0 "$1" 2>/dev/null && return 0
+    return 1
+}
+
+# live_marker_state TASKID -- sets MOE_LIVE_STATE to exactly one of:
+#   none    no marker, or one we cannot parse -> recover (this is also every
+#           task already in flight when this change lands)
+#   self    our own process wrote it -> recover (the idle/resume paths re-enter
+#           the pre-flight for a task this session already holds)
+#   live    someone else's process is RUNNING and still matches its recorded
+#           start token -> stand down
+#   foreign the marker belongs to a host or pid namespace we cannot probe from
+#           here -> stand down and say so; refusing to steal is recoverable by
+#           a human, a wrong recovery is not
+#   stale   the owner's process is gone, or the id was recycled (start token
+#           mismatch) -> delete the marker and recover, exactly as before
+# Also sets MOE_LIVE_OWNER_* for the caller's message. It ASSIGNS rather than
+# echoing (the ps1 twin returns the state as a value) precisely so callers do
+# not wrap it in `$(...)`: that subshell would discard every MOE_LIVE_OWNER_*
+# assignment and the operator line would come out with empty fields.
+MOE_LIVE_STATE="none"
+MOE_LIVE_OWNER_PID=""
+MOE_LIVE_OWNER_HOST=""
+MOE_LIVE_OWNER_NS=""
+MOE_LIVE_OWNER_WORKER=""
+MOE_LIVE_OWNER_START=""
+live_marker_state() {
+    local tid="$1" f line now_tok
+    MOE_LIVE_STATE="none"
+    MOE_LIVE_OWNER_PID=""; MOE_LIVE_OWNER_HOST=""; MOE_LIVE_OWNER_NS=""
+    MOE_LIVE_OWNER_WORKER=""; MOE_LIVE_OWNER_START=""
+    [ -n "$tid" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
+    f="$(live_marker_path "$tid")"
+    [ -f "$f" ] || return 0
+    line="$(head -n1 "$f" 2>/dev/null)" || line=""
+    case "$line" in '#moe-live v1 '*) : ;; *) return 0 ;; esac
+    MOE_LIVE_OWNER_PID=$(printf '%s' "$line" | sed -n 's/.* pid=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_HOST=$(printf '%s' "$line" | sed -n 's/.* host=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_NS=$(printf '%s' "$line" | sed -n 's/.* ns=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_WORKER=$(printf '%s' "$line" | sed -n 's/.* worker=\([^ ]*\).*/\1/p')
+    MOE_LIVE_OWNER_START=$(printf '%s' "$line" | sed -n 's/.* start=\([^ ]*\).*/\1/p')
+    case "$MOE_LIVE_OWNER_PID" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$MOE_LIVE_OWNER_HOST" != "$(live_marker_host)" ] || [ "$MOE_LIVE_OWNER_NS" != "$(live_marker_ns)" ]; then
+        MOE_LIVE_STATE="foreign"; return 0
+    fi
+    if [ "$MOE_LIVE_OWNER_PID" = "$$" ]; then MOE_LIVE_STATE="self"; return 0; fi
+    proc_alive "$MOE_LIVE_OWNER_PID" || { MOE_LIVE_STATE="stale"; return 0; }
+    # Same id, different process: a recycled id is not the owner. When either
+    # side has no token the probe is identity-only (documented in
+    # proc_start_token) and a running id counts as the owner -- the safe side.
+    now_tok="$(proc_start_token "$MOE_LIVE_OWNER_PID")" || now_tok=""
+    if [ -n "$MOE_LIVE_OWNER_START" ] && [ -n "$now_tok" ] && [ "$MOE_LIVE_OWNER_START" != "$now_tok" ]; then
+        MOE_LIVE_STATE="stale"; return 0
+    fi
+    MOE_LIVE_STATE="live"
+    return 0
+}
+
+# live_marker_foreign_live TASKID -- 0 when SOMEONE ELSE still holds the task's
+# bytes (running here, or on a host/namespace we cannot probe). Callers use it
+# to stand down without duplicating the state machine.
+live_marker_foreign_live() {
+    live_marker_state "$1"
+    case "$MOE_LIVE_STATE" in
+        live|foreign) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # commit_scope PHASE TASKID OUT -- moe.get_commit_scope, with the disk fallback
@@ -3972,13 +4176,18 @@ PYEOF
         } <<< "$parsed" 2>/dev/null || true
     fi
     bp="$(baseline_path "$tid")"
+    # A task that is over (or gone) has no bytes left to protect, so its
+    # live-session marker goes with its baseline -- otherwise a hard-killed
+    # session would leave one behind under <gitdir>/moe/baseline/ forever.
     if [ "${scope_notfound:-0}" = "1" ]; then
         echo -e "${YELLOW}[WARN]${NC} [attribution] task $tid not found in the daemon or on disk -- dropping its baseline."
         baseline_delete "$tid"
+        live_marker_clear "$tid"
         return 0
     fi
     if [ "$scope_status" = "DONE" ] || [ "$scope_status" = "ARCHIVED" ]; then
         baseline_delete "$tid"
+        live_marker_clear "$tid"
         return 0
     fi
     local status="${scope_status:-$status_hint}"
@@ -3988,7 +4197,41 @@ PYEOF
     # 3. Recovery: a baseline that never reached a completed landing means the
     # previous session ended without one (Ctrl+C, window close, crash, lookup
     # failure, CAS exhaustion). Land it as a checkpoint now.
+    # The predicate above is true for a crashed session AND for one still
+    # running and about to commit. Ask the live-session marker which it is
+    # before touching anything. Four outcomes; each one is load-bearing:
+    #   none/self -> recover exactly as before (no marker is every task already
+    #                in flight when this landed; self is the idle/resume paths
+    #                re-entering the pre-flight for a task we ourselves hold)
+    #   live      -> stand down: the owner is running and WILL land these bytes
+    #   foreign   -> stand down: the owner is on a host or pid namespace we
+    #                cannot probe from here (a WSL seat and a Windows seat
+    #                sharing this checkout through a mount). Refusing to steal
+    #                is recoverable by a human; recovering across a boundary we
+    #                cannot probe is not.
+    #   stale     -> the owner crashed, or its id was recycled: drop the marker
+    #                and recover, unchanged. This is the 2026-08-28 lost-code
+    #                path and it must not weaken.
+    local live_state="none"
     if [ -f "$bp" ] && ! baseline_landed "$tid"; then
+        live_marker_state "$tid"
+        live_state="$MOE_LIVE_STATE"
+    fi
+    case "$live_state" in
+        live)
+            echo -e "${YELLOW}[attribution]${NC} MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$tid pid=$MOE_LIVE_OWNER_PID host=$MOE_LIVE_OWNER_HOST worker=$MOE_LIVE_OWNER_WORKER reason=live"
+            echo -e "${YELLOW}[attribution]${NC} $tid is still held by a RUNNING session -- leaving its baseline and its dirty paths untouched so that session can land them itself."
+            ;;
+        foreign)
+            echo -e "${YELLOW}[attribution]${NC} MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=$tid pid=$MOE_LIVE_OWNER_PID host=$MOE_LIVE_OWNER_HOST worker=$MOE_LIVE_OWNER_WORKER reason=foreign-host"
+            echo -e "${YELLOW}[attribution]${NC} the live-session marker for $tid was written on $MOE_LIVE_OWNER_HOST/$MOE_LIVE_OWNER_NS, whose process ids are not visible here -- not recovering. Delete $(live_marker_path "$tid") by hand if that session is known to be gone."
+            ;;
+        stale)
+            echo -e "${BLUE}[attribution]${NC} the session that held $tid (pid=$MOE_LIVE_OWNER_PID) is gone -- dropping its stale marker and recovering its work."
+            live_marker_clear "$tid"
+            ;;
+    esac
+    if [ -f "$bp" ] && ! baseline_landed "$tid" && [ "$live_state" != "live" ] && [ "$live_state" != "foreign" ]; then
         echo -e "${BLUE}[info]${NC} lingering baseline for $tid -- landing the previous session's work before this one starts."
         LAND_KIND="checkpoint"; LAND_TASK_ID="$tid"; LAND_TITLE="$title"; LAND_STATUS="$status"; LAND_REOPEN=0
         LAND_CLI_EXIT=0; LAND_RECOVERED=true; LAND_GATE_FAILED=false; LAND_POLICY_OVERRIDE=""
@@ -4073,6 +4316,16 @@ PYEOF
     if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0; then
         MOE_BASELINE_PATH="$bp"
         echo -e "${BLUE}[attribution]${NC} baseline written for $tid (${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing)"
+        # Claim the bytes this baseline arms: a session gets both or neither.
+        # This runs on the launch path AND the resume path (a resumed session
+        # is exactly as live as a fresh one). A marker already held by a LIVE
+        # peer is left alone -- overwriting it would hand the next seat a dead
+        # owner to steal from once we exit.
+        if live_marker_foreign_live "$tid"; then
+            echo -e "${BLUE}[attribution]${NC} leaving the live-session marker of $tid to its current owner (${MOE_LIVE_OWNER_WORKER:-?} pid=${MOE_LIVE_OWNER_PID:-?})."
+        else
+            live_marker_write "$tid"
+        fi
     else
         echo -e "${YELLOW}[WARN]${NC} [attribution] could not write the baseline for $tid under $MOE_GITDIR/moe/baseline -- measured attribution is off for this session."
     fi
@@ -4253,6 +4506,12 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_IS_RESUME=false
     PREFLIGHT_ROUTED_MENTIONS_JSON=""
     PREFLIGHT_ROUTED_MENTIONS_COUNT=0
+    # Taskless-launch state. A CLI that can edit code is only ever launched
+    # with a task already bound, so these record WHY a taskless iteration
+    # happened and decide between "launch nothing" and "launch a chat-only
+    # session". Spelled identically in moe-agent.ps1.
+    PREFLIGHT_CLAIM_FAILED=false
+    PREFLIGHT_HAS_UNREAD_MENTION=false
     # Landing state is per-iteration: a previous task's baseline, snapshot or
     # tool-write harvest must never leak into this task's attribution.
     MOE_PREFLIGHT_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -4327,6 +4586,116 @@ except Exception:
         else
             CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
         fi
+
+        # Role-group tag for @architects/@workers/@qa routing. Computed HERE
+        # rather than beside the mention extraction below because the
+        # wrapper-side wait needs it first.
+        ROLE_GROUP_TAG=""
+        case "$ROLE" in
+            architect) ROLE_GROUP_TAG="architects" ;;
+            worker)    ROLE_GROUP_TAG="workers" ;;
+            qa)        ROLE_GROUP_TAG="qa" ;;
+            governor)  ROLE_GROUP_TAG="governors" ;;
+        esac
+        # Does anything ALREADY unread tag this worker? moe.wait_for_task only
+        # wakes on NEW messages, so entering the wait with an unanswered
+        # mention in hand would sit on it for the whole timeout.
+        if [ -n "$PYTHON_CMD" ] && [ -n "$PREFLIGHT_GENERAL_UNREAD" ]; then
+            set +e
+            PREFLIGHT_GENERAL_UNREAD="$PREFLIGHT_GENERAL_UNREAD" \
+                $PYTHON_CMD - "$WORKER_ID" "$ROLE_GROUP_TAG" >/dev/null 2>&1 <<'PYEOF'
+import json, os, sys
+worker_id, role_group = sys.argv[1], sys.argv[2]
+try:
+    msgs = (json.loads(os.environ.get("PREFLIGHT_GENERAL_UNREAD") or "{}") or {}).get("messages") or []
+except Exception:
+    msgs = []
+targets = {worker_id, "all"}
+if role_group:
+    targets.add(role_group)
+hit = any(targets & set(m.get("mentions") or []) for m in msgs if isinstance(m, dict))
+sys.exit(0 if hit else 1)
+PYEOF
+            MENTION_PROBE_CODE=$?
+            set -e
+            if [ "$MENTION_PROBE_CODE" -eq 0 ]; then PREFLIGHT_HAS_UNREAD_MENTION=true; fi
+        fi
+
+        # -------- Wrapper-side task wait (bind the task BEFORE the launch) ----
+        # The per-task baseline, the live-session marker and the post-flight
+        # landing all key on PREFLIGHT_TASK_ID. A CLI told to claim inside
+        # itself therefore edits with no snapshot of what was already dirty and
+        # lands nothing at all, silently. So the WRAPPER does the waiting and
+        # the claiming; the claimed session then falls through the EXISTING
+        # baseline block and the EXISTING launch, with no second delivery path
+        # and no hand-made baseline anywhere.
+        #
+        # Skipped for: a claim that already succeeded or that reported a held
+        # task (the resume path owns that), the governor (never claims;
+        # taskless is its normal state), AUTO_CLAIM=false (the operator opted
+        # out of the whole claim/baseline/landing path), and a pending unread
+        # mention (answered by a chat-only session below instead of waited on).
+        # NOT moe.wait_for_task, and that is measured rather than preferred:
+        # moe_rpc pipes ONE json line into a fresh moe-proxy and closes stdin,
+        # and the proxy treats stdin EOF as shutdown, erroring every still-open
+        # request after a flat 2s grace ("Proxy shutting down before response
+        # received" -- reproduced against a real daemon on 2026-09-12). A
+        # blocking long-poll therefore cannot survive this transport in either
+        # wrapper, so the wait is a bounded CLAIM poll over the same
+        # non-blocking RPC the pre-flight already uses.
+        if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] \
+            && [ "$PREFLIGHT_HAS_UNREAD_MENTION" = false ] && [ -n "$CLAIM_RESULT" ] && [ -n "$PYTHON_CMD" ]; then
+            CLAIM_WAIT_NEEDED=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    held = (d.get('alreadyAssigned') or {}).get('taskId')
+    print('true' if (not d.get('hasNext')) and not held else 'false')
+except Exception:
+    print('false')
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo false)
+            if [ "$CLAIM_WAIT_NEEDED" = true ] && [ "$LOOP_ENABLED" = true ]; then
+                # The outer relaunch loop IS the wait: it sleeps POLL_INTERVAL
+                # and re-runs this pre-flight. Adding a second loop here would
+                # duplicate it; the launch below is suppressed instead.
+                echo "[no-task] No claimable task for role $ROLE; not launching a CLI without one -- the wrapper polls again in ${POLL_INTERVAL}s."
+            elif [ "$CLAIM_WAIT_NEEDED" = true ]; then
+                # Single-shot run (--no-loop / --poll-interval 0): there is no
+                # next iteration, so the waiting happens HERE rather than in a
+                # CLI told to claim itself. Idle waiting is NOT a resume
+                # attempt -- the resume budget counts relaunches at a HELD
+                # task -- so no resume counter is touched.
+                echo "[no-task] No claimable task for role $ROLE; waiting up to ${MOE_TASKLESS_WAIT_SEC}s in the wrapper (single-shot run) rather than launching a CLI without one."
+                TASKLESS_WAITED=0
+                while [ "$TASKLESS_WAITED" -lt "$MOE_TASKLESS_WAIT_SEC" ]; do
+                    sleep "$MOE_TASKLESS_POLL_SEC"
+                    TASKLESS_WAITED=$((TASKLESS_WAITED + MOE_TASKLESS_POLL_SEC))
+                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+                    if [ -z "$CLAIM_RESULT" ]; then
+                        # Unreachable daemon/proxy. Falling through to a launch
+                        # is exactly the hole being closed, so stop waiting and
+                        # let the seat exit without an unbound CLI.
+                        echo -e "${YELLOW}[WARN]${NC} claim_next_task stopped answering during the wait; not launching an unbound CLI."
+                        PREFLIGHT_CLAIM_FAILED=true
+                        break
+                    fi
+                    CLAIM_WAIT_NEEDED=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    held = (d.get('alreadyAssigned') or {}).get('taskId')
+    print('true' if (not d.get('hasNext')) and not held else 'false')
+except Exception:
+    print('false')
+" <<< "$CLAIM_RESULT" 2>/dev/null || echo false)
+                    if [ "$CLAIM_WAIT_NEEDED" != true ]; then
+                        echo -e "${GREEN}[no-task]${NC} A claimable task appeared after ${TASKLESS_WAITED}s; claimed in the wrapper."
+                        break
+                    fi
+                done
+            fi
+        fi
+        # -------- End wrapper-side task wait --------
         if [ -n "$CLAIM_RESULT" ]; then
             HAS_NEXT=$($PYTHON_CMD -c "
 import json, sys
@@ -4499,7 +4868,7 @@ except Exception:
                     # dropped (re-fetch via moe.get_context if needed); plan notes
                     # are capped to 300 chars per step.
                     if [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
-                        PREFLIGHT_CONTEXT_TRIMMED=$("$PYTHON_CMD" -c "
+                        PREFLIGHT_CONTEXT_TRIMMED=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -4618,10 +4987,17 @@ except Exception:
                 fi
             elif [ "$HAS_NEXT" = "false" ]; then
                 PREFLIGHT_NO_TASK=true
-                echo -e "${YELLOW}[INFO]${NC} No claimable task for role $ROLE. Agent will wait_for_task."
+                echo -e "${YELLOW}[INFO]${NC} No claimable task for role $ROLE after the wrapper-side wait."
             else
                 echo -e "${YELLOW}[WARN]${NC} Pre-flight claim returned unparseable response; falling back to in-agent claim."
             fi
+        elif [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ]; then
+            # Same hole as the taskless prompt, different trigger: an
+            # unanswered claim RPC used to render the in-agent claim chain,
+            # which is a CLI editing with no baseline and no landing. Back off
+            # and let the outer loop retry instead.
+            PREFLIGHT_CLAIM_FAILED=true
+            echo -e "${YELLOW}[WARN]${NC} Pre-flight claim RPC failed; not falling back to an in-agent claim (that session would have no baseline and would land nothing)."
         else
             echo -e "${YELLOW}[WARN]${NC} Pre-flight claim RPC failed (daemon/proxy error); falling back to in-agent claim."
         fi
@@ -4632,13 +5008,6 @@ except Exception:
         # Match directly on WORKER_ID, on @all, or on the role-group tag this
         # worker belongs to (architects/workers/qa).
         if [ -n "$PYTHON_CMD" ]; then
-            ROLE_GROUP_TAG=""
-            case "$ROLE" in
-                architect) ROLE_GROUP_TAG="architects" ;;
-                worker)    ROLE_GROUP_TAG="workers" ;;
-                qa)        ROLE_GROUP_TAG="qa" ;;
-                governor)  ROLE_GROUP_TAG="governors" ;;
-            esac
             # Exit code is captured SEPARATELY instead of being swallowed by
             # `|| true`: that swallow is exactly the habit being removed here.
             # A routed mention that vanishes is the same harm class as one whose
@@ -4648,7 +5017,7 @@ except Exception:
             MENTIONS_RESULT=$(PREFLIGHT_GENERAL_UNREAD="$PREFLIGHT_GENERAL_UNREAD" \
                               PREFLIGHT_TASK_UNREAD="$PREFLIGHT_TASK_UNREAD" \
                               MOE_PROJECT_DIR="$PROJECT" \
-                              "$PYTHON_CMD" - "$WORKER_ID" "$ROLE_GROUP_TAG" <<'PYEOF' 2>/dev/null
+                              $PYTHON_CMD - "$WORKER_ID" "$ROLE_GROUP_TAG" <<'PYEOF' 2>/dev/null
 import sys, json, os, re
 worker_id  = sys.argv[1]
 role_group = sys.argv[2]
@@ -4710,7 +5079,7 @@ def verified_mention(msg, mid):
     ok, reason, rec = stored_record(msg.get("channel"), mid)
     if not ok:
         return {
-            "id": mid, "channel": msg.get("channel"), "sender": msg.get("sender"),
+            "id": mid, "channel": msg.get("channel"), "sender": msg.get("sender"), "timestamp": None,
             "content": "%s reason=%s id=%s channel=%s" % (MARKER, reason, mid, msg.get("channel")),
             "provenance": reason,
         }
@@ -4720,6 +5089,9 @@ def verified_mention(msg, mid):
     body = rec["content"]
     sender = rec.get("sender") if isinstance(rec.get("sender"), str) else msg.get("sender")
     channel = rec.get("channel") if isinstance(rec.get("channel"), str) else msg.get("channel")
+    # Historical messages need their stored time, never the RPC's claim of
+    # freshness. Unavailable/non-string metadata remains explicitly unknown.
+    timestamp = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else None
     rpc = msg.get("content")
     rpc = rpc if isinstance(rpc, str) else ""
     if body == rpc:
@@ -4732,7 +5104,7 @@ def verified_mention(msg, mid):
     else:
         prov = "MOE_MENTION_CONTENT_DIVERGED"
     return {
-        "id": mid, "channel": channel, "sender": sender,
+        "id": mid, "channel": channel, "sender": sender, "timestamp": timestamp,
         "content": body, "provenance": prov,
     }
 
@@ -4781,7 +5153,7 @@ PYEOF
             else
                 PREFLIGHT_ROUTED_MENTIONS_JSON="$MENTIONS_RESULT"
                 set +e
-                PREFLIGHT_ROUTED_MENTIONS_COUNT=$("$PYTHON_CMD" -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" <<<"$MENTIONS_RESULT" 2>/dev/null)
+                PREFLIGHT_ROUTED_MENTIONS_COUNT=$($PYTHON_CMD -c "import json,sys; print(json.loads(sys.stdin.read()).get('count',0))" <<<"$MENTIONS_RESULT" 2>/dev/null)
                 COUNT_RC=$?
                 set -e
                 # `|| echo 0` used to turn an unparseable count into "no
@@ -4899,7 +5271,7 @@ Run: bash $moe_call --help for full list."
     # mentions. Claiming later inside that CLI bypasses the task baseline and
     # postflight, both keyed to the preflight task id. Return to the wrapper.
     NOTIFICATION_PROMPT=""
-    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != governor ] && [ "$CLI_TYPE" = claude ] && [ "$CLAUDE_INTERACTIVE" = false ] && [ "$LOOP_ENABLED" = true ]; then
+    if [ "$AUTO_CLAIM" = true ] && { [ "$PREFLIGHT_NO_TASK" = true ] || [ "$PREFLIGHT_CLAIM_FAILED" = true ]; } && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != governor ]; then
         NOTIFICATION_PROMPT="This is a notification-only session for workerId=$WORKER_ID. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
     fi
     if [ "$PREFLIGHT_OK" = true ]; then
@@ -4907,7 +5279,7 @@ Run: bash $moe_call --help for full list."
         # responses (each one can be several KB of token-burning JSON).
         PREFLIGHT_GENERAL_COUNT=0
         if [ -n "$PREFLIGHT_GENERAL_UNREAD" ] && [ -n "$PYTHON_CMD" ]; then
-            PREFLIGHT_GENERAL_COUNT=$("$PYTHON_CMD" -c "
+            PREFLIGHT_GENERAL_COUNT=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -4918,7 +5290,7 @@ except Exception:
         fi
         PREFLIGHT_TASK_COUNT=0
         if [ -n "$PREFLIGHT_TASK_UNREAD" ] && [ -n "$PYTHON_CMD" ]; then
-            PREFLIGHT_TASK_COUNT=$("$PYTHON_CMD" -c "
+            PREFLIGHT_TASK_COUNT=$($PYTHON_CMD -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
@@ -5123,10 +5495,33 @@ $PROMPT_BODY"
         PROMPT=""
     fi
 
+    # -------- Single taskless launch decision (all CLI types) --------
+    # No task bound means no baseline, no live-session marker and no landing,
+    # so the ONLY thing such a session may do is answer chat. With nothing to
+    # answer there is nothing for a CLI to do at all: skip the spawn and let
+    # the outer loop (or this single-shot run) end. Deliberately NOT gated on
+    # LOOP_ENABLED -- a --no-loop run has already done its waiting in the
+    # wrapper, so launching an unbound CLI here would be the very defect this
+    # closes rather than a fallback. Governor keeps its terminal;
+    # AUTO_CLAIM=false is the operator owning the session.
+    MOE_SKIP_LAUNCH=false
+    if [ "$AUTO_CLAIM" = true ] && { [ "$PREFLIGHT_NO_TASK" = true ] || [ "$PREFLIGHT_CLAIM_FAILED" = true ]; } \
+        && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != "governor" ] \
+        && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
+        MOE_SKIP_LAUNCH=true
+    fi
+
     CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
 
-    if [ "$CLI_TYPE" = "codex" ]; then
+    if [ "$MOE_SKIP_LAUNCH" = true ]; then
+        if [ "$PREFLIGHT_CLAIM_FAILED" = true ]; then
+            echo "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$ROLE worker=$WORKER_ID - the claim RPC is unreachable; no CLI is launched without a task bound."
+        else
+            echo "MOE_TASKLESS_NO_LAUNCH reason=idle role=$ROLE worker=$WORKER_ID - no claimable task and nothing to answer."
+        fi
+        CLI_EXIT_CODE=0
+    elif [ "$CLI_TYPE" = "codex" ]; then
         # Check codex is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
             echo -e "${RED}[ERROR]${NC} Codex command not found: $COMMAND_BIN. Install codex CLI first."
@@ -5430,16 +5825,10 @@ $DYNAMIC_CONTEXT"
         [ ${#GROK_MODEL_ARGS[@]} -gt 0 ] && GROK_EXTRA_DISPLAY="$GROK_EXTRA_DISPLAY ${GROK_MODEL_ARGS[*]}"
         [ ${#GROK_EFFORT_ARGS[@]} -gt 0 ] && GROK_EXTRA_DISPLAY="$GROK_EXTRA_DISPLAY ${GROK_EFFORT_ARGS[*]}"
 
-        # No-task fast path for headless grok (same gates as the claude one-shot
-        # path below: never for governors / the interactive TUI, only when the
-        # loop will retry, and never when a routed mention is waiting).
+        # The taskless launch decision is taken ONCE for every CLI type before
+        # this dispatch (MOE_SKIP_LAUNCH), so this branch only runs when a CLI
+        # really is launching.
         LAUNCH_SKIPPED=false
-        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$ROLE" != "governor" ] && [ "$GROK_INTERACTIVE" = false ] \
-            && [ "$LOOP_ENABLED" = true ] && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
-            echo "[no-task] Skipping CLI launch -- wrapper will poll again in ${POLL_INTERVAL} s."
-            CLI_EXIT_CODE=0
-            LAUNCH_SKIPPED=true
-        fi
 
         # SYSTEM_APPEND + per-iteration session context (bash PROMPT already
         # carries DYNAMIC_CONTEXT + the role body -- it is not added twice).
@@ -5714,35 +6103,10 @@ for line in sys.stdin:
 PYEOF
 )
 
-        # No-task fast path (parity with moe-agent.ps1): when the pre-flight
-        # reports no claimable task, skip launching the CLI entirely. The
-        # outer polling loop will sleep POLL_INTERVAL seconds and retry
-        # pre-flight. Avoids paying for a CLI session whose only job would be
-        # to call moe.wait_for_task.
-        #
-        # Governor is excluded: governors never claim tasks (PREFLIGHT_NO_TASK
-        # is synthesized true on every iteration), but they DO need an
-        # interactive Claude session so the human can drive governance
-        # decisions. Skipping the launch would leave the governor terminal
-        # dead. The interactive TUI is likewise never skipped -- the operator
-        # owns that session; only the one-shot --print mode is skippable.
-        #
-        # Gated on LOOP_ENABLED: with --no-loop (or --poll-interval 0) there is
-        # no next iteration -- skipping would print "will poll again" and then
-        # exit without ever launching, a silent no-op. Single-shot runs must
-        # still launch the CLI, which parks in moe.wait_for_task.
-        #
-        # Gated on routed mentions: pre-flight chat_read already consumed the
-        # unread messages and baked @mentions into the prompt; skipping the
-        # launch would discard them permanently. If anything tagged this
-        # worker, launch so the CLI can reply.
+        # The taskless launch decision is taken ONCE for every CLI type before
+        # this dispatch (MOE_SKIP_LAUNCH), so this branch only runs when a CLI
+        # really is launching.
         LAUNCH_SKIPPED=false
-        if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_NO_TASK" = true ] && [ "$ROLE" != "governor" ] && [ "$CLAUDE_INTERACTIVE" = false ] \
-            && [ "$LOOP_ENABLED" = true ] && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
-            echo "[no-task] Skipping CLI launch -- wrapper will poll again in ${POLL_INTERVAL} s."
-            CLI_EXIT_CODE=0
-            LAUNCH_SKIPPED=true
-        fi
 
         if [ "$LAUNCH_SKIPPED" = true ]; then
             : # CLI spawn skipped this iteration; post-flight + loop continue below.
@@ -6123,6 +6487,59 @@ except Exception:
         # not run a second pass. Same as the ps1 twin's unconditional
         # $moeLandingDone after its landing selection.
         MOE_LANDING_DONE=true
+        # ...and this session no longer holds the task's bytes, so drop the
+        # claim beside the baseline prune. On a rescue/refusal the baseline is
+        # deliberately KEPT for the next pre-flight to recover -- which only
+        # works if the marker is gone. Same as the ps1 twin.
+        live_marker_remove "$PREFLIGHT_TASK_ID"
+    elif [ "$AUTO_CLAIM" = true ] && [ "$MOE_SKIP_LAUNCH" = false ] && [ -n "$PYTHON_CMD" ]; then
+        # -------- Adoption boundary (the alarm, not the fix) --------
+        # This session launched WITHOUT a task, so it took no baseline: the
+        # wrapper cannot tell this session's bytes from a live peer's work in
+        # progress or from dirt that predated it. If it nonetheless ends up
+        # holding a task -- an agent ignoring its chat-only prompt, or a launch
+        # path nobody has written yet -- the honest outcome is a loud refusal,
+        # not silence and not a fabricated baseline. get_context with only a
+        # workerId resolves the caller's held task and has no side effects;
+        # claim_next_task would CLAIM one, so it must never be used here.
+        ADOPT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1]}))" "$WORKER_ID" 2>/dev/null || echo "")
+        ADOPT_RESULT=""
+        if [ -n "$ADOPT_ARGS" ]; then
+            ADOPT_RESULT=$(moe_rpc get_context "$ADOPT_ARGS" 2>/dev/null || echo "")
+        fi
+        ADOPTED_TASK_ID=""
+        if [ -n "$ADOPT_RESULT" ]; then
+            ADOPTED_TASK_ID=$($PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(((d.get('task') or {}).get('id')) or '')
+except Exception:
+    print('')
+" <<< "$ADOPT_RESULT" 2>/dev/null || echo "")
+        fi
+        if [ -n "$ADOPTED_TASK_ID" ]; then
+            ADOPTED_DIRTY=0
+            if [ -z "${MOE_TOP:-}" ]; then git_top || true; fi
+            if [ -n "${MOE_TOP:-}" ]; then
+                ADOPTED_DIRTY=$(git -C "$MOE_TOP" status --porcelain=v1 -z --untracked-files=all --no-renames 2>/dev/null \
+                    | tr '\0' '\n' | grep -c . || true)
+            fi
+            if [ "${ADOPTED_DIRTY:-0}" -eq 0 ] 2>/dev/null; then
+                echo "[adoption] Session started with no task and now holds $ADOPTED_TASK_ID, but the tree is clean - nothing to land."
+            else
+                # No baseline means no safe attribution, and the task rails
+                # forbid inventing one or staging the tree. Say what that costs.
+                echo "MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=$ADOPTED_TASK_ID worker=$WORKER_ID dirty=$ADOPTED_DIRTY - this session launched without a task, so no pre-edit baseline exists and its bytes CANNOT be separated from a peer's work in progress. Refusing to land; $ADOPTED_DIRTY dirty path(s) stay in the working tree and the NEXT session of $ADOPTED_TASK_ID will snapshot them as pre-existing. A human must land or discard them."
+                if [ -n "$GENERAL_CHANNEL_ID" ]; then
+                    ADOPT_MSG="@governors ${WORKER_ID}: MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=$ADOPTED_TASK_ID - a session launched with no task ended holding one and left $ADOPTED_DIRTY dirty path(s) unlanded. No pre-edit baseline exists, so the wrapper will not guess which bytes are its own. Needs a human."
+                    moe_rpc chat_send \
+                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ADOPT_MSG" 2>/dev/null)" \
+                        > /dev/null 2>&1 || true
+                fi
+            fi
+        fi
+        # -------- End adoption boundary --------
     fi
     # Session-ended chat line (carries commit=<sha|none> kind=<k> paths=<n>).
     # Best-effort -- any RPC failure does not block loop continuation.

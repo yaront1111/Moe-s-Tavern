@@ -1,0 +1,219 @@
+{
+  "id": "task-fa46784f7d7548a1b50f8ea7faf79df3",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Land the orphaned createTask role-attribution fix and sweep the remaining team.role call sites",
+  "description": "ORPHAN BYTES, filed by the governor so they land through the wrapper under an owning task rather than as a hand-written chore commit. This follows the resolution the human ruled on 2026-09-10 for the mention-timestamp orphan: file a task to own them, declare_files the paths, let the task's session land them.\n\nWHAT IS SITTING DIRTY. Two files, modified 2026-09-12 00:35, declared by no task on the board:\n- packages/moe-daemon/src/tools/createTask.ts (+17/-5)\n- packages/moe-daemon/src/tools/createTask.test.ts (+30)\n\nI verified the work before filing rather than assuming it was junk:\n- `npx tsc --noEmit` is clean\n- `npx vitest run src/tools/createTask.test.ts` passes 12/12\n- The util it imports, packages/moe-daemon/src/util/workerRole.ts, is already landed on this branch in commit b0dae82 (\"fix(daemon): role gates fall back to the worker-id prefix on role-less teams\")\n\nWHAT THE CHANGE DOES, and it is a real defect fix. createTask resolved the caller's role by reading `team.role` directly. The launcher registers seats into a project-named team whose `role` is null and which holds architects, workers and QA at once, so every row an architect or governor filed was stamped `createdBy: \"WORKER\"`. The diff's own comment cites the measurement: on moe-next, an architect-filed row landed `createdBy: \"WORKER\"` because team `moe-next` carries `role: null`. The fix routes through `resolveWorkerRole`, which tries the team role first and falls back to the seat's id prefix, exactly as the role-GATED tools already do. The soft fallback for an unknown or workerId-less caller is preserved.\n\nTHE SWEEP, which is why this is not purely a landing chore. Three call sites still read `state.getTeamForWorker(...)` and branch on `team.role` without the prefix fallback:\n- packages/moe-daemon/src/tools/claimNextTask.ts:138\n- packages/moe-daemon/src/tools/claimNextTask.ts:451\n- packages/moe-daemon/src/tools/enterGovernance.ts:43\n\nEach needs a judgement, not a blanket rewrite. claimNextTask:451 picks the `roleLabel` for the \"worker is online\" chat line, so a wrong role there is cosmetic but misleading. enterGovernance:43 is the governor ROLE GATE — changing it widens who may govern, so it needs deliberate thought and its own test, and it must stay refusing non-governors. Decide each on its merits and say why in the plan.\n\nNOTE FOR WHOEVER PLANS THIS: enterGovernance.ts also has a fix in flight as PR #179 (letting a purged governor re-enter through the team tombstone). Check whether that has merged before editing that file, and rebase rather than conflict.",
+  "definitionOfDone": [
+    "The two orphaned files land in a commit carrying this task's Moe-Task trailer, with no hand-written chore commit and no git operation performed by the agent outside the wrapper.",
+    "createTask stamps createdBy from the caller's resolved role, proven by a test in which the caller belongs to a team whose role is null and whose id prefix is architect, and the row lands createdBy ARCHITECT rather than WORKER.",
+    "The existing soft fallback is preserved and tested: an unknown or workerId-less caller still falls back to the explicit createdBy param, then WORKER.",
+    "Each of the three remaining team.role call sites (claimNextTask.ts:138, claimNextTask.ts:451, enterGovernance.ts:43) is either converted to resolveWorkerRole or explicitly left alone with a one-line reason recorded in the completion summary.",
+    "If enterGovernance.ts is changed, a test proves a non-governor is still refused, and no new record is created for a refused caller.",
+    "npm test in packages/moe-daemon is green and npx tsc --noEmit is clean, with both commands and their results recorded in the completion verification."
+  ],
+  "taskRails": [
+    "The wrapper is the only git actor: never hand-commit these paths, and never fabricate a baseline.",
+    "enterGovernance.ts:43 is a role gate. Widening who may govern is out of scope; if you touch it, prove refusal still holds.",
+    "Check whether PR #179 has merged before editing enterGovernance.ts, and rebase rather than resolve a conflict blindly."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "ADOPT THE ORPHAN BYTES, THEN RE-CHECK THE THREE SITES. (a) FIRST ACTION, before reading anything: call moe.declare_files for packages/moe-daemon/src/tools/createTask.ts and packages/moe-daemon/src/tools/createTask.test.ts so this session owns them and the wrapper lands them at exit. They were still dirty and undeclared as of 2026-09-12 14:07. Do NOT hand-commit them and do NOT fabricate a baseline - the wrapper is the only git actor, which is the first task rail, and this card exists precisely so those bytes land under an owning task rather than as a chore commit. (b) Read the delivered diff and satisfy yourself it does what the card claims: createTask resolved the caller's role by reading team.role directly, and the launcher registers every seat into a project-named team whose role is null, so architect- and governor-filed rows were stamped createdBy WORKER. Verify the util it imports, packages/moe-daemon/src/util/workerRole.ts, is landed - the card says commit b0dae82 - and read its docblock in full, because it contains the reasoning that settles step 4. (c) Re-measure the three remaining call sites; line numbers drift. claimNextTask.ts around 138 reads the team role to route governors away from claiming. claimNextTask.ts around 451 picks the roleLabel for the worker-is-online chat line. enterGovernance.ts around 43 is the governor role gate. (d) Check whether PR 179, the purged-governor re-entry fix, has merged. It was OPEN as of this planning pass. If it has merged, pull and rebase before touching enterGovernance.ts; if it is still open, proceed as step 4 says but plan to post the heads-up it describes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/createTask.test.ts"
+      ],
+      "note": "ADOPTED + RE-MEASURED. (a) declare_files ran first: both orphan paths were already on this task's declaredFiles, re-confirmed via get_commit_scope — asserted=[createTask.ts, createTask.test.ts], planned=[claimNextTask.ts/.test.ts, enterGovernance.ts/.test.ts], and NONE of the six appear in peerDeclared (only task-5b857738 paths do), so contested policy does not apply. No git command run. (b) Diff verified: createTask.ts swaps the direct `team?.role` read for resolveWorkerRole with the soft fallback chain intact; the test file adds a role-less-team prefix arm plus a roled-team-overrides-prefix arm. util/workerRole.ts confirmed landed in b0dae82; its docblock states the decisive fact for step 4 — \"This is a workflow guard, not a security boundary: join_team is unauthenticated and any seat may join any team, so the prefix fallback grants nothing a seat could not already grant itself with one call.\" (c) Line numbers re-measured, all three still accurate: claimNextTask.ts:138-139 (governor routing), claimNextTask.ts:451-452 (roleLabel chat line), enterGovernance.ts:43-44 (governor gate). (d) PR #179 is still OPEN (state OPEN, mergedAt null, head moe/fix-governor-reentry), touching enterGovernance.ts +33/-3 and its test +59; nothing to rebase onto, so step 4 proceeds and posts the heads-up. Its diff moves the team lookup to resolveEffectiveTeam for the purge tombstone and still reads `team?.role !== 'governor'` — same two lines I change, so the rebase hint matters and I will put it in both the chat line and a code comment. KEY FINDING for step 3: state.getTeamForWorker reads state.workers.get(workerId) FIRST and returns null when the record is missing (teamStore.ts:44-48), so the existing onboarding fall-through at :138 is ALREADY keyed on the worker record existing — an explicit state.getWorker() guard preserves it byte-for-byte rather than adding a new condition. Baseline captured before any edit: npx vitest run on the three focused files = 3 files / 61 tests passed, exit 0. SCOPE NOTE: the bypass-permissions prompt says prefer Bash for edits; I am overriding that deliberately and using the Edit tool for every file per mem:gotcha-contested-path-needs-edit-tool-to-land, since sed/heredoc writes produce no TOOL-tier attribution event.",
+      "startedAt": "2026-09-12T14:09:24.670Z",
+      "completedAt": "2026-09-12T14:11:58.636Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FINISH THE createTask FIX AND ITS TESTS. The production change is already written; your job is to confirm it is complete and that its tests actually pin the behaviour rather than passing vacuously. Required cases in packages/moe-daemon/src/tools/createTask.test.ts, each asserting an exact createdBy value: a caller on a team whose role is NULL and whose worker id begins with the architect prefix lands ARCHITECT, not WORKER - this is the defect, so it must fail if the resolver call is reverted to a direct team-role read; a caller on a team that DOES carry a role gets that team role even when the id prefix disagrees, because an explicit join is the operator stating the seat's role and must win over the id; and the soft fallback is preserved in both its steps, so an unrecognised id falls back to the explicit createdBy parameter and a caller with no workerId at all still lands WORKER. That fallback chain is the compatibility guarantee for every existing caller, and a test that only covers the happy path would let someone tighten it into a refusal later. Error handling: creating a task must never fail because a role could not be resolved - attribution is metadata, and a refusal here would break task creation for any unregistered caller. If the delivered diff already covers a case, leave it alone rather than rewriting it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/createTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTask.test.ts",
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ],
+      "note": "createTask FIX CONFIRMED COMPLETE; TESTS STRENGTHENED WHERE THEY WERE VACUOUS. Production change left exactly as delivered (no rewrite): `resolveWorkerRole(state, params.workerId)` replaces the direct `team?.role` read, and the soft chain `(resolvedRole && ROLE_TO_CREATED_BY[resolvedRole]) || params.createdBy || 'WORKER'` is intact — there is no throw on an unresolvable role anywhere in the handler, so creation cannot fail on attribution. Audited the four required cases against the delivered tests: (1) role-less team + architect prefix lands ARCHITECT — covered by \"attributes by id prefix when the shared team carries no role\", which also pins QA/GOVERNOR/WORKER on the same `role: null` team and asserts `expect(mixed.role).toBeFalsy()` so the fixture cannot silently drift into a roled team; (2) roled team beats a disagreeing prefix — covered by \"lets a roled team override the id prefix\" (worker-onqateam on a qa team lands QA). Both left untouched per the step instruction. (3) The fallback chain was only HALF covered and I added the missing half: the existing arm's `worker-unknown` MATCHES the `worker-` prefix, so it lands WORKER by successful resolution, not by fallback — it would keep passing if someone deleted the `|| params.createdBy` term entirely. New test \"keeps both fallback steps for an id that declares no role\" uses `console-1` (no known prefix, so resolveWorkerRole returns null) and asserts both steps: with an explicit createdBy it lands HUMAN, without one it lands WORKER. (4) New test \"never fails creation when the role cannot be resolved\" pins the error-handling requirement on state, not just on the return value — success is true AND state.getTask(id) is non-null for an unresolvable caller, so tightening attribution into a refusal breaks a test rather than breaking every unregistered caller in production. VERIFIED: npx vitest run src/tools/createTask.test.ts = 14 passed (was 12), exit 0. Edits made with the Edit tool, not sed, per the TOOL-tier attribution note in step 1. Red proof by mutation is deferred to step 5 as the plan sequences it.",
+      "startedAt": "2026-09-12T14:12:00.687Z",
+      "completedAt": "2026-09-12T14:12:45.259Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "CONVERT BOTH claimNextTask SITES. Around line 451 the roleLabel for the worker-is-online chat line falls back to guessing from the requested statuses when the team has no role; route it through resolveWorkerRole first and keep the status-based guess as the last resort. That one is cosmetic but it is a one-line improvement and an announcement that names the wrong role is exactly the kind of small lie that erodes trust in the board. Around line 138 is the substantive one, and the card undersells it: that branch routes governors away from claiming toward enter_governance, so on a role-less team a governor seat falls THROUGH and claims a task - which the project's own rules say governors never do. Convert it to resolveWorkerRole. Preserve the onboarding escape the existing comment protects, and be careful about how: the current fall-through happens for a caller with no registered worker record, so keep that condition on the worker record's existence rather than on the role lookup. A seat whose id says governor but which has not registered must still fall through, because routing it to enter_governance would hand it a next action that immediately fails with a not-found refusal. Add cases to packages/moe-daemon/src/tools/claimNextTask.test.ts: a governor-prefixed seat on a role-less REGISTERED team is routed to enter_governance rather than claiming; the same seat unregistered still falls through; a team-supplied role still wins over the prefix; and the chat line names the resolved role.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+      ],
+      "note": "BOTH claimNextTask SITES CONVERTED. Site ~138 (governor redirect, the substantive one): `const team = state.getTeamForWorker(id); if (team?.role === 'governor')` becomes `if (params.workerId && state.getWorker(params.workerId)) { if (resolveWorkerRole(state, params.workerId) === 'governor') {`. The onboarding escape is preserved EXACTLY, not merely approximated: teamStore.ts:44-48 shows getTeamForWorker does `state.workers.get(workerId)` first and returns null with no record, so the old fall-through was already keyed on the worker record — the explicit state.getWorker guard restates that condition rather than adding a new one, and an unregistered governor-prefixed seat still claims instead of being handed an enter_governance next action that would throw NOT_FOUND. Site ~451 (roleLabel for the worker-is-online chat line): `team?.role ?? statusGuess` becomes `resolveWorkerRole(...) ?? statusGuess`, keeping the status-based guess as the last resort for an id that declares no role. Added `import { resolveWorkerRole } from '../util/workerRole.js'`. FOUR TESTS ADDED, two of which are red against the old code: (1) \"routes a governor-prefixed seat on a ROLE-LESS team to enter_governance\" seeds the launcher's exact shape (team named moe-next, `expect(team.role).toBeFalsy()`) and asserts on STATE as well as routing — a claimable WORKING task sits right there and `task.assignedWorkerId` must still be null, so the test measures the defect (a governor taking work) and not just a changed string; on the old read the role is null, the seat falls through and claims. (2) \"names the resolved role in the worker-is-online chat line\" deliberately picks the case where the two sources DISAGREE — an architect-prefixed seat claiming statuses ['WORKING'], where the status guess says \"worker\" — and pins the exact line `architect-chatline is online (architect)`; a PLANNING claim would have been vacuous because the guess already answers \"architect\" there. The other two are guards against my own change and pass on both sides by design: (3) \"still lets an UNREGISTERED governor-prefixed seat fall through to claim\" asserts the task really is assigned to it, so keying the escape on the role instead of the record would fail here; (4) \"lets a team-supplied role beat the id prefix in the governor redirect\" puts a governor-NAMED seat on a worker-roled team and requires it to claim normally, so an operator's explicit join_team keeps meaning something. VERIFIED: npx vitest run src/tools/claimNextTask.test.ts = 47 passed (was 43), exit 0; npx tsc --noEmit exit 0. Edit tool used throughout.",
+      "startedAt": "2026-09-12T14:12:47.316Z",
+      "completedAt": "2026-09-12T14:14:29.493Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "CONVERT THE GOVERNANCE GATE, AND PROVE IT STILL REFUSES. The task rail says widening who may govern is out of scope, so here is the architectural judgement behind converting it anyway, which the completion summary should restate. Converting is not a widening. The resolver's own docblock states the reason: this is a workflow guard rather than a security boundary, because join_team is unauthenticated and any seat may join any team, so a seat that wants the governor role can already grant itself one with a single call. The prefix fallback therefore hands out nothing new. What the current code DOES do is refuse a genuine governor seat on the launcher's role-less project team - the gate reads a null role and rejects - and the tool's own error text betrays it by telling the caller to go join a governor team, which is the workaround for a bug. So the change makes the gate work as intended and aligns it with every other role-gated tool, which already resolve this way. Replace the direct team-role read around line 43 with resolveWorkerRole, changing nothing else about the refusal - same error helper, same message, same not-allowed code. Add cases to packages/moe-daemon/src/tools/enterGovernance.test.ts: a governor-prefixed seat on a role-less team now enters; a worker-prefixed seat on a role-less team is still REFUSED with the same code and message, and no governance record or broadcast is created for it, asserted on state rather than only on the thrown error; and an explicitly roled team still wins over the prefix. If PR 179 has not merged by now, post one short #general line naming this file and the two-line change so its author is not surprised by a conflict, then proceed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/enterGovernance.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/enterGovernance.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.test.ts"
+      ],
+      "note": "GOVERNANCE GATE CONVERTED; REFUSAL PROVEN INTACT ON STATE. PR #179 re-checked immediately before editing: still OPEN (mergedAt null, head moe/fix-governor-reentry), so nothing to rebase onto. Heads-up posted to #general (msg-5d2498fe81884f0387b3d3abe146e926) naming the file, the two-line change, and — because #179 swaps the same lookup for resolveEffectiveTeam to read the purge tombstone — an explicit rebase composition so its fix is not lost in the conflict: keep `team = resolveEffectiveTeam(...)` and write `const role = team?.role ?? roleFromWorkerId(id)` (roleFromWorkerId is exported from the same util), which gives tombstone > prefix, the precedence both changes want. THE CHANGE: `const team = state.getTeamForWorker(id); if (team?.role !== 'governor')` becomes `if (resolveWorkerRole(state, params.workerId) !== 'governor')`. Nothing else moved — same notAllowed helper, same operation string, same message text, same NOT_ALLOWED code, same position BEFORE the notFound check's successor code so a refused caller still reaches no mutation. The `team` local had no other reader (grep-confirmed) so it is gone rather than left unused. THE JUDGEMENT, restated for the record so a reviewer can disagree with it on the record: the task rail says widening who may govern is out of scope, and this is not a widening. workerRole.ts's docblock states it directly — this is a workflow guard, not a security boundary, because join_team is unauthenticated and any seat may join any team, so a seat that wants the governor role can already grant itself one with a single call; the prefix fallback therefore hands out nothing that was not already one call away. What the direct read DID do is refuse a genuine governor seat on the launcher's role-less project team, and the gate's own error text (\"Join a governor team to govern\") is the workaround for that bug. The conversion makes the gate work as intended and aligns it with every other role-gated tool. THREE TESTS ADDED (file 6 -> 9 passing): (1) \"lets a governor-prefixed seat on a ROLE-LESS team enter\" — the fix, red on the old read; the fixture asserts `expect(team.role).toBeFalsy()` so it cannot drift into a roled team and pass for free. (2) \"still refuses a worker-prefixed seat on a ROLE-LESS team, writing nothing\" — the rail's proof, asserted on STATE and not merely on the throw: instanceof MoeError, codeName exactly 'NOT_ALLOWED', message contains 'enter_governance is governor-only', AND worker status still IDLE, currentTaskId still 'task-held' (so releaseWorkerTasks never ran), with vi.spyOn on both postToGeneral and postToRoleChannel asserted not-called, so no governance record, no status flip and no broadcast exists for a refused caller. (3) \"lets an explicitly roled team beat the id prefix at the gate\" — a governor-NAMED seat the operator put on a worker team is refused, so an explicit join_team still decides. Pre-existing \"rejects a worker without any team (defensive)\" still passes unchanged: its id `orphan-1` declares no prefix role, so resolution returns null and the refusal holds. VERIFIED: npx vitest run on the three focused files = 3 files / 70 tests passed (baseline 61), exit 0; npx tsc --noEmit exit 0.",
+      "startedAt": "2026-09-12T14:14:31.712Z",
+      "completedAt": "2026-09-12T14:16:14.475Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "GATE, REVIEW, HAND OFF. (a) Run the three focused test files first, then the full daemon suite from the repository root with npm.cmd on Windows, requiring exit 0 and a total no lower than before. Filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it, and remember the suite has been seen flaking under heavy fleet load - re-run an unrelated failing file alone before treating it as yours. Run npx tsc --noEmit and require exit 0. Record both commands and their results for the verification argument of complete_task, which the sixth Definition-of-Done item asks for by name. (b) Red proof: this fix is already written, so establish it by mutation rather than claiming the delivered diff as evidence. Revert each converted site to a direct team-role read in turn, in a scratch copy and never in the shared checkout peers are working in, and name the test that fails for each. If reverting a site breaks nothing, that site has no real test and you must add one. (c) Adversarially review: can a seat now reach governance that could not already have reached it with one unauthenticated join - and if you believe not, say why in one sentence rather than asserting it; does a non-governor still get refused with the same code and message, and with no record written; does an unregistered seat still onboard without being routed into a failing next action; does a team-supplied role still beat the id prefix at every converted site; and is task creation still impossible to fail on an unresolvable role. (d) Confirm the two adopted files are landing under this task's trailer and that no git command was run by you. This task is epic-final, so its landing runs the full quality gate - check the tree is free of unrelated churn. In the completion summary, record the one-line decision for EACH of the three sites as the fourth Definition-of-Done item requires, and state the governance judgement explicitly so a reviewer can disagree with it on the record rather than discovering it in a diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/createTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.test.ts"
+      ],
+      "note": "GATED, REVIEWED, HANDED OFF. (a) GATES. Focused: npx vitest run on createTask/claimNextTask/enterGovernance = 3 files / 70 passed, exit 0 (baseline before my edits was 61 — +9). Full suite: `npm.cmd test` in packages/moe-daemon, exit captured in its own statement = 0, 115 files / 1570 passed / 4 skipped. `npx tsc --noEmit` exit 0. FLAKE DISCLOSED HONESTLY: the first full run exited 1 on src/tools/waitForTask.test.ts > \"does NOT offer a WORKING task with unmet dependsOn\" at `expect(activeWaiters.has('worker-dep')).toBe(true)` after a 50ms sleep — a timing assertion in an unrelated file, matching the known under-fleet-load flake. Re-run alone: 10/10 passed, exit 0. Two subsequent full runs: exit 0. The verification evidence uses the final clean run, not the flaky one. (b) RED PROOF BY MUTATION, all four conversions, none in the shared checkout: built a scratch tree at D:\\moe-role-scratch (src copy + package.json/tsconfig/vitest.config + a node_modules JUNCTION, per mem:gotcha-vitest-root-cwd-scratch-guard), confirmed it green at 70/70 first, then reverted ONE site at a time from a pristine copy so mutations never stacked, each verified applied by grep before running. createTask -> \"attributes by id prefix when the shared team carries no role\" FAILS with `expected 'WORKER' to be 'ARCHITECT'`; 13 others pass. claimNextTask governor redirect -> \"routes a governor-prefixed seat on a ROLE-LESS team to enter_governance\" FAILS with `expected true to be false` (hasNext true: the governor CLAIMED the task); 46 others pass. claimNextTask roleLabel -> \"names the resolved role in the worker-is-online chat line\" FAILS with `expected 'architect-chatline is online (worker)'`; 46 others pass. enterGovernance gate -> \"lets a governor-prefixed seat on a ROLE-LESS team enter\" FAILS with the NOT_ALLOWED refusal whose text ends \"Join a governor team to govern\" — the bug and its workaround in one line; 8 others pass. Every failure observes the OLD BEHAVIOUR happening rather than a missing string, and each isolates to one test. Teardown followed the safe order: junction deleted first, real node_modules/vitest/vitest.mjs asserted still present, then rm -rf; repo re-grepped afterwards to prove no mutation leaked back (all three production files still call resolveWorkerRole, zero `getTeamForWorker(params.workerId)` reads remain). (c) ADVERSARIAL REVIEW. Can a seat now reach governance it could not before? No — and the reason, in one sentence: join_team is unauthenticated and any seat may join any team, so a `governor-`named seat could already pass the old gate with one extra call; the conversion changes the number of calls required, not the set of seats that can govern. Non-governor still refused identically: same notAllowed helper, codeName asserted exactly 'NOT_ALLOWED', message asserted to contain 'enter_governance is governor-only', and refusal proven on STATE — status still IDLE, currentTaskId still held (releaseWorkerTasks never ran), postToGeneral and postToRoleChannel both spied and asserted not-called. Unregistered seat still onboards: the redirect is keyed on state.getWorker, which is the same condition the old code had implicitly, and a test asserts the unregistered governor-prefixed seat really is assigned the task rather than merely not-redirected. Team-supplied role beats the prefix at ALL THREE converted sites, each with its own test (createTask \"lets a roled team override the id prefix\", claimNextTask \"lets a team-supplied role beat the id prefix in the governor redirect\", enterGovernance \"lets an explicitly roled team beat the id prefix at the gate\"). Task creation still cannot fail on attribution: no throw exists on that path and a test pins success plus a non-null task for an unresolvable caller. Concurrency: all three sites are synchronous map reads with no await between them, inside the serialized tool dispatch, so no check-then-act window was introduced; the governance mutation still happens inside state.runExclusive, untouched. Empty-string workerId short-circuits at every site (and resolveWorkerRole guards it too). (d) LANDING. No git command was run by me beyond read-only inspection (git diff/log/status, gh pr view/diff) — no add, no commit, no branch or index operation, no fabricated baseline. get_commit_scope confirms createTask.ts/.test.ts are ASSERTED on this task and none of the six files appear in peerDeclared; every edit was made with the Edit tool so all six are TOOL-tier as well. Tree is free of unrelated churn: git status shows exactly my six source files plus expected .moe/ board state. TWO OUT-OF-SCOPE FINDINGS RECORDED RATHER THAN SWEPT (the rail says do not widen): (1) claimNextTask.ts:545 picks the role CHANNEL name from the requested statuses ('architects'/'qa'/'workers') — it never reads team.role, so it is not one of the three sites, but an architect claiming a WORKING task still gets a hint pointing at #workers. (2) The same root defect starves three fleet-scan governor lookups that find gov",
+      "startedAt": "2026-09-12T14:16:19.038Z",
+      "completedAt": "2026-09-12T14:20:42.879Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Operator asked for next architect work with an empty PLANNING column. task-867f69a6 is held by architect-2d25447a and every remaining Wave 1 row has unmet dependencies, leaving this the only dependency-ready unassigned card. Firsthand evidence for it: creating task-d7fa98f4 today returned createdBy WORKER despite an architect workerId.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-12T13:51:11.824Z",
+  "updatedAt": "2026-09-12T14:27:15.258Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/tools/createTask.ts",
+    "packages/moe-daemon/src/tools/createTask.test.ts"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T14:07:17.296Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 5,
+    "doneAt": "2026-09-12T14:27:15.258Z",
+    "wallClockMs": 1197962
+  },
+  "contextFetchedBy": [
+    "architect-8b93cc67",
+    "worker-85674160",
+    "qa-8db40c97"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T14:09:08.924Z",
+  "planningNotes": {
+    "approachesConsidered": "Leaving enterGovernance alone to avoid a conflict with the open PR 179 - considered seriously and rejected: the change is two lines, it is the site where the defect bites hardest since a genuine governor is refused outright, and the honest handling of a concurrent edit is a heads-up to that author rather than silently leaving a bug. The Definition of Done permits leaving a site alone with a recorded reason, so a worker who finds PR 179 merged mid-flight should rebase rather than fight it. Treating the 138 site as cosmetic like the card implies - rejected on reading it: a governor that falls through claims work it must never claim. A blanket find-and-replace of every team.role read - rejected by the card and on merit: each site has different consequences, and the gate deserved an argument rather than a sweep. Making createTask refuse when a role cannot be resolved - rejected: attribution is metadata and a refusal would break task creation for unregistered callers, so the soft fallback chain stays and is tested in both its steps.",
+    "codebaseInsights": "Verified live on 2026-09-12. Both orphan files are still dirty and undeclared, so the adoption path is open. The resolver's docblock is the decisive document for this task and should be read before any judgement is made: it records that a seat on a role-less team resolved to no role at all, that five parent tasks once shipped with empty dependencies because the planning architect was refused, and - crucially - that this is a workflow guard rather than a security boundary, since join_team is unauthenticated and any seat may grant itself any role with one call. That single fact is what turns the governance conversion from a widening into a repair. The card also undersells claimNextTask around line 138: that branch routes governors away from claiming, so on the launcher's role-less team a governor seat falls through and claims a task, which the project's rules say governors never do. That is a behavioural defect, not a cosmetic one. The site around 451 really is cosmetic. One trap in the 138 conversion: the existing fall-through protects onboarding for a caller with no registered worker record, so the condition must stay keyed on the worker record existing, or a governor-named seat that has not registered gets routed to a tool that immediately refuses it with not-found. PR 179 was still OPEN at planning time and touches the same gate region.",
+    "risks": "The orphan bytes are the fragile part: declare them before anything else, never hand-commit, never fabricate a baseline. The governance conversion is the part most likely to draw a reject, so the reasoning must be written into the completion summary where a reviewer can disagree with it on the record - and the refusal test must assert on state, proving no governance record or broadcast exists for a refused caller, not merely that an error was thrown. Preserve the onboarding fall-through by keying it on the worker record rather than the role. Keep the team-supplied role winning over the id prefix at every converted site, or an operator's explicit join stops meaning anything. The delivered diff is not red evidence for itself, so the proof is mutation: revert each site in a scratch copy and name the failing test, and treat a site that breaks nothing as an untested site. PR 179 is open against the same file - check again before editing and post the heads-up. The daemon suite flakes under fleet load. This task is epic-final, so its landing runs the full quality gate.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/createTask.ts and createTask.test.ts (the orphan bytes; declare them first thing)",
+      "packages/moe-daemon/src/util/workerRole.ts (resolveWorkerRole plus the docblock that settles the governance judgement)",
+      "packages/moe-daemon/src/tools/claimNextTask.ts (~138 governor routing, ~451 chat roleLabel) and its test file",
+      "packages/moe-daemon/src/tools/enterGovernance.ts (~43 role gate) and its test file"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T14:09:08.994Z",
+  "workStartedAt": "2026-09-12T14:09:24.670Z",
+  "reviewStartedAt": "2026-09-12T14:22:12.481Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit (exit 0) && npm.cmd test",
+    "exitCode": 0,
+    "outputTail": "TSC_EXIT=0\nNPM_TEST_EXIT=0\n\n Test Files  115 passed (115)\n      Tests  1570 passed | 4 skipped (1574)\n   Start at  17:20:01\n   Duration  8.90s (tests 84%, transform 10%, import 5%)\n\nFocused run (npx vitest run src/tools/createTask.test.ts src/tools/claimNextTask.test.ts src/tools/enterGovernance.test.ts): 3 files / 70 passed, exit 0 — baseline before this task was 61.",
+    "reportedAt": "2026-09-12T14:22:12.481Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/createTask.ts",
+    "packages/moe-daemon/src/tools/createTask.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.test.ts",
+    ".moe/tasks/task-171a1412815f4b1f836086f2185bc48c.json",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+    ".moe/tasks/task-fa46784f7d7548a1b50f8ea7faf79df3.json"
+  ],
+  "completionSummary": "Adopted the orphaned createTask role-attribution fix under this task and swept all three remaining per-seat team.role call sites. Root defect everywhere: the launcher registers EVERY seat into one project-named team whose `role` is null, so a direct `team.role` read resolved to nothing.\n\nDECISION PER SITE (DoD item 4), all three CONVERTED to resolveWorkerRole, none left alone:\n1. createTask.ts — converted. An architect-filed row landed `createdBy: \"WORKER\"`; this is the orphan bytes the card exists to land, adopted via declare_files, never hand-committed.\n2. claimNextTask.ts:138 (governor redirect) — converted; NOT cosmetic. On the role-less team a governor seat fell through and CLAIMED A TASK, which the project's rules say governors never do. The onboarding escape is preserved exactly: it stays keyed on `state.getWorker(...)`, which is the condition the old code already had implicitly (teamStore.ts:44 reads `state.workers.get(id)` first and returns null with no record), so an unregistered governor-prefixed seat still claims rather than being routed into an enter_governance call that would throw NOT_FOUND at it.\n3. claimNextTask.ts:451 (worker-is-online roleLabel) — converted; cosmetic but it announced every architect and qa seat as \"worker\". Status-based guess kept as the last resort.\n4. enterGovernance.ts:43 (governor role gate) — converted; refusal untouched (same notAllowed helper, same message, same NOT_ALLOWED code).\n\nTHE GOVERNANCE JUDGEMENT, stated so a reviewer can disagree on the record: the task rail says widening who may govern is out of scope, and converting the gate is NOT a widening. join_team is unauthenticated and any seat may join any team, so a `governor-`named seat could already pass the OLD gate with one extra call — the conversion changes the number of calls required, not the set of seats that can govern (util/workerRole.ts's docblock records this as a workflow guard, not a security boundary). What the direct read DID do is refuse a GENUINE gov",
+  "commits": [
+    {
+      "sha": "9eaed1fc571c7fec9f5462f7a241108fc1f0c105",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-12T14:09:09Z",
+      "paths": [
+        ".moe/tasks/task-171a1412815f4b1f836086f2185bc48c.json",
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+        ".moe/tasks/task-fa46784f7d7548a1b50f8ea7faf79df3.json",
+        "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/createTask.test.ts",
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.test.ts",
+        "packages/moe-daemon/src/tools/enterGovernance.ts"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-12T14:22:27.804Z",
+      "treeId": "46d68ebe4d3898721db2ca3a170e4f89d95adf34",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
+    "packages/moe-daemon/src/tools/createTask.test.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.ts",
+    "packages/moe-daemon/src/tools/enterGovernance.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-85674160@2026-09-12T14:09:09Z",
+    "at": "2026-09-12T14:22:27.804Z"
+  },
+  "completedAt": "2026-09-12T14:27:15.258Z",
+  "reviewCompletedAt": "2026-09-12T14:27:15.258Z",
+  "reviewSummary": "APPROVED — 6/6 DoD verified by me. Detail in Serena memory task-task-fa46784f7d7548a1b50f8ea7faf79df3-handoff.\n\nRE-RAN in packages/moe-daemon: `npx tsc --noEmit` exit 0; `npm.cmd test` exit 0 = 115 files/1570 passed/4 skipped, no flake; focused 3 files 70/70 (DoD6).\n\nDoD1: 9eaed1f, kind=completion, 9 paths/0 unattributed, pushed; no hand-written chore commit on either orphan path (prior touch 5b5784e).\n\nDoD2+3: test seeds the real launcher shape (one role:null team, 4 role-prefixed seats), asserts exact ARCHITECT/QA/GOVERNOR/WORKER; roled team still beats prefix; fallback uses `console-1` (no prefix) so both steps bite — HUMAN then WORKER, where `worker-unknown` was vacuous; creation never fails on an unresolvable role.\n\nDoD4: all 3 converted, per-site reasons in the summary. Re-grepped: remaining non-test getTeamForWorker callers are only the definition, StateManager delegation, workerRole.ts:50, a comment, and teamMembershipHeal's membership-existence lookups. Zero per-seat role gates left. Onboarding escape correctly keyed on state.getWorker().\n\nDoD5: refusal intact twice over — test asserts NOT_ALLOWED + unchanged message AND state (IDLE, task still held, no broadcast); the throw precedes runExclusive, so a refused caller reaches no write.\n\nRED PROOF RUN BY ME, not taken from the diff: scratch tree outside the repo, baseline 70/70, one grep-verified mutation at a time. Four old behaviours reproduced — 'WORKER' vs 'ARCHITECT'; hasNext true vs false (governor really claimed); `is online (worker)` vs `(architect)`; real NOT_ALLOWED at a genuine governor. Rest green 13/14, 46/47, 46/47, 8/9. No leak into the repo.\n\nRAIL: gh pr view 179 still OPEN, same 2 files — nothing to rebase; heads-up present. Gate conversion non-widening: join_team is unauthenticated, so a governor-named seat already passed the OLD gate with one extra call.\n\nScope matches plan: 6 source files + 3 daemon-written board records, additive."
+}

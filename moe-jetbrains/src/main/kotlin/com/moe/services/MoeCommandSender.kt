@@ -3,12 +3,22 @@ package com.moe.services
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.intellij.openapi.diagnostic.Logger
+import com.moe.model.MAX_SAFE_PLAN_REVISION
 import com.moe.model.ProjectSettings
 
+/**
+ * Builds the daemon command envelopes.
+ *
+ * [send] reports whether the local transport accepted the bytes; it never
+ * reports daemon acceptance. Only [approveTask] reads that result or lets a
+ * transport failure escape — every other command keeps the historical
+ * best-effort behaviour of [sendMessage], because they are also driven from
+ * connection and background callbacks that must not start throwing.
+ */
 class MoeCommandSender(
     private val connectedCheck: () -> Boolean,
     private val onDisconnected: () -> Unit,
-    private val send: (String, String) -> Unit
+    private val send: (String, String) -> Boolean
 ) {
     private val log = Logger.getInstance(MoeCommandSender::class.java)
 
@@ -66,9 +76,6 @@ class MoeCommandSender(
         val payload = JsonObject().apply {
             addProperty("approvalMode", settings.approvalMode)
             addProperty("speedModeDelayMs", settings.speedModeDelayMs)
-            addProperty("autoCreateBranch", settings.autoCreateBranch)
-            addProperty("branchPattern", settings.branchPattern)
-            addProperty("commitPattern", settings.commitPattern)
             addProperty("agentCommand", settings.agentCommand)
             addProperty("enableAgentTeams", settings.enableAgentTeams)
         }
@@ -101,10 +108,34 @@ class MoeCommandSender(
         }
         sendMessage("UPDATE_EPIC", payload)
     }
-    fun approveTask(taskId: String) {
-        if (!ensureConnected()) return
-        val payload = JsonObject().apply { addProperty("taskId", taskId) }
-        sendMessage("APPROVE_TASK", payload)
+    /**
+     * Approves [taskId], optionally quoting the plan revision that was reviewed.
+     *
+     * An omitted (or null) [expectedPlanRevision] keeps the legacy payload
+     * exactly: the key is absent, never a JSON null. A supplied revision —
+     * including an explicit 0 — is sent unchanged, so the caller must pass the
+     * revision it actually reviewed rather than a fresher one read from state.
+     *
+     * @return true only when the local socket accepted the bytes. That is NOT
+     *   daemon approval; the task flips only when the daemon says so. false means
+     *   the command never left this process and [onDisconnected] has fired once.
+     * @throws IllegalArgumentException when [expectedPlanRevision] is outside
+     *   `0..MAX_SAFE_PLAN_REVISION`. Nothing is sent in that case.
+     */
+    fun approveTask(taskId: String, expectedPlanRevision: Long? = null): Boolean {
+        require(expectedPlanRevision == null || expectedPlanRevision in 0L..MAX_SAFE_PLAN_REVISION) {
+            "expectedPlanRevision must be in 0..$MAX_SAFE_PLAN_REVISION, was $expectedPlanRevision"
+        }
+        if (!ensureConnected()) return false
+        val payload = JsonObject().apply {
+            addProperty("taskId", taskId)
+            // Only ever added when supplied: an omitted revision must keep the
+            // legacy shape, so the daemon never sees an explicit null token.
+            if (expectedPlanRevision != null) addProperty("expectedPlanRevision", expectedPlanRevision)
+        }
+        val delivered = dispatch("APPROVE_TASK", payload)
+        if (!delivered) onDisconnected()
+        return delivered
     }
     fun releaseTask(taskId: String, reason: String? = null) {
         if (!ensureConnected()) return
@@ -243,13 +274,22 @@ class MoeCommandSender(
         val payload = JsonObject().apply { addProperty("decisionId", decisionId) }
         sendMessage("REJECT_DECISION", payload)
     }
-    fun sendMessage(type: String, payload: JsonObject) {
+    /**
+     * Builds the `{type,payload}` envelope and hands it to the transport.
+     * Deliberately unchecked: the caller decides whether a transport failure is
+     * best-effort noise or an error the user must see.
+     */
+    private fun dispatch(type: String, payload: JsonObject): Boolean {
         val message = JsonObject().apply {
             addProperty("type", type)
             add("payload", payload)
         }
+        return send(type, message.toString())
+    }
+
+    fun sendMessage(type: String, payload: JsonObject) {
         try {
-            send(type, message.toString())
+            dispatch(type, payload)
         } catch (ex: Exception) {
             log.debug("Failed to send message '$type': ${ex.message}")
             // Connection likely dropped; let reconnect handle it.

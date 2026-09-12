@@ -1,4 +1,8 @@
 import type { Task, TaskVerification } from '../types/schema.js';
+// Type-only: erased at compile time, so the enforcement helpers never pull the
+// state layer in at runtime and no import cycle can form through it.
+import type { StateManager } from '../state/StateManager.js';
+import { currentAttempt, listAttempts, MAX_ATTEMPT_GENERATION } from '../state/attemptStore.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from './errors.js';
 import { logger } from './logger.js';
 
@@ -46,6 +50,146 @@ export function assertWorkerOwns(task: Task, workerId: string | undefined, toolN
     `Task ${task.id} is claimed by ${task.assignedWorkerId}, not ${workerId}`,
     { taskId: task.id, owner: task.assignedWorkerId, caller: workerId },
     'NOT_ALLOWED'
+  );
+}
+
+// =============================================================================
+// Attempt fencing
+// =============================================================================
+// assertAttemptCurrent refuses a call from an attempt the daemon has already
+// superseded, so a zombie waking after reassignment cannot get a daemon mutation
+// recorded against the live attempt (it is inert until a tool handler calls it).
+// It sits BESIDE assertWorkerOwns: ownership asks "right seat?", currency asks
+// "right execution of that seat?", and existing callers pass no attempt identity.
+//
+// SCOPE, do not soften: this fences DAEMON MUTATIONS ONLY. A superseded CLI can
+// still write to a shared workspace, and nothing here prevents that.
+
+/** What a caller presents about its attempt. Both optional: pre-attempt callers send neither. */
+export interface AttemptIdentity {
+  attemptId?: string;
+  /** Fencing token: a positive safe integer. */
+  generation?: number;
+}
+
+// Same bounded FIFO dedupe as warnMissingWorkerId, in its OWN map so a flood of
+// attempt notices can never evict the ownership guard's entries.
+const attemptNoticed = new Map<string, true>();
+function firstAttemptNotice(key: string): boolean {
+  if (attemptNoticed.has(key)) return false;
+  if (attemptNoticed.size >= DEPRECATION_WARN_MAX_ENTRIES) {
+    const oldest = attemptNoticed.keys().next().value;
+    if (oldest !== undefined) attemptNoticed.delete(oldest);
+  }
+  attemptNoticed.set(key, true);
+  return true;
+}
+
+/** Bounded rendering of an untrusted value that cannot throw (no String() on objects). */
+function renderUntrusted(value: unknown): string {
+  if (value === null) return 'null';
+  const kind = typeof value;
+  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
+  const text = kind === 'string' ? JSON.stringify(value) : String(value);
+  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
+}
+
+/**
+ * Refuse a malformed token, never coerce it (the plan-revision token rule). Checks
+ * are `!== undefined`, not truthiness: generation 0 and attemptId '' are falsy but
+ * SUPPLIED, and must not fall through to the legacy tolerance.
+ */
+function validateAttemptIdentity(identity: AttemptIdentity): AttemptIdentity {
+  const validated: AttemptIdentity = {};
+  const { attemptId, generation } = identity;
+  if (attemptId !== undefined) {
+    if (typeof attemptId !== 'string' || attemptId.trim() === '') {
+      const got = renderUntrusted(attemptId);
+      throw invalidInput('attemptIdentity.attemptId', `must be a non-blank string (got ${got})`);
+    }
+    validated.attemptId = attemptId;
+  }
+  if (generation !== undefined) {
+    // Positive, not merely non-negative: generations start at 1 (schema.ts) and
+    // attemptStore refuses a stored value below 1.
+    const inDomain = typeof generation === 'number' && Number.isSafeInteger(generation);
+    if (!inDomain || generation < 1 || generation > MAX_ATTEMPT_GENERATION) {
+      const got = renderUntrusted(generation);
+      throw invalidInput('attemptIdentity.generation', `must be a positive safe integer (got ${got})`);
+    }
+    validated.generation = generation;
+  }
+  return validated;
+}
+
+function describeAttempt(attemptId: string | null, generation: number | null): string {
+  if (attemptId === null) return generation === null ? 'none' : `generation ${generation}`;
+  return generation === null ? attemptId : `${attemptId} (generation ${generation})`;
+}
+
+/**
+ * Reject when the caller's attempt is not the CURRENT attempt for this task.
+ * Decision order, each part deliberate:
+ *  1. No identity (argument absent, or neither field): legacy tolerance, warning
+ *     once and only on a claimed task — the assertWorkerOwns/assertContextFetched shape.
+ *  2. Validate before use: malformed is invalid input, never a fall-through to 1.
+ *  3. NO attempt record for the task: tolerate even with an identity. DO NOT "FIX"
+ *     THIS INTO A REFUSAL — a task that never opened an attempt superseded nobody,
+ *     and refusing breaks every pre-rollout task once handlers call this guard.
+ *     Records that exist but are all CLOSED are refused: that execution is over.
+ *  4. EQUALITY, not ordering: a future generation is as wrong as a stale one. Each
+ *     presented field is compared to the current attempt, so a self-inconsistent
+ *     pair can never pass.
+ * No unassigned-task early return (unlike assertWorkerOwns): a caller presenting an
+ * identity is an attempt-aware worker, and releasing its task must not let a zombie in.
+ * STATE_CONFLICT, not NOT_ALLOWED: a superseded attempt is a state race, not a
+ * permission failure. The caller must hold `state.mutex`.
+ */
+export function assertAttemptCurrent(
+  state: StateManager,
+  task: Task,
+  identity: AttemptIdentity | undefined,
+  toolName = 'unknown'
+): void {
+  const supplied = identity !== undefined && identity !== null;
+  if (supplied && (typeof identity !== 'object' || Array.isArray(identity))) {
+    throw invalidInput('attemptIdentity', 'must be an object carrying attemptId and/or generation');
+  }
+  const presented: AttemptIdentity = supplied ? validateAttemptIdentity(identity) : {};
+  if (presented.attemptId === undefined && presented.generation === undefined) {
+    if (task.assignedWorkerId && firstAttemptNotice(`attempt-missing:${task.id}:${toolName}`)) {
+      logger.warn(
+        { taskId: task.id, tool: toolName },
+        'attempt identity missing — fencing check skipped (legacy-client fallback, will become a hard error once every caller carries an attempt)'
+      );
+    }
+    return;
+  }
+  if (listAttempts(state, task.id).length === 0) {
+    if (firstAttemptNotice(`attempt-unrecorded:${task.id}:${toolName}`)) {
+      logger.info(
+        { taskId: task.id, tool: toolName, ...presented },
+        'task has no attempt record — fencing check skipped (task predates the attempt rollout)'
+      );
+    }
+    return;
+  }
+
+  const current = currentAttempt(state, task.id);
+  const currentAttemptId = current?.id ?? null;
+  const currentGeneration = current?.generation ?? null;
+  const callerAttemptId = presented.attemptId ?? null;
+  const callerGeneration = presented.generation ?? null;
+  const idMatches = callerAttemptId === null || callerAttemptId === currentAttemptId;
+  const generationMatches = callerGeneration === null || callerGeneration === currentGeneration;
+  if (idMatches && generationMatches) return;
+  const currentText = current ? describeAttempt(currentAttemptId, currentGeneration) : 'none (all closed)';
+  throw new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Superseded attempt refused by ${displayToolName(toolName)} on task ${task.id}: caller presented ` +
+      `${describeAttempt(callerAttemptId, callerGeneration)}, current attempt is ${currentText}`,
+    { taskId: task.id, currentAttemptId, currentGeneration, callerAttemptId, callerGeneration },
+    'ATTEMPT_SUPERSEDED'
   );
 }
 

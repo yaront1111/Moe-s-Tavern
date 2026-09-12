@@ -9,10 +9,15 @@ import {
   UNIDENTIFIED_RELEASER,
 } from '../util/claimGuards.js';
 import { nextStatusForRelease } from '../state/workerLifecycle.js';
+import { closeOpenAttempts } from '../state/attemptStore.js';
+import { assertAttemptCurrent } from '../util/enforcement.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
+import { logger } from '../util/logger.js';
 
 const MAX_HANDOFFS_PER_TASK = 20;
 const MAX_HANDOFF_FIELD_LEN = 4000;
+/** Generated attempt ids are ~40 chars; the bound keeps an echoed refusal message small. */
+const MAX_ATTEMPT_ID_LEN = 128;
 /** Refusal cascade: this many empty-progress releases inside the window park the task. */
 const REFUSAL_CASCADE_THRESHOLD = 3;
 const REFUSAL_CASCADE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -99,6 +104,16 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         force: {
           type: 'boolean',
           description: 'Governor/human crash-recovery override: release a row you do not hold, or one whose step is IN_PROGRESS. Both parties are named in the banner and the result, so the strip is auditable. Without it, a release by a non-assignee is refused (RELEASE_NOT_ASSIGNEE) and a live step lease is refused (STEP_LEASE_HELD).'
+        },
+        attemptId: {
+          type: 'string',
+          maxLength: MAX_ATTEMPT_ID_LEN,
+          description: 'Optional fencing identity: the attemptId moe.claim_next_task returned. A superseded attempt (the task was re-claimed since) is refused with ATTEMPT_SUPERSEDED before anything is written. Omitted = unfenced, as before.'
+        },
+        generation: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Optional fencing token: the generation moe.claim_next_task returned, checked together with attemptId.'
         }
       },
       required: ['taskId'],
@@ -116,11 +131,17 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         };
         workerId?: string;
         force?: boolean;
+        attemptId?: string;
+        generation?: number;
       };
       if (!params.taskId) {
         throw missingRequired('taskId');
       }
       const force = params.force === true;
+      // Bounded before use: an ATTEMPT_SUPERSEDED refusal echoes the presented id.
+      if (typeof params.attemptId === 'string' && params.attemptId.length > MAX_ATTEMPT_ID_LEN) {
+        throw invalidInput('attemptId', `must be at most ${MAX_ATTEMPT_ID_LEN} characters`);
+      }
 
       // Validate handoff shape BEFORE acquiring the state mutex so we don't
       // hold the lock while throwing on bad input.
@@ -164,6 +185,16 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         // below are unaffected.
         assertReleaseCaller(task, params.workerId, force);
         assertNoLiveLease(task, force, params.workerId);
+        // Currency gate, beside the ownership gates and for the same reason —
+        // before any mutation: a delayed release from generation N arriving after
+        // the task was re-claimed as N+1 would otherwise strip the live claim and
+        // close the live attempt. No identity presented = the legacy, unfenced path.
+        assertAttemptCurrent(
+          state,
+          task,
+          { attemptId: params.attemptId, generation: params.generation },
+          'moe.release_task'
+        );
 
         if (!previousWorkerId) {
           // Terminal tasks are never "stuck": a duplicate/late release_task on
@@ -297,6 +328,17 @@ export function releaseTaskTool(_state: StateManager): ToolDefinition {
         }
 
         const updated = await state.updateTask(task.id, updates, 'WORKER_RELEASED');
+
+        // The seat is given up, so the attempt that held it ends here — keyed on
+        // the release itself, never on where the routing above sent the task.
+        // Best-effort: the release is already durable, and failing the call now
+        // would report an error for a task the caller no longer holds. The next
+        // claim closes a leftover attempt before it opens its own.
+        try {
+          await closeOpenAttempts(state, task.id);
+        } catch (err: unknown) {
+          logger.error({ taskId: task.id, error: err }, 'release_task: could not close the released attempt');
+        }
 
         const worker = state.getWorker(previousWorkerId);
         if (worker && worker.currentTaskId === task.id) {

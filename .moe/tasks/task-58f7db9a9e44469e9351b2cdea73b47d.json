@@ -1,0 +1,391 @@
+{
+  "id": "task-58f7db9a9e44469e9351b2cdea73b47d",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Reconcile attempts on daemon restart instead of purging every worker",
+  "description": "Objective: stop a daemon restart from yanking a task away from a CLI that is still running. packages/moe-daemon/src/index.ts:501 calls purgeAllWorkers on every start, and state/workerStore.ts:305 deletes every worker record and releases their tasks without first establishing that the external processes exited. A restart during a long build therefore hands live work to someone else.\n\nDeliverable: on startup, attempts in phase running are moved to reconciling rather than being destroyed, and their tasks are held from reassignment while reconciling. A runner reattaches by presenting its attempt id plus process start time and host; a successful reattach returns the attempt to running. An attempt confirmed dead, or one that stays unreattached past a configurable reconcile window, is closed and gets exactly one successor generation.\n\nNot in scope: heartbeat semantics, which are the sibling task. Preserve stable worker identity across the restart by persisting it separately from the attempt, and preserve the existing rule that a quiet build is not evidence of a dead worker: the reconcile window must not become an idle-based auto-release for WORKING or PLANNING.\n\nUnskips the acceptance case \"restarting only the daemon during a long build preserves ownership\".\n\nVerification: npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts from packages/moe-daemon.",
+  "definitionOfDone": [
+    "Daemon startup moves running attempts to reconciling and holds their tasks from reassignment instead of releasing them",
+    "A runner that reattaches with a matching attempt id, process start time and host returns the attempt to running and keeps the task assigned",
+    "An attempt confirmed dead, or unreattached past the configurable reconcile window, is closed and permits exactly one successor generation",
+    "Stable worker identity survives the restart and is persisted separately from the attempt record",
+    "The reconcile window is a settings key with a documented default and is never applied to a live reattached attempt, so no idle-based auto-release is introduced for WORKING or PLANNING",
+    "The acceptance case for restart during a long build is unskipped and passes unchanged",
+    "npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts passes and npm test in packages/moe-daemon stays green"
+  ],
+  "taskRails": [
+    "Do not reintroduce idle-based auto-release for WORKING or PLANNING; a quiet build is not evidence of a dead worker.",
+    "REVIEW's existing reviewStaleTimeoutMs self-heal stays exactly as it is.",
+    "Reassignment must establish the old process stopped, or contain its writes; a JSON record alone does not stop a running CLI."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "READ THE HELD-OUT CASE AS THE CONTRACT (read-only, no edits). This card owns unskipping the fourth acceptance case and its assertions may not be edited, so it is the specification and it overrides any wording here. Read src/delivery/acceptance.test.ts from the describe at line 1607 to line 1835, plus the helpers it uses: `startDaemonChild`, `killDaemonAbruptly`, `daemonTool`, `toolResult`, `toolRefusal`, `spawnOwned`, `isPidAlive`, `readBytes` and `listRecords`. Note that it drives the REAL startup path, a daemon child spawned through the installed CLI, never a StateManager reload, and that it has a 240 second timeout because it spawns a genuine long-running process. Extract the exact contract: a new tool `moe.reattach_attempt` taking taskId, workerId, runnerId, attemptId, generation, processStartedAt and host; a successful reattach leaves phase `running`, the task WORKING and assigned, and the worker record's currentTaskId intact; a reattach whose processStartedAt OR host differs is refused with numeric code -32002 and codeName exactly `ATTEMPT_IDENTITY_MISMATCH`; a competing claim during the hold is refused with -32002 and codeName exactly `ATTEMPT_RECONCILING`, with the attempt id inside the message; and every refusal is byte-pure, asserted on the task file, the worker file and the attempt file. Note two details that will otherwise be missed: `toolRefusal` also asserts a `tool` field naming the refusing tool, so check how it reads that off the error payload and make sure both refusals carry it; and the first daemon calls reattach on an attempt that is ALREADY running, which must succeed and leave it running, so reattach is idempotent for the running phase. Finally note what the fixture proves about liveness: the worker has been quiet for three hours and the build emits nothing, yet ownership must hold, so nothing in this work may consult lastActivityAt. Then read the code you will change: `purgeAllWorkers` at src/state/workerStore.ts line 305, its call site at src/index.ts line 501, the attempt store's phase setter, and the claim path's existing finalizing refusal, which is the pattern the reconciling refusal should follow. Read the task comment on this card recording the scope split before you plan any window or sweep behaviour: those two definition-of-done items now belong to task-d7fa98f4e43d434a96cad9440b153f1c and must NOT be built here. Produce no diff in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "Re-read the contract after the QA reject. Read-only, no diff produced.\n\nVerified the reject is a LANDING gap, not a code defect:\n- `git show 2d9635f --stat` lands 13 paths (index.ts, attemptStore.ts, workerStore.ts, workerStore.test.ts, claimNextTask.ts, claimGuards.ts, reattachAttempt.ts, reattachAttempt.test.ts, releaseTask.test.ts, tools/index.ts, docs/MCP_SERVER.md + board) — the whole implementation is ON the branch.\n- Its trailer: `Moe-Contested: packages/moe-daemon/src/delivery/acceptance.test.ts (task-5b85773867594a8eb0cea350f2c6008f)`. The path was dropped by `contested: skip-untouched` (moe-agent.sh:2790) because it was not in this session's TOOL set.\n- HEAD is now b586b1c (a QA-session checkpoint) whose trailer carries the SAME contested drop, so the QA session did not land it either.\n- `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` = 5; worktree = 4. HEAD:1621 is still `  it.skip(`.\n- `git diff` of that path is exactly one hunk: `-  it.skip(` / `+  it(`. No assertion or logic delta to re-derive.\n\nConfirmed the mechanism QA named, by reading the wrapper rather than trusting the summary: the TOOL tier is harvested from the CLI stream (moe-agent.sh:5941-5965 `WRITE_TOOLS = ('Edit','Write','MultiEdit','NotebookEdit')` + the Serena edit tools; ps1 twin `Register-MoeToolWrite`/`Complete-MoeToolWrite` at 3716-3740), and only a complete assistant tool_use with a matching NON-error tool_result registers the path. A sed/heredoc/PowerShell write produces no such event, which is why the identical bytes were invisible last time. ASSERTED alone cannot rescue it: at sh:2788-2792 a contested path is skipped unless `pk in TOOL`, regardless of modifiedFiles.\n\nSo the fix is exactly what QA prescribed and nothing more: re-apply the same one-word change with the Edit tool. Contract itself (case 4 at line 1607-1835, the `toolRefusal` `tool` field, the idempotent running/reconciling reattach, the three-hour-quiet fixture forbidding any lastActivityAt read) is unchanged and its assertions stay untouched.",
+      "startedAt": "2026-09-11T21:48:21.871Z",
+      "completedAt": "2026-09-11T21:48:58.107Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "CAPTURE THE RED PROOF BEFORE CHANGING ANYTHING. Unskip only the fourth acceptance case by changing its `it.skip` to `it`, touching not one assertion, and run `npx vitest run src/delivery/acceptance.test.ts` from packages/moe-daemon. SAVE the failing output: it is the epic rail's fails-on-old-behaviour evidence and the definition-of-done item that the case passes unedited. The expected first failure is the counterexample the case names, a purged owner: the second daemon's startup deletes the worker and releases the task while the build is still alive. Record which assertion fails first. Be aware this case spawns real processes and takes minutes; if the harness cannot spawn a daemon child in this environment, say so explicitly in the step note rather than editing the case or marking it skipped again. Then create src/state/workerStore.test.ts, which this card's verification command names and which does not exist yet, using the existing ToolTestHarness convention. It covers what the slow end-to-end case cannot isolate, all against the store rather than a spawned daemon: a worker owning a running attempt survives startup reconciliation with its record and currentTaskId intact and its task still WORKING and assigned; that attempt's phase becomes exactly `reconciling`; a worker owning NO attempt is still purged and its task still released exactly as today, which is the legacy path that must not regress; a worker whose attempt is already closed is likewise purged; a task held in reconciling is refused to a competing claimer with the exact code name; and a worker quiet for hours is held regardless, which is the test that fails if anyone reintroduces a liveness inference. Assert exact phase strings and exact code names, never truthiness.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/workerStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "note": "THE REJECT FIX. Re-applied the unskip with the Edit TOOL so the path enters the TOOL attribution tier and survives `contested: skip-untouched`.\n\nWhat I did, exactly:\n1. Edit #1 turned line 1621 back to `  it.skip(`. Verified it restored the landed bytes: `git diff --stat <path>` printed NOTHING (byte-identical to HEAD) and `grep -c 'it\\.skip('` = 5. This also proves the Edit tool preserved the file's LF endings — no whole-file CRLF rewrite.\n2. Edit #2 turned it back to `  it(`.\nNet worktree change: identical to what QA already reviewed. `git diff -U0` is one hunk, `-  it.skip(` / `+  it(`, `1 file changed, 1 insertion(+), 1 deletion(-)`. Not one assertion, comment or logic line touched. The other four cases still skip at 1187 / 1445 / 1852 / 1996 and still collect (4 skipped in the run below).\n\nBoth edits were real Edit tool_use blocks with successful tool_results, which is the ONLY thing that populates the TOOL set (moe-agent.sh:5941-5965 / ps1 `Register-MoeToolWrite`+`Complete-MoeToolWrite`). Deliberately did NOT use sed/heredoc/PowerShell for this file, overriding this session's general \"prefer Bash for edits\" guidance — a shell write leaves no stream event and is exactly how the change failed to land last time.\n\nRED PROOF: not re-derived, and here is why rather than an omission. The implementation is already ON the branch (2d9635f, 13 paths), so reverting it to re-fail the case would mean changing landed logic, which the reject explicitly forbids (\"change no logic, touch no assertion\"). The prior session's recorded red output stands as the fails-on-old-behaviour evidence: `-32601 Tool not found: moe.reattach_attempt` and `TypeError: reconcileRunningAttempts is not a function`, 8 failed. QA also re-ran the gate themselves and confirmed green.\n\nGREEN, fresh, this session, from packages/moe-daemon:\n- `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts` -> GATE_EXIT=0, `Test Files 2 passed (2)`, `Tests 11 passed | 4 skipped (15)`.\n- Case 4 proved by name, not by count: `npx vitest run src/delivery/acceptance.test.ts -t \"holds the task for its live owner through an abrupt daemon kill and restart\" --reporter=verbose` -> CASE4_EXIT=0, `✓ ... > holds the task for its live owner through an abrupt daemon kill and restart 1648ms`, `Tests 1 passed | 5 skipped (6)`. Real daemon children and a real long build; the environment CAN spawn them.\n\nsrc/state/workerStore.test.ts already exists and is landed (254 lines in 2d9635f) — no new test file needed for this reopen.\n\nHONEST LIMIT on the evidence QA asked for: `git show HEAD:<path> | grep -c 'it\\.skip('` still returns 5 right now, because HEAD is b586b1c and the landing for this session has not happened yet — the wrapper's post-flight makes the completion commit after I exit, so a landed-blob check cannot be run from inside the session that produces the commit. What I can assert is the precondition: the path is now TOOL-tier. The check itself is handed to QA in the completion summary against the new completion sha.",
+      "startedAt": "2026-09-11T21:49:02.358Z",
+      "completedAt": "2026-09-11T21:50:23.287Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "RECONCILE ON STARTUP INSTEAD OF DESTROYING. Add one exported helper to packages/moe-daemon/src/state/attemptStore.ts that moves every attempt currently in the running phase to reconciling, reusing the existing phase setter so the store keeps its single write-then-publish ordering, and returning what it moved so the caller can decide which workers to spare. Give it a comment stating plainly what the phase means: the daemon has lost sight of this execution and is holding the task until a runner proves the process is still there, which is not the same as believing it is alive. Then change `purgeAllWorkers` in src/state/workerStore.ts. It currently deletes every worker file, clears the map and releases every orphaned assignment. It must now spare a worker that owns a non-closed attempt: keep its record on disk and in the map, keep its currentTaskId, and leave its task WORKING and assigned rather than routing it through the release path. The worker record is what the definition of done means by stable identity persisted separately from the attempt, so it is deliberately not derived from the attempt file. Every worker with no attempt, or only closed ones, keeps today's purge and release behaviour exactly, because that is the legacy path for every project that predates attempts. Keep the existing per-worker error handling: one unwritable record must not abort startup for the rest of the fleet. In src/index.ts, at the startup call site around line 501, run the reconcile pass before the purge so the purge can see which attempts were held, and confirm while you are there that the state load which populates the attempts map already runs before both. Nothing here may consult lastActivityAt or any other idle signal.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "NO NEW EDITS — already landed in 2d9635f and byte-unchanged in the worktree. QA's reject was a landing gap on one test file and explicitly said \"change no logic\". Re-verified on the branch rather than assumed:\n\n- `src/state/attemptStore.ts:284` `export async function reconcileRunningAttempts(state): Promise<ExecutionAttempt[]>` — moves running -> reconciling through `setAttemptPhase`, returns what it moved, per-attempt try/catch so one unwritable record cannot brick startup. Comment at :265 states the phase meaning and that it \"consults lastActivityAt or any other idle signal\" nowhere, because a silent build is not evidence of death.\n- `src/state/workerStore.ts:308-346` `workersHoldingOpenAttempts` + the spare inside `purgeAllWorkers`: the file is skipped (:355), the map entry is restored from the surviving object rather than re-read (:370-373), currentTaskId is kept and the task never enters the release loop. Comment at :316 pins \"Reads the attempt phase and nothing else.\"\n- Legacy path intact: a seat with no attempt, or only closed ones, is purged and released exactly as before (:407-415, per-worker try/catch preserved).\n- `src/index.ts`: `await state.load()` (501) -> `reconcileRunningAttempts` inside the mutex (506) -> `purgeAllWorkers()` (507). Load populates the attempts map before both, and reconcile runs before the purge so the purge can see the held seats.\n- Zero idle signals: the only `lastActivityAt` hits across the changed files are the two comments saying it is deliberately not read.",
+      "startedAt": "2026-09-11T21:50:56.986Z",
+      "completedAt": "2026-09-11T21:51:06.594Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "REFUSE A COMPETING CLAIM WHILE AN ATTEMPT IS RECONCILING. In src/tools/claimNextTask.ts add a refusal that mirrors the finalizing one already in that file: same position, inside the exclusive section and before any ranking, eligibility scan or assignment write, so a refused claim can never have changed an owner. It differs in scope, and the difference matters: the finalizing hold is scoped to the calling worker, while this one is scoped to the TASK, because the whole point is to stop a DIFFERENT worker taking a task whose owner is still out there. Throw a MoeError with the STATE_CONFLICT code, codeName exactly `ATTEMPT_RECONCILING`, a message naming the attempt id, and a context carrying the attempt id, its generation, the task and the holding worker. Follow whatever the finalizing refusal does to surface the `tool` field that the acceptance helper asserts, so both refusals look the same on the wire. Do not let this refusal fire for the attempt's own owner reattaching through the claim path: reattachment has its own tool and this refusal is for third parties. Change nothing about claimable statuses, dependency gating, ranking, the alreadyAssigned resume or the attempt opening that already exists in this file. This is the error handling path the acceptance case exercises with worker-X, and it asserts the files are byte-identical afterwards, so the refusal must happen before any write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "NO NEW EDITS — landed in 2d9635f, byte-unchanged. Re-read the refusal on the branch to confirm the trap QA and the plan both flagged is still avoided:\n\n- `src/tools/claimNextTask.ts:218-229`: the guard looks up `listAttempts(state, params.taskId).find(a => a.phase === 'reconciling')` — scoped by TASK, not by caller. The finalizing hold directly above is caller-scoped; copying that scope was the named copy-paste defect and it is not present.\n- Owner exempt: `holding.workerId !== params.workerId`, so the seat's own resume through the claim path is not treated as a takeover.\n- Position: inside the exclusive section, before `let tasks: Task[]` and therefore before any ranking, eligibility scan or assignment write. A refused claim cannot have moved an owner, which is what the acceptance case's byte-identical file assertions after the worker-X refusal depend on.\n- THROWN, not returned: `attemptReconcilingRefusal` (`src/util/claimGuards.ts:117`) builds a MoeError with STATE_CONFLICT and codeName `ATTEMPT_RECONCILING` (:62, :132) and the attempt id in the message; McpAdapter attaches `{ tool, codeName }` to any thrown MoeError, which is the `tool` field `toolRefusal` asserts. Same wire shape as the finalizing refusal.\n- Nothing else in the file moved: claimable statuses, dependency gating, ranking, the alreadyAssigned resume and the existing attempt opening are untouched.\n- Ranked pool needs no change: a spared owner is present and not DEAD, so `isTaskClaimable` already excludes the held row. Only the explicit-taskId path needed the refusal (comment at :209-211 records this so it is not \"fixed\" later).",
+      "startedAt": "2026-09-11T21:51:08.942Z",
+      "completedAt": "2026-09-11T21:51:19.085Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "WRITE THE REATTACH TOOL. Create packages/moe-daemon/src/tools/reattachAttempt.ts following the shape of the neighbouring tool modules: an exported factory returning a ToolDefinition named `moe.reattach_attempt`, an input schema declaring taskId, workerId, runnerId, attemptId, generation, processStartedAt and host with additionalProperties false, and a handler whose whole body runs inside state.runExclusive. Do NOT mark it blocking: it never parks. Handler order: validate the inputs and refuse malformed ones as invalid input; load the attempt by id and refuse a missing one or one whose taskId does not match, by name; then compare the presented identity against the stored record. The identity is the attempt id, the generation, the recorded processStartedAt and the recorded host, and ALL of them must match: the acceptance case refuses a start time off by sixty seconds and refuses a different host with the same start time, both with codeName exactly `ATTEMPT_IDENTITY_MISMATCH` and the STATE_CONFLICT code. Compare the timestamps as exact recorded strings rather than by parsing to a date, so a re-serialised value cannot widen the match. On a mismatch throw before any write, because the case asserts byte-identical files afterwards. On a match, move the attempt to running through the store's phase setter and return the attempt id, generation and phase; an attempt already running is a no-op that returns the same success, which is what the first daemon in the case relies on. Leave the task and the worker record alone: the point of the hold is that they were never disturbed, and writing them here would be a second source of truth. Say in a comment what this tool does and does not prove: a matching process start time and host narrow which process the runner is talking about, they do not establish that it is alive, and nothing may treat them as proof. Then register the tool in getTools() in src/tools/index.ts, because an unregistered tool is silently invisible to MCP.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/reattachAttempt.ts"
+      ],
+      "note": "NO NEW EDITS — `src/tools/reattachAttempt.ts` (208 lines) and its registration landed in 2d9635f, byte-unchanged. Re-verified the properties the acceptance case pins:\n\n- Registered: `src/tools/index.ts:27` import, `:118` `reattachAttemptTool(state)` inside getTools(). Not registered = invisible to MCP, so this was checked, not assumed.\n- NOT blocking: `grep -c blocking src/tools/reattachAttempt.ts` = 0. It never parks, so it must not hold the global mutex the way wait_for_task does.\n- Identity is all four parts, and the timestamp is compared as the EXACT stored string (`:107-110`): `attempt.processStartedAt !== params.processStartedAt`, `attempt.host !== params.host`, plus attempt id and generation. No Date.parse anywhere, so a re-serialised instant cannot widen the match.\n- An attempt recorded before those fields existed is refused by name rather than silently matching (`:94`, `:107`, `:109` — \"(none recorded)\").\n- Mismatch throws before any write; the case asserts byte-identical task, worker and attempt files after both refusals.\n- Idempotent: `:181` accepts `reconciling` AND `running` and refuses everything else as `ATTEMPT_NOT_REATTACHABLE`. Both matter — in the acceptance case daemon #1 boots over a running fixture, so the startup pass has already moved it to `reconciling` before the first reattach lands. `setAttemptPhase` treats a repeated phase as no write at all (`:191`), so the running case is a true no-op and a retry after a lost response is safe.\n- Task and worker record are never written here: the hold's whole claim is that they were not disturbed, and writing them would create a second source of truth.\n- Comment at `:18-26` states the honest boundary: a matching start time and host narrow WHICH PROCESS the runner means; they are not evidence of liveness, and `lastActivityAt` has nothing to say here.\n- Still NOT comparing workerId/runnerId (regression-tested): claim_next_task opens attempts with `runnerId = workerId`, so a real runner's id never matches the stored one and every genuine reattach would be refused.",
+      "startedAt": "2026-09-11T21:51:21.126Z",
+      "completedAt": "2026-09-11T21:51:32.752Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "DOCUMENT THE TOOL AND THE RESTART CONTRACT. Add a section for `moe.reattach_attempt` to docs/MCP_SERVER.md alongside the other lifecycle tools, in the existing section format: purpose, parameters, returns, notes. The notes must carry what a runner cannot guess: that a daemon restart parks every running attempt in the reconciling phase and holds its task rather than releasing it, which is a deliberate change from the old purge-everything startup; that the runner reattaches by presenting the attempt id, generation, recorded process start time and host, and that all of them must match exactly; that a mismatch and a competing claim are both refused by name, with the two code names spelled out; that reattaching an already-running attempt is a safe no-op, so a retry after a lost response is fine; and the honest boundary that a matching start time and host narrow which process is meant but prove nothing about whether it is alive. Add one line to the daemon-lifecycle prose noting that the startup purge now spares a worker that owns a non-closed attempt, so worker identity survives a restart. Do not document the reconcile window or any timeout here: that belongs to the sibling card task-d7fa98f4e43d434a96cad9440b153f1c. Documentation only, no behaviour change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "NO NEW EDITS — docs landed in 2d9635f (45 lines), byte-unchanged. Worth recording: this path was ALSO contested by task-5b85773867594a8eb0cea350f2c6008f and it still landed, because it was written with the editing tool. Same mechanism I have now applied to the acceptance test, which is direct evidence the fix is the right one.\n\nVerified on the branch:\n- `docs/MCP_SERVER.md:485` `### moe.reattach_attempt` in the existing section format, with the full parameter block (taskId, workerId, runnerId, attemptId, generation, processStartedAt, host — the last two annotated \"EXACTLY as recorded\").\n- `:510` `reconciling` defined as the absence of both beliefs — not alive, not dead — and states no idle signal is consulted in either direction.\n- `:512` the honest boundary: a match narrows WHICH PROCESS (rules out a reused pid, a stale session, another machine) and is NOT evidence the process is alive.\n- `:513` both refusals by name with the numeric code — `-32002 ATTEMPT_IDENTITY_MISMATCH` and `-32002 ATTEMPT_RECONCILING` — including that the reconciling one is scoped by task, not caller, and fires before any write. Also records that `MoeError.context` is not forwarded on the wire, so clients key on `codeName`.\n- `:514` idempotent no-op for an already-running attempt, writing nothing (no touched `lastPhaseAt`), so a retry after a lost response is safe.\n- `:1476` the one-line lifecycle change: the startup purge spares a worker owning a non-closed attempt, so its record, map entry and currentTaskId survive; workers with no attempt or only closed ones are purged exactly as before.\n- Sibling-card boundary respected: `grep -c 'reconcileWindow\\|reconcile window' docs/MCP_SERVER.md` = 0. No window, timeout or successor-generation sweep documented here.",
+      "startedAt": "2026-09-11T21:51:51.801Z",
+      "completedAt": "2026-09-11T21:52:00.554Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "RUN THE NAMED GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run this card's own command first: `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts`. The fourth acceptance case must pass with its assertions untouched; if it does not, fix the production code, never the case. Allow for its 240 second budget and real process spawning, and if the environment genuinely cannot spawn daemon children, report that in the completion rather than claiming a pass. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Watch the restart-sensitive suites specifically: anything covering purgeAllWorkers, claim behaviour and daemon startup, because sparing a worker changes a path that every other test boots through. Confirm the acceptance file's other cases keep their existing skip state and still collect. Keep the exact commands, exit codes and counts for the verification argument of moe.complete_task, and keep the step-2 red output as the fails-on-old-behaviour proof.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GATE + FULL SUITE + TYPECHECK, all fresh this session, all exit 0. Exit codes captured separately from the filtered output (a grep/Select-String pipeline swallows them on this box).\n\n1) Card's own gate, from packages/moe-daemon:\n   `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts`\n   GATE_EXIT=0 — `Test Files 2 passed (2)`, `Tests 11 passed | 4 skipped (15)`.\n\n2) Case 4 proved BY NAME, not inferred from a count:\n   `npx vitest run src/delivery/acceptance.test.ts -t \"holds the task for its live owner through an abrupt daemon kill and restart\" --reporter=verbose`\n   CASE4_EXIT=0 — `✓ src/delivery/acceptance.test.ts > Wave 1 acceptance: restarting only the daemon during a long build preserves ownership > holds the task for its live owner through an abrupt daemon kill and restart 1648ms`, `Tests 1 passed | 5 skipped (6)`. The environment CAN spawn daemon children and the real long build; no pass is being claimed on a skipped case. Assertions untouched — the only diff in the file is `-  it.skip(` / `+  it(`.\n\n3) Full package suite, from packages/moe-daemon:\n   `npm.cmd test`\n   FULL_SUITE_EXIT=0 — `Test Files 114 passed (114)`, `Tests 1530 passed | 4 skipped (1534)`. Matches the pre-reject run exactly and is strictly above the pre-task baseline of 112 files / 1498 passed / 5 skipped: +2 files, +32 tests, one fewer skip (this card's case).\n\n4) `npx tsc --noEmit -p tsconfig.json` — TSC_EXIT=0, no output.\n\nRestart-sensitive suites watched specifically, since sparing a worker changes a path every test boots through: workerStore.test.ts, releaseTask.test.ts, claimNextTask*, reattachAttempt.test.ts and the daemon-startup suites are all inside the 114 green files. The ERROR/WARN lines in the run output are the deliberate injected-failure fixtures (\"Failed to close the attempt of a task released during worker purge\", \"Failed to park a running attempt in reconciling during startup; its task stays held\") — those are the per-record error-tolerance tests asserting startup survives one bad record, not real failures.\n\nOther four acceptance cases keep their skip state and still collect: `it.skip(` remains at 1187 / 1445 / 1852 / 1996, and the suite reports 4 skipped.\n\nLANDED-BLOB CHECK, stated honestly rather than claimed: `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` returns 5 right now, because HEAD is b586b1c and this session's completion commit does not exist yet — the wrapper lands after I exit, so the check cannot be run from inside the session that produces the commit. What changed is the precondition: the path is now TOOL-tier (two Edit tool_use/tool_result pairs this session), which is what `contested: skip-untouched` requires. The exact post-landing commands are handed to QA in the completion summary.",
+      "startedAt": "2026-09-11T21:52:04.246Z",
+      "completedAt": "2026-09-11T21:52:42.596Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: a worker owning a non-closed attempt genuinely survives startup with its file, its map entry and its currentTaskId, and its task is neither released nor re-routed; a worker with no attempt is still purged exactly as before, so no legacy project regresses; nothing anywhere consults lastActivityAt or any idle signal to decide the hold, which the three-hour-quiet fixture is there to catch; the reconciling claim refusal is scoped by task rather than by worker, or a third party walks straight in; both refusals throw before any write and leave every file byte-identical; the identity comparison requires the attempt id, the generation, the process start time AND the host, with the timestamp compared as the exact stored string; reattaching an already-running attempt is a no-op rather than an error; the tool is registered and not marked blocking; and the reconcile window, the successor generation and any sweep were left entirely to the sibling card. Confirm the file count is the nine in scope. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and tell QA two things plainly: that two definition-of-done items were moved to task-d7fa98f4e43d434a96cad9440b153f1c under the operator-approved split recorded in this card's comment and are deliberately absent here, and that the restart hold narrows which process a runner means but never establishes that it is alive, so a genuinely dead runner still parks its task until that sibling card lands.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/reattachAttempt.ts",
+        "packages/moe-daemon/src/state/workerStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "note": "ADVERSARIAL PASS re-run against the landed branch, not the previous summary. Every step-8 item checked by reading the code:\n\n- Spared seat never reaches the release loop: `purgeAllWorkers` restores the held seats into `state.workers` BEFORE the assignment loop, and that loop is gated on `state.isTaskAssignedToMissingWorker(task)` — a restored owner is not missing, so its task is never released or re-routed. File skipped (`spared.has(...) continue`), map entry rebuilt from the surviving object rather than re-read, so the record stays byte-identical. currentTaskId untouched.\n- Legacy path intact: no attempt, or only closed ones -> deleted + released via `nextStatusForRelease`, with the per-worker/per-task try/catch still wrapping each step.\n- Zero idle signals: only `lastActivityAt` occurrences in the changed files are comments saying it is deliberately not read.\n- Reconciling claim refusal scoped BY TASK (`listAttempts(state, params.taskId).find(a => a.phase === 'reconciling')`), owner exempt, thrown before `let tasks` and therefore before any ranking or write.\n- Identity requires attempt id + generation + processStartedAt + host; timestamp compared as the exact stored string (`!==`), no Date.parse; a record missing either hint is refused by name instead of matching.\n- Reattach idempotent for `running` AND `reconciling` (`setAttemptPhase` no-writes a repeated phase); `closed`/`finalizing` refused as ATTEMPT_NOT_REATTACHABLE.\n- Tool registered (`tools/index.ts:118`), `blocking` absent (grep count 0).\n- Sibling-card scope untouched: no reconcile window, no successor-generation sweep, `src/state/sweeps.ts` unchanged, 0 hits for \"reconcile window\" in docs.\n\nNew findings this pass (neither is a defect; recording so QA does not have to re-derive):\n1. MUTEX GAP, benign. `reconcileRunningAttempts` takes `state.mutex` at index.ts:506 and `purgeAllWorkers` takes it again at :507, so the two passes are separately exclusive rather than one critical section. No external actor exists in that window — the WS/MCP servers are not listening yet at that point in `startDaemon`. The only possible interleaver is a FileWatcher-triggered `load()`, and it is safe in the right direction: reconcile has already PERSISTED `reconciling`, so a reload re-reads a still-non-closed phase and the seat is still spared. Widening it to one critical section would need the mutex to be held across a reload it also triggers; left as is deliberately.\n2. An attempt whose `workerId` names a seat with NO record on disk is in `spared` but has nothing to spare — no file to skip, no map entry to restore — so its task still falls to `isTaskAssignedToMissingWorker` and is released with the attempt closed. That is the dangling-assignment case `releaseTask.test.ts` now pins via `seedDanglingTask`, and it is the correct outcome: no seat exists to hold the row.\n3. Input hardening on reattach confirmed against the checklist: null/undefined/blank strings rejected by `requireNonBlank`; `generation` rejects non-numbers, NaN, Infinity, 0, negatives and non-safe integers via `Number.isSafeInteger(...) && >= 1`.\n\nFILE COUNT: 13 landed paths, not the plan's 9 — deltas already flagged at the first completion (claimGuards.ts, reattachAttempt.test.ts, releaseTask.test.ts, plus the board/epic records). This session touched exactly ONE path: `packages/moe-daemon/src/delivery/acceptance.test.ts`, one line, via the Edit tool.",
+      "startedAt": "2026-09-11T21:52:46.970Z",
+      "completedAt": "2026-09-11T21:53:37.938Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 1,
+  "reopenReason": "One DoD item unmet ON THE BRANCH: \"The acceptance case ... is unskipped and passes unchanged.\" A landing gap, not a code defect — the rest is good work.\n\nEVIDENCE:\n  git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('  -> 5\n  grep -c 'it\\.skip(' packages/moe-daemon/src/delivery/acceptance.test.ts                  -> 4\n  HEAD line 1621 is still \"  it.skip(\"\nCommit 2d9635f does not contain that file. Its trailer says why: Moe-Contested: .../acceptance.test.ts (task-5b85773867594a8eb0cea350f2c6008f) — a live WORKING peer declares that path. Under contested: skip-untouched (scripts/moe-agent.sh:2790) a peer-declared path is dropped unless it is in the TOOL tier (a Claude editing call with a matching tool_result). docs/MCP_SERVER.md was contested too and DID land, because it was edited with the editing tool; this one was not.\nConsequence: on the merged branch CI still runs case 4 as skipped, so the epic's fourth acceptance criterion is enforced by nothing. Your green runs were real but against unlanded bytes.\n\nFIX: worktree content is already correct — change no logic, touch no assertion. Re-apply the same it.skip( -> it( at line 1621 with the Edit/Write tool (not sed/heredoc/PowerShell), then re-run the gate and confirm the LANDED blob returns 4.\n\nRE-RAN MYSELF, ALL GREEN: gate cmd exit 0 (2 files, 11 passed | 4 skipped; case 4 passed 1311ms with real daemon children + real long build); npm.cmd test exit 0 (114 files, 1530 passed | 4 skipped); tsc exit 0. Verified too: spared seat never enters the release loop, reconcile runs before purge inside the mutex, ATTEMPT_RECONCILING is task-scoped with owner exempt and thrown before any write, identity needs generation+processStartedAt(exact string)+host, reattach idempotent, registered and non-blocking, releaseTask.test.ts tightened not weakened, zero idle signals added. DoD 3 and 5 correctly out of scope per the operator split — not held against you.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b6c48bf029bf4170a603a91c12451df7",
+    "task-30df41a802754b65ac29d04fa031b769"
+  ],
+  "priority": "HIGH",
+  "order": 70,
+  "comments": [
+    {
+      "id": "comment-76db1359c72b458e96e12fb3c85162c9",
+      "author": "architect-31b9f5b1",
+      "content": "SCOPE SPLIT, operator-approved 2026-09-11. This card needed 10 distinct files, the size gate's hard ceiling, so the give-up half moved to a new sibling: task-d7fa98f4e43d434a96cad9440b153f1c, \"Close an attempt that never reattaches and allow one successor\", which dependsOn this card.\n\nTwo definition-of-done items moved there verbatim and are NOT deliverable here. QA should not fail this card for them:\n- \"An attempt confirmed dead, or unreattached past the configurable reconcile window, is closed and permits exactly one successor generation\"\n- \"The reconcile window is a settings key with a documented default and is never applied to a live reattached attempt, so no idle-based auto-release is introduced for WORKING or PLANNING\"\n\nThis card keeps the restart hold, the reattach surface and the claim refusal, which is exactly what its acceptance case (src/delivery/acceptance.test.ts, describe at line 1607) drives end to end. That case never waits for a reconcile window and never infers death from lastActivityAt, so it is fully satisfiable without the moved items.\n\nRemaining definition-of-done here: startup moves running attempts to reconciling and holds their tasks; a matching reattach returns the attempt to running with the task still assigned; stable worker identity survives the restart, persisted separately from the attempt; the acceptance case is unskipped and passes unchanged; and the named verification command plus the full package suite stay green.",
+      "timestamp": "2026-09-11T21:23:08.101Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:00:55.761Z",
+  "updatedAt": "2026-09-11T21:58:30.345Z",
+  "contextFetchedBy": [
+    "worker-85674160",
+    "qa-813933f7"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-11T18:35:43.267Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 16,
+    "rejectCount": 1,
+    "reopenCount": 1,
+    "doneAt": "2026-09-11T21:57:38.786Z",
+    "wallClockMs": 12115519
+  },
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
+  "failedDodItems": [
+    {
+      "item": "The acceptance case for restart during a long build is unskipped and passes unchanged",
+      "rejectedAt": "2026-09-11T21:46:25.265Z",
+      "rejectedBy": "qa-813933f7"
+    }
+  ],
+  "planSubmittedAt": "2026-09-11T21:24:31.758Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Planning all seven definition-of-done items in one card: it needed 10 distinct files, the size gate's hard ceiling, with a real-process acceptance case that takes minutes. The operator was asked and chose to split, so the give-up half is now task-d7fa98f4e43d434a96cad9440b153f1c and this card keeps exactly what its acceptance case drives. (2) Deriving worker identity from the attempt record rather than sparing the worker file: rejected, because the definition of done asks for identity persisted SEPARATELY from the attempt, and the acceptance case asserts the worker file's currentTaskId directly after the restart. (3) Scoping the reconciling claim refusal to the calling worker, mirroring the finalizing hold: rejected outright, and worth stating because it is the obvious copy-paste error — the finalizing hold stops a worker starting more work, while this one stops a DIFFERENT worker taking a task whose owner is still out there, so it must be scoped by task. (4) Parsing the recorded process start time to a date before comparing: rejected, since a re-serialised value could widen the match; compare the exact stored string. (5) Having reattach also rewrite the task or worker record: rejected, because the whole claim of the hold is that neither was disturbed, and writing them would create a second source of truth. (6) Consulting lastActivityAt to decide whether to hold: forbidden by a task rail and by the fixture, whose worker has been quiet for three hours and must still keep its task.",
+    "codebaseInsights": "The acceptance case at line 1607 is the real specification and is already in the tree. It drives the genuine startup path through a spawned daemon child rather than a StateManager reload, spawns a real silent build process, kills the daemon abruptly, and asserts byte-identical task, worker and attempt files across every refusal. It requires a tool this card's description never names, `moe.reattach_attempt`, with the full identity tuple. Its `toolRefusal` helper asserts a `tool` field on the error alongside code and codeName, so both refusals must carry it the way the existing finalizing refusal does. The first daemon in the case reattaches an attempt that is already running, which pins reattach as idempotent for that phase. On the production side, purgeAllWorkers at workerStore.ts line 305 deletes every worker file, clears the map and releases assignments through nextStatusForRelease, with a deliberate per-worker try/catch so one bad record cannot abort startup; its call site is src/index.ts line 501, and the state load that populates the attempts map runs before it. The attempt store's phase setter already treats a repeated phase as a no-op and closed as terminal, so reconciling and running transitions need no new store primitive beyond one pass helper. src/state/sweeps.ts exists and is where the sibling card's window belongs, not here. src/state/workerStore.test.ts does not exist yet and this card's verification command names it, so it is created here.",
+    "risks": "The single most likely defect is scoping the reconciling refusal by worker instead of by task, because the finalizing refusal directly above it does exactly that and reads as the pattern to copy. Second is reintroducing a liveness inference: any lastActivityAt check added to the hold passes casual review and fails the three-hour-quiet fixture, and a task rail forbids it. Third is the byte-purity requirement: the case compares raw file bytes after each refusal, so a stray activity row, timestamp or defensive rewrite anywhere in the refusal path breaks it. Sparing a worker from the purge changes a path every other test boots through, so watch the full suite rather than just the named files. The acceptance case spawns real processes with a 240 second budget; if the environment cannot spawn daemon children, that must be reported honestly rather than papered over. Finally, do not overstate the result: matching a process start time and host narrows which process a runner means and proves nothing about liveness, and until the sibling card lands a genuinely dead runner parks its task indefinitely — both belong in the completion summary.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T21:24:31.823Z",
+  "workStartedAt": "2026-09-11T21:24:53.048Z",
+  "reviewStartedAt": "2026-09-11T21:55:20.182Z",
+  "verification": {
+    "command": "npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts",
+    "exitCode": 0,
+    "outputTail": "GATE (packages/moe-daemon): Test Files  2 passed (2) | Tests  11 passed | 4 skipped (15) | GATE_EXIT=0\n\nCASE 4 BY NAME: npx vitest run src/delivery/acceptance.test.ts -t \"holds the task for its live owner through an abrupt daemon kill and restart\" --reporter=verbose\n  v src/delivery/acceptance.test.ts > Wave 1 acceptance: restarting only the daemon during a long build preserves ownership > holds the task for its live owner through an abrupt daemon kill and restart 1648ms\n  Test Files  1 passed (1) | Tests  1 passed | 5 skipped (6) | CASE4_EXIT=0\n\nFULL SUITE: npm.cmd test -> Test Files  114 passed (114) | Tests  1530 passed | 4 skipped (1534) | FULL_SUITE_EXIT=0 (baseline 112 files / 1498 passed / 5 skipped)\n\nTYPECHECK: npx tsc --noEmit -p tsconfig.json -> no output, TSC_EXIT=0",
+    "reportedAt": "2026-09-11T21:55:20.182Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/index.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json"
+  ],
+  "completionSummary": "REOPEN FIX. The code was already correct and landed in 2d9635f (13 paths); only the one-word unskip of acceptance case 4 never reached the branch. Cause: `contested: skip-untouched` (moe-agent.sh:2790) drops a peer-declared path — task-5b857738 declares acceptance.test.ts — unless it is TOOL-tier, and the prior session wrote it with a shell. docs/MCP_SERVER.md was contested too and landed only because an editing tool wrote it.\n\nRe-applied the identical change with the Edit tool. Round trip: Edit back to `it.skip(`, confirmed `git diff --stat` printed NOTHING (byte-identical to HEAD, LF endings preserved), then Edit forward. No logic, assertion or comment touched; `git diff -U0` is one hunk, `-  it.skip(` / `+  it(`. Other four cases still skip at 1187/1445/1852/1996 and still collect.\n\nFRESH VERIFICATION (this session, exit codes captured separately from filtered output):\n- gate `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts` = 0 — 11 passed | 4 skipped (15)\n- case 4 proved BY NAME, not by count: `-t \"holds the task for its live owner...\" --reporter=verbose` = 0, passed in 1648ms with real daemon children and a real long build\n- `npm.cmd test` = 0 — 114 files, 1530 passed | 4 skipped (baseline 112/1498/5)\n- `npx tsc --noEmit -p tsconfig.json` = 0\n\nTWO THINGS I CANNOT ASSERT MYSELF:\n1. LANDED BLOB. It cannot be checked inside the session that produces the commit — the wrapper lands after the CLI exits. HEAD is b586b1c and still returns 5. Please run against the completion sha: `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` == 4, the path present in `git show --stat <sha>`, and no `Moe-Contested` line for it in the trailer. If it is dropped again, that is the wrapper's TOOL harvest, not the diff.\n2. SCOPE. DoD 3 (one successor generation for a dead/expired attempt) and DoD 5 (the reconcile-window settings key) belong to task-d7fa98f4e43d434a96cad9440b153f1c under the operator-approved split reco",
+  "commits": [
+    {
+      "sha": "2d9635f83f1b8e58d241d3a9028ebf446524fa5a",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T21:24:34Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        ".moe/tasks/task-e8bbfb4363bd458ab29ee1c0f17e2dc1.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/workerStore.test.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/reattachAttempt.test.ts",
+        "packages/moe-daemon/src/tools/reattachAttempt.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T21:40:40.230Z",
+      "treeId": "e5bf7fd03968b6be07eed49377b37fced7e7ed0b",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        },
+        {
+          "path": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "b586b1c3caad3d95739d9c211651accbd1296459",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T21:40:01Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T21:47:16.897Z",
+      "treeId": "c28152d9837ba2a271c0c87e3a85102c973b24a5",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "f7663c00c06032c374d3967b821b0c86c3444bee",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-85674160@2026-09-11T21:46:28Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "recordedBy": "worker-85674160",
+      "recordedAt": "2026-09-11T21:55:28.572Z",
+      "treeId": "e59d45b4e89a3ce5f5bcaa030740fb82d9879687",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "taskId": "task-5b85773867594a8eb0cea350f2c6008f"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "284a4adb7069a04f3990a590420cd4eff8468907",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T21:55:26Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T21:58:30.345Z",
+      "treeId": "9074d7c8feb57fd67fb4ac769c59538a9b1dd1f3",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/state/workerStore.test.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/releaseTask.test.ts",
+    "packages/moe-daemon/src/tools/reattachAttempt.ts",
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/reattachAttempt.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts"
+  ],
+  "unattributedPaths": [
+    ".moe-tmp-patch.py",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T21:55:26Z",
+    "at": "2026-09-11T21:58:30.345Z"
+  },
+  "reviewCompletedAt": "2026-09-11T21:57:38.786Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The acceptance case for restart during a long build is unskipped and passes unchanged"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "line": 1621,
+        "description": "The it.skip( -> it( unskip is uncommitted worktree bytes only. Commit 2d9635f omits this file (trailer: Moe-Contested ... task-5b857738...). `git show HEAD:<path> | grep -c 'it\\.skip('` = 5 vs 4 in the worktree; HEAD:1621 is still `  it.skip(`. So on the branch the 4th Wave 1 acceptance case stays skipped. Fix: re-apply the identical one-word change with the Edit/Write tool so it enters the TOOL tier and survives contested: skip-untouched (moe-agent.sh:2790). No assertion or logic change."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "line": 1621,
+        "description": "Evidence gap, same cause: task.verification records GATE_EXIT=0 for a run over worktree bytes that never landed. On re-complete, add a landed-blob check to the evidence — `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` == 4, plus the path appearing in `git show --stat <completionSha>` — so a green run can no longer be reported for code that is not on the branch."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "One DoD item unmet ON THE BRANCH: \"The acceptance case ... is unskipped and passes unchanged.\" A landing gap, not a code defect — the rest is good work.\n\nEVIDENCE:\n  git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('  -> 5\n  grep -c 'it\\.skip(' packages/moe-daemon/src/delivery/acceptance.test.ts                  -> 4\n  HEAD line 1621 is still \"  it.skip(\"\nCommit 2d9635f does not contain that file. Its trailer says why: Moe-Contested: .../acceptance.test.ts (task-5b85773867594a8eb0cea350f2c6008f) — a live WORKING peer declares that path. Under contested: skip-untouched (scripts/moe-agent.sh:2790) a peer-declared path is dropped unless it is in the TOOL tier (a Claude editing call with a matching tool_result). docs/MCP_SERVER.md was contested too and DID land, because it was edited with the editing tool; this one was not.\nConsequence: on the merged branch CI still runs case 4 as skipped, so the epic's fourth acceptance criterion is enforced by nothing. Your green runs were real but against unlanded bytes.\n\nFIX: worktree content is already correct — change no logic, touch no assertion. Re-apply the same it.skip( -> it( at line 1621 with the Edit/Write tool (not sed/heredoc/PowerShell), then re-run the gate and confirm the LANDED blob returns 4.\n\nRE-RAN MYSELF, ALL GREEN: gate cmd exit 0 (2 files, 11 passed | 4 skipped; case 4 passed 1311ms with real daemon children + real long build); npm.cmd test exit 0 (114 files, 1530 passed | 4 skipped); tsc exit 0. Verified too: spared seat never enters the release loop, reconcile runs before purge inside the mutex, ATTEMPT_RECONCILING is task-scoped with owner exempt and thrown before any write, identity needs generation+processStartedAt(exact string)+host, reattach idempotent, registered and non-blocking, releaseTask.test.ts tightened not weakened, zero idle signals added. DoD 3 and 5 correctly out of scope per the operator split — not held against you.",
+      "rejectedAt": "2026-09-11T21:46:25.265Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The acceptance case for restart during a long build is unskipped and passes unchanged"
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "line": 1621,
+          "description": "The it.skip( -> it( unskip is uncommitted worktree bytes only. Commit 2d9635f omits this file (trailer: Moe-Contested ... task-5b857738...). `git show HEAD:<path> | grep -c 'it\\.skip('` = 5 vs 4 in the worktree; HEAD:1621 is still `  it.skip(`. So on the branch the 4th Wave 1 acceptance case stays skipped. Fix: re-apply the identical one-word change with the Edit/Write tool so it enters the TOOL tier and survives contested: skip-untouched (moe-agent.sh:2790). No assertion or logic change."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "line": 1621,
+          "description": "Evidence gap, same cause: task.verification records GATE_EXIT=0 for a run over worktree bytes that never landed. On re-complete, add a landed-blob check to the evidence — `git show HEAD:packages/moe-daemon/src/delivery/acceptance.test.ts | grep -c 'it\\.skip('` == 4, plus the path appearing in `git show --stat <completionSha>` — so a green run can no longer be reported for code that is not on the branch."
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-09-11T21:57:38.786Z",
+  "reviewSummary": "APPROVED after reopen #1. The landing gap is closed and re-verified on the LANDED blob, not the worktree.\n\nTHE FIX: f7663c0 contains packages/moe-daemon/src/delivery/acceptance.test.ts with exactly one hunk, `-  it.skip(` / `+  it(` at 1621. No assertion, no logic, no timeout changed. `git show HEAD:<path> | grep -c 'it\\.skip('` = 4 (was 5); worktree = 4; HEAD:1621 is now `  it(`. The Moe-Contested trailer still names the path, but it landed this time — TOOL tier survives skip-untouched, which is the exact mechanism I asked for.\n\nRE-RAN MYSELF, ALL EXIT 0:\n- gate `npx vitest run src/state/workerStore.test.ts src/delivery/acceptance.test.ts` -> 2 files, 11 passed | 4 skipped\n- case 4 by name --reporter=verbose -> PASSED 1653ms (real daemon children, real long build); 1 passed | 5 skipped\n- `npm.cmd test` -> 114 files, 1530 passed | 4 skipped (baseline 112/1498/5)\n- `npx tsc --noEmit` -> clean\nCounts match the worker's reported evidence exactly.\n\nDoD: 1 index.ts:506-507 reconcile-before-purge inside the mutex, load first; 2 reattachAttempt.ts registered at tools/index.ts:118, non-blocking, identity = id+generation+exact-string processStartedAt+host, idempotent for running; 4 workerStore spares the seat and restores it into state.workers BEFORE the release loop, so a held seat never enters it; 6 unskipped AND landed; 7 green above. DoD 3 and 5 are the operator-approved split to task-d7fa98f4e43d434a96cad9440b153f1c — deliberately absent, not a gap.\n\nRAILS: zero idle signals — lastActivityAt appears only inside two comments; sweeps.ts has zero changed lines; reviewStaleTimeoutMs appears in the diff only as task-JSON rail text. ATTEMPT_RECONCILING is TASK-scoped with the owner exempt and thrown before any write. No forbidden patterns in the diff.\n\nHONEST BOUNDARY carried forward: start time + host narrow WHICH process a runner means, never that it is alive, so until the sibling card lands a genuinely dead runner parks its task indefinitely."
+}

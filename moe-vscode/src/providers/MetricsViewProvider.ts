@@ -291,8 +291,9 @@ export class MetricsViewProvider implements vscode.WebviewViewProvider, vscode.D
         });
 
         function renderAggregate(a, lastUpdated) {
+            // The daemon already emits firstPassApprovalPct in percent units (0..100), so consumers must not rescale it.
             const firstPass = (typeof a.firstPassApprovalPct === 'number')
-                ? Math.round(a.firstPassApprovalPct * 100) + '%'
+                ? Math.round(a.firstPassApprovalPct) + '%'
                 : '—';
             document.getElementById('kpiFirstPass').textContent = firstPass;
             document.getElementById('kpiWallClock').textContent = humaniseMs(a.avgWallClockMs);

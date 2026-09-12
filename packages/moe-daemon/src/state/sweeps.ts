@@ -21,8 +21,9 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { RailProposal, TaskStatus, Worker } from '../types/schema.js';
+import type { ExecutionAttempt, RailProposal, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { listAttempts, setAttemptPhase } from './attemptStore.js';
 import { isWorkerAlive, nextStatusForRelease } from './workerLifecycle.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import { cleanupStaleResourceWaiters } from '../tools/waitForResource.js';
@@ -39,6 +40,16 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 export const PROPOSAL_PURGE_AGE_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_AGE_MS || `${7 * DAY_IN_MS}`, 10);
 export const PROPOSAL_PURGE_INTERVAL_MS = parseInt(process.env.MOE_PROPOSAL_PURGE_INTERVAL_MS || `${DAY_IN_MS}`, 10);
 export const PROPOSAL_SNAPSHOT_RETENTION_MS = parseInt(process.env.MOE_PROPOSAL_SNAPSHOT_RETENTION_MS || `${DAY_IN_MS}`, 10);
+
+/**
+ * Default for settings.reconcileWindowMs — 2 hours. Lives here beside the sweep
+ * that reads it; StateManager's constructor imports it so there is one value.
+ * The reasoning for the size is on that constructor default.
+ */
+export const DEFAULT_RECONCILE_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/** Cadence of the reconcile-window pass. Matches the blocked-timeout sweep. */
+export const RECONCILE_WINDOW_CHECK_INTERVAL_MS = 300000;
 
 /**
  * Start periodic check for blocked worker timeouts.
@@ -128,6 +139,157 @@ export function stopStaleWorkerWatcher(state: StateManager): void {
     clearInterval(state.staleWorkerInterval);
     state.staleWorkerInterval = undefined;
   }
+}
+
+/**
+ * Start the periodic reconcile-window pass. Default cadence: 5 minutes.
+ */
+export function startReconcileWindowCheck(
+  state: StateManager,
+  intervalMs = RECONCILE_WINDOW_CHECK_INTERVAL_MS
+): void {
+  state.stopReconcileWindowCheck();
+  // mutex.exit: see startBlockedTimeoutCheck.
+  state.reconcileWindowInterval = state.mutex.exit(() => setInterval(() => {
+    state.checkReconcileWindow().catch((err) => {
+      logger.error({ error: err }, 'Error checking the attempt reconcile window');
+    });
+  }, intervalMs));
+  if (state.reconcileWindowInterval.unref) {
+    state.reconcileWindowInterval.unref();
+  }
+}
+
+export function stopReconcileWindowCheck(state: StateManager): void {
+  if (state.reconcileWindowInterval) {
+    clearInterval(state.reconcileWindowInterval);
+    state.reconcileWindowInterval = undefined;
+  }
+}
+
+/**
+ * Close reconciling attempts that no runner ever came back for, and release
+ * their tasks for ONE successor each.
+ *
+ * WHY THIS EXISTS. A daemon restart parks every `running` attempt in
+ * `reconciling`: the daemon has lost sight of that execution and holds the task
+ * until a runner reattaches and proves which process it is talking about. If no
+ * runner ever comes back, nothing else releases the row — the seat is spared by
+ * purgeAllWorkers, third parties are refused by the claim guard, and there is
+ * deliberately no idle sweep for WORKING. The task would be parked forever.
+ *
+ * WHAT THIS IS NOT. It is not a death detector, and the window is not evidence
+ * of anything. The daemon is state-only and never probes a process; the only
+ * authority that can establish a runner stopped is the wrapper's exit trap
+ * calling moe.deregister_worker, and that path already closes the attempt
+ * immediately (releaseWorkerTasks → closeOpenAttempts, which covers
+ * `reconciling` because it is one of OPEN_PHASES). This is only the bound for
+ * when no such declaration ever arrives.
+ *
+ * TWO INVARIANTS THIS SWEEP MUST NEVER BREAK, both of which would look correct
+ * in review:
+ *  - The filter is the `reconciling` phase EXACTLY — never the task's status. A
+ *    reconciling attempt's task is still WORKING, so a status filter would
+ *    sweep live rows. `running` (including a successfully reattached attempt)
+ *    and `finalizing` are untouched however old they are.
+ *  - The clock is the attempt's own `lastPhaseAt` — when it ENTERED the phase —
+ *    never a worker's `lastActivityAt`. Measuring from worker idle would
+ *    reintroduce the idle-based auto-release for WORKING/PLANNING that a task
+ *    rail forbids: a quiet build is not evidence of a dead worker.
+ *
+ * EXACTLY ONE SUCCESSOR, without a counter here. This sweep never opens an
+ * attempt; the next claim does. The store is what makes the successor exactly
+ * one: openAttempt refuses a second open attempt for the same task, and the
+ * generation allocator takes the max over EVERY prior attempt (closed ones
+ * included) + 1, so the successor is strictly greater and a generation is never
+ * reissued. A count kept here would be a second source of truth for a rule that
+ * already holds.
+ *
+ * Caller must hold state.mutex (checkReconcileWindow provides it). Returns the
+ * attempts it closed.
+ */
+export async function runReconcileWindowSweep(
+  state: StateManager,
+  nowMs = Date.now()
+): Promise<ExecutionAttempt[]> {
+  const closed: ExecutionAttempt[] = [];
+  for (const attempt of listAttempts(state)) {
+    if (attempt.phase !== 'reconciling') continue;
+    const phaseAt = attempt.lastPhaseAt ? Date.parse(attempt.lastPhaseAt) : NaN;
+    // An unreadable timestamp is not a licence to release: skip it, exactly as
+    // the sweeps above skip a worker whose lastActivityAt will not parse.
+    if (Number.isNaN(phaseAt)) continue;
+    if (nowMs - phaseAt <= state.reconcileWindowMs) continue;
+
+    // Per-attempt, like every other sweep here: one unwritable record must not
+    // stop the pass for the whole fleet. A record that fails to close stays
+    // `reconciling` — still non-closed, so its task is still held and a runner
+    // reattaching to it still succeeds. Failing in that direction is safe.
+    try {
+      logger.info(
+        { attemptId: attempt.id, taskId: attempt.taskId, lastPhaseAt: attempt.lastPhaseAt },
+        'Closing an attempt that sat in reconciling past the window; releasing its task for one successor'
+      );
+      // CLOSE FIRST, THEN RELEASE. The reverse order leaves a window in which
+      // the task is released while its attempt is still `reconciling` — and the
+      // claim guard refuses a reconciling row to exactly the third party the
+      // release just invited.
+      closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
+
+      const task = state.getTask(attempt.taskId);
+      // No task (deleted under a stale attempt): the close above is all there
+      // is to do, and updateTask would throw NOT_FOUND.
+      if (!task) continue;
+      // Release ONLY the seat this attempt actually held. A row that has since
+      // been handed to somebody else is that worker's live work, and yanking it
+      // on the age of a superseded record would be exactly the "never yank a
+      // live worker" violation this sweep must not commit. Closing the stale
+      // attempt above is still right, and an already-unassigned row (a release
+      // that got half-way) still needs its status routed below.
+      if (task.assignedWorkerId && task.assignedWorkerId !== attempt.workerId) continue;
+      // Context 'requeue', NOT the blocked sweep's 'park': park routes to
+      // BACKLOG, which is human-gated and invisible to agents, so it would
+      // yield no successor at all. Requeue returns the row to the column the
+      // shared routing chooses (WORKING stays WORKING-unassigned, or → REVIEW
+      // when every step is already done) where the next claim picks it up.
+      await state.updateTask(task.id, {
+        assignedWorkerId: null,
+        status: nextStatusForRelease(task, 'requeue'),
+      }, 'WORKER_TIMEOUT');
+
+      // The status usually does NOT change here (WORKING → WORKING), and
+      // updateTask only auto-releases the prior owner on a status change — so
+      // clear the seat's back-pointer explicitly, exactly as the REVIEW
+      // self-heal above does. A worker record still naming a row it no longer
+      // owns reads as busy in list_workers and re-alerts in the stale watcher.
+      // Preserve its real lastActivityAt: letting updateWorker stamp a fresh
+      // one would resurrect a suspected corpse as "alive" and defeat the
+      // Layer-3 prune that removes it once it owns nothing.
+      const owner = state.workers.get(attempt.workerId);
+      if (owner?.currentTaskId === task.id) {
+        await state.updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt });
+      }
+    } catch (error) {
+      logger.error(
+        { error, attemptId: attempt.id, taskId: attempt.taskId },
+        'Failed to close a reconciling attempt past its window; its task stays held'
+      );
+    }
+  }
+  return closed;
+}
+
+/** Mutex-wrapped entry point for the interval and for direct callers. */
+export async function checkReconcileWindow(
+  state: StateManager,
+  nowMs = Date.now()
+): Promise<ExecutionAttempt[]> {
+  // Same reasoning as checkBlockedTimeouts: setAttemptPhase and updateTask are
+  // themselves lock-free, so without this wrapper the background timer would
+  // interleave with tool handlers at an await boundary — and a release racing a
+  // reattachment is exactly the lost update this must not have. runExclusive is
+  // reentrant, so a direct caller already holding the lock re-enters.
+  return state.mutex.runExclusive(() => runReconcileWindowSweep(state, nowMs));
 }
 
 /**

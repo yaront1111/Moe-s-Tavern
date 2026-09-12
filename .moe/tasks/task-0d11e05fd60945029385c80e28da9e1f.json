@@ -1,0 +1,411 @@
+{
+  "id": "task-0d11e05fd60945029385c80e28da9e1f",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Remove the deprecated task time-budget UI from both IDE clients",
+  "description": "packages/moe-daemon/src/types/schema.ts marks the task time-budget fields DEPRECATED and ignored (the 80%/100% warn feature was removed), but the clients still advertise it: moe-jetbrains MoeBundle.properties has 'moe.metrics.budgetRemaining=Budget remaining' (Metrics + Budget surface), and moe-vscode/src/panels/TaskDetailPanel.ts:726-770 renders task.budget.wallClockMs as 'remaining'. Users see a control that does nothing. Remove the budget rendering and strings from both clients (keep chat hop limits and reopen caps — those are separate and live), drop any dead budget fields from the plugin Task/Metrics models, and scrub docs/CONFIGURATION.md + docs/SCHEMA.md of budget as a live setting (leave the deprecation note in schema.ts). Source: roadmap 2026-09-10 §4 'Effective settings'.",
+  "definitionOfDone": [
+    "No 'budget' string remains in moe-jetbrains/src/main (grep), MetricsPanel compiles without the budget KPI",
+    "TaskDetailPanel.ts no longer reads task.budget; npm run compile green",
+    "docs/CONFIGURATION.md and docs/SCHEMA.md do not present time budgets as a live setting",
+    "./gradlew test green and moe-vscode npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY THE THREE CHILDREN LANDED, THEN CONFIRM WHAT IS LEFT. Read-only, no edits. This parent is the docs and integration gate over the original Definition of Done; it must not re-implement a single line of child work. (a) Prove each child landed by landing.merged true or `git log <branch> --grep \"Moe-Task: <id>\"`: task-0471536723384823995c88fe0fb58e15 (JetBrains presentation), task-435683c2df8f47e7b77a77dc51ba62e9 (JetBrains model and both parsers) and task-9d731a5e5eb14951a9d342e5976883b6 (VS Code detail, board and model). All three were unlanded on 2026-09-11, so re-measure; if any is missing, moe.report_blocked naming the specific ids rather than finishing their work here. (b) Run the two client-side Definition-of-Done checks as VERIFICATION, not as edits: `grep -rni budget moe-jetbrains/src/main` must return nothing, and `grep -rn \"task.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` must return nothing. Correct one line of the task prose while you are here: no MetricsPanel change is needed or wanted - the JetBrains remaining-versus-cap readout lives in TaskDetailDialog and the board badge, both owned by the first child. If a grep hit survives in a child's file, report it to that child rather than fixing it here. (c) Read the three live doc defects this parent DOES own, all of which still describe a removed feature as active: docs/CONFIGURATION.md line 168 says moe.submit_plan seeds an absent task budget from pacePerStepMs; docs/SCHEMA.md lines 180-181 repeat that seeding claim, line 437 presents the task budget field as a soft wall-clock cap, and lines 742-746 describe the daemon checking firstClaimAt plus the cap. packages/moe-daemon/src/types/schema.ts already contradicts all of it at lines 119 and 722-728 with DEPRECATED and ignored notes. (d) Note the two near-misses that must NOT be scrubbed: schema.ts line 740 speaks of a reopen budget, which is the live reopen cap, and the chat hop limit is likewise live. Record foreign dirty paths and preserve them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "READ-ONLY, no edits. Bound seat: baseline .git/moe/baseline/task-0d11e05f...tsv present (11:04:30Z, head=8d2ac40). (a) All 3 children DONE and landed, each an ancestor of HEAD 8d2ac40 and on origin/moe/work-2026-09-10: task-04715367 = 792e4ce feat (TaskDetailDialog.kt, TaskCard.kt, MoeBundle.properties) + 97f295b recovered wip (MoeDuration.kt, TaskTimingPresentationTest.kt); task-435683c2 = e09bcb6 feat [qa self-land] (Models.kt, MoeJson.kt, MoeProjectService.kt, MoeJsonTest.kt; e0ed8ca carried board only); task-9d731a5e = fe608c7 feat (board.js, TaskDetailPanel.ts, BoardViewProvider.ts, types/moe.ts, tests/task-time-budget.test.cjs). (b) DoD greps as verification: `grep -rni budget moe-jetbrains/src/main` exit 1 (no hit); `grep -rn \"task.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` exit 1; also case-insensitive `budget` over vscode src+media exit 1; `git grep` on HEAD for both exit 1. Prose correction confirmed: no MetricsPanel change needed. (c) Doc defects confirmed live: CONFIGURATION.md:168 (seeding + default/range); SCHEMA.md:180-181 (seeding comment + default), :437 (`budget?: TaskBudget; // Soft wall-clock cap`), :741-750 (TaskBudget interface doc says daemon checks firstClaimAt+wallClockMs, warns 80%/escalates 100%). Daemon reality verified: schema.ts:119/722-728 DEPRECATED notes are in HEAD; validators.ts:202-204 keeps pacePerStepMs in the settings allowlist as accepted-and-ignored; WebSocketServer.ts:73 lists 'budget' as a server-owned field clients cannot set; no seeding/checking code anywhere in daemon src (submitPlan.ts has no budget). (d) Near-misses to preserve: schema.ts:740 'reopen budget' (live cap), SCHEMA.md:218 chatMaxAgentHops, :375 maxReopens, :767 '### Reopen cap', CONFIGURATION.md:173 chatMaxAgentHops. CONTENTION: docs/SCHEMA.md holds peer task-4d7074c0's (worker-e67b0dd2, at final step-7) UNCOMMITTED +49-line Candidate section (hunks at ~977 and ~1420) and it is peer-declared; my edits are in disjoint hunks but whole-file landing would carry their bytes — I will do CONFIGURATION.md + test first and re-check whether the peer has landed SCHEMA.md before step 4. OUT OF SCOPE, noted for a follow-up card: docs/MCP_SERVER.md:273 (submit_plan budget.wallClockMs validation note), :279 (`budget` in submit_plan Returns) and :2058-2079 (a documented `moe.set_task_budget` tool that is NOT in getTools()) — also contested by peer task-4d7074c0. Foreign dirty paths preserved untouched: .moe/tasks/{0ad3744e,4d7074c0,aec72949,b6c48bf0,dd739724,e7f534f1}.json, docs/MCP_SERVER.md, docs/SCHEMA.md, daemon src/state/{StateManager,attemptStore,workerLifecycle,workerStore}.ts, src/tools/{claimNextTask(.contract).test,claimNextTask,index,releaseTask(.test)}.ts, src/types/schema.ts; untracked .moe/epics/epic-3b8eb56d..json, .moe/resources/, .moe/tasks/{808869c5,9e851d4e}.json, src/state/candidateStore(.test).ts, src/tools/recordCandidate(.test).ts.",
+      "startedAt": "2026-09-11T11:03:28.408Z",
+      "completedAt": "2026-09-11T11:08:45.431Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST: A DOC-CONTRACT GUARD THAT FAILS ON TODAY'S DOCS. Create packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, a vitest file that reads docs/CONFIGURATION.md and docs/SCHEMA.md off disk and asserts the documented contract matches the daemon's actual behavior. Resolve the repository root from import.meta.url through fileURLToPath the way src/tools/registry.test.ts resolves its own directory, and fail with a clear message if a file is missing rather than silently passing - that is this test's own error handling, and a guard that passes when it cannot find its input is worse than no guard. Anchor the assertions on specific terms instead of vague prose matching: every line mentioning pacePerStepMs, and every line describing the task time-budget field or its interface, must also carry a deprecation marker on the same line or in its immediately adjacent annotation, and no line may state that a submission SEEDS a budget or that the daemon CHECKS a cap. Add the positive half, which is what keeps this guard from becoming a blunt search-and-destroy: assert the chat hop limit and the reopen cap are still documented AND still unmarked as deprecated, so a later over-eager cleanup that scrubs live settings fails here. Run it now against unmodified docs - Windows `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts`, remembering npm.cmd if the PowerShell policy blocks the shim - and save the failing output. It must fail on the seeding sentence in CONFIGURATION.md, which is the recorded proof that the docs really did advertise a removed feature.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "note": "RED PROVEN. Created packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts (vitest, reads docs off disk; repoRoot via path.resolve(dirname(fileURLToPath(import.meta.url)),'../../../..') per registry.test.ts precedent; readDoc throws a named error if a doc is missing/empty so the guard can never pass blind). Collected by the normal run: vitest.config.ts include is src/**/*.test.ts. Command: `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts` -> EXIT=1, \"Test Files 1 failed (1) / Tests 5 failed | 5 passed (10)\". Failures are exactly the 6 defect lines: CONFIGURATION.md:168 (unmarked + SEEDS claim - the recorded proof the docs advertised a removed feature); SCHEMA.md:180,181,437,746 unmarked; SCHEMA.md:180 SEEDS claim; SCHEMA.md:742 \"daemon checks firstClaimAt + wallClockMs\". The 5 PASSING tests are the positive half (chatMaxAgentHops in both docs, maxReopens/MAX_REOPENS_DEFAULT in SCHEMA.md - documented and unmarked) plus the file-existence probe, so the guard already protects the live reopen cap and chat hop limit from an over-eager cleanup. Anchors are the retired identifiers (pacePerStepMs / TaskBudget / task.budget / `budget?:`), never the bare word \"budget\" - verified no false positives: SCHEMA.md:608 (newFiles 50-entry cap) and CONFIGURATION.md:22 (MOE_PORT_CHECK_INTERVAL_MS) both contain check+cap but are correctly excluded because the cap-check rule additionally requires firstClaimAt|wallClockMs. No doc or source edit in this step. Foreign dirty paths preserved untouched (docs/MCP_SERVER.md, peer .moe/tasks records, .moe/resources/, .moe/epics/).",
+      "startedAt": "2026-09-11T11:08:54.504Z",
+      "completedAt": "2026-09-11T12:14:38.869Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "CORRECT docs/CONFIGURATION.md. Rewrite the pacePerStepMs row at line 168 so it describes what the daemon actually does today: the setting is retained for compatibility and is ignored, and no task time budget is seeded from it, because the warn feature it fed was removed. Keep the row rather than deleting it - the key can still appear in a real project file, so a reader who finds it needs to learn it does nothing, which a silent deletion would not tell them. Mark it clearly deprecated using whatever convention the surrounding table already uses, and drop the default and range presentation that implies a live tunable. Change nothing else in the file: every other setting row, and in particular the chat hop limit and the reopen cap, stay exactly as they are, since those are live and the guard test now asserts they remain unmarked. No behavior change and no daemon edit in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "note": "docs/CONFIGURATION.md: rewrote ONLY the pacePerStepMs row (line 168). Row kept, not deleted - the key still appears in real project.json files, so a reader who finds it must be told it does nothing. New text opens with the marker `**DEPRECATED - accepted and ignored.**` (matches the table's existing bold-lead convention, e.g. `**Dialog: ...**`), explains the removed 80%/100% warn+escalate feature and WHY it went (calendar-time clock from first claim counted BLOCKED time and fired a false escalation out of a long park - same reasoning as schema.ts:722-728), states moe.submit_plan no longer reads the key and writes no task time budget, and notes it is still accepted so existing project.json keeps loading. Values column changed from \"Milliseconds (default: 900000 = 15 min; valid 1000-86400000)\" to \"Ignored (any value has no effect)\" - the default/range presentation implying a live tunable is gone. No other row touched: chatMaxAgentHops (line 173) and every other setting are byte-identical, and the guard's positive half proves it. Also tightened the guard's SEEDING_CLAIM regex from /\\bseeds?\\b/i to /\\bseed(s|ed|ing)?\\b/i so past/gerund tense (\"seeded\", \"seeding\") cannot slip a live claim past it; it still fails red on the remaining SCHEMA.md defect. Verification: `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts` -> EXIT=1, \"Tests 3 failed | 7 passed (10)\" (was 5 failed | 5 passed). Both CONFIGURATION.md failures are cleared; the 3 remaining are exactly the SCHEMA.md defects owned by step-4 (lines 180/181/437/746 unmarked, 180 seeding claim, 742 daemon-checks claim). No daemon source edit, no behavior change.",
+      "startedAt": "2026-09-11T12:14:41.037Z",
+      "completedAt": "2026-09-11T12:15:33.031Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "CORRECT docs/SCHEMA.md. Three edits, all of the same kind. At lines 180-181 remove the claim that a submission seeds the task budget from pacePerStepMs and mark the field deprecated and ignored, matching the wording chosen for CONFIGURATION.md so the two documents agree. At line 437 change the task budget member's annotation from presenting a soft wall-clock cap to stating it is a deprecated legacy field the daemon ignores, and keep the member documented, because legacy records on disk and older clients on the wire still carry it and a reader needs to know it is accepted but inert. At lines 742-746 rewrite the interface description so it no longer says the daemon checks firstClaimAt plus the cap - that check was removed - while still describing the legacy shape for anyone reading an old record. Do not touch the daemon's own DEPRECATED notes in packages/moe-daemon/src/types/schema.ts, do not change any persisted data or wire compatibility, and do not touch the planRevision section a sibling task added. Leave the reopen and chat limits alone.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "docs/SCHEMA.md corrected - GUARD NOW GREEN. Re-read the file fresh before editing as the plan's risk note demanded; a peer QA self-land (b2061c8) had committed SCHEMA.md between my session snapshot and this step, so `git diff docs/SCHEMA.md` now contains ONLY my three hunks (@@ -180,2 +180,4 @@, @@ -437 +439,3 @@, @@ -742,3 +746,8 @@). The sibling's planRevision section (lines 358-359, 579, 614-616, landed by 7da080b) is untouched. Three edits, wording aligned with the CONFIGURATION.md row so the two documents agree: (1) lines 180-181: the \"moe.submit_plan seeds task.budget.wallClockMs = stepCount * pacePerStepMs\" claim is gone, replaced by \"DEPRECATED - accepted and ignored ... no longer reads it and writes no task time budget. Still accepted so an existing project.json keeps loading\"; the misleading `// default: 900000 (15 min/step)` trailer is dropped. (2) line 437/439: changed `budget?: TaskBudget;  // Soft wall-clock cap` to `budget?: unknown;  // DEPRECATED legacy TaskBudget field (shape below), ignored by the daemon; typed unknown so old task records round-trip without reviving a contract`. Chose `unknown` over `TaskBudget` deliberately: schema.ts:728 really types it `budget?: unknown`, and this document mirrors the TS interface, so keeping `TaskBudget` there would have left the docs disagreeing with the daemon in a new way. The member stays documented - legacy on-disk records and older clients still carry it. (3) lines 742-746: the JSDoc no longer says the daemon checks firstClaimAt + wallClockMs (that check was removed); it now opens DEPRECATED, describes the interface as the legacy shape kept only so an old record can be decoded, and records why the feature went. The TaskBudget interface body is left intact for that decoding. Iteration note worth keeping: the guard rejected my first 437 annotation because the trailing continuation line mentioning TaskBudget sat outside the marked line's adjacency window - reflowed so the marker and the TaskBudget mention share a line. That is the guard doing its job on its own author. NOT touched: packages/moe-daemon/src/types/schema.ts (its DEPRECATED notes are the source of truth and stay), any persisted data or wire shape, chatMaxAgentHops (line 218 and 1097), maxReopens/MAX_REOPENS_DEFAULT (lines 375, 775). Verification: `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts` -> EXIT=0, \"Test Files 1 passed (1) / Tests 10 passed (10)\" - full red-to-green arc recorded across steps 2/3/4 (5 failed -> 3 failed -> 1 failed -> 0). Foreign dirty paths observed and preserved, unstaged, unmodified: moe-jetbrains/src/main/resources/messages/MoeBundle.properties (M) and moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt (??) - a peer's in-flight blocker-card work; plus .moe/resources/, .moe/epics/, peer task records.",
+      "startedAt": "2026-09-11T12:15:41.501Z",
+      "completedAt": "2026-09-11T12:16:58.864Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "RUN THE WHOLE FEATURE GATE FRESH, AFTER THE DOCS ARE FINAL. From the repository root on Windows, exactly: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE . On macOS or Linux: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Also run the full daemon suite once, not just the focused doc guard, so the new test file is proven to be collected by the normal run rather than only by an explicit path. Require exit 0 everywhere with nonzero counts from each suite. Acquire the shared Gradle slot through the Moe resource protocol before the JetBrains leg and release it either way; never cancel a peer's build or clean a shared cache, and treat an UP-TO-DATE Gradle result as no test run. Daemon vitest output on this box is buried in logger noise, so filter for the summary lines but capture the exit code in a separate statement, because a filtered pipeline swallows it. Record the exact commands, exit codes and counts for the verification argument of complete_task. An unrun leg or a missing toolchain is an honest incomplete gate, to be reported rather than smoothed over.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "FULL GATE RUN FRESH AFTER THE DOCS WERE FINAL. Every leg exit 0 with nonzero counts. No file was edited in this step.\n(1) FULL daemon suite (not just the focused guard): `npm --prefix packages/moe-daemon test` -> EXIT=0, \"Test Files 109 passed | 1 skipped (110) / Tests 1446 passed | 6 skipped (1452)\". Collection of the new file PROVEN independently rather than inferred from the count: `npm --prefix packages/moe-daemon exec -- vitest list | Select-String taskTimeBudgetDocs` enumerates all five of its test ids under packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, so the guard is picked up by the normal run and not only by an explicit path (vitest.config.ts include = src/**/*.test.ts).\n(2) Focused guard: `npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts` -> EXIT=0, \"Test Files 1 passed (1) / Tests 10 passed (10)\".\n(3) JetBrains. Shared slot taken through the Moe resource protocol: acquire_resource returned granted:false position #2, wait_for_resource granted at 12:18:06Z, released immediately after the run and the daemon granted it onward to task-0ad3744e - no peer build cancelled, no shared cache cleaned. First ran the UNFILTERED gate `.\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun` (GRADLE_OPTS=-Xmx512m per the known client-OOM gotcha; --rerun because an UP-TO-DATE :test is not a test run and this task changes no Kotlin). It reported EXIT=1, \"143 tests completed, 5 failed\" - ALL FIVE in com.moe.services.PlanApprovalContractTest (PlanApprovalContractTest.kt:83 and :117). Traced rather than smoothed over: `git status --short` shows that file as ?? UNTRACKED and `git ls-files` does not know it - it is worker-85674160's deliberately-RED TDD file for task-0ad3744e (plan-revision approval), which held this very Gradle slot minutes earlier for its \"step-2 focused red run\". It is a peer's in-flight red, not a regression from this task and not part of the committed tree; no alert raised because a red TDD file is its author's expected state. Re-ran against the committed suite by naming every TRACKED test class explicitly (11 classes via repeated --tests; the two untracked peer files - PlanApprovalContractTest and TaskBlockerPresentationTest - are simply not named, so no peer file was touched, moved or modified): EXIT=0, \"BUILD SUCCESSFUL\", \":test\" executed not UP-TO-DATE. Counts read from build/test-results/test/TEST-*.xml: 11 classes, tests=117, failures=0, errors=0. That set includes TaskTimingPresentationTest and MoeJsonTest, which are the child-owned regressions proving the JetBrains time-cap removal and the parser cleanup.\n(4) VS Code: `npm --prefix moe-vscode test` -> EXIT=0, \"tests 24 / pass 24 / fail 0\" (includes the third child's actual-render coverage: \"board card of a claimed task shows only its elapsed wall-clock under every legacy cap shape\", \"task detail markup is identical with or without any legacy cap\"). `npm --prefix moe-vscode run compile` (tsc -p ./) -> EXIT=0.\n(5) Final composite rerun after the lease was released, all three in one shot: GUARD=0 VSCODE_TEST=0 VSCODE_COMPILE=0.\nClient DoD greps re-verified read-only in this session: `grep -rni budget moe-jetbrains/src/main` -> no matches (exit 1); `grep -rn \"task\\.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` -> no matches (exit 1).\nHONEST GAP STATED PLAINLY: the unfiltered `gradlew test` is red on this shared checkout right now, and will stay red until the peer finishes task-0ad3744e. The green JetBrains evidence above is the 11 tracked classes, not the working tree's untracked additions. Foreign dirty paths preserved untouched: moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt, moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskBlockerPresentationTest.kt, moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskBlockerPresentation.kt, moe-jetbrains/src/main/resources/messages/MoeBundle.properties, .moe/resources/, .moe/epics/, peer task records.",
+      "startedAt": "2026-09-11T12:17:05.021Z",
+      "completedAt": "2026-09-11T12:19:37.383Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL REVIEW OVER THE WHOLE REMOVAL, THEN HAND OFF. Review the three child diffs plus this docs diff as one feature. Confirm or fix: no case-insensitive occurrence of the retired term survives anywhere in moe-jetbrains/src/main, and no reference to the retired type or field survives in the VS Code sources; live elapsed wall-clock display survives in BOTH clients, including the derivation from firstClaimAt and its unparseable-timestamp guards, and neither client gained a badge where it previously showed none; chat hop limits and reopen caps are untouched in code and still documented as live; the daemon's schema notes, persisted data and wire compatibility are unchanged, so an old record carrying the legacy field still loads; the two documents now agree with each other and with the daemon's actual behavior; and the guard test would fail again if either document regressed, which you can check by reverting one sentence in a scratch copy rather than in the shared checkout peers are working in. Map each of the four original Definition-of-Done items to named evidence: the two client greps from step 1, the compile and test legs from step 5, and the corrected documents. Then complete through moe.complete_task with the fresh verification evidence, the saved red output from step 2, and every modified path in modifiedFiles. State plainly in the summary that the client removals were delivered by the three children and that this task contributed the documentation correction and the standing guard against its regression.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "note": "ADVERSARIAL REVIEW OVER THE WHOLE REMOVAL (three child diffs + this docs diff, read as one feature). Every item confirmed by measurement; one real defect found and REPORTED rather than silently fixed.\n\nRETIRED TERM GONE FROM BOTH CLIENTS: `grep -rni budget moe-jetbrains/src/main` -> no matches (exit 1), case-insensitive, whole main source tree. `grep -rn \"task\\.budget\\|TaskBudget\" moe-vscode/src moe-vscode/media` -> no matches (exit 1).\nLIVE ELAPSED WALL-CLOCK SURVIVES IN BOTH, derivation and guards intact, and no new badge: JetBrains TaskCard.kt:480 still gates on `MoeDuration.parseInstant(task.metrics?.firstClaimAt) ?: return null` then derives firstClaimAt -> doneAt ?: now (485) with the tooltip at 489; TaskDetailDialog.kt:684-688 keeps \"recorded wall-clock wins, otherwise derive\" with the same parse guard. VS Code TaskDetailPanel.ts:745-751 and media/board.js:811-821 both keep wallClockMs-first, Date.parse fallback and the `!Number.isNaN(from) && !Number.isNaN(to)` / `!isNaN(...)` unparseable-timestamp guards; board.js:812 still returns '' when firstClaimAt is absent, so a never-claimed card gains no badge. The children's own tests assert exactly this (\"board card of a never-claimed task has no elapsed badge under every legacy cap shape\", \"board card shows no badge for a recorded duration without a first claim\", \"task detail markup is identical with or without any legacy cap\").\nCHAT HOPS / REOPEN CAPS UNTOUCHED: this task changed zero lines of code; chatMaxAgentHops (SCHEMA.md:218, :1097; CONFIGURATION.md:173) and maxReopens/MAX_REOPENS_DEFAULT (SCHEMA.md:375, :775) are byte-identical and the guard's positive half asserts they stay documented AND unmarked.\nDAEMON UNCHANGED, PERSISTENCE AND WIRE SAFE: `git diff packages/moe-daemon/src/types/schema.ts` is EMPTY - its DEPRECATED notes are untouched. The only daemon path I own is the new untracked test file. `Task.budget` stays `unknown` in the daemon and is now documented as such, so an old record carrying the legacy shape still loads and nothing writes it.\nTHE TWO DOCUMENTS AGREE with each other and with the daemon: both now say accepted-and-ignored, neither claims seeding, neither claims a cap check.\nGUARD PROVEN TO STILL BITE, on a SCRATCH COPY - the shared checkout peers are working in was never modified. Copied both docs plus the test file into a temp tree (the test resolves its repo root relatively from import.meta.url, so a copied tree simply guards the copied docs - that portability is itself proof there is no hardcoded path) and ran `vitest run --root <scratch>/packages/moe-daemon`. (a) Reverting ONE sentence - the pacePerStepMs row back to its old live wording - turned it red again: EXIT=1, \"Tests 2 failed | 8 passed (10)\", both pinned to CONFIGURATION.md:168. (b) Simulating the opposite failure, an over-eager cleanup that deletes the chatMaxAgentHops row and marks maxReopens deprecated, ALSO turned it red: EXIT=1, \"Tests 4 failed | 6 passed (10)\", with \"The chat hop limit is live and must stay documented\" and \"The reopen cap is a live setting ... must not be marked deprecated\". Both halves of the guard bite. Scratch tree deleted; `git status --short docs/` shows only my two intended files.\nCHILD LANDINGS RE-MEASURED THIS SESSION (not trusted from the step-1 note): task-04715367 -> 0967421, task-435683c2 -> a5d037d, task-9d731a5e -> d607ec2, each `git merge-base --is-ancestor <sha> HEAD` = yes.\n\nDEFINITION OF DONE -> NAMED EVIDENCE. (1) \"No 'budget' string in moe-jetbrains/src/main, MetricsPanel compiles without the budget KPI\" -> the case-insensitive grep above returns nothing; MetricsPanelTest is in the 11-class green Gradle run. Correction carried from step 1 and re-confirmed: MetricsPanel needed no edit, the remaining-versus-cap readout lived in TaskDetailDialog and the board badge, both owned by the first child. (2) \"TaskDetailPanel.ts no longer reads task.budget; npm run compile green\" -> grep returns nothing; `npm --prefix moe-vscode run compile` (tsc -p ./) EXIT=0. (3) \"CONFIGURATION.md and SCHEMA.md do not present time budgets as a live setting\" -> the corrected rows/annotations plus a standing automated guard, 10/10 green, red-proven in both directions. (4) \"./gradlew test green and moe-vscode npm test green\" -> VS Code EXIT=0 \"tests 24 / pass 24 / fail 0\"; JetBrains EXIT=0 BUILD SUCCESSFUL over all 11 TRACKED test classes, tests=117 failures=0 errors=0 from build/test-results XML, :test executed via --rerun not UP-TO-DATE. Honest qualifier repeated from step 5: the UNFILTERED `gradlew test` is currently red with 5 failures, all inside moe-jetbrains/src/test/.../PlanApprovalContractTest.kt, which `git status` reports as ?? UNTRACKED - a peer's deliberately-red TDD file for task-0ad3744e. Not my regression, not in the committed tree, and no peer file was touched to get a green run.\n\nOUT-OF-SCOPE DEFECT FOUND AND REPORTED, NOT FIXED: docs/MCP_SERVER.md carries the same defect class in a third document - :2058 documents a whole `moe.set_ta",
+      "startedAt": "2026-09-11T12:19:39.387Z",
+      "completedAt": "2026-09-11T12:22:38.614Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor clearing a session-scoped block. worker-2020d87c is an interactive Codex seat launched idle; the runtime assigned this task mid-session, so no per-task baseline exists (.git/moe/baseline/task-0d11e05f....tsv MISSING) and the wrapper would run no post-flight for it. The task itself is unblocked: all three children (task-04715367, task-435683c2, task-9d731a5e) are DONE and landed. Returning to WORKING-unassigned for a wrapper-bound seat. No source edits were made; step 1 was read-only and incomplete.",
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 4,
+  "comments": [
+    {
+      "id": "comment-4e0da6f7b2d441d7b6cbd7796513ecb3",
+      "author": "architect-6f3113ee",
+      "content": "Architect SPIDR breakdown after live exploration (no source edits/tests): the original removal spans at least 7 JetBrains main files, 4 VS Code production files, docs and regressions, beyond the hard plan file cap. Created BACKLOG children in order: task-0471536723384823995c88fe0fb58e15 (JetBrains UI + production presentation regressions, 5 files) -> task-435683c2df8f47e7b77a77dc51ba62e9 (JetBrains model/both parser cleanup + JUnit, 4 files) -> task-9d731a5e5eb14951a9d342e5976883b6 (VS Code details/board/model + production-render regressions, 5 files). Dependencies enforce JetBrains first; all are parentTaskId-linked here. No child plan has been submitted or approved.\n\nThis parent retains ALL original DoD items as the final feature integration gate, not duplicate implementation: children cover DoD 1/2 and client regressions; parent owns docs/CONFIGURATION.md + docs/SCHEMA.md retirement of active budget/pacePerStepMs claims, a proposed packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts red-first doc-contract guard, the final case-insensitive JetBrains src/main grep, and full JetBrains/VS Code test+compile evidence. Keep daemon schema.ts's DEPRECATED/ignored notes and legacy wire/disk compatibility unchanged; docs may describe ignored legacy fields, never a live cap/seeding feature. Preserve live elapsed wall-clock behavior, chat hop limits and reopen caps. No MetricsPanel.kt edit is needed: the remaining KPI is in TaskDetailDialog and the board badge. Parent verifies delivered child commits/landing plus fresh gates before complete_task.\n\nProposed parent Windows verification from repo root: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE. Unix: npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts && (cd moe-jetbrains && ./gradlew test) && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. The proposed new guard should reject active TaskBudget/seeding docs, allow clearly deprecated legacy annotations, and protect live chat/reopen settings. It is not yet created; commands are future verification, not executed evidence.\n\nThe initial get_context said isEpicFinal=true, but a fresh list_tasks found newer order-5/6 siblings. This parent is only this feature's integration/docs gate, not a claim that the whole Wave 0 epic is ready. Unrelated blocked siblings are not dependencies of this removal. Existing generated/initFiles.ts, launcher/provenance scripts and peer board dirt are foreign; preserve them. Child A was recorded createdBy=WORKER by the runtime despite architect workerId; this comment records the actual architect provenance (B/C explicitly recorded ARCHITECT).",
+      "timestamp": "2026-09-10T17:42:33.777Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:46.385Z",
+  "updatedAt": "2026-09-11T12:31:25.859Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T17:34:22.626Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T12:31:18.937Z",
+    "wallClockMs": 68216311
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee",
+    "architect-8b93cc67",
+    "worker-2020d87c",
+    "worker-de4739a8",
+    "qa-813933f7"
+  ],
+  "dependsOn": [
+    "task-0471536723384823995c88fe0fb58e15",
+    "task-435683c2df8f47e7b77a77dc51ba62e9",
+    "task-9d731a5e5eb14951a9d342e5976883b6"
+  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "UNBOUND WRAPPER SESSION: claimed inside a CLI launched with no pre-flight task. Fresh check: D:/projexts/moes/.git/moe/baseline/task-0d11e05fd60945029385c80e28da9e1f.tsv is MISSING. Baseline/postflight are gated on preflightTaskId; current launch supplies none. Governor explicitly instructed this seat to block before edits if unbound. All three declared children are now DONE and landed per get_context; this is NOT a dependency wait. No source edits or tests performed; foreign docs/SCHEMA.md and daemon WIP preserved. Resume only after actual wrapper task-bound preflight; do not fabricate a baseline or hand-land. Step 1 read-only inspection started, not completed.",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:44:03.742Z",
+  "planningNotes": {
+    "approachesConsidered": "Deleting the pacePerStepMs row and the legacy field from the documents outright - rejected: the key can still appear in a real project file and the field still appears in legacy records and older client payloads, so a reader needs to be told it is accepted and inert rather than left to wonder why it is undocumented. Writing the guard as a blunt search for the retired word - rejected: it would fire on the live reopen cap and require carve-outs that rot; anchoring on pacePerStepMs and on the specific field and interface, plus asserting the live settings stay unmarked, is both stricter and safer. Putting the guard in a client test suite - rejected: the contract being asserted is the daemon's behavior versus its documentation, and the daemon suite already has a precedent for tests that read repository files. Finishing any client removal here if a child fell short - rejected: it would duplicate child work, break the file scope and weaken their tests; report the gap to the child instead.",
+    "codebaseInsights": "Measured live on 2026-09-11, and the defect is exactly as the breakdown described: the daemon's own schema marks the task time-budget fields deprecated and ignored, while both documents still describe the feature as active. CONFIGURATION.md:168 states that a plan submission seeds an absent task budget from pacePerStepMs and presents a default and a valid range, which reads as a live tunable. SCHEMA.md repeats the seeding claim at 180-181, annotates the field as a soft wall-clock cap at 437, and at 742-746 says the daemon checks firstClaimAt plus the cap - a check that no longer exists. Two near-misses must survive the cleanup: schema.ts:740 refers to a reopen budget, which is the live reopen cap, and the chat hop limit is also live, so a blunt search-and-destroy over the word would damage real documentation. That is why the guard test has a positive half asserting both remain documented and unmarked. One correction to the task prose, already noted by the breakdown: MetricsPanel needs no edit - the JetBrains remaining-versus-cap readout lives in TaskDetailDialog and the board badge, and both belong to the first child. This parent verifies the client greps rather than performing any client edit, so its own diff is two documents and one new test.",
+    "risks": "All three children were unlanded when this plan was written, so step 1 must block rather than proceed on assumption - and the parent must never finish a child's removal itself. The guard test is the piece most likely to be built wrong in two opposite ways: too loose and it passes on the current docs, too blunt and it condemns the live reopen and chat settings; the red run in step 2 proves the first, and the positive assertions prove the second. Do not touch the daemon's schema notes, persisted data or wire compatibility - an old record carrying the legacy field must still load. docs/SCHEMA.md is contended: a sibling added a planRevision section to it, so re-read before editing and leave that section alone. Gradle output is shared infrastructure - serialize it and treat an UP-TO-DATE result as no test run. Run the full daemon suite once as well as the focused file, or a test that is never collected by the normal run will look green while guarding nothing. Finally, the two documents must agree with each other after the edit, not just each be individually defensible.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts (new, parent-owned doc-contract guard)",
+      "docs/CONFIGURATION.md:168 (pacePerStepMs row still describes seeding a task budget)",
+      "docs/SCHEMA.md:180-181, :437, :742-746 (seeding claim, soft-cap annotation, and an interface описание saying the daemon checks the cap)",
+      "packages/moe-daemon/src/types/schema.ts:119 and :722-728 (the DEPRECATED and ignored notes that the docs currently contradict - keep them untouched)",
+      "packages/moe-daemon/src/tools/registry.test.ts (the precedent for a test that reads repository files and asserts a contract)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:44:03.789Z",
+  "workStartedAt": "2026-09-11T11:03:28.408Z",
+  "commits": [
+    {
+      "sha": "04235547245be68d58cd845b236f18674809402b",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:04:30Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:11:08.826Z",
+      "treeId": "45fb1002f837e099d07b95361a7565887653e92f",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "abce5254ed241e26f071678e0af0a05d056b47c3",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:11:39Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:11:45.661Z",
+      "treeId": "50b0e376827d0254a2646163ae0f04d89fee0881",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "bb36c8c09284e222821b674efe2d0abd485b1544",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:12:46Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:12:54.004Z",
+      "treeId": "68d0e048a4ef5067cfddb70dd0b83e24059b6ff9",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "29e6400bbd1ccdafc08f4089d7760ea31d94bd38",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:14:54Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:15:01.255Z",
+      "treeId": "e8da75e4d27d0dffc9361ecd14613ee93feb40ef",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "c37238cb2599840bea30434f8f95e5d9dff0de1b",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:27:07Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:27:13.647Z",
+      "treeId": "cb16275ca95944acb93833b92263df4ff62347d3",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "59c9cf1eb38164f90ad913b181cca28ff7087265",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:42:14Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:42:21.279Z",
+      "treeId": "370cd877dfef802a0f75fe4caca2976fdf42a3ed",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "d48d6d077d62b4cd5bff304caa3aba4c0cad14c9",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T11:57:22Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T11:57:28.550Z",
+      "treeId": "3637d07f0cb63adb4f44060bcbdb7b157e57e71c",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-4d7074c001af47e881572e9efae30a41"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "81bc40b716d401d9cc340cb918a1d7ae5845d00a",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T12:23:48Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+        ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T12:23:51.942Z",
+      "treeId": "d8dca1281fbba4d26a8aebce1f127d47969a2f89",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "19c5264b7c419cbc221e18129536f04f17bce1fb",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T12:12:29Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T12:24:27.660Z",
+      "treeId": "388650fb9783731b456850676341c752b5826d8f",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "e237c74bd0b64806c8f8ad71088b214a00b2749e",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-11T12:23:48Z",
+      "paths": [
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-11T12:31:25.859Z",
+      "treeId": "2e0ec5cced7d2d7a4d8221219958c19e1c7bea57",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts",
+    ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+    ".moe/tasks/task-b6c48bf029bf4170a603a91c12451df7.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-11T12:23:48Z",
+    "at": "2026-09-11T12:31:25.859Z"
+  },
+  "reviewStartedAt": "2026-09-11T12:23:21.216Z",
+  "verification": {
+    "command": "npm --prefix packages/moe-daemon test -- src/util/taskTimeBudgetDocs.test.ts ; npm --prefix moe-vscode test ; npm --prefix moe-vscode run compile ; .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --tests <11 tracked classes> ; npm --prefix packages/moe-daemon test",
+    "exitCode": 0,
+    "outputTail": "GUARD (focused): Test Files 1 passed (1) / Tests 10 passed (10) -> EXIT=0\nDAEMON FULL SUITE: Test Files 109 passed | 1 skipped (110) / Tests 1446 passed | 6 skipped (1452) -> EXIT=0\nCOLLECTION PROOF: `vitest list` enumerates all 5 ids under packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts, so the new guard is picked up by the normal run, not only by an explicit path\nVS CODE TESTS: tests 24 / pass 24 / fail 0 -> EXIT=0\nVS CODE COMPILE: tsc -p ./ -> EXIT=0\nJETBRAINS (11 tracked test classes, --rerun so :test really executed): BUILD SUCCESSFUL -> EXIT=0; build/test-results/test/TEST-*.xml aggregated: tests=117 failures=0 errors=0 across 11 classes\nFINAL COMPOSITE RERUN AFTER THE LEASE WAS RELEASED: GUARD=0 VSCODE_TEST=0 VSCODE_COMPILE=0\nDoD GREPS (read-only): `grep -rni budget moe-jetbrains/src/main` -> no matches (exit 1); `grep -rn \"task.budget|TaskBudget\" moe-vscode/src moe-vscode/media` -> no matches (exit 1)\nRECORDED RED (step 2, unmodified docs): Tests 5 failed | 5 passed (10) -> EXIT=1, failing on CONFIGURATION.md:168 seeding sentence + SCHEMA.md:180/181/437/742/746\nCAVEAT, NOT SMOOTHED OVER: unfiltered `gradlew test` is EXIT=1 with 5 failures, all in the peer's UNTRACKED PlanApprovalContractTest.kt (task-0ad3744e red TDD file), not a regression from this task",
+    "reportedAt": "2026-09-11T12:23:21.216Z"
+  },
+  "completionSummary": "THE CLIENT REMOVALS WERE DELIVERED BY THE THREE CHILDREN, NOT HERE. This parent task contributed exactly two things: the documentation correction, and a standing automated guard against its regression. It re-implemented no child work and edited no client file.\n\nChildren re-measured this session (each landed and an ancestor of HEAD): task-0471536723384823995c88fe0fb58e15 -> 0967421 (JetBrains presentation), task-435683c2df8f47e7b77a77dc51ba62e9 -> a5d037d (JetBrains model + both parsers), task-9d731a5e5eb14951a9d342e5976883b6 -> d607ec2 (VS Code detail, board, model).\n\nDELIVERED HERE:\n1. packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts (new) - a doc-contract guard. It reads docs/CONFIGURATION.md and docs/SCHEMA.md off disk (repo root resolved relatively from import.meta.url, per the src/tools/registry.test.ts precedent) and asserts the documented contract matches the daemon's real behaviour. It anchors on the RETIRED IDENTIFIERS (pacePerStepMs / TaskBudget / task.budget), never the bare word \"budget\", because the live reopen cap (\"reopen budget\") and chat hop limit share that vocabulary. Negative half: every retired line must carry a deprecation marker, and no line may claim a submission seeds a budget or that the daemon checks firstClaimAt + wallClockMs. Positive half: the chat hop limit and reopen cap must stay documented AND stay unmarked, so a later over-eager scrub of live settings fails here. A missing or empty doc throws a named error instead of passing blind.\n2. docs/CONFIGURATION.md - the pacePerStepMs row rewritten: kept (the key still appears in real project.json files, so a reader must be told it does nothing), marked \"**DEPRECATED - accepted and ignored.**\", explains the removed 80%/100% warn+escalate feature and why it went, and the default/valid-range presentation that implied a live tunable is replaced by \"Ignored (any value has no effect)\".\n3. docs/SCHEMA.md - three edits: the pacePerStepMs seeding claim removed and the field marked deprecated",
+  "touchedFiles": [
+    "docs/SCHEMA.md",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+  ],
+  "completedAt": "2026-09-11T12:31:18.937Z",
+  "reviewCompletedAt": "2026-09-11T12:31:18.937Z",
+  "reviewSummary": "APPROVED — 4/4 DoD re-verified by me. Scope = docs/CONFIGURATION.md, docs/SCHEMA.md, new src/util/taskTimeBudgetDocs.test.ts + board JSON, in 81bc40b (qa checkpoint) + 19c5264 (worker completion), both pushed. schema.ts untouched; no client edit — children 792e4ce/e0ed8ca/fe608c7 own those, all ancestors of HEAD.\n\nDoD1: `git grep -ni budget HEAD -- moe-jetbrains/src/main` empty (tree too); MetricsPanel needed no edit. DoD2: `git grep \"task\\.budget|TaskBudget\" HEAD -- moe-vscode/src moe-vscode/media` empty; vscode compile exit 0. DoD3: read both diffs — pacePerStepMs row kept but \"DEPRECATED — accepted and ignored\", range now \"Ignored (any value has no effect)\"; SCHEMA.md drops the seeding claim, types `budget?: unknown`, TaskBudget JSDoc no longer claims a firstClaimAt+wallClockMs check. Matches daemon: pacePerStepMs only in validators.ts + the DEPRECATED note, schema.ts:728 is `budget?: unknown`; chatMaxAgentHops/maxReopens still live and unmarked. DoD4: `gradlew -p moe-jetbrains test --rerun` exit 0, `:test` executed, 13 classes/154 tests/0 failures; vscode `npm test` 24/24.\n\nRed-proof by me in a scratch copy (shared checkout never mutated): restoring the CONFIGURATION.md seeding sentence fails 2 tests; deleting the live chatMaxAgentHops line fails the positive half. Guard 10/10 exit 0; collection proven via `vitest list` (5 ids). readDoc throws on missing/empty doc; no forbidden pattern.\n\nCaveat: RAW full daemon suite exit 1 (6 failed/1454 passed), all in uncommitted peer edits to claimNextTask.test.ts + completeTask.test.ts (\"finalizing attempt\": 0 hits at HEAD vs 4 and 2 in tree); this task touched no daemon source. Excluding those two: exit 0, 107 files/1391 tests.\n\nOpen (worker already reported): docs/MCP_SERVER.md:2058 documents a nonexistent moe.set_task_budget tool, :891 claims post-claim budget re-evaluation — needs its own card."
+}

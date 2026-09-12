@@ -1,12 +1,15 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { Task, TaskPriority, WorkerType } from '../types/schema.js';
-import { missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
+import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
-import { assertNoLiveLease, claimLostRace } from '../util/claimGuards.js';
+import { assertNoLiveLease, claimLostRace, attemptFinalizingRefusal, attemptReconcilingRefusal } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import {
@@ -21,6 +24,62 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   MEDIUM: 2,
   LOW: 3
 };
+
+/**
+ * Open the attempt for a claim whose assignment write has ALREADY succeeded,
+ * or adopt the one still open on a genuine resume. Three arms:
+ *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
+ *  2. ATTEMPT_ALREADY_OPEN on a resume — this worker held the seat before this
+ *     claim and the open attempt is its own: adopt it. A respawned CLI coming
+ *     back to its task is the same execution, not a second one.
+ *  3. ATTEMPT_ALREADY_OPEN otherwise: it belongs to a seat that was given up
+ *     without closing it (a crash between a release's two writes, or a path
+ *     that does not close yet), so close it through the shared helper and open
+ *     the successor generation.
+ * Any other failure propagates; the caller treats it as fatal to the claim.
+ */
+async function openClaimAttempt(
+  state: StateManager,
+  taskId: string,
+  workerId: string,
+  resumingOwnSeat: boolean
+): Promise<ExecutionAttempt> {
+  const params = {
+    taskId,
+    workerId,
+    // The claim knows the worker and the project, nothing more. A distinct
+    // runner identity and a per-attempt workspace arrive with the reattachment
+    // work; they are deliberately not invented here.
+    runnerId: workerId,
+    workspace: state.projectPath,
+  };
+  try {
+    return await openAttempt(state, params);
+  } catch (err: unknown) {
+    if (!(err instanceof MoeError && err.codeName === 'ATTEMPT_ALREADY_OPEN')) throw err;
+  }
+  const open = currentAttempt(state, taskId);
+  if (open && resumingOwnSeat && open.workerId === workerId) return open;
+  await closeOpenAttempts(state, taskId);
+  return openAttempt(state, params);
+}
+
+/**
+ * Best-effort compensation for a claim that could not record its attempt: hand
+ * back the assignment the claim just wrote, so the task is not left held by an
+ * execution the daemon has no record of. Its own try/catch, because a failed
+ * compensation must never mask the error that made it necessary.
+ */
+async function handBackUnrecordedClaim(state: StateManager, taskId: string, workerId: string): Promise<void> {
+  try {
+    await state.updateTask(taskId, { assignedWorkerId: null }, undefined, workerId);
+  } catch (err: unknown) {
+    logger.error(
+      { taskId, workerId, error: err },
+      'claim_next_task: could not hand back the assignment after its attempt failed to open'
+    );
+  }
+}
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
   return {
@@ -73,12 +132,21 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         }
 
         // Governors never claim tasks — they oversee. Route them straight to
-        // enter_governance. The role is derived from the worker's team, so a
-        // fresh first-time caller without a registered worker falls through to
-        // the normal claim path (so onboarding doesn't break).
-        if (params.workerId) {
-          const team = state.getTeamForWorker(params.workerId);
-          if (team?.role === 'governor') {
+        // enter_governance. The role resolves through util/workerRole (team
+        // role first, then the seat's id prefix): reading `team.role` directly,
+        // as this once did, saw nothing on the role-LESS project team the
+        // launcher registers every seat into, so a governor seat FELL THROUGH
+        // and claimed a task — work the project's rules say governors never do.
+        //
+        // The onboarding escape stays keyed on the WORKER RECORD, not on the
+        // role: a fresh first-time caller with no record must still reach the
+        // normal claim path, because enter_governance throws NOT_FOUND for an
+        // unregistered id and routing it there hands it a next action that
+        // immediately refuses. That is also exactly the old condition —
+        // getTeamForWorker reads `state.workers.get(id)` first and returns null
+        // without a record — so this guard preserves it rather than adding one.
+        if (params.workerId && state.getWorker(params.workerId)) {
+          if (resolveWorkerRole(state, params.workerId) === 'governor') {
             return {
               hasNext: false,
               nextAction: {
@@ -111,6 +179,62 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           const hold = blockingHold(state, params.workerId, params.taskId);
           if (hold) {
             return heldTaskRefusal(hold, params.workerId);
+          }
+
+          // The seat is not free while an attempt of THIS worker is still
+          // finalizing. complete_task hands its task to QA and leaves the
+          // attempt open on purpose, because the wrapper only lands the bytes
+          // after the CLI exits — so claiming now would start task B while
+          // task A's artifact boundary is still open.
+          //
+          // Fires HERE, beside the one-task-per-worker check and before any
+          // ranking, eligibility scan or assignment write, so a refused claim
+          // can never have changed an owner. THROWN: the held-out acceptance
+          // case for this boundary requires a MoeError, and the retryable rail
+          // now travels in context.retryable rather than in the response shape.
+          // Scoped to this worker by construction — another worker's
+          // finalizing attempt is none of this caller's business (qa_approve's
+          // hold is the task-scoped one).
+          const finalizing = listAttempts(state).find(
+            (a) => a.workerId === params.workerId && a.phase === 'finalizing'
+          );
+          if (finalizing) {
+            throw attemptFinalizingRefusal({
+              attemptId: finalizing.id,
+              generation: finalizing.generation,
+              taskId: finalizing.taskId,
+              workerId: finalizing.workerId,
+            });
+          }
+        }
+
+        // A task whose attempt is `reconciling` is HELD for its owner. A daemon
+        // restart parked it there because it lost sight of that execution, and
+        // the owner's runner may be seconds from reattaching — so handing the
+        // row to anyone else would start a second execution of live work.
+        //
+        // Scoped to the TASK, NOT to the caller: that is the whole difference
+        // from the finalizing hold directly above, which stops a worker taking
+        // MORE work. Copying that scope here would let a third party walk
+        // straight in. Only the explicit-taskId path needs it — the ranked pool
+        // never offers a held row, because the spared owner is still present in
+        // the worker map and isTaskClaimable therefore excludes it.
+        //
+        // Fires before any ranking, eligibility scan or assignment write, so a
+        // refused claim can never have changed an owner. THROWN, like the
+        // finalizing refusal, so McpAdapter surfaces { tool, codeName } on the
+        // wire for both.
+        if (params.taskId) {
+          const holding = listAttempts(state, params.taskId).find((a) => a.phase === 'reconciling');
+          // The owner is exempt: its own resume is not a takeover (reattachment
+          // has its own tool, and this refusal is for third parties).
+          if (holding && holding.workerId !== params.workerId) {
+            throw attemptReconcilingRefusal({
+              attemptId: holding.id,
+              generation: holding.generation,
+              taskId: holding.taskId,
+              workerId: holding.workerId,
+            });
           }
         }
 
@@ -216,6 +340,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       // Try each candidate task in priority order; fall through on concurrency conflicts
       let task = tasks[0];
       let claimed = false;
+      // The attempt this claim opened or adopted; stays null when no worker is named.
+      let claimedAttempt: ExecutionAttempt | null = null;
       // Set when a candidate is skipped ONLY because the claimer has no team.
       // Without it the drained loop falls through to the concurrent-claim tail
       // and reports a race on a board where nothing raced.
@@ -232,6 +358,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // (1) Owner is gone / marked DEAD — clear the dangling assignment so
             // the optimistic-concurrency guard lets us reassign.
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+            // Clearing the seat ends its attempt HERE, not at the reassignment
+            // below: the solo-claim check can still skip this row, and a row
+            // left unassigned must not keep an attempt running.
+            await closeOpenAttempts(state, candidate.id);
           } else if (candidate.assignedWorkerId && candidate.assignedWorkerId !== params.workerId) {
             // (2) Owner is present AND alive — only reachable on an explicit taskId
             // claim (the ranked filter excludes live-owned tasks). Take over THIS
@@ -246,6 +376,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             assertNoLiveLease(candidate, false, params.workerId);
             const incumbent = candidate.assignedWorkerId;
             await state.updateTask(candidate.id, { assignedWorkerId: null }, 'WORKER_REPLACED');
+            // The evicted incumbent's execution is superseded from this point on.
+            await closeOpenAttempts(state, candidate.id);
             await state.touchWorker(incumbent, { status: 'IDLE', currentTaskId: null });
           }
 
@@ -274,6 +406,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             }
           }
 
+          // Read BEFORE the write: only a worker that already held this seat is
+          // resuming. Both eviction branches above cleared the assignment, so
+          // they never count — and after the write the cases look identical.
+          const resumingOwnSeat = state.getTask(candidate.id)?.assignedWorkerId === params.workerId;
           try {
             task = await state.updateTask(candidate.id, { assignedWorkerId: params.workerId }, undefined, params.workerId);
           } catch (err: unknown) {
@@ -290,6 +426,21 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             throw err; // Unexpected error — propagate
           }
 
+          // Open the attempt AFTER the assignment write, never before it: that
+          // write is an optimistic race, and an attempt opened by the loser would
+          // sit in phase running and make the WINNER's open fail with
+          // ATTEMPT_ALREADY_OPEN — the loser must leave nothing behind. A claim
+          // that cannot record its attempt fails outright, because handing out
+          // an execution the daemon has no record of is the silent state attempts
+          // exist to remove; first it hands back the seat it just took (a resume
+          // took nothing new, so there is nothing to hand back).
+          try {
+            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat);
+          } catch (err: unknown) {
+            if (!resumingOwnSeat) await handBackUnrecordedClaim(state, candidate.id, params.workerId);
+            throw err;
+          }
+
           // Auto-register or update worker entity
           const existingWorker = state.getWorker(params.workerId);
           if (!existingWorker) {
@@ -304,11 +455,13 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             });
 
             try {
-              // Prefer the worker's registered team role over inferring from
-              // the requested statuses (a worker may legitimately claim
-              // across multiple status sets).
-              const team = state.getTeamForWorker(params.workerId);
-              const roleLabel = team?.role
+              // Prefer the worker's resolved role — team role, then the seat's
+              // id prefix — over inferring from the requested statuses (a
+              // worker may legitimately claim across multiple status sets, and
+              // on the launcher's role-less team the team read alone announced
+              // every architect and qa seat as a "worker"). The status guess
+              // stays as the last resort for an id that declares no role.
+              const roleLabel = resolveWorkerRole(state, params.workerId)
                 ?? (statuses.includes('PLANNING')
                   ? 'architect'
                   : statuses.includes('REVIEW') ? 'qa' : 'worker');
@@ -442,6 +595,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           generalChannelId,
           priorHandoffCount: hasHandoffs ? task.priorHandoffs!.length : 0,
         },
+        // Beside `task`, never inside it: `task` mirrors the persisted row and
+        // the attempt is a record of its own. Callers present these two values
+        // to fenced tools (assertAttemptCurrent); absent when no worker is named.
+        ...(claimedAttempt
+          ? { attemptId: claimedAttempt.id, generation: claimedAttempt.generation }
+          : {}),
         ...(task.reopenCount > 0
           ? {
               reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`

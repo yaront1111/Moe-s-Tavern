@@ -25,6 +25,11 @@ export class PlanReviewPanel implements vscode.Disposable {
     private readonly taskId: string;
     private readonly disposables: vscode.Disposable[] = [];
     private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Revision of an approval that was sent but not yet answered by the daemon. */
+    private pendingApprovalRevision: number | undefined;
+    /** True once this panel knows the page is NOT showing content it could deliver. */
+    private contentOutOfSync = false;
+    private disposed = false;
 
     /**
      * Create a new panel or reveal an existing one for the given task.
@@ -89,6 +94,17 @@ export class PlanReviewPanel implements vscode.Disposable {
             })
         );
 
+        // A daemon refusal is the authoritative "this approval did not happen".
+        this.disposables.push(
+            this.client.onError(event => this.handleClientError(event))
+        );
+
+        // A drop while an approval is in flight must not leave the panel waiting
+        // for an answer that can no longer arrive.
+        this.disposables.push(
+            this.client.onConnectionChanged(state => this.handleConnectionChange(state))
+        );
+
         // Cleanup on panel close
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     }
@@ -98,30 +114,102 @@ export class PlanReviewPanel implements vscode.Disposable {
     }
 
     private debouncedUpdate(): void {
+        if (this.disposed) { return; }
         if (this.debounceTimer) {
             clearTimeout(this.debounceTimer);
         }
         this.debounceTimer = setTimeout(() => {
+            this.debounceTimer = undefined;
+            if (this.disposed) { return; }
+
             const task = this.findTask();
-            if (task) {
-                this.panel.webview.postMessage({
-                    type: 'updateTask',
-                    task,
-                });
+            if (!task) {
+                // The page is now showing a task that no longer exists — say so and
+                // treat its content as unbacked until a real task is delivered again.
+                this.contentOutOfSync = true;
+                void this.postControl({ type: 'taskRemoved' });
+                return;
             }
+
+            // The ONLY authoritative completion: the daemon moved this task on.
+            if (this.pendingApprovalRevision !== undefined && task.status === 'WORKING') {
+                this.pendingApprovalRevision = undefined;
+                vscode.window.showInformationMessage('Plan approved');
+                this.dispose();
+                return;
+            }
+
+            void this.postTaskUpdate(task);
         }, 200);
     }
 
-    private async handleWebviewMessage(msg: { type: string; taskId?: string; reason?: string; content?: string }): Promise<void> {
+    /**
+     * Deliver the task to the page, and remember whether it actually arrived.
+     *
+     * A failed delivery cannot disable anything remotely, so the gate has to live
+     * here: while `contentOutOfSync` is set, this panel refuses every approve
+     * message, because it knows the page is showing content it could not refresh.
+     */
+    private async postTaskUpdate(task: Task): Promise<void> {
+        if (this.disposed) { return; }
+        try {
+            const delivered = await this.panel.webview.postMessage({ type: 'updateTask', task });
+            this.contentOutOfSync = delivered === false;
+        } catch {
+            this.contentOutOfSync = true;
+        }
+    }
+
+    /**
+     * Act only on errors correlated to THIS task and the approve operation: the
+     * daemon returns the task id in the allowlisted error context, so an error for
+     * another task or another operation is ignored entirely.
+     */
+    private handleClientError(event: {
+        operation?: string;
+        message: string;
+        codeName?: string;
+        context?: { taskId?: string };
+    }): void {
+        if (this.disposed) { return; }
+        if (event.operation !== 'APPROVE_TASK') { return; }
+        if (!event.context || event.context.taskId !== this.taskId) { return; }
+
+        const stale = event.codeName === 'PLAN_REVISION_MISMATCH';
+        vscode.window.showErrorMessage(
+            stale
+                ? 'Plan approval refused — the plan changed since it was displayed. Reopen the review to read the current plan.'
+                : `Plan approval failed: ${event.message}`
+        );
+        void this.reportApprovalFailure(stale, stale
+            ? 'The daemon refused this approval because the plan changed. Close and reopen the review.'
+            : `The approval failed: ${event.message}`);
+    }
+
+    private handleConnectionChange(state: string): void {
+        if (this.disposed) { return; }
+        if (state === 'connected') { return; }
+        if (this.pendingApprovalRevision === undefined) { return; }
+
+        vscode.window.showWarningMessage(
+            'Lost the connection to the Moe daemon — the plan approval was not confirmed.'
+        );
+        void this.reportApprovalFailure(false,
+            'The connection dropped before the approval was confirmed. Approve will re-enable once the plan refreshes.');
+    }
+
+    private async handleWebviewMessage(msg: {
+        type: string;
+        taskId?: string;
+        reason?: string;
+        content?: string;
+        expectedPlanRevision?: unknown;
+    }): Promise<void> {
+        if (this.disposed) { return; }
         try {
             switch (msg.type) {
                 case 'approve':
-                    if (this.client.approveTask(this.taskId)) {
-                        vscode.window.showInformationMessage('Plan approved');
-                        this.dispose();
-                    } else {
-                        vscode.window.showWarningMessage('Not connected to Moe daemon — plan was not approved.');
-                    }
+                    await this.handleApprove(msg.expectedPlanRevision);
                     break;
 
                 case 'reject': {
@@ -167,6 +255,75 @@ export class PlanReviewPanel implements vscode.Disposable {
         }
     }
 
+    /**
+     * Approve the plan the webview actually rendered.
+     *
+     * `token` is whatever the page sent and is the ONLY source of the revision.
+     * This method deliberately never consults `currentState` to produce, replace
+     * or second-guess it: the cache's newest revision is by definition not the one
+     * the human read, and the daemon — not this panel — is the authority on
+     * staleness. A click carrying an older revision is therefore sent as-is and
+     * refused server side.
+     */
+    private async handleApprove(token: unknown): Promise<void> {
+        if (this.disposed) { return; }
+
+        // Duplicate sends while the daemon has not answered yet.
+        if (this.pendingApprovalRevision !== undefined) { return; }
+
+        // The page is showing content this panel failed to refresh, so whatever it
+        // rendered cannot be trusted as reviewed-and-current.
+        if (this.contentOutOfSync) {
+            vscode.window.showWarningMessage(
+                'The review page could not be refreshed — reopen the review before approving.'
+            );
+            await this.reportApprovalFailure(false,
+                'The review page could not be refreshed. Close and reopen the review before approving.');
+            return;
+        }
+
+        if (!isPlanRevision(token)) {
+            // Calling the one-argument approval here would approve a plan nobody
+            // reviewed — the exact hole this panel exists to close.
+            vscode.window.showErrorMessage(
+                `Plan approval refused: the review page sent no usable plan revision (${String(token)}).`
+            );
+            await this.reportApprovalFailure(false,
+                'The review page sent no usable plan revision. Close and reopen the review.');
+            return;
+        }
+
+        if (!this.client.approveTask(this.taskId, token)) {
+            vscode.window.showWarningMessage('Not connected to Moe daemon — plan was not approved.');
+            await this.reportApprovalFailure(false,
+                'The approval could not be sent. Approve will re-enable once the plan refreshes.');
+            return;
+        }
+
+        // A successful send only means bytes left the socket. Approval is finished
+        // only when the daemon says so (see debouncedUpdate / handleClientError).
+        this.pendingApprovalRevision = token;
+        await this.postControl({ type: 'approvePending' });
+    }
+
+    /**
+     * Post a control message to the page. Control messages never clear
+     * `contentOutOfSync` — only a delivered task update proves the page is current.
+     */
+    private async postControl(message: Record<string, unknown>): Promise<void> {
+        if (this.disposed) { return; }
+        try {
+            await this.panel.webview.postMessage(message);
+        } catch {
+            // The page is unreachable; `contentOutOfSync` already gates approval.
+        }
+    }
+
+    private async reportApprovalFailure(stale: boolean, message: string): Promise<void> {
+        this.pendingApprovalRevision = undefined;
+        await this.postControl({ type: 'approveFailed', stale, message });
+    }
+
     private getWebviewContent(task: Task | undefined): string {
         const webview = this.panel.webview;
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'planReview.js'));
@@ -208,6 +365,9 @@ export class PlanReviewPanel implements vscode.Disposable {
         const dodHtml = this.renderDoD(task.definitionOfDone);
         const stepsHtml = this.renderSteps(task.implementationPlan || []);
         const commentsHtml = this.renderComments(task.comments || []);
+        // Derived from the SAME task object that just produced the markup above,
+        // so the token can never describe content other than what is on screen.
+        const revisionAttr = seedRevisionAttribute(task);
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -413,10 +573,19 @@ export class PlanReviewPanel implements vscode.Disposable {
         /* ---- Action buttons ---- */
         .actions {
             display: flex;
+            align-items: center;
             gap: 8px;
             padding: 12px 20px;
             border-top: 1px solid var(--vscode-panel-border);
             flex-shrink: 0;
+        }
+        .review-notice {
+            flex: 1;
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .review-notice.visible {
+            color: var(--vscode-errorForeground);
         }
         .btn {
             padding: 6px 16px;
@@ -472,7 +641,7 @@ export class PlanReviewPanel implements vscode.Disposable {
         <div class="task-desc" id="taskDesc">${descHtml}</div>
     </div>
 
-    <div class="review-container">
+    <div class="review-container" id="reviewRoot"${revisionAttr}>
         <div class="review-left">
             <div class="section-title">Definition of Done</div>
             <div id="dodContent">${dodHtml}</div>
@@ -493,7 +662,10 @@ export class PlanReviewPanel implements vscode.Disposable {
     </div>
 
     <div class="actions">
-        <button class="btn btn-approve" id="approveBtn">Approve</button>
+        <div class="review-notice" id="reviewNotice"></div>
+        <!-- Starts disabled: only the script, after it has confirmed a seeded
+             token for fully rendered content, is allowed to enable approval. -->
+        <button class="btn btn-approve" id="approveBtn" disabled>Approve</button>
         <button class="btn btn-reject" id="rejectBtn">Reject</button>
     </div>
 
@@ -558,9 +730,16 @@ export class PlanReviewPanel implements vscode.Disposable {
     }
 
     dispose(): void {
+        // `panel.dispose()` below re-enters here through onDidDispose, so the guard
+        // is what makes disposal run exactly once.
+        if (this.disposed) { return; }
+        this.disposed = true;
+        this.pendingApprovalRevision = undefined;
+
         PlanReviewPanel.currentPanels.delete(this.taskId);
         if (this.debounceTimer) {
             clearTimeout(this.debounceTimer);
+            this.debounceTimer = undefined;
         }
         this.disposables.forEach(d => d.dispose());
         this.disposables.length = 0;
@@ -571,6 +750,33 @@ export class PlanReviewPanel implements vscode.Disposable {
 // ============================================================================
 // Utility functions (module-scoped, not exported)
 // ============================================================================
+
+/**
+ * True only for a value that can serve as an approval token: a non-negative safe
+ * integer. Never coerces — a numeric conversion here would be exactly the silent
+ * fallback that lets an unreviewed plan through.
+ */
+function isPlanRevision(value: unknown): value is number {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * The `data-plan-revision` attribute for the review root, or an empty string when
+ * the attribute must be omitted entirely.
+ *
+ * An ABSENT revision field is a legacy task record and seeds 0 — the daemon reads
+ * absence the same way, and 0 is exactly the value a truthiness check would drop.
+ * A present but malformed value is NOT legacy: it seeds nothing, so the page loads
+ * with Approve disabled rather than bound to a token nobody can trust. The same
+ * goes for a task that is not awaiting approval.
+ */
+function seedRevisionAttribute(task: Task): string {
+    if (task.status !== 'AWAITING_APPROVAL') { return ''; }
+    const raw: unknown = task.planRevision;
+    if (raw === undefined) { return ` data-plan-revision="${escapeHtml('0')}"`; }
+    if (!isPlanRevision(raw)) { return ''; }
+    return ` data-plan-revision="${escapeHtml(String(raw))}"`;
+}
 
 function escapeHtml(text: string): string {
     if (!text) { return ''; }

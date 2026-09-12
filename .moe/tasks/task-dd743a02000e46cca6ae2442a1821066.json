@@ -1,0 +1,387 @@
+{
+  "id": "task-dd743a02000e46cca6ae2442a1821066",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Reject stale daemon approval commands",
+  "description": "Objective: implement compare-and-swap approval against the durable planRevision producer task-492b573920264188888d56638dd98d81; work only after its delivered contract is available. Deliverable: optional expectedPlanRevision forwarded by StateManager.approveTask to taskStore.approveTask, plus APPROVE_TASK and the UPDATE_TASK AWAITING_APPROVAL-to-WORKING route in WebSocketServer. Put UPDATE_TASK command metadata beside taskId/updates, never persist it; strip forged planRevision and expectedPlanRevision from updates. Under the existing state mutex, validate supplied revision then compare to current effective revision before cancelSpeedModeTimeout or any write/publication. Only absence uses legacy approval; null, strings, booleans, fractional/negative/unsafe/non-finite numbers refuse INVALID_INPUT. A mismatch throws MoeErrorCode.STATE_CONFLICT (-32002) with codeName PLAN_REVISION_MISMATCH and safe taskId/expected/current revision details. WS ERROR keeps existing message, operation, context.taskId plus machine-readable code/codeName and allowlisted revision details, never arbitrary exception contexts. Use existing registration census to confirm no MCP approve_task tool exists; do not create one or repurpose set_task_status, whose role/policy stays unchanged. Scope: packages/moe-daemon/src/state/taskStore.ts, src/state/StateManager.ts, src/server/WebSocketServer.ts, new src/server/planApproval.test.ts, docs/MCP_SERVER.md (5 files). Tests use real serialization/dispatch or explicitly state.runExclusive, not concurrent direct handlers that bypass production locking. NOT in scope: IDE rendering, in-place revision policy, SPEED/TURBO policy rewrites, Wave 1. Verification at repo root: npm --prefix packages/moe-daemon test (Windows npm.cmd); document wire contract where no MCP approval tool exists. Capture focused old-behavior failure.",
+  "definitionOfDone": [
+    "Vitest proves current revision approves with PLAN_APPROVED and planApprovedAt; omitted revision remains accepted; legacy task without a stored revision accepts explicit 0.",
+    "Stale revision throws/returns exact STATE_CONFLICT code -32002 and PLAN_REVISION_MISMATCH codeName; task remains AWAITING_APPROVAL with persisted bytes, map, timestamps, assignment, activity/events and pending SPEED timeout unchanged.",
+    "Malformed supplied tokens refuse INVALID_INPUT instead of coercion or legacy fallback; unrelated error responses retain backwards-compatible message/operation fields and do not leak unallowlisted context.",
+    "Both APPROVE_TASK and UPDATE_TASK approval routes forward the token under the mutex; forged stored stamps and command metadata are not writable task fields, proven by WS regression tests.",
+    "A serialized newer-submit-before-older-approval race rejects the older token; a matched/legacy approval still succeeds under existing policy, proven through the real dispatch/locking path.",
+    "docs/MCP_SERVER.md records the actual approval wire/error shape and absence of MCP approve_task; fresh npm --prefix packages/moe-daemon test exits 0 with nonzero counts and recorded red proof."
+  ],
+  "taskRails": [
+    "Compare before timer cancellation or task mutation; do not weaken status/role checks.",
+    "A task-write failure does not promise new multi-entity transaction rollback.",
+    "No new MCP approval tool or automatic approval policy change."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY PREREQUISITE + SEAMS (read-only, no edits). Confirm slice 1 landed: `git log --oneline --grep 'Moe-Task: task-492b573920264188888d56638dd98d81'` must reach commit 7da080b, and `grep -n 'planRevision' packages/moe-daemon/src/types/schema.ts packages/moe-daemon/src/state/taskStore.ts` must show the optional `Task.planRevision` field plus the local helpers MAX_PLAN_REVISION / decodeStoredPlanRevision / derivePlanRevision (taskStore.ts around lines 40-130). If any is missing, STOP and moe.report_blocked instead of re-implementing the producer. Re-read the four live seams you will edit: taskStore.approveTask (taskStore.ts:428, currently `(state, taskId)`, calls cancelSpeedModeTimeout BEFORE state.updateTask), StateManager.approveTask (StateManager.ts:625, a two-line facade), WebSocketServer APPROVE_TASK (around line 514) and the UPDATE_TASK AWAITING_APPROVAL->WORKING delegation (`return this.state.approveTask(taskId)` around line 404), and the single catch-all ERROR builder (around lines 945-960: message / operation / context.taskId+epicId). Note three callers that must keep working with NO token and therefore rely on the parameter being optional: submitPlan.ts SPEED/TURBO auto-approval, setTaskStatus.ts relaxed-mode plan approval, and taskTimestamps.test.ts. Confirm by census that no MCP approval tool exists: `grep -n \"approve_task\" packages/moe-daemon/src/tools/index.ts` must return nothing. Do not create one and do not touch setTaskStatus.ts. Record the findings in the step note; produce no diff in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Read-only verification, no diff produced.\n\nPREREQUISITE CONFIRMED. `git log --oneline --grep 'Moe-Task: task-492b573920264188888d56638dd98d81'` reaches 7da080b (feat) plus 58e0546/8e23c42 checkpoints. `Task.planRevision?: number` exists at src/types/schema.ts:613. taskStore.ts carries MAX_PLAN_REVISION (line 47), decodeStoredPlanRevision (55, absent reads 0, malformed throws invalidInput fail-closed), sameSanitizedSurface (79), derivePlanRevision (103), createTask stamp 0 (171), updateTask strip+derive (221/303). submitPlan.ts:527 returns planRevision from the committed Task.\n\nSEAMS RE-READ.\n1. taskStore.approveTask at line 428, signature (state, taskId). Order today: getTask, AWAITING_APPROVAL check, cancelSpeedModeTimeout(taskId), state.updateTask(status WORKING + planApprovedAt, 'PLAN_APPROVED'). Comment says callers MUST hold the mutex; it does not acquire. The new validate+compare must go between the status check and cancelSpeedModeTimeout.\n2. StateManager.approveTask at line 625, two-line facade `return approveTask(this, taskId)`.\n3. WS APPROVE_TASK case at line 514: missing-taskId guard then `withMutex(() => this.state.approveTask(message.payload.taskId))`. withMutex (line 193) is literally `state.runExclusive(fn)`.\n4. WS UPDATE_TASK AWAITING_APPROVAL to WORKING delegation at line 405, `return this.state.approveTask(taskId)`, inside the same withMutex block that holds the transition table; it deliberately discards the rest of safeUpdates.\n5. UPDATE_TASK_DENYLIST at line 33 (Set of daemon-owned keys); the dropped-keys debug log is at line 328. Neither planRevision nor expectedPlanRevision is in it yet.\n6. Single catch-all ERROR builder at lines 947-963: type/message/operation plus context {taskId, epicId} only when payload is an object. WebSocketServer.ts has NO import from util/errors.js today (checked the import block, lines 5-25).\n7. PluginMessage union: APPROVE_TASK payload {taskId} at line 97, UPDATE_TASK payload {taskId, updates} at line 91.\n\nTOKEN-FREE CALLERS that require the parameter to stay optional: src/tools/submitPlan.ts (SPEED auto-approval path does its own updateTask, the TURBO path at line 396 comments on the approveTask mutex), src/tools/setTaskStatus.ts:130 (relaxed-mode approval comment), src/tools/taskTimestamps.test.ts:44 `await h.state.approveTask('task-1')`, src/state/StateManager.test.ts:730/735, src/__e2e__/lifecycle.e2e.test.ts:93. Five existing call sites total, all token-free.\n\nCENSUS: `grep -n \"approve_task\" src/tools/index.ts` returns nothing (exit 1). No MCP approval tool exists. Not creating one; setTaskStatus.ts stays untouched.\n\nSUPPORTING FACTS for later steps. util/errors.ts: MoeError(code, message, context?, codeName?) formats the message as `[CODENAME] message`; invalidInput(field, reason) carries context {field, reason} which is exactly the arbitrary context the ERROR allowlist must not leak. MoeErrorCode.STATE_CONFLICT = -32002, INVALID_INPUT = -32602. submitPlan.ts exports cancelSpeedModeTimeout (17) and clearAllSpeedModeTimeouts (26); speedModeTimeouts is module-private. StateManager has subscribe (463), runExclusive (475), detachFromMutexContext (486). WebSocketServer.test.ts harness (temp dir, setupMoeFolder/createEpic/createTask, port 0, connectAndCollect at line 142 with nextMessage) is copyable as-is. docs/MCP_SERVER.md: '## Plugin WebSocket Messages' at line 2270, '### moe.submit_plan' at 245 with its Returns block at 269-272 which does NOT yet mention planRevision.\n\nDirty paths in this shared checkout at step start are .moe board JSON belonging to the fleet plus this task's own record; untouched.",
+      "startedAt": "2026-09-11T09:22:47.579Z",
+      "completedAt": "2026-09-11T09:24:11.287Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "WRITE THE FAILING TEST FILE FIRST AND CAPTURE RED PROOF. Create packages/moe-daemon/src/server/planApproval.test.ts modelled on the existing WebSocketServer.test.ts harness: real http server on port 0, real StateManager over a temp `.moe` folder, real McpAdapter, real MoeWebSocketServer, and the `connectAndCollect()` helper that opens a genuine ws client to `/ws` and buffers frames. Never call a private handler directly and never race two direct handler calls; every non-socket assertion goes through `state.runExclusive(() => state.approveTask(...))`, which is exactly how production reaches the store. Cover, at minimum: (A) matched revision approves — status WORKING, planApprovedAt set, PLAN_APPROVED in the activity log; (B) omitted token still approves (legacy); (C) a legacy row whose `.moe/tasks/<id>.json` is written WITHOUT a planRevision key before `state.load()` accepts explicit 0; (D) stale N-1 and also newer N+1 both refuse with numeric code exactly -32002 and codeName exactly 'PLAN_REVISION_MISMATCH' (the N+1 case kills a `<` instead of `!==` mutant); (E) each malformed token — null, '3', true, 3.5, -1, Number.MAX_SAFE_INTEGER+1, NaN, Infinity — refuses with -32602 / 'INVALID_INPUT' and never silently falls back to the legacy path; (F) after every refusal the task is unchanged: byte-identical `.moe/tasks/<id>.json` read before and after, same status AWAITING_APPROVAL, same updatedAt, same planApprovedAt absence, same assignedWorkerId, same activity-log length, and a `state.subscribe(spy)` that recorded no publication; (G) a pending SPEED timer survives a refusal — set settings.approvalMode 'SPEED' with a small speedModeDelayMs, arm it through a real submit_plan, refuse a stale approval, then await the delay and assert the task reached WORKING with PLAN_AUTO_APPROVED, proving cancelSpeedModeTimeout did not run; (H) both WS routes end to end over the socket for matched, omitted and stale tokens, asserting the ERROR frame keeps message and operation and context.taskId; (I) forgery — `updates` carrying planRevision and expectedPlanRevision must not be persisted nor used as the token; (J) a serialized race — snapshot N, then a real submit_plan advances the row to N+1, then APPROVE_TASK with N refuses and a follow-up with N+1 succeeds, each step awaited so ordering is real, not racy; (K) a census regression asserting no registered tool name contains 'approve_task'. Import clearAllSpeedModeTimeouts in afterEach so no timer leaks, close the ws client and server, and remove the temp dir. Run `npx vitest run src/server/planApproval.test.ts` from packages/moe-daemon and SAVE the red output — the DoD requires recorded proof these tests fail on the old behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/planApproval.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/planApproval.test.ts"
+      ],
+      "note": "Created packages/moe-daemon/src/server/planApproval.test.ts (30 tests). RED PROOF CAPTURED — no production file touched in this step.\n\n`npx vitest run src/server/planApproval.test.ts` from packages/moe-daemon:\n  Test Files  1 failed (1)\n       Tests  20 failed | 10 passed (30)\n  EXIT=1\n\nHarness is a copy of the WebSocketServer.test.ts shape: temp `.moe` dir, real StateManager over it, real McpAdapter, real http server on port 0, real MoeWebSocketServer, a genuine ws client via connectAndCollect with a nextOfType(type) pump (broadcasts interleave with replies, so blind nextMessage is not safe). No private handler is called anywhere; every store-level assertion runs through the `approve()` helper which is `state.runExclusive(() => state.approveTask(...))`, the same path WebSocketServer.withMutex uses. afterEach calls clearAllSpeedModeTimeouts, closes every tracked ws client, closes wsServer + httpServer, removes the temp dir.\n\nGroups: (A) matched revision approves with WORKING + planApprovedAt + PLAN_APPROVED activity and an unchanged planRevision; (B) omitted token approves; (C) a task JSON written WITHOUT a planRevision key survives state.load and accepts explicit 0; (D) stale N-1, newer N+1 and 0-against-nonzero all refuse -32002 / PLAN_REVISION_MISMATCH with taskId/expected/current context (N+1 kills a `<` mutant); (E) eight malformed tokens (null, '3', true, 3.5, -1, MAX_SAFE_INTEGER+1, NaN, Infinity) refuse -32602 / INVALID_INPUT and never fall back to legacy; (F) after two refusals the task JSON is byte-identical and status/updatedAt/planApprovedAt/assignedWorkerId/planRevision/activity-log length are unchanged with a state.subscribe spy recording zero publications; (G) a SPEED timer armed through a real submit_plan (delay 400ms) survives a refused approval and still fires PLAN_AUTO_APPROVED; (H) five APPROVE_TASK and four UPDATE_TASK wire cases covering matched, omitted, stale, explicit null and an unrelated non-MoeError; (I) three forgery cases; (J) submit, reject, resubmit, then the rendered revision refuses over the socket while the current one succeeds; (K) getTools census asserts no registered name contains approve_task.\n\nTWO OF MY OWN ASSERTIONS WERE WRONG on the first run and were corrected, not the production code: I expected the ERROR frame context key set to be ['epicId','taskId'], but JSON.stringify DROPS `epicId: undefined`, so the wire set is ['taskId']. Both no-leak assertions now compare against ['taskId']. That flipped the \"unrelated errors stay backwards compatible\" case from failing to passing, which is correct — it is a regression guard for step 5, and today's builder already emits no code/codeName.\n\nFailure reasons on the current code, all the expected ones: 13 store-level cases throw nothing (\"expected undefined to be an instance of MoeError\") because approveTask ignores a second argument; 6 wire cases time out at 5000ms because no ERROR frame is produced at all; 1 forgery case fails \"expected 999 to be undefined\" because `expectedPlanRevision` inside `updates` is not on UPDATE_TASK_DENYLIST and reaches disk. The 10 passing are the legacy/accepted paths, the census, and the backwards-compatibility guard, which must stay green throughout.",
+      "startedAt": "2026-09-11T09:24:15.064Z",
+      "completedAt": "2026-09-11T09:29:09.177Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "IMPLEMENT THE COMPARE-AND-SWAP IN THE STORE AND FORWARD IT THROUGH THE FACADE. In taskStore.ts add an exported-or-local validator `decodeSuppliedPlanRevision(value: unknown, taskId: string): number` that accepts only `typeof value === 'number' && Number.isSafeInteger(value) && value >= 0`; everything else (null, strings, booleans, fractional, negative, unsafe, non-finite) throws `invalidInput('expectedPlanRevision', ...)` — no coercion, no legacy fallback. This is the whole error handling contract for a supplied token. Change the signature to `approveTask(state, taskId, expectedPlanRevision?: unknown)`; type it `unknown`, not `number`, so an untyped WS payload cannot bypass validation. Order inside the function is load-bearing and must be: existing task lookup, existing AWAITING_APPROVAL status check (do not weaken either), then — only when `expectedPlanRevision !== undefined` — validate the supplied token, read the current effective revision with the existing `decodeStoredPlanRevision(task)` (absent stamp reads as 0, so a legacy row matches explicit 0, and a corrupt stored stamp still fails closed as INVALID_INPUT), and on `supplied !== current` throw `new MoeError(MoeErrorCode.STATE_CONFLICT, <message naming the task and both revisions>, { taskId, expectedPlanRevision: supplied, currentPlanRevision: current }, 'PLAN_REVISION_MISMATCH')`. Every one of those throws must happen BEFORE `cancelSpeedModeTimeout(taskId)` and before `state.updateTask(...)`, so a refusal cancels no timer and writes nothing. An absent token skips the block entirely and takes the unchanged legacy path. Keep the existing comment about callers holding the mutex. In StateManager.ts widen the facade at line 625 to `approveTask(taskId: string, expectedPlanRevision?: unknown)` and forward the third argument verbatim. Do not add a new cross-entity transaction or rollback promise. Re-run the focused test file; groups A-G must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/planApproval.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "Store-level compare-and-swap landed plus the facade forward. Two files, no new dependency, no new transaction.\n\ntaskStore.ts: added the local validator `decodeSuppliedPlanRevision(value: unknown, taskId: string): number` beside the existing `decodeStoredPlanRevision`. It accepts only `typeof value === 'number' && Number.isSafeInteger(value) && value >= 0`; everything else throws `invalidInput('expectedPlanRevision', ...)`. Number.isSafeInteger already rejects NaN, Infinity and fractional values, so no separate finite check and no Number() anywhere — a coercion would reintroduce exactly the bug. The thrown message tells the caller to OMIT the field for a token-free approval, which is the only legacy opt-out.\n\n`approveTask` is now `(state, taskId, expectedPlanRevision?: unknown)` — `unknown`, not `number`, so an untyped WS payload cannot bypass validation by type-assertion at the call site. Order inside is load-bearing and is: getTask, the unchanged AWAITING_APPROVAL check, then the new `if (expectedPlanRevision !== undefined)` block (validate the token, read the effective current revision via decodeStoredPlanRevision so an absent stamp reads 0 and a corrupt stamp still fails closed as INVALID_INPUT, then throw MoeError STATE_CONFLICT with codeName PLAN_REVISION_MISMATCH and context { taskId, expectedPlanRevision, currentPlanRevision } when they differ), and only after all of that the original cancelSpeedModeTimeout + updateTask. Comparison is `!==`, not `<`: a newer token is stale-or-forged too. The mutex comment is unchanged. An absent token skips the block entirely, so the existing legacy path is byte-for-byte the old one.\n\nStateManager.ts: the facade is now `approveTask(taskId: string, expectedPlanRevision?: unknown)` forwarding the third argument verbatim, with a doc comment naming taskStore as the single decode authority. Optional, so the five existing token-free call sites (submitPlan TURBO, setTaskStatus relaxed mode, taskTimestamps.test.ts, StateManager.test.ts, lifecycle.e2e.test.ts) compile and behave unchanged.\n\n`npx vitest run src/server/planApproval.test.ts`: Tests 7 failed | 23 passed (30), EXIT=1 — down from 20 failed. Groups A through G are now fully green, including the byte-identical no-write refusal check, the zero-publication subscribe spy and the behavioral SPEED-timer proof (a refused approval leaves the timer armed and PLAN_AUTO_APPROVED still fires). The 7 remaining failures are all WS-layer and belong to steps 4 and 5: six frame timeouts because neither route forwards a token yet, and the forgery case still persisting `expectedPlanRevision: 999` because UPDATE_TASK_DENYLIST has not been widened yet.",
+      "startedAt": "2026-09-11T09:29:11.287Z",
+      "completedAt": "2026-09-11T09:30:29.942Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "WIRE BOTH WEBSOCKET APPROVAL ROUTES AND CLOSE THE FORGERY HOLE. In WebSocketServer.ts widen the PluginMessage union so APPROVE_TASK is `{ taskId: string; expectedPlanRevision?: unknown }` and UPDATE_TASK is `{ taskId: string; updates: Record<string, unknown>; expectedPlanRevision?: unknown }` — the token is COMMAND METADATA beside taskId/updates, never a task field. Add both 'planRevision' and 'expectedPlanRevision' to UPDATE_TASK_DENYLIST with a comment explaining the stamp is daemon-derived in taskStore.updateTask and the token is a command argument, so neither is ever a writable task field; the existing dropped-keys debug log then covers them for free. In the APPROVE_TASK case forward `message.payload.expectedPlanRevision` into `this.state.approveTask(...)` inside the existing `withMutex` call so validation and comparison happen under the state mutex. In the UPDATE_TASK case capture the raw token from the payload (NOT from `updates`, which is already stripped) before entering the mutex, and pass it at the AWAITING_APPROVAL->WORKING delegation around line 404: `return this.state.approveTask(taskId, approvalToken)`. Preserve the existing behavior that this approval route ignores the rest of `safeUpdates` — do not extend it. Omission of the key over the wire is the only legacy opt-out; an explicit JSON null is a malformed token and must surface INVALID_INPUT. Re-run the focused test file; groups H-J for both routes must now pass except the ERROR-shape assertions handled in the next step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/planApproval.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Both /ws approval routes now forward the token, and the forgery hole is closed. One file.\n\nPluginMessage union: APPROVE_TASK is `{ taskId: string; expectedPlanRevision?: unknown }`, UPDATE_TASK is `{ taskId: string; updates: Record<string, unknown>; expectedPlanRevision?: unknown }` with a comment stating the token is command metadata beside taskId/updates, never inside `updates`. Typed `unknown` end to end so nothing downstream can treat an unvalidated wire value as a number.\n\nUPDATE_TASK_DENYLIST gained 'planRevision' and 'expectedPlanRevision' with a comment explaining that the stamp is daemon-derived in taskStore.updateTask and the token is a command argument, so neither is a writable task field. The existing dropped-keys debug log now covers both for free, no extra logging added.\n\nAPPROVE_TASK forwards `message.payload.expectedPlanRevision` as the second argument to state.approveTask INSIDE the existing withMutex call, so validation and comparison are serialized with the status re-check and the write.\n\nUPDATE_TASK destructures the token out of the PAYLOAD as `approvalToken` (`const { taskId, updates, expectedPlanRevision: approvalToken } = message.payload`) before the safeUpdates strip and before the mutex, then passes it at the AWAITING_APPROVAL to WORKING delegation: `return this.state.approveTask(taskId, approvalToken)`. Reading it from the payload rather than from `updates` is the point — `updates` is already denylist-stripped, so a client cannot supply its own token there. The route still deliberately ignores the rest of safeUpdates; that behavior was not extended.\n\nKey omission is the only legacy opt-out because JSON cannot carry undefined; an explicit null arrives as null and reaches the store validator, which refuses it as INVALID_INPUT.\n\n`npx vitest run src/server/planApproval.test.ts`: Tests 6 failed | 24 passed (30), EXIT=1 — down from 7. Every frame timeout is gone, both routes now produce an ERROR frame for stale and null tokens, and all three forgery cases pass: a forged planRevision/expectedPlanRevision in `updates` no longer reaches disk or the cache, a correct token hidden in `updates` does not rescue a stale top-level token, and a stale token hidden in `updates` is ignored when the top-level key is omitted. The 6 remaining failures are purely the additive ERROR-frame fields (`expected undefined to be -32002` / `-32602` / `'PLAN_REVISION_MISMATCH'`), which is exactly step 5's scope.",
+      "startedAt": "2026-09-11T09:30:31.777Z",
+      "completedAt": "2026-09-11T09:31:25.541Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "MAKE THE ERROR FRAME MACHINE-READABLE WITHOUT LEAKING CONTEXT. WebSocketServer.ts does not import from util/errors.js yet — add `import { MoeError } from '../util/errors.js'`. In the single catch-all ERROR builder (around lines 945-960) keep `type`, `message` and `operation` exactly as they are and keep `context.taskId` / `context.epicId` exactly as they are, so every unrelated error response stays backwards compatible. Additively: when the caught value is a MoeError, add top-level `code` (the numeric MoeErrorCode, -32002 for a mismatch) and `codeName` (the stable string, 'PLAN_REVISION_MISMATCH' or 'INVALID_INPUT'). Never spread `error.context` — write a small module-local pure helper that reads at most the two allowlisted keys `expectedPlanRevision` and `currentPlanRevision` from `error.context`, emits each only when it is a finite number, and merges them into the existing `context` object beside taskId. A non-MoeError (a plain Error from a transition check, for example) must gain neither `code` nor `codeName` and no extra context keys — that is the error handling regression the test asserts. Re-run the focused test file; every group including the allowlist and the no-leak assertions must pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/planApproval.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "ERROR frame is machine-readable and leak-proof. Focused file is fully GREEN: Test Files 1 passed (1), Tests 30 passed (30), EXIT=0. `npx tsc --noEmit -p tsconfig.json` also exits 0.\n\nAdded `import { MoeError } from '../util/errors.js'` (the file had no util/errors.js import before). Added a module-local pure helper `allowlistedErrorContext(context)` driven by a two-entry `ERROR_CONTEXT_ALLOWLIST` of 'expectedPlanRevision' and 'currentPlanRevision'; it emits a key only when the value is a number AND Number.isFinite, and returns {} for an undefined context. Nothing else from an error context can ever cross the boundary.\n\nIn the single catch-all builder: `type`, `message` and `operation` are untouched, and `context.taskId` / `context.epicId` are untouched, so every unrelated error response stays byte-compatible. Additively, `code` and `codeName` are spread in ONLY when `error instanceof MoeError`, and the allowlisted revision numbers are merged into the existing context object beside taskId. `error.context` is never spread — the helper is the only reader. Renamed the local from `context` to `response` because the object also CONTAINS a `context` field and the shadowing made the allowlist hard to read; both use sites (the logger.error call and safeSend) were updated in the same block, no behavior change.\n\nProven by the suite: a mismatch frame carries message + operation + code -32002 + codeName PLAN_REVISION_MISMATCH + context { taskId, expectedPlanRevision, currentPlanRevision }. A malformed-token frame carries code -32602 + codeName INVALID_INPUT and its context key set is exactly ['taskId'] — the `field` and `reason` keys that invalidInput() puts in the error context do NOT cross, which is the concrete no-leak assertion. A plain Error (approving a WORKING task) keeps `message` containing 'Cannot approve task in WORKING status', has `code` and `codeName` undefined, and its context key set is exactly ['taskId']. Note for reviewers: `epicId` is absent from the wire not because it was dropped but because JSON.stringify omits an undefined value, and these payloads carry no epicId.",
+      "startedAt": "2026-09-11T09:31:27.573Z",
+      "completedAt": "2026-09-11T09:32:17.516Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "DOCUMENT THE ACTUAL WIRE AND ERROR CONTRACT. In docs/MCP_SERVER.md, under the existing '## Plugin WebSocket Messages' section (starts near line 2270), add a section for the plan-approval revision check covering: the APPROVE_TASK request shape with the optional `expectedPlanRevision` beside `taskId`; the UPDATE_TASK request shape with the token beside `taskId`/`updates` and an explicit note that `planRevision` and `expectedPlanRevision` inside `updates` are stripped by the denylist and can never be persisted or used as the token; the rule that OMITTING the key (not sending JSON null) is the only legacy no-token approval, while null, strings, booleans, fractional, negative, unsafe and non-finite values are refused as INVALID_INPUT (-32602); a copy-paste ERROR frame example for a mismatch showing `message`, `operation`, `code: -32002`, `codeName: 'PLAN_REVISION_MISMATCH'` and `context` with taskId plus the two allowlisted revision numbers, with a line stating no other exception context is ever forwarded; the fact that a legacy row with no stored stamp has effective revision 0 and therefore matches an explicit 0; and an explicit statement that there is NO `moe.approve_task` MCP tool and none is being added — approval reaches the daemon only over `/ws`, plus the unchanged SPEED/TURBO auto-approval and the unchanged `moe.set_task_status` relaxed-mode route, both of which use the token-free legacy path. Also add one line to the '### moe.submit_plan' Returns block noting it returns the committed `planRevision`, which is where a client gets the token it later sends back. Documentation only — no behavior change in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Documentation only, no behavior change. docs/MCP_SERVER.md gains a new '### Plan approval — expectedPlanRevision compare-and-swap' section under '## Plugin WebSocket Messages' (line 2275) plus one line in the moe.submit_plan Returns block.\n\nSection content, each item cross-checked against the shipped code rather than the plan text:\n- Opens by stating there is NO moe.approve_task MCP tool and none is being added; approval reaches the daemon only over /ws, and moe.set_task_status keeps its existing role/policy and is not an approval route.\n- APPROVE_TASK request shape `{ taskId, expectedPlanRevision?: number }` and UPDATE_TASK shape `{ taskId, updates: { status: 'WORKING' }, expectedPlanRevision?: number }`, with the note that the UPDATE_TASK route still ignores the rest of `updates`.\n- Explicit statement that the token is command metadata beside taskId/updates, never a task field, and that both `planRevision` and `expectedPlanRevision` are on the UPDATE_TASK denylist, so a forged stamp can never be persisted and a token smuggled inside `updates` is never read as the token.\n- Token rules: omission is the only legacy no-token approval (JSON cannot carry undefined, so explicit null is malformed, not an omission); a supplied token must be a non-negative safe integer, and null/'3'/true/3.5/-1/MAX_SAFE_INTEGER+1/NaN/Infinity all refuse INVALID_INPUT (-32602) with no coercion and no legacy fallback; a legacy row with no stored stamp has effective revision 0 and therefore matches an explicit 0; any non-equal revision refuses, so a newer token is as stale-or-forged as an older one; SPEED/TURBO auto-approval and set_task_status relaxed-mode approval are unchanged and token-free.\n- Copy-paste ERROR frame example for a mismatch with message, operation, code -32002, codeName 'PLAN_REVISION_MISMATCH' and context carrying taskId plus the two allowlisted revision numbers. The example message string is the literal one the store throws, including MoeError's own '[PLAN_REVISION_MISMATCH] ' prefix (verified against util/errors.ts, which formats every message as '[CODENAME] message').\n- A line stating message/operation/context.taskId/context.epicId are unchanged for every message type, that code/codeName are added only for a MoeError (a plain Error such as an illegal transition gets neither), and that no other exception context is ever forwarded because context is the request payload plus an allowlist of exactly expectedPlanRevision and currentPlanRevision as finite numbers, so field/reason/paths never reach a client. A malformed token gets the same shape with -32602 / 'INVALID_INPUT' and no revision numbers.\n- Closing line pointing clients at the planRevision returned by submit_plan or the task record in STATE_SNAPSHOT/TASK_UPDATED, and telling them to send back the revision that was rendered and reviewed, never a newer cached read.\n\nsubmit_plan Returns block: added `planRevision` to the returned shape and a bullet explaining it is the revision that submission committed and the token a client later sends back as expectedPlanRevision, linking to the new section. Verified against submitPlan.ts:527 (`planRevision: submitted.planRevision`).\n\nVerification of the anchor: the heading renders as #plan-approval--expectedplanrevision-compare-and-swap (em dash and backticks drop, double hyphen from the two spaces around the dash), which is exactly the link used in the Returns bullet.\n\nNote for the shared checkout: the four production/test files from steps 2-5 are already committed in checkpoints f1f7eb9/748f363, so docs/MCP_SERVER.md is the only path of mine dirty right now. Other dirty .moe/tasks/*.json and untracked .moe/epics/* belong to peer sessions and were left alone.",
+      "startedAt": "2026-09-11T09:32:19.564Z",
+      "completedAt": "2026-09-11T09:33:36.241Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "FULL REGRESSION RUN WITH RECORDED EVIDENCE. From the repo root run the package suite: on Windows `npm.cmd --prefix packages/moe-daemon test`, elsewhere `npm --prefix packages/moe-daemon test`. Capture the exit code SEPARATELY from any filtered output — a grep pipeline swallows it on this box — and require exit 0 with nonzero test-file and test counts that are strictly greater than the pre-change baseline (103 files / 1219 tests as of commit 7da080b). Also run `npx tsc --noEmit -p tsconfig.json` from packages/moe-daemon and require exit 0; note that tsconfig excludes `src/**/*.test.ts`, so the new test file is transpiled by vitest and not type-checked by that command. If anything unrelated fails, diagnose before proceeding rather than re-running. Keep the exact command, exit code and counts for the `verification` argument of moe.complete_task, and keep the earlier red output as the failing-before proof the DoD requires.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full regression GREEN. No files modified in this step (verification only).\n\nCommand, run from the repo root D:\\projexts\\moes on Windows:\n  npm.cmd --prefix packages/moe-daemon test\nExit code captured separately from the output (piped to a file, then $LASTEXITCODE) because a filtered pipeline swallows it on this box:\n  EXIT=0\n  Test Files  104 passed (104)\n  Tests       1249 passed (1249)\n  Duration    7.97s\n\nCounts are strictly greater than the pre-change baseline named in the plan (103 files / 1219 tests at commit 7da080b): exactly +1 file and +30 tests, which is the new src/server/planApproval.test.ts and its 30 cases. Nothing else moved, so no unrelated suite was perturbed and there was nothing to diagnose.\n\nTypecheck, run from packages/moe-daemon:\n  npx tsc --noEmit -p tsconfig.json\n  TSC_EXIT=0\nAs the plan noted, tsconfig excludes src/**/*.test.ts, so the new test file is transpiled by vitest and is NOT type-checked by that command; the three production files I touched (taskStore.ts, StateManager.ts, WebSocketServer.ts) are.\n\nRED PROOF preserved from step 2, before any production file was touched:\n  npx vitest run src/server/planApproval.test.ts  (from packages/moe-daemon)\n  Test Files  1 failed (1)\n  Tests       20 failed | 10 passed (30)\n  EXIT=1\nThat is the DoD's failing-before evidence: 20 of the 30 cases fail on the old behavior and all 30 pass now.\n\nEvidence carried forward to moe.complete_task verification: command `npm --prefix packages/moe-daemon test` (npm.cmd on this Windows box), exitCode 0, outputTail the two summary lines above.",
+      "startedAt": "2026-09-11T09:33:38.280Z",
+      "completedAt": "2026-09-11T09:34:08.637Z"
+    },
+    {
+      "stepId": "step-8",
+      "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Re-read the whole diff as an attacker and confirm each of these or fix it: the comparison really happens before `cancelSpeedModeTimeout` and before any write, so a refusal leaves bytes, cache, timestamps, assignment, activity and the pending SPEED timer untouched and publishes nothing; a supplied token is validated rather than coerced and an unparseable one never degrades into a legacy approval; absence and explicit null are genuinely different code paths; a forged `planRevision` in `updates` cannot reach disk through either route; the allowlist in the ERROR builder cannot forward an arbitrary exception context, including from an unrelated MoeError that carries `field`/`reason`; the three token-free callers (SPEED/TURBO auto-approval, set_task_status, existing tests) still compile and pass unchanged; status and role checks were not weakened; no MCP approval tool was added; and no promise of multi-entity rollback was introduced for a task-write failure. Confirm the file count is exactly the five in scope with no drift into IDE code or Wave 1. Then call moe.complete_task with the verification evidence from the previous step, list every modified path in modifiedFiles, and summarize for QA: the new wire contract, the exact refusal codes, and the deliberate limitation that a SPEED callback already queued behind the mutex can still auto-approve after a human refusal, so this is not a universal stale-approval fence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/planApproval.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review done against the full diff (`git diff 58e0546`). No code changed in this step; one factual correction to a plan premise is recorded below. Every checklist item confirmed:\n\nORDERING. taskStore.approveTask runs getTask, then the untouched AWAITING_APPROVAL status check, then the CAS block, and only then cancelSpeedModeTimeout + state.updateTask. Both throws (INVALID_INPUT and STATE_CONFLICT) are inside the CAS block, so a refusal cancels no timer, writes no bytes and publishes nothing (updateTask is the only publisher). Proven behaviorally, not by reading: the SPEED group arms a real timer, refuses a stale approval, then lets the timer fire and observes PLAN_AUTO_APPROVED.\n\nVALIDATION NOT COERCION. decodeSuppliedPlanRevision rejects anything that is not `typeof 'number' && Number.isSafeInteger && >= 0`. No Number() anywhere in the path. A malformed token throws instead of degrading into the legacy approval.\n\nABSENCE VS NULL. `expectedPlanRevision !== undefined` gates the whole block, so omission skips it entirely while an explicit null enters it and fails decode. Genuinely different code paths.\n\nFORGERY. Unreachable through three independent layers: WebSocketServer strips both `planRevision` and `expectedPlanRevision` from `updates` via UPDATE_TASK_DENYLIST; taskStore.updateTask strips `planRevision` again at line 221; and the approval route ignores safeUpdates wholesale, so nothing from `updates` reaches disk there at all. I also checked the creation route, which the plan did not name: createTask builds its Task literal field-by-field with no input spread and hardcodes `planRevision: 0` with a comment saying it ignores whatever the caller passed, so CREATE_TASK cannot seed a forged stamp either.\n\nERROR ALLOWLIST. The builder never spreads error.context. allowlistedErrorContext iterates a frozen two-key const list and emits a key only when the value is a finite number, so an unrelated MoeError carrying field/reason/entity/id/paths forwards nothing; `__proto__` is not in the list. code/codeName are added only for a MoeError, so a plain Error (the illegal-transition check) keeps the byte-identical legacy frame.\n\nTOKEN-FREE CALLERS — PLAN PREMISE CORRECTED. The plan and the architect's notes said submitPlan.ts SPEED/TURBO auto-approval and setTaskStatus.ts relaxed-mode approval are approveTask callers that must keep working. They are NOT. A full census of `approveTask(` across src shows submitPlan.ts calls `state.updateTask(..., 'PLAN_AUTO_APPROVED')` directly (lines 59 and 391) and setTaskStatus.ts sets planApprovedAt + emits PLAN_APPROVED through its own updates object (lines 233-242). Neither ever reached the store helper, so neither could have broken, and neither is fenced by this CAS — which is correct, because they are daemon-owned policy paths with no client-supplied token. The real token-free callers are three test sites: StateManager.test.ts:730/735, taskTimestamps.test.ts:44 and __e2e__/lifecycle.e2e.test.ts:93. All four call sites pass unchanged in the green suite. This strengthens rather than weakens the documented limitation and I have stated it plainly for QA.\n\nNOT WEAKENED / NOT ADDED. The status check is untouched and still runs before the CAS; no role check was modified; no MCP approval tool exists (`grep approve_task src/tools/index.ts` returns nothing, and registry.test.ts asserts every exported *Tool factory is registered, so absence is real); no new cross-entity transaction or rollback promise was introduced.\n\nSCOPE. `git diff --name-only 58e0546` outside .moe board state is exactly the five in-scope paths: src/state/taskStore.ts, src/state/StateManager.ts, src/server/WebSocketServer.ts, src/server/planApproval.test.ts, docs/MCP_SERVER.md. No drift into moe-jetbrains, moe-vscode or any Wave 1 concern. The dirty .moe/tasks/*.json rows are daemon-written board state for this task and for peer sessions and were left alone.\n\nVERIFICATION carried from step 7: `npm.cmd --prefix packages/moe-daemon test` EXIT=0, 104 files / 1249 tests passed (baseline 103/1219 at 7da080b, so +1 file / +30 tests and no regressions); `npx tsc --noEmit -p tsconfig.json` exit 0. Red proof from step 2: 20 failed | 10 passed (30), EXIT=1 before any production edit.",
+      "startedAt": "2026-09-11T09:34:10.705Z",
+      "completedAt": "2026-09-11T09:35:39.864Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion of architect-fa3e53b1's approved six-slice decomposition of task-7265e1fc (slice 2/6, daemon approval CAS). dependsOn gates WORKING claims only; ordering behind slice 1 holds.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "dependsOn": [
+    "task-492b573920264188888d56638dd98d81"
+  ],
+  "priority": "HIGH",
+  "order": 2.32,
+  "comments": [
+    {
+      "id": "comment-582ee70d7f254589a45e77dd81d55f87",
+      "author": "architect-fa3e53b1",
+      "content": "Scope clarification: governor-c9adec43 ruled (msg-2af1526f3f154a76af884f5ddb637293) that the producer revision covers all steps+DoD mutations, including amend_plan_step and WS UPDATE_TASK. The description's 'in-place revision policy' exclusion means that centralized stamp derivation belongs to prerequisite task-492b573920264188888d56638dd98d81, not that those updates may remain unfenced. Add a WS test that editing DoD/steps and then approving with the previous revision returns PLAN_REVISION_MISMATCH. Keep both WS approval routes and all existing malformed/legacy/error tests.",
+      "timestamp": "2026-09-10T18:28:15.840Z"
+    },
+    {
+      "id": "comment-cee2764a72134323b88a7508bb6934f4",
+      "author": "architect-8b93cc67",
+      "content": "Plan review (second architect, no resubmission — the approved 8-step plan from architect-31b9f5b1 is sound and maps to all six DoD items). One concrete gap worth closing while implementing step 2, so it does not come back as a QA reject:\n\nStep 2 group (J) advances the revision with a real submit_plan. The earlier task comment comment-582ee70d7f254589a45e77dd81d55f87 asked specifically for the OTHER bump path: edit definitionOfDone or implementationPlan through the plugin WS UPDATE_TASK route on an AWAITING_APPROVAL task (that patch reaches taskStore.updateTask, so derivePlanRevision bumps N to N+1), THEN approve with the stale N and assert PLAN_REVISION_MISMATCH. Add that as a second case in group (J). It is the regression that proves the fence covers every writer, not just submit_plan, and it exercises UPDATE_TASK in both of its roles (mutating edit, then approval) within one test.\n\nTwo smaller confirmations from a live read of the seams, both consistent with the plan:\n- taskStore.updateTask sanitizes by spread (`const sanitized: Partial<Task> = { ...updates }`), NOT by allowlist. So an unknown key such as expectedPlanRevision inside `updates` really would be persisted into the task record. The step-4 denylist entries are load-bearing, not belt-and-braces.\n- decodeStoredPlanRevision and MAX_PLAN_REVISION are module-local to taskStore.ts and approveTask lives in that same file, so the compare-and-swap reads the stored revision directly. Do not export them and do not write a second decode.",
+      "timestamp": "2026-09-11T09:22:55.514Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:23:52.742Z",
+  "updatedAt": "2026-09-11T09:41:48.826Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T19:43:57.705Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 8,
+    "doneAt": "2026-09-11T09:41:36.232Z",
+    "wallClockMs": 50258527
+  },
+  "contextFetchedBy": [
+    "architect-fa3e53b1",
+    "architect-8b93cc67",
+    "architect-31b9f5b1",
+    "worker-f2b3ac93",
+    "worker-e67b0dd2",
+    "qa-8db40c97"
+  ],
+  "commits": [
+    {
+      "sha": "661f13e65e46722538dbc23e35fa80ec97099c24",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-31b9f5b1@2026-09-11T09:17:42Z",
+      "paths": [
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json"
+      ],
+      "recordedBy": "architect-31b9f5b1",
+      "recordedAt": "2026-09-11T09:17:45.327Z",
+      "treeId": "d8d2d06957aa5d7f84306980602fb2cb4c5e10c2",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "f1f7eb9437540d5898c4c2b4a3751025629ca6ae",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-11T09:22:33Z",
+      "paths": [
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-11T09:22:36.310Z",
+      "treeId": "d5c6284af9e77c33cbad6869390a76cc70c21222",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "748f363a751efb88916a687e9133d0ee5adcbf86",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T09:32:29Z",
+      "paths": [
+        ".moe/tasks/task-0ad3744e77bd43b08b9c0b63293912a6.json",
+        ".moe/tasks/task-1bf079020e504aaaa760a8faeddebbcd.json",
+        ".moe/tasks/task-247fdf296ff2445daae8e057c0608f51.json",
+        ".moe/tasks/task-34dba87e4e1948bcba69e85f3f34bfd3.json",
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json",
+        "packages/moe-daemon/src/server/planApproval.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-11T09:32:33.802Z",
+      "treeId": "674a4fba95f73c860ca884df9327d0997b02e0bd",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "967b3020eda7876364ecdb379cf121f6bedf3093",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T09:36:20Z",
+      "paths": [
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T09:36:22.909Z",
+      "treeId": "dee766941d972e7aa3d8b415090df63abbd5eff6",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "ed4c8b7b56623f45cf85385b074661cd4e78e0d5",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-11T09:22:33Z",
+      "paths": [
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json",
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-11T09:36:31.050Z",
+      "treeId": "d4c68f52497147a0aa2c936fe948eef52fd246aa",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "48267af533514dfa84ee72eb4c47a19d92cde9be",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e67b0dd2@2026-09-11T09:32:29Z",
+      "paths": [
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json"
+      ],
+      "recordedBy": "worker-e67b0dd2",
+      "recordedAt": "2026-09-11T09:36:47.758Z",
+      "treeId": "18f9069f074b5df67eddd9191e076946b295f6cd",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "950364d89bc4b940081468bc35ceb1ca70adbda9",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T09:36:20Z",
+      "paths": [
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+        ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json",
+        ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T09:41:48.826Z",
+      "treeId": "852397c9241eb4b844a14bb99b82b12b147a1dfd",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/planApproval.test.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json",
+    ".moe/tasks/task-dd743a02000e46cca6ae2442a1821066.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json",
+    ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+    ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+    ".moe/tasks/task-c6e2eca5e19f4aaf9323f02aefadb29a.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T09:36:20Z",
+    "at": "2026-09-11T09:41:48.826Z"
+  },
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:22:07.490Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) A new moe.approve_task MCP tool carrying the token — rejected: the registration census shows no such tool and a task rail forbids adding one; approval is human-gated over /ws. (2) Putting expectedPlanRevision inside UPDATE_TASK.updates — rejected: updates flow into taskStore.updateTask and would make the token a writable task field, which is exactly the forgery hole; it goes beside taskId/updates as command metadata and both key names are added to the denylist. (3) Validating the token in WebSocketServer and passing a clean number down — rejected: two WS routes plus future callers would each need the same validation; typing the store parameter `unknown` and validating once in taskStore keeps a single authority and lets TypeScript refuse a caller that tries to skip it. (4) Comparing with < so only older tokens refuse — rejected: any non-equal token is stale-or-forged; a dedicated N+1 test kills that mutant. (5) Proving the SPEED timer survived by spying on cancelSpeedModeTimeout — usable, but the stronger proof is behavioral: arm a real SPEED timer, refuse a stale approval, then let the timer fire and observe PLAN_AUTO_APPROVED.",
+    "codebaseInsights": "Slice 1 (commit 7da080b) already landed the producer: optional Task.planRevision in types/schema.ts and, in taskStore.ts around lines 40-130, MAX_PLAN_REVISION / decodeStoredPlanRevision / derivePlanRevision. decodeStoredPlanRevision is the right read for the current effective revision — absent reads as 0 (so a legacy row matches explicit 0) and a corrupt stamp throws INVALID_INPUT, failing closed. util/errors.ts MoeError takes an explicit 4th codeName argument, so PLAN_REVISION_MISMATCH needs no enum edit; MoeErrorCode.STATE_CONFLICT is already -32002 and INVALID_INPUT is -32602. taskStore.approveTask (line 428) documents that callers hold the mutex and it does not acquire it; WebSocketServer.withMutex is state.runExclusive, so both WS routes are already serialized. The UPDATE_TASK approval route at line 404 delegates to state.approveTask and deliberately discards the rest of safeUpdates — preserve that. WebSocketServer.ts has a single catch-all ERROR builder near line 945 that already emits message/operation/context.taskId, and it does NOT yet import from util/errors.js. Three callers approve with no token today and must keep working: submitPlan.ts SPEED and TURBO auto-approval, setTaskStatus.ts relaxed-mode plan approval, and taskTimestamps.test.ts. WebSocketServer.test.ts has the exact real-socket harness to copy (temp .moe, port 0, connectAndCollect); toolTestHarness.ts in src/tools is available for seeding. StateManager.load uses raw loadEntities, so a task JSON written without planRevision is a faithful legacy row.",
+    "risks": "Ordering is the whole feature: any validation or comparison placed after cancelSpeedModeTimeout silently kills a pending SPEED timer on a refused approval — assert it behaviorally, not by reading the code. Number.isSafeInteger already rejects NaN, Infinity and fractional values, but a bare `typeof === 'number'` check would let them through, and `Number(value)` anywhere in this path reintroduces coercion. JSON cannot carry undefined, so key omission is the only legacy signal on the wire while an explicit null must refuse — test both. Spreading error.context into the ERROR frame would leak field/reason and paths from unrelated MoeErrors; only the two revision keys may cross. speedModeTimeouts is module-private, so a test that arms a real SPEED timer must call the exported clearAllSpeedModeTimeouts in afterEach or it leaks into sibling files. Vitest output here is buried in pino logs and a filtered pipeline hides the exit code — capture the code separately. tsconfig excludes test files, so tsc will not type-check the new one. Do not widen into IDE rendering, in-place revision policy, SPEED/TURBO policy or Wave 1, and do not claim a universal stale-approval fence: a SPEED callback already queued behind the mutex can still auto-approve after a human refusal, and that limitation belongs in the completion summary.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:22:07.570Z",
+  "workStartedAt": "2026-09-11T09:22:47.579Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/server/planApproval.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewStartedAt": "2026-09-11T09:36:17.447Z",
+  "verification": {
+    "command": "npm --prefix packages/moe-daemon test  (run as npm.cmd on this Windows box, from repo root D:\\projexts\\moes)",
+    "exitCode": 0,
+    "outputTail": "Test Files  104 passed (104)\n     Tests  1249 passed (1249)\n  Duration  7.97s (tests 81%, transform 13%, import 6%)\nEXIT=0\n\nBaseline at commit 7da080b was 103 files / 1219 tests, so this is exactly +1 file and +30 tests (the new src/server/planApproval.test.ts) with zero regressions.\n\nAlso: npx tsc --noEmit -p tsconfig.json (from packages/moe-daemon) -> TSC_EXIT=0.\n\nRED PROOF, captured in step 2 BEFORE any production file was touched:\n  npx vitest run src/server/planApproval.test.ts\n  Test Files  1 failed (1)\n       Tests  20 failed | 10 passed (30)\n  EXIT=1",
+    "reportedAt": "2026-09-11T09:36:17.447Z"
+  },
+  "completionSummary": "Daemon plan approval is now a compare-and-swap against the durable planRevision that slice 1 (7da080b) persists. Five files: src/state/taskStore.ts, src/state/StateManager.ts, src/server/WebSocketServer.ts, new src/server/planApproval.test.ts, docs/MCP_SERVER.md.\n\nWIRE CONTRACT (documented in docs/MCP_SERVER.md under '## Plugin WebSocket Messages'). Both /ws approval routes take an OPTIONAL expectedPlanRevision as command metadata beside taskId/updates:\n  { type: 'APPROVE_TASK', payload: { taskId, expectedPlanRevision?: number } }\n  { type: 'UPDATE_TASK',  payload: { taskId, updates: { status: 'WORKING' }, expectedPlanRevision?: number } }\nThere is NO moe.approve_task MCP tool and none was added; the registration census confirms it and registry.test.ts makes absence meaningful. moe.set_task_status keeps its existing role/policy. moe.submit_plan now advertises the committed planRevision in its Returns block, which is where a client gets the token.\n\nREFUSAL CODES. Mismatch (any non-equal revision, newer as well as older): MoeErrorCode.STATE_CONFLICT, numeric code -32002, codeName 'PLAN_REVISION_MISMATCH'. Malformed token (null, '3', true, 3.5, -1, MAX_SAFE_INTEGER+1, NaN, Infinity): -32602 / 'INVALID_INPUT' — never coerced, never degraded into the legacy path. Omitting the key is the ONLY token-free approval; a legacy row with no stored stamp has effective revision 0 and matches an explicit 0. The ERROR frame keeps message, operation and context.taskId/epicId exactly as before for every message type; code/codeName are additive and only for a MoeError, and context gains at most the two allowlisted finite numbers expectedPlanRevision/currentPlanRevision. error.context is never spread, so field/reason/paths from unrelated MoeErrors cannot leak.\n\nORDERING is the feature: the token is validated and compared inside taskStore.approveTask, after the untouched AWAITING_APPROVAL status check but BEFORE cancelSpeedModeTimeout and before any write. A refusal therefore leaves the ",
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/server/planApproval.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "completedAt": "2026-09-11T09:41:36.232Z",
+  "reviewCompletedAt": "2026-09-11T09:41:36.232Z",
+  "reviewSummary": "All 6 DoD items verified against the cumulative diff 58e0546..HEAD, not the worker summary. Exactly the 5 planned files, 915 insertions, no drift. Completion commit ed4c8b7 confirmed; the 4 source files landed earlier in checkpoint 748f363, so that commit alone looks doc-only. RE-RAN: npm.cmd --prefix packages/moe-daemon test -> 104 files / 1249 tests passed EXIT=0 (exit captured separately); tsc --noEmit EXIT=0. RED PROOF REPRODUCED INDEPENDENTLY: worktree at pre-change 58e0546, node_modules junctioned, new test against OLD code -> 20 failed | 10 passed (30), EXIT=1, matching the recorded red. DoD1 matched/omitted/legacy-0 approve with PLAN_APPROVED + planApprovedAt. DoD2 stale N-1 and newer N+1 both throw STATE_CONFLICT -32002 / PLAN_REVISION_MISMATCH (kills the < mutant); refusal leaves byte-identical json, unchanged status/updatedAt/assignment/revision, zero publications, unchanged activity length; SPEED timer survival proven behaviorally, and the diff confirms validation precedes cancelSpeedModeTimeout and updateTask. DoD3 all 8 malformed tokens refuse -32602 INVALID_INPUT, no coercion or fallback; an unrelated plain Error keeps message+operation with no code/codeName and context keys exactly [taskId], so field/reason never leak. DoD4 both routes forward the token inside withMutex; denylist strips planRevision and expectedPlanRevision, proven by 3 WS regressions (forged 999 never persisted; a token inside updates neither rescues a stale top-level one nor acts as the token). DoD5 serialized race over real ws dispatch: revision 1->2, rendered 1 refused, current 2 approves. No private handler called; store assertions use state.runExclusive. DoD6 docs cover both shapes, omission-vs-null, legacy 0, the mismatch ERROR frame, and the absence of moe.approve_task. Rails held, forbidden-pattern scan clean. Known limit: a SPEED callback already queued behind the mutex can still auto-approve after a refusal."
+}

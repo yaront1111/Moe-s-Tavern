@@ -1,0 +1,43 @@
+{
+  "id": "task-49ec8755a9ad4fa29c87294adf61804d",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Run the wrapper quality gate against a frozen candidate in a clean workspace",
+  "description": "Objective: verify the code that will actually be delivered. The wrapper's optional quality gate currently runs in the shared project directory before candidate attribution and staging, so it can pass using a dirty helper file that never reaches the final commit, and a CAS retry can rebuild the candidate against an advanced tip without repeating the gate.\n\nDeliverable: in scripts/moe-agent.sh and scripts/moe-agent.ps1, the landing path freezes the candidate tree first, records it with record_candidate, materializes that tree in a clean workspace, runs the configured gate there, reports the outcome with record_check_run, and calls finalize_attempt with the landing result. A CAS retry that rebuilds the candidate against a new tip produces a new candidate and reruns the gate rather than reusing the old result.\n\nNot in scope: the receipt record and target-movement recheck, which is the sibling task. Keep every existing landing guarantee: pathspec-only attribution, the tier rules, rescue refs on any failure, and the refusal codes.\n\nBoth wrappers must stay in parity; scripts/tests/parity-check.sh enforces shared strings.\n\nVerification: bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh, on a quiet box with MOE_POSTFLIGHT_TIMEOUT_SEC=180.",
+  "definitionOfDone": [
+    "Both wrappers freeze the candidate tree before running the gate and record it via record_candidate",
+    "The gate runs against the frozen tree materialized in a clean workspace, not the shared dirty project directory",
+    "The gate outcome is reported via record_check_run with the tree sha it ran against, and finalize_attempt is called with the landing result",
+    "A CAS retry against an advanced tip creates a new candidate and reruns the gate instead of reusing the previous result",
+    "Existing landing behaviour is preserved: pathspec-only attribution, tier rules, rescue refs on failure and the existing refusal codes all keep their harness coverage",
+    "bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh both pass",
+    "The clean workspace is removed on every exit path, including gate failure and Ctrl+C"
+  ],
+  "taskRails": [
+    "Keep scripts/moe-agent.sh and scripts/moe-agent.ps1 in exact parity; parity-check.sh gates the shared strings.",
+    "Never use git add -A or a bare git commit; the existing pathspec-only, temp-index landing stays.",
+    "A gate failure must still route bytes to a rescue ref, never to the branch."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-867f69a6cdb748a8ab68fcbeec0de711",
+    "task-d72d8cc6a29a4181a3767f493007320e"
+  ],
+  "priority": "HIGH",
+  "order": 130,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:02:34.280Z",
+  "updatedAt": "2026-09-12T22:06:42.821Z",
+  "contextFetchedBy": [
+    "architect-2d25447a",
+    "governor-6c1e1bf2"
+  ]
+}

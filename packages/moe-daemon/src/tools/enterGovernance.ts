@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatChannel } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
 import { releaseWorkerTasks } from '../state/workerLifecycle.js';
+import { resolveWorkerRole } from '../util/workerRole.js';
 import { healTeamMembership, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import { logger } from '../util/logger.js';
 
@@ -50,9 +51,31 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
       // Role gate: only governors may enter governance mode. Architects plan,
       // workers code, qa verifies. Call moe.claim_next_task for your role
       // instead — architects on an empty PLANNING queue get a wait_for_task
-      // nextAction. The tombstone is durable state written by the purge, not
-      // caller input, so honouring it here does not widen who may govern.
-      if (team?.role !== 'governor') {
+      // nextAction.
+      //
+      // MERGE NOTE: both sides of this gate are kept, because they fix two
+      // DIFFERENT ways a genuine governor was refused.
+      //
+      // From main: membership is resolved through the eviction tombstone, so a
+      // governor whose record the restart purge deleted can still re-enter. The
+      // tombstone is durable state written by the purge, not caller input, so
+      // honouring it does not widen who may govern.
+      //
+      // From this branch: when the effective team supplies no role at all, fall
+      // back to util/workerRole, which reads the seat's id prefix, like every
+      // other role-gated tool. That is not a widening either: as workerRole's
+      // docblock records, this is a workflow guard rather than a security
+      // boundary — join_team is unauthenticated, so a seat that wants the
+      // governor role can already grant itself one with a single call. What the
+      // bare `team?.role` read DID do is refuse a genuine governor on the
+      // role-less project team the launcher registers every seat into, and then
+      // tell it (below) to go join a governor team, which is the workaround for
+      // that bug.
+      //
+      // Order matters: an explicit team role is the operator stating the seat's
+      // role and must win over the id prefix.
+      const effectiveRole = team?.role ?? resolveWorkerRole(state, params.workerId);
+      if (effectiveRole !== 'governor') {
         throw notAllowed(
           'enter_governance',
           'enter_governance is governor-only. Architects plan (use moe.claim_next_task with statuses:["PLANNING"], then moe.wait_for_task when empty); workers code; qa verifies. Join a governor team to govern.'
@@ -72,7 +95,10 @@ export function enterGovernanceTool(_state: StateManager): ToolDefinition {
           status: 'IDLE'
         });
         logger.info(
-          { workerId: params.workerId, teamId: team.id },
+          // team is non-null here (the guard above throws when BOTH worker and team
+          // are missing), but the role gate no longer narrows it for the compiler:
+          // a governor can now pass via the id-prefix fallback with no team at all.
+          { workerId: params.workerId, teamId: team?.id },
           'enter_governance rebuilt a purged governor record from its team tombstone'
         );
       }

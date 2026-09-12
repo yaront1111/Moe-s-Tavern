@@ -177,8 +177,10 @@ interface ProjectSettings {
     autoCritique?: boolean;
   };
 
-  // moe.submit_plan seeds task.budget.wallClockMs = stepCount * pacePerStepMs when no explicit budget is passed; an existing budget is never overwritten.
-  pacePerStepMs?: number; // default: 900000 (15 min/step)
+  // DEPRECATED — accepted and ignored. Fed the removed task time-budget feature
+  // (80%/100% warn + escalate). moe.submit_plan no longer reads it and writes no
+  // task time budget. Still accepted so an existing project.json keeps loading.
+  pacePerStepMs?: number;
 
   // Per-column WIP limits (optional)
   // Key is TaskStatus, value is max tasks allowed in that column
@@ -351,6 +353,10 @@ interface Task {
   
   // Implementation Plan (AI-generated)
   implementationPlan: ImplementationStep[];
+
+  // Monotonic version of the approval-relevant plan surface
+  // (implementationPlan + definitionOfDone). Daemon-owned; see `planRevision` below.
+  planRevision?: number;
   
   // Status
   status: TaskStatus;
@@ -430,7 +436,9 @@ interface Task {
 
   // Governance / metrics
   metrics?: TaskMetrics;                        // Lifecycle counters
-  budget?: TaskBudget;                          // Soft wall-clock cap
+  budget?: unknown;                             // DEPRECATED legacy TaskBudget field (shape below),
+                                                // ignored by the daemon; typed unknown so old task
+                                                // records round-trip without reviving a contract
   pendingPlanCritique?: PendingPlanCritique;    // Set by submit_plan in CONTROL mode
   planCritiqueResult?: PlanCritiqueResult;      // Set by submit_plan_critique
 
@@ -567,7 +575,9 @@ effect immediately.
       "affectedFiles": ["src/components/auth/LoginForm.test.tsx"]
     }
   ],
-  
+
+  "planRevision": 1,
+
   "status": "WORKING",
   
   "assignedWorkerId": "worker-w1x2y3z4",
@@ -600,6 +610,30 @@ effect immediately.
 ### `newFiles`
 
 `ImplementationStep.newFiles` (and the `moe.submit_plan` step input) declares the paths a step will **create**. Same normalization and 50-entry cap as `affectedFiles`. Declared paths are exempt from the existence check above, plan-wide — a file declared in step 1's `newFiles` may be cited in step 2's `affectedFiles`. They still count toward the plan-size distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so the exemption cannot be used to dodge either gate. The key is omitted from persisted steps when empty. Do not park files that already exist in `newFiles` to silence the gate — that hides a wrong path from the next worker and from collision detection.
+
+### `planRevision`
+
+`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface** — `implementationPlan` + `definitionOfDone`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
+
+Producer rules, all enforced in `taskStore.updateTask` — the single choke point every plan/DoD writer already routes through (`moe.submit_plan`, `moe.amend_plan_step`, `moe.qa_reject`/reopen step resets, `moe.request_replan`, the plugin `UPDATE_TASK` message):
+
+- **`create_task` stamps 0**, even when the caller ships an initial `implementationPlan` — so the first submission is always 1.
+- **Absent = 0.** A record written before this field existed is read as revision 0. There is **no migration and no `schemaVersion` bump**; the row materializes a real `0`/`1` on its next successful write.
+- **No caller-selected stamp.** A `planRevision` in a tool argument or an `UPDATE_TASK` payload is stripped before the write, so a client can neither forge a newer value nor reset an older one.
+- **+1 for every committed submission**, including a resubmission whose steps are byte-identical to the ones already stored.
+- **+1 for any write that actually changes the sanitized surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not. Every retained key inside a step participates — `status`, `startedAt`/`completedAt`, `note`, `modifiedFiles`, `newFiles`, `amendments`, `activeAmendmentId` — so an amendment or a completed step advances the revision exactly like a re-plan.
+- **One bump per task write.** A write that changes steps *and* DoD *and* carries the submission event advances by exactly 1.
+- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
+- **Reopen never resets it.** `qa_reject` / reopen may *advance* it, because resetting steps to `PENDING` and dropping their execution evidence is a real surface change; an already-pending plan sanitizes equal and holds steady.
+
+Atomicity and errors:
+
+- The derived stamp is placed in the **same fresh `Task` object, and therefore the same `writeEntity` call**, as the plan/DoD it versions. A reader can never see one without the other. If that primary write fails, the revision, the in-memory task, the persisted bytes and the `TASK_UPDATED` publication are all unchanged, and a later retry advances exactly once.
+- A **malformed stored stamp** (`null`, a string, negative, fractional, non-finite, or an unsafe integer) refuses the write with `INVALID_INPUT` rather than coercing or resetting it — fail-closed, on any write, not just submissions.
+- A **required increment at `Number.MAX_SAFE_INTEGER`** refuses with numeric code `STATE_CONFLICT` (-32002) and `codeName` `PLAN_REVISION_EXHAUSTED`, carrying `taskId`/`currentRevision`/`maxPlanRevision`, and throws before anything is persisted. A metadata-only write at that value still succeeds.
+- `moe.submit_plan` returns the committed value as `planRevision` in its success result (never a recomputed or later-cached number).
+
+**Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. It is still not a universal fence: omitting the token remains a legal legacy approval, the other board/detail approve entry points stay token-free, and SPEED/TURBO auto-approval is unchanged — so a stamped revision documents staleness everywhere but only *prevents* a stale approval on the paths that send it. Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
 
 ### Task subtypes
 
@@ -709,9 +743,14 @@ interface TaskMetrics {
 }
 
 /**
- * Soft wall-clock budget. The daemon checks `firstClaimAt + wallClockMs` on
- * every WORKING-path tool call and posts a one-shot warning at 80% then an
- * escalation at 100% to `#governors`. No hard kill — purely advisory.
+ * DEPRECATED — the legacy shape of `Task.budget`, kept here only so anyone
+ * reading an old on-disk task record can decode it. The daemon no longer
+ * constructs, reads or enforces it: the wall-clock warn feature (a one-shot
+ * 80% warning then a 100% escalation to `#governors`) was removed because its
+ * clock measured calendar time from the first claim, so it counted BLOCKED
+ * time and fired a false "escalate or wrap up" on any transition out of a long
+ * park. `Task.budget` is typed `unknown` today; a legacy record carrying this
+ * shape still loads untouched, and nothing writes it.
  */
 interface TaskBudget {
   wallClockMs?: number;
@@ -942,6 +981,154 @@ interface ResourceQueueEntry {
   ],
   "createdAt": "2026-08-02T10:00:00Z",
   "updatedAt": "2026-08-02T10:15:00Z"
+}
+```
+
+---
+
+## Candidate
+
+**File:** `.moe/candidates/{candidate-id}.json` (one file per candidate)
+
+The exact bytes a task is offering for delivery, frozen so that review and checks can bind to something immutable instead of to a moving working tree. The runner records a candidate through `moe.record_candidate` (contract in docs/MCP_SERVER.md), and only `packages/moe-daemon/src/state/candidateStore.ts` writes the file. The addition is purely additive, with no `schemaVersion` bump and no migration. A project that has never recorded a candidate has no `candidates/` directory and loads an empty collection.
+
+```typescript
+interface Candidate {
+  readonly id: string;             // "cand-<32 hex>" when the daemon generates it; a caller-supplied
+                                   // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly attemptId: string;      // The ExecutionAttempt (.moe/attempts/) that produced the bytes;
+                                   // must exist and belong to taskId when the candidate is recorded
+  readonly taskId: string;
+  readonly baseRevision: string;   // Runner-REPORTED commit sha (7-40 hex) the bytes were built on
+  readonly treeSha: string;        // Runner-REPORTED tree or commit sha (7-40 hex) naming the bytes
+  readonly deliveryTarget: string; // Where the runner intends to land them, e.g. "refs/heads/wave1-pilot"
+  readonly createdAt: string;      // ISO 8601, the daemon's clock at first record (never the caller's)
+}
+```
+
+**Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
+
+**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never runs git, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
+
+**Queries.** Candidates are listed per task or per attempt, ordered by `createdAt` and then `id`, so ties are deterministic.
+
+**Example:**
+
+```json
+{
+  "id": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "attemptId": "attempt-8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b",
+  "taskId": "task-t1u2v3w4",
+  "baseRevision": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+  "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "deliveryTarget": "refs/heads/wave1-pilot",
+  "createdAt": "2026-09-11T03:00:00.000Z"
+}
+```
+
+---
+
+## Review
+
+**File:** `.moe/reviews/{review-id}.json` (one file per decision)
+
+One QA decision, bound to the exact [Candidate](#candidate) it was made against. Without the binding an approval issued after reading candidate A silently blesses whatever the task holds by the time it lands; the `candidateId` is what makes the decision mean something. Written by `moe.qa_approve` and `moe.qa_reject` (contracts in docs/MCP_SERVER.md), and only `packages/moe-daemon/src/state/reviewStore.ts` writes the file. Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a candidate never gets a `reviews/` directory and loads an empty collection.
+
+```typescript
+interface Review {
+  readonly id: string;          // "review-<32 hex>" when the daemon generates it; a caller-supplied
+                                // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly taskId: string;
+  readonly candidateId: string; // The Candidate the decision was made against — the task's CURRENT
+                                // candidate, already checked against the one the reviewer named
+  readonly reviewerId: string;  // Worker seat that decided, or "human" on the IDE/human path
+  readonly decision: 'approve' | 'reject';
+  readonly summary: string;     // qa_approve's summary, or qa_reject's reason
+  readonly createdAt: string;   // ISO 8601, the daemon's clock (never the caller's)
+}
+```
+
+**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+
+**Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
+
+**Incremental adoption.** A task with no candidate recorded produces **no** review — even when the caller names a `candidateId`, which then binds nothing — and both tools behave exactly as they did before the binding existed, adding no warning. This is deliberate: a project that never records candidates must keep working, and there is nothing truthful to bind a review to.
+
+**Queries.** Reviews are listed per task, ordered by `createdAt` and then `id`, so ties are deterministic. Every read, and the record `recordReview` returns, is a copy: editing it cannot change the stored review.
+
+**Example:**
+
+```json
+{
+  "id": "review-7c6b5a4938271605f4e3d2c1b0a99887",
+  "taskId": "task-t1u2v3w4",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "reviewerId": "qa-8db40c97",
+  "decision": "approve",
+  "summary": "Re-ran npx vitest run src/tools/qaApprove.test.ts: 21 passed. All 7 DoD items verified.",
+  "createdAt": "2026-09-11T03:10:00.000Z"
+}
+```
+
+---
+
+## CheckRun
+
+**File:** `.moe/checks/{check-run-id}.json` (one file per run)
+
+What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; no MCP tool records one yet (`moe.record_check_run` is a later slice). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
+
+```typescript
+interface CheckRun {
+  readonly id: string;           // "check-<32 hex>" when the daemon generates it; a caller-supplied
+                                 // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+  readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
+  readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
+                                 // candidate's treeSha exactly when recorded: no prefix match, no case folding
+  readonly command: string;      // Exactly as reported, never trimmed and never run; at most 500 chars
+  readonly exitCode: number;     // Any signed safe integer. A failing run is recorded like a passing one
+  readonly outputTail: string;   // The END of the output, at most 16384 UTF-8 BYTES; "" when none was sent
+  readonly runnerId: string;     // The runner the report names: reported, not authenticated
+  readonly source: 'runner-observed' | 'agent-reported';
+  readonly createdAt?: string;   // ISO 8601, the daemon's clock at first record (never the caller's).
+                                 // Optional only so rows written before the field existed still load
+}
+```
+
+**Provenance.** `source` is *declared* provenance. The daemon never executes the command and does not authenticate whoever reports it, so `runner-observed` is a claim about where the result came from — not proof that the command ran, and not a verified identity. There is no third value and no default. `runnerId` is likewise only what the report says.
+
+**Output tail.** The stored tail is capped at **16384 bytes of UTF-8** (16 KiB) — bytes, not characters, so a multibyte log keeps fewer characters than an ASCII one. The kept portion is the **end** of the log, and it always begins on a whole character: when the cut would split a character, it moves forward past that character instead of storing part of it, so the cut never adds a replacement character (U+FFFD). Malformed input, such as a lone UTF-16 surrogate, is first normalized to U+FFFD, deterministically. An absent tail is stored as `""`.
+
+**Many runs per candidate.** A candidate accumulates check runs. There is never one row per candidate that a later run overwrites: running a check again is a new record under a new id, and the history keeps every result, failures included.
+
+**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused.
+
+**Refusals.** Checked in this order; every refusal writes nothing:
+
+1. Malformed input: `-32602` `INVALID_INPUT` or `MISSING_REQUIRED` (see the CheckRun validation rules below).
+2. `candidateId` names no candidate: `-32001` `CANDIDATE_NOT_FOUND`, with `context.candidateId`. No candidate is ever created on the caller's behalf.
+3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
+4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
+
+A failed write reaches the caller as an error, and the run is published nowhere.
+
+**Recording is not eligibility.** Recording checks shape, that the candidate exists, and that the reported tree is the candidate's. Whether a stored run satisfies a gate — its command, its exit code, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
+
+**Queries.** Runs are listed per candidate: rows without a `createdAt` first, then by `createdAt`, then by `id`, so ties are deterministic. Every read, and the record `recordCheckRun` returns, is a copy: editing it cannot change the stored run.
+
+**Example:**
+
+```json
+{
+  "id": "check-5e4d3c2b1a09f8e7d6c5b4a392817065",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "treeSha": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+  "command": "node gate.cjs",
+  "exitCode": 1,
+  "outputTail": "1 failing: expected 0 lint errors, found 3",
+  "runnerId": "runner-pilot",
+  "source": "runner-observed",
+  "createdAt": "2026-09-11T03:20:00.000Z"
 }
 ```
 
@@ -1376,6 +1563,7 @@ function generateId(prefix: string): string {
 - `definitionOfDone` at least 1 item
 - `order` must be unique within epic
 - `status` transitions must be valid (see state machine)
+- `planRevision` is daemon-derived: a caller-supplied value is stripped, and a stored value outside the non-negative safe-integer domain refuses the write (`INVALID_INPUT`)
 
 ### Worker
 - `epicId` must exist
@@ -1388,6 +1576,32 @@ function generateId(prefix: string): string {
 - `settings.resources` updates **replace** the stored map (not a deep merge — removing a resource must be possible); unknown per-resource fields are rejected
 - `capacity` integer 1-100 (default 1); `maxLeaseMs` integer 60000-604800000 (1 min - 7 days; default 86400000 = 24h); `description` ≤500 chars
 - Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
+
+### Candidate
+- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op
+- `attemptId` must name an existing attempt of the same `taskId` (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`)
+- `baseRevision` and `treeSha` must be 7-40 hex characters. They are validated for shape only and never coerced
+- `deliveryTarget` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars
+- `createdAt` is always the daemon's clock; a caller cannot set it
+
+### Review
+- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included
+- `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
+- `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
+- `decision` must be exactly `approve` or `reject`
+- `candidateId` must be the task's CURRENT candidate at decision time, else the decision is refused with `CANDIDATE_MISMATCH` and no record is written
+- `createdAt` is always the daemon's clock; a caller cannot set it
+
+### CheckRun
+- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included
+- `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
+- `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
+- `command` must be a non-blank string of at most 500 characters, stored verbatim
+- `exitCode` must be a safe integer; zero, positive and negative values are all accepted
+- `source` must be exactly `runner-observed` or `agent-reported`, with no default
+- `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
+- An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
+- `createdAt` is always the daemon's clock; a caller cannot set it
 
 ---
 

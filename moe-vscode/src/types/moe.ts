@@ -16,9 +16,10 @@ export type TaskStatus =
   | 'PLANNING'
   | 'AWAITING_APPROVAL'
   | 'WORKING'
-  // Waiting on a shared-resource lease or a human. Not a board column of its
-  // own — the board display-maps BLOCKED into the WORKING column (matching
-  // the JetBrains plugin) and renders a BLOCKED badge on the card.
+  // Waiting on a shared-resource lease, on prerequisite tasks, or on a human.
+  // Not a board column of its own — the board display-maps BLOCKED into the
+  // WORKING column (matching the JetBrains plugin) and names the cause on the
+  // card chip (see blockCause in src/panels/TaskDetailPanel.ts).
   | 'BLOCKED'
   | 'REVIEW'
   | 'DONE'
@@ -198,12 +199,6 @@ export interface TaskMetrics {
   doneAt?: string;
 }
 
-export interface TaskBudget {
-  wallClockMs?: number;
-  warnedAt?: string;
-  escalatedAt?: string;
-}
-
 export interface HandoffNote {
   from?: string;
   to?: string;
@@ -273,10 +268,26 @@ export interface Task {
   comments: TaskComment[];
   hasPendingQuestion?: boolean;
   metrics?: TaskMetrics;
-  budget?: TaskBudget;
   priorHandoffs?: HandoffNote[];
   failedDodItems?: FailedDodEntry[];
   planCritiqueResult?: PlanCritiqueResult;
+
+  // Daemon-stamped plan revision, bumped every time the plan changes. Optional
+  // because a record written before the daemon started stamping revisions has
+  // no value at all; the daemon reads that absence as effective revision 0, so
+  // an explicit 0 matches a legacy row and no old snapshot breaks.
+  planRevision?: number;
+
+  // Blocker / attention metadata. All optional and nullable, exactly as the
+  // daemon declares them (packages/moe-daemon/src/types/schema.ts) — the raw
+  // client passes the payload through untouched, so these only widen the type.
+  // needsHumanReview is independent of BLOCKED and is never inferred.
+  needsHumanReview?: boolean;
+  blockedReason?: string | null;
+  blockedOnTaskIds?: string[] | null;
+  blockedResourceId?: string | null;
+  blockedFromStatus?: TaskStatus | null;
+  blockedAt?: string | null;
 }
 
 export interface Worker {
@@ -420,7 +431,11 @@ export type PluginOutboundMessage =
   | { type: 'UPDATE_EPIC'; payload: { epicId: string; updates: Record<string, unknown> } }
   | { type: 'DELETE_EPIC'; payload: { epicId: string } }
   | { type: 'REORDER_TASK'; payload: { taskId: string; beforeId: string | null; afterId: string | null } }
-  | { type: 'APPROVE_TASK'; payload: { taskId: string } }
+  // expectedPlanRevision is the plan-approval compare-and-swap token: command
+  // metadata sitting beside taskId, never part of a task update. It is omitted
+  // ENTIRELY for a legacy approval — omission is the daemon's only unchecked
+  // opt-out, so an explicit null would be refused as malformed.
+  | { type: 'APPROVE_TASK'; payload: { taskId: string; expectedPlanRevision?: number } }
   | { type: 'REJECT_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'REOPEN_TASK'; payload: { taskId: string; reason: string } }
   | { type: 'APPROVE_PROPOSAL'; payload: { proposalId: string } }
@@ -479,7 +494,24 @@ export type DaemonInboundMessage =
   | { type: 'DECISIONS'; payload: { decisions: Decision[] } }
   | { type: 'DECISION_PROPOSED'; payload: Decision }
   | { type: 'DECISION_RESOLVED'; payload: Decision }
-  | { type: 'ERROR'; message: string }
+  // The daemon puts operation/code/codeName at the TOP level and only emits
+  // code/codeName for a classified MoeError, so every field past `message` is
+  // optional. `payload` keeps the older nested shape type-checking; `context`
+  // lists only the keys the daemon's own /ws allowlist can emit.
+  | {
+      type: 'ERROR';
+      message: string;
+      operation?: string;
+      code?: number;
+      codeName?: string;
+      context?: {
+        taskId?: string;
+        expectedPlanRevision?: number;
+        currentPlanRevision?: number;
+        epicId?: string;
+      };
+      payload?: Record<string, unknown>;
+    }
   | { type: 'DAEMON_SHUTTING_DOWN' };
 
 // =============================================================================

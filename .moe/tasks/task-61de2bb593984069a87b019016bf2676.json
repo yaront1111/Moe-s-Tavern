@@ -1,0 +1,296 @@
+{
+  "id": "task-61de2bb593984069a87b019016bf2676",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Fix first-pass approval percent rendered 100x too large in both IDE clients",
+  "description": "Producer packages/moe-daemon/src/util/metrics.ts emits firstPassApprovalPct on a 0..100 scale (Math.round(count/total*100), comment '// 0..100'). Both consumers multiply by 100 again: moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt:213 formats it * 100.0, and moe-vscode/src/providers/MetricsViewProvider.ts:295 does Math.round(pct * 100). A 50% rate shows as 5000%. Fix the consumers (keep the producer's documented 0..100 contract) and pin the contract with fixtures on both sides so the unit cannot drift again. Source: roadmap 2026-09-10 §4 'Small corrections'.",
+  "definitionOfDone": [
+    "MetricsPanel.kt renders firstPassApprovalPct 0/50/100 as 0%/50%/100% (JUnit test in moe-jetbrains covers all three values)",
+    "MetricsViewProvider.ts renders the same three values identically",
+    "metrics.ts has a vitest case asserting firstPassApprovalPct is 0..100 for a 1-of-2 first-pass fixture",
+    "docs/SCHEMA.md (or the metrics section of docs/MCP_SERVER.md) states the 0..100 unit explicitly",
+    "./gradlew test and daemon npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "JetBrains first (primary IDE). TDD: write the failing test before touching the render code. Add a pure, headless-testable seam to MetricsPanel.kt — a `companion object { internal fun firstPassApprovalText(pct: Double?): String }` — mirroring the existing companion-seam convention proven by CreateTaskDialog.epicSelectionModel + CreateTaskDialogTest (JUnit 4, no Project/Application/Alarm needed). Step order: (1) create moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt asserting firstPassApprovalText(0.0)==\"0%\", (50.0)==\"50%\", (100.0)==\"100%\", and (null)==\"—\" (em dash, U+2014 — copy the exact glyph from MetricsPanel.kt line 213, do not retype a hyphen); (2) move the CURRENT expression `\"%.0f%%\".format(it * 100.0)` verbatim into the new companion function and bind line 213 to `firstPassValue.text = firstPassApprovalText(aggregate.firstPassApprovalPct)`; (3) run `./gradlew test` and RECORD the real numeric failures (expected 50%, got 5000%; expected 100%, got 10000%) — this is the epic-rail evidence that the test fails on the old behaviour, and a mere compile failure does not count; (4) delete only the `* 100.0`, leaving `\"%.0f%%\".format(it)`, and re-run green. Add a one-line comment above the companion function stating the daemon already emits percent units on 0..100 so consumers must not rescale. The null branch IS the missing-value error handling path and must keep returning the em dash unchanged; likewise leave the surrounding requestMetrics error handling (the swallowed-exception pooled-thread block above renderAggregate), locale handling, whole-number formatting, the hasAny empty-state logic, polling and every other KPI untouched. The tested function MUST be the one renderAggregate actually calls — an unused test-only helper is a rejection.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt"
+      ],
+      "note": "JetBrains consumer fixed, TDD order honoured. (1) Created MetricsPanelTest.kt (JUnit 4, headless, same companion-seam convention as CreateTaskDialogTest) asserting firstPassApprovalText(0.0)==\"0%\", (50.0)==\"50%\", (100.0)==\"100%\", (null)==em dash U+2014 (verified bytes e2 80 94 in both the test and MetricsPanel.kt). (2) Moved the CURRENT buggy expression verbatim into a new `companion object { internal fun firstPassApprovalText(pct: Double?): String }` and bound renderAggregate line 213 to `firstPassValue.text = firstPassApprovalText(aggregate.firstPassApprovalPct)` — renderAggregate calls the tested function, there is no parallel copy. (3) RED evidence from a real run, not a compile error: `gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.MetricsPanelTest` exit 1, \"4 tests completed, 2 failed\", XML report `expected:<50%> but was:<5000%>` and `expected:<100%> but was:<10000%>`. (4) Deleted only `* 100.0`, leaving `\"%.0f%%\".format(it)`. GREEN: full `gradlew.bat -p moe-jetbrains test` exit 0, 9 test classes / 72 tests / 0 failures / 0 skipped; the 4 new cases are in TEST-com.moe.toolwindow.MetricsPanelTest.xml (executed, not skipped). Untouched as required: the null-branch em dash, the pooled-thread requestMetrics swallowed-exception handler, locale/format string, hasAny empty-state, polling, all other KPIs. Added a one-line comment above the companion stating the daemon emits 0..100 so consumers must not rescale. MetricsPanel.kt grew 308->314 lines (already over the 300 soft cap before this task; the 6-line seam is the minimum). Pre-existing dirty paths from other sessions left alone (packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.*, scripts/tests/mention-provenance*). Gradle printed an unrelated cosmetic `OutOfMemoryError` from the jansi cleanup thread on daemon start; build result unaffected.",
+      "startedAt": "2026-09-10T17:35:09.428Z",
+      "completedAt": "2026-09-10T17:37:34.886Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code consumer (trivial one-line fix, allowed in-task by the epic rail). The buggy formatter lives inside the inline webview script string, so the test must execute that emitted script rather than duplicate its math. Create moe-vscode/tests/metrics-view.test.cjs following the existing harness convention in tests/daemon-start.test.cjs (node:test + typescript transpileModule to CommonJS + node:vm, fake `vscode` module via the context require shim; npm test globs tests/*.test.cjs, so add no runner and no dependency). Build a MetricsViewProvider with a fake extensionUri and a fake MoeDaemonClient whose onMetrics/onConnectionChanged return `{ dispose() {} }`, then call the private renderer entry point `provider['getHtml']()` — it takes no arguments and tolerates a missing view (`this._view?.webview.cspSource ?? ''`). Extract the script with a `/<script>([\\s\\S]*?)<\\/script>/` match and THROW if it does not match. Run that script in a fresh vm context per fixture supplying: `acquireVsCodeApi: () => ({ postMessage() {} })`, a `document` with `querySelectorAll: () => []` and `getElementById: id => elements[id] ??= {}`, and a `window` whose addEventListener captures the 'message' handler (throw if no handler registered). Use bare `{}` stub elements so every DOM property the production script writes is absorbed implicitly by ordinary assignment — the test source must not name any DOM markup-injection property, since the repo forbidden-pattern rail greps for it. Drive the fixture by invoking that captured handler with `{ data: { type: 'aggregate', aggregate: { firstPassApprovalPct: N } } }` and assert elements.kpiFirstPass.textContent is exactly '0%', '50%', '100%' for N = 0/50/100, plus '—' for an omitted field, an explicit null, and a non-number — that typeof guard is the script's missing-value error handling and must survive the edit. Run the test BEFORE the fix and record the 5000%/10000% failures, then change line 295 `Math.round(a.firstPassApprovalPct * 100)` to `Math.round(a.firstPassApprovalPct)` and add the same 'daemon emits 0..100' comment. Missing script, missing handler and unexpected requires must all throw loudly rather than silently pass. Call provider.dispose() in a finally so no listener or poll timer leaks. Leave humaniseMs, escapeHtml, the range chips, the per-epic table and the connection-status error handling untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/MetricsViewProvider.ts"
+      ],
+      "newFiles": [
+        "moe-vscode/tests/metrics-view.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/MetricsViewProvider.ts",
+        "moe-vscode/tests/metrics-view.test.cjs"
+      ],
+      "note": "VS Code consumer fixed, TDD order honoured. New moe-vscode/tests/metrics-view.test.cjs follows the tests/daemon-start.test.cjs harness exactly (node:test + ts.transpileModule to CommonJS + node:vm + a fake `vscode` require shim); no runner and no dependency added, npm test already globs tests/*.test.cjs. The test builds a MetricsViewProvider with a fake extensionUri and a fake client whose onMetrics/onConnectionChanged return `{ dispose() {} }`, calls the private `provider['getHtml']()` with no resolved view, extracts the inline script with /<script>([\\s\\S]*?)<\\/script>/ and THROWS if it does not match, then runs that exact production script in a FRESH vm context per fixture (stub acquireVsCodeApi, document.querySelectorAll -> [], document.getElementById -> bare {} stubs, window.addEventListener capturing the 'message' handler and throwing if none registered). An unexpected require throws loudly. provider.dispose() runs in a finally so the metrics listeners and the 30s poll interval are released. Stub elements are bare {} so no DOM markup-injection property is ever named in the test source; grep for the four repo forbidden patterns across both new test files returns nothing. RED evidence from a real run BEFORE the fix: `node --test moe-vscode/tests/metrics-view.test.cjs` exit 1, 6 tests / 4 pass / 2 fail, \"'5000%' !== '50%'\" and \"'10000%' !== '100%'\"; the three missing-value cases (omitted, explicit null, non-number string) passed already, proving the typeof guard survives. GREEN after changing only line 295 `Math.round(a.firstPassApprovalPct * 100)` -> `Math.round(a.firstPassApprovalPct)` plus the same one-line 'daemon emits 0..100' comment: `npm --prefix moe-vscode test` exit 0, tests 13 / pass 13 / fail 0 / skipped 0 (7 pre-existing daemon-start cases + the 6 new ones, all executed). humaniseMs, escapeHtml, the range chips, the per-epic table and the connection-status error handling are untouched. Pre-existing dirty paths from other sessions left alone.",
+      "startedAt": "2026-09-10T17:37:37.526Z",
+      "completedAt": "2026-09-10T17:39:07.312Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Pin the producer contract so the unit cannot drift back. Create packages/moe-daemon/src/util/metrics.test.ts (vitest, colocated like the other daemon *.test.ts files) importing the real computeMetricsAggregate and computeDashboardAggregate from './metrics.js'. Do NOT append to an existing test file and do NOT import any module that installs a hoisted vi.mock — a hoisted mock in the same file silently swallows appended cases (known repo gotcha). Build minimal deterministic Task fixtures with fixed ISO timestamps, cast through `as unknown as Task` so only the fields metrics.ts reads are required (status, epicId, metrics.rejectCount). Cases, all mutation-resistant exact-value assertions: two DONE tasks with metrics.rejectCount 0 and 1 give firstPassApprovalPct exactly 50 (not 0.5, not 5000) and the value is within 0..100; 0-of-2 gives exactly 0; 2-of-2 gives exactly 100; adding a non-DONE task with a rejectCount does not change the 50 result (it must not enter the approval denominator); computeDashboardAggregate over the same 1-of-2 input also reports exactly 50; and with no DONE tasks the raw aggregate is 0 while the dashboard field is undefined and absent after a JSON.stringify round-trip — that zero-vs-missing split is the producer's deliberate empty-input error handling and is what the IDE em dash depends on. These lock in already-correct behaviour, so they pass at baseline — that is expected; the fail-on-old-behaviour rail is carried by the two consumer tests. Change nothing in metrics.ts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "note": "Producer contract pinned without touching metrics.ts (confirmed: git shows no change under packages/moe-daemon/src/util/metrics.ts). New standalone packages/moe-daemon/src/util/metrics.test.ts (vitest, colocated like every other daemon *.test.ts) imports the real computeMetricsAggregate and computeDashboardAggregate from './metrics.js'; it is its own file and `grep -c 'vi\\.mock'` on it is 0, so the hoisted-mock swallowing gotcha cannot apply. Fixtures are minimal Task objects with fixed ISO timestamps cast through `as unknown as Task` (only status, epicId, metrics.rejectCount are read). Seven exact-value cases: 1-of-2 DONE is exactly 50 (plus explicit 0..100 bound assertions), 0-of-2 is exactly 0, 2-of-2 is exactly 100, a WORKING task with rejectCount 2 does not enter the denominator so the answer stays 50 while taskCount rises to 3, no DONE tasks gives a raw 0, computeDashboardAggregate over the same 1-of-2 input is exactly 50, and with no DONE tasks the raw aggregate is 0 while the dashboard field is undefined AND absent from the keys after a JSON.stringify round-trip (the zero-vs-missing split the IDE em dash depends on). Verification: `npm --prefix packages/moe-daemon exec -- vitest run src/util/metrics.test.ts` exit 0, Test Files 1 passed, Tests 7 passed. These pass at baseline by design; the fail-on-old-behaviour rail is carried by steps 1 and 2. Checked packages/moe-daemon/tsconfig.json excludes src/**/*.test.ts, so the new file cannot affect `npm run build`. Pre-existing dirty paths from other sessions (packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.*, scripts/tests/mention-provenance*) left untouched.",
+      "startedAt": "2026-09-10T17:39:09.452Z",
+      "completedAt": "2026-09-10T17:39:53.001Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Documentation DoD. docs/MCP_SERVER.md already carries the unit as an inline comment in the moe.list_metrics response sample (`firstPassApprovalPct,           // 0..100; first-pass = DONE with rejectCount===0`, around line 1957) and documents omission-when-no-DONE-tasks in the GET_METRICS section (around line 2287). Verify both are still present and correct, then strengthen the list_metrics section with one explicit prose sentence stating that firstPassApprovalPct is an integer percentage on the 0..100 scale and that clients must render it as-is without multiplying by 100. Keep it to a sentence or two next to the existing sample; do not restructure the section, do not duplicate the statement into docs/SCHEMA.md (which covers per-task TaskMetrics, not this aggregate), and do not touch any other tool contract or its documented error handling. Quote the exact final wording and file:line in the step note so QA can check the DoD item without hunting.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Documentation DoD satisfied in docs/MCP_SERVER.md only, one inserted line, `git diff --stat docs/MCP_SERVER.md` = \"1 file changed, 1 insertion(+)\". Verified both pre-existing statements are still present and correct: docs/MCP_SERVER.md:1957 `firstPassApprovalPct,           // 0..100; first-pass = DONE with rejectCount===0` in the moe.list_metrics response sample, and docs/MCP_SERVER.md:2288 `firstPassApprovalPct?: number,     // omitted when no DONE tasks` in the GET_METRICS response. Added exactly one prose bullet at the top of the moe.list_metrics **Notes:** list. Exact final wording, docs/MCP_SERVER.md:1967: \"- `aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio — a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.\" Section not restructured, no other tool contract or documented error handling touched, and nothing duplicated into docs/SCHEMA.md (grep -c firstPassApprovalPct docs/SCHEMA.md = 0, confirming it covers per-task TaskMetrics only). Pre-existing dirty paths from other sessions left alone.",
+      "startedAt": "2026-09-10T17:39:55.205Z",
+      "completedAt": "2026-09-10T17:40:18.490Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate — one fresh consolidated run from the repo root after all edits, exit codes captured. Windows PowerShell: `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix packages/moe-daemon test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE`. POSIX equivalent: `(cd moe-jetbrains && ./gradlew test) && npm --prefix packages/moe-daemon test && npm --prefix moe-vscode test && npm --prefix moe-vscode run compile`. That per-command exit-code check is deliberate error handling: PowerShell does not stop on a failed native command, so an unguarded chain would report green after a red suite. The DoD names ./gradlew test and daemon npm test explicitly, so run the FULL suites, not just the new files. Require a positive executed-test count in each suite and confirm the new cases ran rather than being skipped. The JetBrains Gradle cache is shared with other sessions on this box — serialize with them, never delete or clean shared build outputs, and never regenerate daemon assets for this fix. Pass the exact command, exitCode 0 and a useful outputTail into moe.complete_task verification.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification gate green, one consolidated run from the repo root after all edits, per-command exit-code guards as planned (PowerShell does not stop on a failed native command, so each stage exits the chain on non-zero). Command run: `& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --console=plain; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix packages/moe-daemon test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile` -> GATE_EXIT=0. Full suites, not just the new files. Executed-test counts all positive and nothing skipped: JetBrains 72 tests / 0 skipped / 0 failures / 0 errors across 9 test classes (summed from build/test-results/test/*.xml), daemon vitest \"Test Files 102 passed (102), Tests 1177 passed (1177)\", VS Code \"tests 13, pass 13, fail 0, skipped 0\", and `tsc -p ./` clean. DEVIATION, deliberate and explained: the plan's literal `gradlew test` reported \"> Task :test UP-TO-DATE\" and executed ZERO tests (no Kotlin changed since the step-1 run), which is not fresh evidence, so the gate used `--rerun` on the same task. `--rerun` re-executes only the test task; it does NOT delete or clean any shared build output, so the shared-Gradle-cache rail holds. Confirmed the new cases really ran: TEST-com.moe.toolwindow.MetricsPanelTest.xml is timestamped 20:40, one minute old at check time, and contains all four cases. No daemon assets regenerated, no build outputs cleaned. Gradle again printed an unrelated cosmetic OutOfMemoryError from the jansi cleanup thread at daemon startup; BUILD SUCCESSFUL, unaffected. Pre-existing dirty paths from other sessions untouched. The documentation-only step-4 change cannot affect any suite.",
+      "startedAt": "2026-09-10T17:41:16.176Z",
+      "completedAt": "2026-09-10T17:41:24.985Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review, then complete. Load the adversarial-self-review skill and read the whole diff as an attacker. Confirm: renderAggregate in MetricsPanel.kt is bound to the tested companion function (not a parallel copy) and the VS Code assertions run the script actually emitted by getHtml; each client now scales the daemon value exactly once (zero rescaling); 0/50/100 render identically in both clients; missing stays visually distinct from zero on both sides; the producer 1-of-2 fixture is exactly 50; no error handling path regressed on either client (missing-value em dash, webview typeof guard, daemon empty-input branch, pooled-thread request failure); no new timer, listener, vm context or file handle leaks; none of the repo's forbidden patterns appear anywhere in the diff (check the global rail list against the new files) and no secrets or absolute machine paths are in the new tests; no mutable shared formatter state. Explicitly reason about null/empty/negative/huge/NaN inputs and state the deliberate decision in the step note: this task restores the documented finite 0..100 contract only — do NOT add clamping, NaN guards or malformed-value policy, that is out of scope. Verify restoring either consumer multiplier still makes the 50/100 assertions fail, and never weaken an expected value to get green. Stay inside Wave 0: no attempt/candidate/receipt work, no other metrics defects. Leave the pre-existing dirty packages/moe-daemon/src/generated/initFiles.ts and every peer/daemon-owned .moe path alone — never stage, revert or clean them, just note them. Report every created/modified path in complete_step.modifiedFiles, then moe.complete_task with the verification evidence and an explicit five-item DoD mapping. If review forces a code change, re-run the full step-5 gate before completing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt",
+        "moe-vscode/src/providers/MetricsViewProvider.ts",
+        "moe-vscode/tests/metrics-view.test.cjs",
+        "packages/moe-daemon/src/util/metrics.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the full `git diff` done; no code change was forced, so the step-5 gate stands. Binding: MetricsPanel.kt:213 is now `firstPassValue.text = firstPassApprovalText(aggregate.firstPassApprovalPct)` and the ONLY definition of firstPassApprovalText is the companion function the test calls — no parallel copy exists (the old inline expression is gone from the diff). VS Code assertions execute the script extracted from the real `getHtml()` output, not a transcription. Scaling: each client now applies the daemon value exactly once (`\"%.0f%%\".format(it)` and `Math.round(a.firstPassApprovalPct)`); zero rescaling anywhere. 0/50/100 render identically in both clients (4 JUnit cases + 6 node:test cases). Missing stays visually distinct from zero on both sides: JetBrains null gives the U+2014 em dash while 0.0 gives \"0%\"; VS Code non-number gives the em dash while 0 gives \"0%\"; the daemon side keeps the deliberate zero-vs-omitted split (raw aggregate 0, dashboard field absent), all asserted. Producer 1-of-2 is exactly 50 and metrics.ts is unmodified (absent from the diff). Error handling: nothing regressed — em dash branches, the webview `typeof === 'number'` guard, the daemon empty-input branch and the pooled-thread swallowed-exception requestMetrics block are all untouched. Leaks: firstPassApprovalText is pure with no mutable shared or static state; the VS Code test disposes the provider in a finally (releasing both metrics listeners and the 30s poll interval), the vm contexts are per-fixture and unreferenced afterwards, and readFileSync leaves no handle. Fail-loud paths kept: missing <script>, missing message handler and unexpected requires all throw. Forbidden patterns: grep for eval(, innerHTML, dangerouslySetInnerHTML, __proto__ across MetricsPanel.kt, MetricsPanelTest.kt, metrics-view.test.cjs and metrics.test.ts returns nothing, and the MetricsViewProvider.ts diff adds zero occurrences of the markup-injection property (the pre-existing per-epic-table use is untouched and unnamed by the test). No secrets and no absolute machine paths in the new tests (grep for drive letters, /home/, /Users/, token, secret, password, api key returns nothing; the VS Code test resolves its source via __dirname). DELIBERATE OUT-OF-SCOPE DECISION on hostile inputs, as the plan directs: this task restores the documented finite 0..100 contract ONLY. null/omitted is handled (em dash, both clients). Negative, NaN, Infinity and absurdly large values are unreachable through the documented producer contract (metrics.ts emits Math.round of a non-negative ratio*100, and JSON cannot even carry NaN/Infinity), so NO clamping, NaN guard or malformed-value policy was added; a hostile value would still print e.g. \"NaN%\" exactly as it did before this change. Two divergences noted and left alone for the same reason: Java's Formatter rounds HALF_UP while JS Math.round rounds half-up-toward-positive, differing only on negative half values, and the two disagree on formatting values above 1e21 — both unreachable because the wire value is always an integer 0..100. Locale: the Kotlin format string is unchanged, so digit rendering behaviour is exactly what shipped; a JVM default locale with non-Latin digits could theoretically make the new assertions fail, which is a property of the pre-existing formatter, not of this fix. Mutation resistance: restoring either multiplier demonstrably re-breaks the 50/100 assertions — that is precisely the recorded RED evidence from steps 1 and 2 (JetBrains expected:<50%> but was:<5000%> and expected:<100%> but was:<10000%>; VS Code '5000%' !== '50%' and '10000%' !== '100%') produced by these same unmodified test files. No expected value was ever weakened to reach green. Scope: Wave 0 only, no attempt/candidate/receipt work and no other metrics defect touched. Peer/pre-existing dirty paths noted and left completely alone — never staged, reverted or cleaned: packages/moe-daemon/src/generated/initFiles.ts, scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/mention-provenance-proxy.js, scripts/tests/mention-provenance-seed.py, scripts/tests/mention-provenance.ps1, plus untracked peer board records .moe/epics/epic-3b8eb56d7d16495e8c24cb2243d0cfd4.json and .moe/tasks/{task-0471536723384823995c88fe0fb58e15,task-0d11e05fd60945029385c80e28da9e1f,task-435683c2df8f47e7b77a77dc51ba62e9,task-aec72949166b42a99b4279ba4615ac4b,task-c74179d4a32b41b88c6719f595af8dab}.json. One residual nit, deliberately accepted: MetricsPanel.kt is now 314 lines against the 300-line guideline; it was already 308 before this task and the 6-line seam is the minimum needed for a headless test.",
+      "startedAt": "2026-09-10T17:41:27.509Z",
+      "completedAt": "2026-09-10T17:42:30.975Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "HUMAN",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T09:15:45.300Z",
+  "updatedAt": "2026-09-10T17:57:08.756Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-10T09:18:48.249Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-10T17:56:34.749Z",
+    "wallClockMs": 31066500
+  },
+  "contextFetchedBy": [
+    "architect-6f3113ee",
+    "architect-5178e9c0",
+    "worker-6f2a9008",
+    "qa-b80b801c"
+  ],
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Completed repository exploration and drafted a five-step, five-file consumer percentage fix plan. Complete draft and evidence saved in Serena task-task-61de2bb593984069a87b019016bf2676-handoff. No source edits.",
+      "whatRemains": "Obtain explicit REPL confirmation of the proposed approach, submit the saved plan via moe.submit_plan, and update the handoff with actual submission status.",
+      "pitfalls": "Producer already emits 0..100; documentation DoD already satisfied in docs/MCP_SERVER.md. Preserve pre-existing generated/initFiles.ts and peer board state. Do not claim the draft was submitted or tests ran.",
+      "openQuestions": "Approach confirmation remains outstanding; user requested switching to the next task instead.",
+      "releasedAt": "2026-09-10T09:51:52.345Z",
+      "releasedBy": "architect-6f3113ee",
+      "reason": "User explicitly requested next-task; preserve the prepared plan without treating that request as approval to submit it."
+    }
+  ],
+  "commits": [
+    {
+      "sha": "ec9d9c5b9cdfb1f1a23c6b9d7ac5142e5b8c66e2",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-5178e9c0@2026-09-10T10:19:35Z",
+      "paths": [
+        ".moe/tasks/task-4068aee4dacb4056a0abc07c180d7d83.json",
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json"
+      ],
+      "recordedBy": "architect-5178e9c0",
+      "recordedAt": "2026-09-10T10:19:39.834Z",
+      "treeId": "6ebe6a8363e6615afd1f73a9e8c48f18f25bcc1d",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "43be105eb4fe93b452f33068191052300d48ce9f",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-6f2a9008@2026-09-10T17:34:51Z",
+      "paths": [
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+        ".moe/tasks/task-7265e1fca1984b568a5ec75afba48699.json"
+      ],
+      "recordedBy": "worker-6f2a9008",
+      "recordedAt": "2026-09-10T17:34:54.258Z",
+      "treeId": "a4e6a6e207f011f935bfc1ccc79697d20f7d63ab",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "ea6f3ca9c0b0f4a4b9f9b2f78f4c2749d5c4caae",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6f2a9008@2026-09-10T17:34:51Z",
+      "paths": [
+        ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+        ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+        ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+        ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json",
+        "docs/MCP_SERVER.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt",
+        "moe-vscode/src/providers/MetricsViewProvider.ts",
+        "moe-vscode/tests/metrics-view.test.cjs",
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "recordedBy": "worker-6f2a9008",
+      "recordedAt": "2026-09-10T17:44:54.544Z",
+      "treeId": "f615c290f6e915c0f89d25c7db70bcb563c07a3c",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ccfeb45f1e9dee9bd71f02c5ef440d81876edd2e",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b80b801c@2026-09-10T17:54:21Z",
+      "paths": [
+        ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json"
+      ],
+      "recordedBy": "qa-b80b801c",
+      "recordedAt": "2026-09-10T17:57:08.756Z",
+      "treeId": "a05a415790ed89d840f93cdf980832dd86789336",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/MetricsPanelTest.kt",
+    "moe-vscode/src/providers/MetricsViewProvider.ts",
+    "moe-vscode/tests/metrics-view.test.cjs",
+    "packages/moe-daemon/src/util/metrics.test.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-0471536723384823995c88fe0fb58e15.json",
+    ".moe/tasks/task-0d11e05fd60945029385c80e28da9e1f.json",
+    ".moe/tasks/task-435683c2df8f47e7b77a77dc51ba62e9.json",
+    ".moe/tasks/task-61de2bb593984069a87b019016bf2676.json",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-aec72949166b42a99b4279ba4615ac4b.json",
+    ".moe/tasks/task-c74179d4a32b41b88c6719f595af8dab.json"
+  ],
+  "unattributedPaths": [
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/mention-provenance.ps1",
+    "scripts/tests/mention-provenance-proxy.js",
+    "scripts/tests/mention-provenance-seed.py"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-b80b801c@2026-09-10T17:54:21Z",
+    "at": "2026-09-10T17:57:08.756Z"
+  },
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-10T10:25:06.002Z",
+  "planningNotes": {
+    "approachesConsidered": "Fix the consumers, keep the producer: metrics.ts already documents and emits 0..100 and moe.list_metrics is a published contract, so rescaling the producer would break the wire format and other readers. JetBrains uses a pure companion-object seam instead of bootstrapping an IntelliJ Application/Alarm fixture, because MetricsPanel needs a Project and the repo's JUnit 4 tests are headless (CreateTaskDialog already uses exactly this pattern). VS Code executes the emitted inline webview script in a vm with a tiny DOM stub rather than exporting a formatter and injecting Function.prototype.toString into the HTML (rename-fragile under esbuild) or asserting on source text (which passes even when rendering is broken). Inline fixtures per package avoid new shared fixture plumbing. Six steps / six files; the docs step is small because the unit is already documented and only needs an explicit prose sentence.",
+    "codebaseInsights": "Verified live in the tree today: packages/moe-daemon/src/util/metrics.ts:18 declares `firstPassApprovalPct: number;   // 0..100` and lines 92-93 compute Math.round((firstPassCount/approvalCount)*100); only DONE tasks increment approvalCount and first-pass is (m.rejectCount ?? 0) === 0. computeDashboardAggregate (line ~194) passes the value through unchanged and sets it undefined when doneCount is 0. moe-jetbrains MetricsPanel.kt:213 is `firstPassValue.text = aggregate.firstPassApprovalPct?.let { \"%.0f%%\".format(it * 100.0) } ?: \"—\"` and MetricsAggregate.firstPassApprovalPct is Double? (Models.kt:149). moe-vscode MetricsViewProvider.ts:294-295 is `Math.round(a.firstPassApprovalPct * 100) + '%'` inside the browser script that getHtml() returns; getHtml() is private, takes no args, and only reads `this._view?.webview.cspSource ?? ''`, so a test can call it with no resolved view. Test conventions: JetBrains JUnit 4 headless with companion seams (CreateTaskDialogTest.kt); VS Code `node --test tests/*.test.cjs` with typescript transpileModule + node:vm + a fake vscode require shim (tests/daemon-start.test.cjs is the only existing example); daemon is vitest with colocated *.test.ts and no metrics test exists yet. docs/MCP_SERVER.md:1957 already comments 0..100 in the list_metrics sample; docs/SCHEMA.md only covers per-task TaskMetrics, not the aggregate.",
+    "risks": "The JetBrains test is only meaningful if renderAggregate binds to the tested companion function — a copy-paste helper would pass while the panel stays broken; verify the binding in review. The em dash at MetricsPanel.kt:213 is U+2014, so copy the glyph rather than retyping it, and watch file encoding. Kotlin's \"%.0f\" uses the default locale; keep the existing format string unchanged so behaviour does not shift, and be aware a box with a non-Latin-digit default locale could make the assertion flaky. The VS Code emitted script calls acquireVsCodeApi(), querySelectorAll('.range-chip').forEach and window.addEventListener before renderAggregate is reachable — the stub must supply all three or the script throws silently; make a missing script match or missing message handler fail loudly, and use a fresh vm context per fixture so element state does not bleed. The production script writes the per-epic table through a markup-injection DOM property that the repo forbidden-pattern rail greps for; bare `{}` stub elements absorb that assignment without the test source ever naming it, so keep it that way (that rail rejected the first submission of this very plan; the second was rejected for lacking the literal required phrase). The daemon test must not sit in a file with a hoisted vi.mock (known repo gotcha: appended cases get swallowed). Both consumer tests must fail before the fix — a compile-only failure is not evidence. The shared Gradle cache races with other sessions on this box. packages/moe-daemon/src/generated/initFiles.ts was already dirty before this task and belongs to another session; leave it and peer .moe records untouched.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/metrics.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/CreateTaskDialogTest.kt",
+      "moe-vscode/src/providers/MetricsViewProvider.ts",
+      "moe-vscode/tests/daemon-start.test.cjs",
+      "moe-vscode/package.json",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-10T10:25:06.051Z",
+  "workStartedAt": "2026-09-10T17:35:09.428Z",
+  "reviewStartedAt": "2026-09-10T17:44:40.876Z",
+  "verification": {
+    "command": "& .\\moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun --console=plain; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix packages/moe-daemon test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile",
+    "exitCode": 0,
+    "outputTail": "GRADLE_EXIT=0 (BUILD SUCCESSFUL; build/test-results/test/*.xml sums to tests=72 skipped=0 failures=0 errors=0 across 9 classes, including all 4 MetricsPanelTest cases)\n Test Files  102 passed (102)\n      Tests  1177 passed (1177)\n   Start at  20:43:19\n   Duration  9.10s (tests 82%, transform 13%, import 5%)\n(vscode) tests 13 / suites 0 / pass 13 / fail 0 / cancelled 0 / skipped 0 / todo 0 / duration_ms 250.8284\n> moe-vscode@0.8.0 compile\n> tsc -p ./\nGATE_EXIT=0",
+    "reportedAt": "2026-09-10T17:44:40.876Z"
+  },
+  "completionSummary": "Both IDE clients now render the daemon's firstPassApprovalPct exactly once; the producer is unchanged.\n\nCHANGES (6 paths): MetricsPanel.kt — new `companion object { internal fun firstPassApprovalText(pct: Double?): String = pct?.let { \"%.0f%%\".format(it) } ?: \"—\" }`, and renderAggregate line 213 is bound to it (no parallel copy; the old inline expression is gone). MetricsPanelTest.kt (NEW, JUnit 4 headless). MetricsViewProvider.ts line 295 `Math.round(a.firstPassApprovalPct * 100)` -> `Math.round(a.firstPassApprovalPct)`. metrics-view.test.cjs (NEW). packages/moe-daemon/src/util/metrics.test.ts (NEW). docs/MCP_SERVER.md one Notes bullet. packages/moe-daemon/src/util/metrics.ts is NOT modified.\n\nDoD MAPPING (5/5):\n1. MetricsPanel.kt renders 0/50/100 as 0%/50%/100% — MetricsPanelTest.kt has 4 JUnit cases (0.0, 50.0, 100.0, null -> U+2014 em dash), all executed in TEST-com.moe.toolwindow.MetricsPanelTest.xml.\n2. MetricsViewProvider.ts renders the same three values identically — metrics-view.test.cjs runs the script actually emitted by the private getHtml(), asserting kpiFirstPass.textContent is '0%'/'50%'/'100%', plus the em dash for omitted, null and non-number.\n3. metrics.ts has a vitest 1-of-2 fixture — packages/moe-daemon/src/util/metrics.test.ts asserts firstPassApprovalPct is exactly 50 and within 0..100 (7 cases total: 0/2=0, 2/2=100, non-DONE excluded from the denominator, dashboard passthrough=50, and the zero-vs-omitted empty-input split).\n4. Docs state the unit explicitly — docs/MCP_SERVER.md:1967, moe.list_metrics Notes: \"`aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio - a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.\" (Not duplicated into docs/SCHEMA.md, which covers per-task TaskMetrics only.)",
+  "touchedFiles": [
+    "docs/MCP_SERVER.md",
+    "moe-vscode/src/providers/MetricsViewProvider.ts",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MetricsPanel.kt"
+  ],
+  "completedAt": "2026-09-10T17:56:34.749Z",
+  "reviewCompletedAt": "2026-09-10T17:56:34.749Z",
+  "reviewSummary": "APPROVED. Completion commit ea6f3ca audited via `git show`; working tree adds nothing beyond it for the 6 task paths (other dirty paths belong to peer sessions: scripts/moe-agent.*, mention-provenance*, generated/initFiles.ts — left untouched).\n\nSuites re-run by QA from repo root, all exit 0:\n- `gradlew.bat -p moe-jetbrains test --rerun` BUILD SUCCESSFUL; XML census 72 tests / 0 skipped / 0 failures; TEST-com.moe.toolwindow.MetricsPanelTest.xml freshly written (not UP-TO-DATE).\n- `npm --prefix packages/moe-daemon test` 102 files / 1177 tests passed.\n- `npm --prefix moe-vscode test` 13/13 passed incl. the 6 new webview cases; `npm run compile` (tsc -p ./) clean.\n\nEpic rail \"test fails on old behaviour\" independently proven by QA mutation, both consumers restored to HEAD afterwards (tree verified clean):\n- reinstating `* 100` in MetricsViewProvider.ts: 2 fails, `'5000%' !== '50%'`, `'10000%' !== '100%'`.\n- reinstating `it * 100.0` in MetricsPanel.kt: `4 tests completed, 2 failed` (50%/100% cases).\n\nDoD1 PASS: MetricsPanel.kt:213 binds to the tested companion `firstPassApprovalText` (symbol occurs exactly twice = 1 call + 1 definition, no parallel copy); JUnit covers 0.0/50.0/100.0 + null em dash.\nDoD2 PASS: VS Code test executes the script actually emitted by getHtml(), same 0/50/100 plus omitted/null/non-number em dash; throws loudly on missing script or handler; provider.dispose() in finally.\nDoD3 PASS: new packages/moe-daemon/src/util/metrics.test.ts pins exactly 50 for 1-of-2 plus 0..100 bounds, 0/100 ends, non-DONE excluded from denominator, dashboard passthrough, and the 0-vs-undefined empty split. metrics.ts itself unchanged (0 diff lines).\nDoD4 PASS: docs/MCP_SERVER.md:1967 states the integer 0..100 scale and the never-multiply rule; pre-existing :1957 and :2288 intact.\nDoD5 PASS: see suites above.\n\nRails: no Wave 1 scope, no forbidden patterns in the new files, error-handling paths (em dash, typeof guard, empty-input branch) preserved."
+}

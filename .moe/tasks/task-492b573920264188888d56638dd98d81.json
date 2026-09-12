@@ -1,0 +1,281 @@
+{
+  "id": "task-492b573920264188888d56638dd98d81",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Persist daemon plan revisions on submission",
+  "description": "Objective: deliver the daemon-owned revision producer for stale-plan approval parent task-7265e1fca1984b568a5ec75afba48699. Deliverable: Task.planRevision in packages/moe-daemon/src/types/schema.ts and docs/SCHEMA.md, initialized to 0 for newly created tasks, with absent legacy values interpreted as 0; every successful moe.submit_plan increments the persisted nonnegative safe-integer revision exactly once, including identical resubmissions and all approval modes. Plan and revision must be committed in the same task write before publication; return the persisted revision from submit_plan. Rejected validation and a failed task write must not advance revision/map/events; no wrap, coercion, or reset on reopen. Expected seams: src/state/taskStore.ts, src/tools/submitPlan.ts, and src/tools/submitPlan.test.ts under packages/moe-daemon (5 files including schema/docs). Keep the optional legacy-compatible TypeScript shape if needed rather than mechanically rewriting every historical Task fixture. Error handling: malformed existing non-absent revision refuses as INVALID_INPUT, exhaustion as a stable conflict, and task-write failure remains observable. NOT in scope: approval CAS, IDE changes, changing auto-approval policy, or Wave 1 records. This child establishes the mandatory submit_plan behavior; whether awaiting in-place amendments/DoD edits also bump is still a parent-scope decision and must not be advertised as solved by submit-only stamping. Verification from repository root: npm --prefix packages/moe-daemon test (PowerShell: npm.cmd --prefix packages/moe-daemon test); require nonzero Vitest counts and record old-behavior red proof. Do not build/regenerate foreign generated files.",
+  "definitionOfDone": [
+    "docs/SCHEMA.md and Task type describe daemon-owned planRevision, safe-integer domain, new-task 0, legacy missing-as-0 and monotonic submission semantics; a creation/legacy fixture test proves the defaults.",
+    "Vitest proves first submit 0->1, resubmit 1->2 (including identical steps), independent tasks, CONTROL/SPEED/TURBO publication and the returned persisted revision.",
+    "Vitest reloads persisted state and proves revision survives restart and reopen; submitting from a legacy record missing the field produces 1.",
+    "Validation refusal, simulated task-write failure, malformed stored revision and safe-integer exhaustion are regression-tested with unchanged revision/task state and no success publication.",
+    "Fresh npm --prefix packages/moe-daemon test exits 0 with nonzero test counts; record a focused test failing on old behavior without disturbing foreign WIP."
+  ],
+  "taskRails": [
+    "Preserve the parent original DoD: derive a monotonic revision on every successful submission and every actual sanitized steps or DoD mutation, regardless of writer, with one increment per task write.",
+    "No new MCP approval tool, automatic-approval policy change, or Wave 1 work."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Confirm the producer boundary before editing: the approved task rail and governor scope comment supersede the description's submission-only ambiguity. Trace createTask/updateTask, submitPlanTool, amendPlanStepTool, step execution/reopen writers, and the existing MCP/WS runExclusive boundaries read-only. All current plan/DoD mutations route through updateTask; direct order/worker-purge writes retain both fields and the stamp. Record the current foreign dirty paths in the step note and preserve them; only the five declared source/doc paths belong to this task. Do not change approval CAS, clients, auto-approval policy, generated files, or Wave 1 records.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "Read-only boundary trace done; no files changed. Verified seams: taskStore.createTask builds an explicit Task literal (a caller-supplied field outside that literal is already dropped, so revision ownership is free); taskStore.updateTask sanitizes (sanitizeImplementationPlan + sanitizeStringArray for DoD), then writeEntity -> tasks.set -> appendActivity -> emit -> status side effects, so a rejected primary write leaves map/disk/events untouched. Confirmed the only other direct task writers are taskStore.deleteTask orphan-parent clearing, taskStore.reorderTask and workerStore purge; all three spread the prior task and touch neither plan nor DoD, so they retain the stamp without bumping. submitPlan.ts line 376 awaits state.updateTask(..., 'PLAN_SUBMITTED', ...) and discards the returned Task; TURBO/SPEED approval writes are status-only. amendPlanStep.ts line 112 routes fresh step arrays through updateTask; buildReopenClearingUpdates/resetPlanStepsToPending also route reset step arrays through it (execution-field clears are a real sanitized surface change; an all-PENDING plan sanitizes equal). StateManager.load uses raw loadEntities so an additive numeric field survives restart with no migration. util/errors.ts MoeError takes an explicit 4th codeName arg, so PLAN_REVISION_EXHAUSTED needs no enum change. WS UPDATE_TASK forwards arbitrary updates into updateTask, so stripping the field in the store is the single choke point. No planRevision reference exists anywhere in daemon/docs/IDE code yet. ToolTestHarness (src/tools/toolTestHarness.ts) is already imported at submitPlan.test.ts:872 and gives real temp .moe fixtures; StateManager exposes subscribe()/getActivityLog() for publication assertions and runExclusive() for the queued-write test. Foreign dirty paths present and preserved untouched: .moe/tasks/task-{0d11e05f,247fdf29,30df41a8,4068aee4,6b6aaab0,7265e1fc,aec72949,c97afcd5}.json, .moe/tasks/task-492b5739... (own board record), scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/mention-provenance-proxy.js, scripts/tests/mention-provenance-seed.py, scripts/tests/mention-provenance.ps1, plus untracked .moe/epics/epic-3b8eb56d....json and three untracked .moe/tasks records. Only the five declared paths will be edited; no approval CAS, client, policy or generated-file change.",
+      "startedAt": "2026-09-10T19:17:58.248Z",
+      "completedAt": "2026-09-10T19:20:24.641Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Test first in submitPlan.test.ts using the existing ToolTestHarness without editing its file. Add a dedicated planRevision describe with isolated temp state and cleanup of SPEED timers, listeners and mocks. Cover real createTask initialization to 0 despite a supplied stamp; raw legacy missing revision; first submission 1; identical and changed resubmissions 2 after the existing PLANNING transition; independent task counters; CONTROL/SPEED/TURBO returned, persisted and TASK_UPDATED revisions, including delayed/immediate approval not incrementing again. Reload via a new StateManager and exercise actual reopen: no reset, unchanged pending steps preserve revision, changed execution fields advance exactly once. Invoke the actual architect-authorized amendPlanStepTool, then DoD-only, steps-only and combined state.updateTask changes: one increment per changed write, including amendment metadata and ordered-array changes; sanitized-equal content, reordered object keys, comment/status-only updates, and omitted/undefined top-level plan/DoD leave revision unchanged. Prove caller-supplied revisions cannot forge or reset it. Assert exact INVALID_INPUT for stored null/string/negative/fractional/nonfinite/unsafe stamps, and PLAN_REVISION_EXHAUSTED at MAX_SAFE_INTEGER only when a bump is required; allow max-valued no-op metadata writes and MAX_SAFE_INTEGER-1 -> MAX_SAFE_INTEGER. For validation refusal and injected rejection of the primary task write on both submission and in-place change, compare persisted bytes and cached task to the pre-call snapshot, assert no task success event/activity or successful result, and test a successful retry increments once. Exercise two queued surface changes under the existing state.runExclusive boundary to prove successive revisions, not a lost increment. Run the focused file against the pre-implementation behavior and retain assertion-level red evidence; never reverse foreign files to manufacture it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Added a 36-test `planRevision` describe at the end of submitPlan.test.ts (file 934 -> 1419 lines; the approved slice keeps tests in this existing file, so the 300-line guideline cannot apply). Uses the existing ToolTestHarness unmodified (its file was not touched) plus a local boot() helper that rewrites project.json settings for CONTROL/SPEED/TURBO; afterEach clears SPEED timers, restores real timers, restores mocks and removes the temp project. Coverage: real state.createTask ignoring a supplied stamp with an initial plan; legacy record with no stored field; first submission 1; identical and changed resubmissions after the real PLANNING transition; independent task counters; CONTROL/SPEED/TURBO returned+persisted revision with no second bump from immediate or delayed approval; TASK_UPDATED payload; fresh StateManager reload; real reopenTask advancing once when it clears step evidence and holding steady when the plan sanitizes equal; real amendPlanStepTool with an architect id; DoD-only, steps-only and combined writes each bumping once; sanitized-equal, reordered-key, comment-only, status-only and omitted/undefined plan+DoD writes not bumping; caller-supplied stamp neither forging nor resetting; it.each over stored null/string/negative/fractional/NaN/Infinity/unsafe values asserting MoeError INVALID_INPUT plus a disk-loaded malformed case; PLAN_REVISION_EXHAUSTED as numeric STATE_CONFLICT at MAX_SAFE_INTEGER with unchanged bytes and zero emitted events; metadata-only write allowed at the max; MAX_SAFE_INTEGER-1 -> MAX_SAFE_INTEGER; validation refusal compared against pre-call persisted bytes, cached task object identity and zero events; writeEntity rejection injected on both submission and an in-place DoD change with unchanged revision/DoD and a successful retry incrementing once; two writes queued through the real state.runExclusive yielding successive 2 and 3. RED PROOF (pre-implementation, `npx vitest run src/tools/submitPlan.test.ts` in packages/moe-daemon): `Test Files 1 failed (1)` / `Tests 35 failed | 42 passed (77)`; the 35 failures are all new assertions, e.g. `planRevision > treats a legacy record with no stored stamp as 0 and produces 1 on first submission` -> `AssertionError: expected undefined to be 1` at src/tools/submitPlan.test.ts:1041, and `planRevision > increments once for an amend_plan_step write` -> `expected undefined to be 2` at :1182. Only the max-value retention test passes vacuously before the change (a spread already preserves an injected number). The 42 pre-existing passes are untouched. No foreign file was reverted or modified to manufacture red.",
+      "startedAt": "2026-09-10T19:20:27.471Z",
+      "completedAt": "2026-09-10T19:24:51.547Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement the single revision authority in schema.ts and taskStore.ts. Add documented optional Task.planRevision:number for legacy fixture/read compatibility; createTask always writes owned revision 0 even with an initial plan or caller-provided revision. In updateTask, strip incoming planRevision, treat undefined top-level implementationPlan/definitionOfDone as omitted, and keep the existing sanitation rules for supplied values. Privately decode current stored revision as undefined=>0 or a nonnegative Number.isSafeInteger number; reject every other value using the existing invalidInput helper without coercion. After sanitation, compare the candidate implementationPlan and definitionOfDone against the corresponding canonical sanitized prior values structurally (array order significant, object key insertion order irrelevant, including all retained step/amendment fields). Derive shouldBump = PLAN_SUBMITTED event OR actual surface change; compute exactly one increment even when both predicates/fields change. Metadata-only updates retain the numeric revision; a legacy row can materialize 0 on its next successful write. Error handling: when a required increment would exceed Number.MAX_SAFE_INTEGER, throw existing MoeError with numeric STATE_CONFLICT, explicit codeName PLAN_REVISION_EXHAUSTED and task/current-revision context before any write. Put the derived stamp into the same fresh Task object and primary writeEntity call as the plan/DoD, keeping write-before-map/activity/event ordering and original IO rejection. Do not mutate the prior task/input, reset on reopen, add caller-specific bumps, or add a parallel persistence/locking abstraction.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "note": "schema.ts: added documented optional `Task.planRevision?: number` beside implementationPlan (daemon-owned, creation 0, absent legacy = 0, no migration/schemaVersion bump, non-negative safe-integer domain shared with the clients' Long, caller value stripped). Optional keeps every historical Task fixture and on-disk record valid, so no mass fixture rewrite. taskStore.ts (398 -> 500 lines; the store was already past 300 before this change and the approved slice keeps the helpers local): createTask now writes `planRevision: 0` in its literal, so a caller-supplied stamp and an initial plan cannot pre-seed it. updateTask strips incoming planRevision next to the existing id/createdAt identity hardening, then calls the new derivePlanRevision(task, finalUpdates, event) immediately before building the fresh Task — the stamp goes into the same object and the same state.writeEntity call as the plan/DoD, preserving write-before-map/activity/event ordering and the original IO rejection. New local helpers: MAX_PLAN_REVISION (Number.MAX_SAFE_INTEGER); decodeStoredPlanRevision (undefined => 0, else non-negative Number.isSafeInteger or refuse via the existing invalidInput helper with the raw value stringified — no coercion, fails closed on every write, not just submissions); isPlainObject + recursive sameSanitizedSurface (array order significant, object key insertion order irrelevant, every retained key compared so step execution fields and amendment entries participate); derivePlanRevision comparing the sanitized candidate against sanitizeImplementationPlan/sanitizeStringArray of the PRIOR stored values, treating undefined as omitted, and returning current+1 once when the event is PLAN_SUBMITTED or either surface actually changed (both together still +1). Error handling: an exhausted counter throws the existing MoeError with numeric STATE_CONFLICT and explicit codeName PLAN_REVISION_EXHAUSTED plus taskId/currentRevision/maxPlanRevision context, and both refusals happen before any persistence. No caller-specific bump, no reopen reset, no new persistence or locking abstraction, no mutation of the prior task or the caller's input. Verification (npx vitest run src/tools/submitPlan.test.ts in packages/moe-daemon): `Tests 9 failed | 68 passed (77)` — down from 35 failures; every remaining failure is the submit_plan result field owned by step 4 (e.g. src/tools/submitPlan.test.ts:1041 `expected undefined to be 1` on result.planRevision), and all store-level assertions including malformed/exhaustion/no-op/reopen/amend/queued-write cases now pass.",
+      "startedAt": "2026-09-10T19:25:21.904Z",
+      "completedAt": "2026-09-10T19:26:33.675Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Bind submit_plan's result to the committed producer value: capture the Task returned by the existing state.updateTask(..., 'PLAN_SUBMITTED', ...) and include its planRevision in the success response. Do not calculate a second increment in this tool or read a later cache value for that response. Preserve current validation, worker handoff, CONTROL/SPEED/TURBO status behavior, timeout cancellation and critic behavior; subsequent status-only writes must retain the submission stamp. Propagate primary persistence failures rather than publishing success. The unchanged amendment and other mutation tools inherit the store behavior without edits or separate revision parameters.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "submitPlan.ts: the existing `state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId)` call is now captured as `submitted` and the success response carries `planRevision: submitted.planRevision`. No second increment and no later cache read, so a concurrent write cannot make the tool report a stamp that was not committed with this plan; a rejected primary write still propagates out of the same await before any success is published. Validation, worker handoff (touchWorker on the captured assignee), CONTROL/SPEED/TURBO status behavior, SPEED timer arming/cancellation, size-critic flip and nextAction routing are untouched, and the later status-only approval writes retain the submission stamp because the store bumps only on a real surface change. amend_plan_step and the other mutation tools were not edited — they inherit the store behavior with no revision parameter. Verification (packages/moe-daemon): `npx vitest run src/tools/submitPlan.test.ts` -> `Test Files 1 passed (1)` / `Tests 77 passed (77)`, i.e. all 36 planRevision tests green plus the 41 pre-existing ones. `npx tsc --noEmit -p tsconfig.json` exits 0. A standalone strict typecheck of the test file (tsconfig excludes *.test.ts) reports only two PRE-EXISTING errors unrelated to this change (a stale `PACE_PER_STEP_MS_DEFAULT` import at line 6 and an optional-priority fixture at line 77); nothing in the new describe errors, and those two pre-existing lines were deliberately left alone.",
+      "startedAt": "2026-09-10T19:26:36.796Z",
+      "completedAt": "2026-09-10T19:27:24.695Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Document the delivered producer contract beside Task in docs/SCHEMA.md: daemon-owned nonnegative safe integer, creation 0, legacy absent interpreted as 0, no migration/schema-version bump, no caller-selected stamp, +1 for every committed submission including identical content or any actual sanitized steps/DoD mutation, single bump for a combined write, no bump for sanitized no-ops or unrelated metadata. Explain that step/amendment/execution fields retained inside implementationPlan participate; reopen never resets and may advance when it resets steps. State primary-write atomicity, exact malformed/exhaustion errors and the returned submit_plan revision. Explicitly distinguish this producer slice from later expectedPlanRevision approval checks and IDE rendered-review protection; do not claim freshness is solved before those siblings land.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "docs/SCHEMA.md: added `planRevision?: number` to the Task interface block with a pointer comment, `\"planRevision\": 1` to the example task JSON, a `### planRevision` section between `### newFiles` and `### Task subtypes`, and one line in the Task validation rules. The section states the daemon-owned non-negative safe-integer domain (Kotlin Long compatible), creation 0, absent-as-0 with no migration and no schemaVersion bump, no caller-selected stamp (stripped from tool args and plugin UPDATE_TASK), +1 for every committed submission including a byte-identical resubmission, +1 for any actual sanitized steps/DoD mutation by any writer, exactly one bump for a combined write, and no bump for sanitized no-ops, reordered object keys, omitted/undefined keys or unrelated metadata. It names the retained step fields that participate (status, startedAt/completedAt, note, modifiedFiles, newFiles, amendments, activeAmendmentId), and says reopen never resets but may advance because it clears step evidence while an already-pending plan holds steady. Documents same-object/same-writeEntity atomicity with unchanged revision/bytes/publication on a failed primary write plus a retry advancing once, the exact malformed INVALID_INPUT and PLAN_REVISION_EXHAUSTED (numeric STATE_CONFLICT -32002 with taskId/currentRevision/maxPlanRevision) refusals, and the returned submit_plan revision. Ends with an explicit scope note: nothing compares revisions yet — expectedPlanRevision approval refusal and the IDE rendered-review binding are separate follow-up slices, so a stamp documents staleness rather than preventing a stale approval. Doc is not vendored into the generated init/skill files (only docs/roles, docs/agents, docs/skills are), so no generator run is needed; verified CRLF endings preserved and `git diff --numstat` shows a scoped 32/1 line change rather than a whole-file rewrite.",
+      "startedAt": "2026-09-10T19:27:30.629Z",
+      "completedAt": "2026-09-10T19:28:35.829Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Run the final fresh daemon regression gate once from repository root: npm --prefix packages/moe-daemon test (Windows PowerShell exact equivalent: npm.cmd --prefix packages/moe-daemon test). Require exit 0 and nonzero Vitest Test Files/Tests counts, retaining the focused old-behavior red evidence from the test-first step plus the final command/output tail for complete_task. This shared schema/store change requires the whole daemon suite, not only the new describe; cross-client and Gradle integration remain the parent gate. Do not invoke prebuild/build or regenerate bundled files. Investigate failures against the recorded baseline, repair only owned changes, and report a genuine external blocker rather than declaring a partial run green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Fresh whole-suite daemon gate from the repository root, PowerShell exact equivalent as planned: `npm.cmd --prefix packages/moe-daemon test`. Result: `Test Files 103 passed (103)` / `Tests 1219 passed (1219)` / `Duration 7.45s`, EXIT=0 (captured via $LASTEXITCODE, not inferred). Nonzero counts on both lines; no skipped or todo entries. This is the full suite, not only the new describe, because schema.ts and taskStore.ts are shared by every task write. The WARN/ERROR lines in the output are the pre-existing intentional negative-path fixtures (stale waiter, grantNextLeases un-block, worker heartbeat refresh, rail-change failure, stale proposal delete) and belong to passing tests. Red evidence from step 2 retained: the same suite ran `Tests 35 failed | 42 passed (77)` on the focused file before the implementation, with assertion failures such as `expected undefined to be 1` at src/tools/submitPlan.test.ts:1041. No prebuild/build/clean was run and no generated or bundled file was regenerated (docs/SCHEMA.md is not vendored). Cross-client Gradle/VS Code integration stays the parent gate. No files were created or modified by this verification step.",
+      "startedAt": "2026-09-10T19:28:38.491Z",
+      "completedAt": "2026-09-10T19:29:11.143Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Final adversarial self-review of this five-file diff: challenge duplicate queued writes under the actual mutex, stale/malformed/huge stamps, legacy and explicit undefined/null values, caller stamp injection, sanitation-induced no-ops, amendment/DoD bypasses, full-submit double bumps, reopened step changes, primary write failure/retry, and timer/fixture cleanup. Distinguish a failed primary task commit from a later worker/status side-effect failure after persistence; do not promise rollback across multiple existing entities. Verify only owned paths were changed and report every created/modified path in complete_step.modifiedFiles (no new files expected). Complete through Moe with the exact successful verification evidence, red-proof note and downstream producer contract; let the wrapper land the task and QA audit delivered bytes, then stop rather than self-approving.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Adversarial review of the five-file diff (646 insertions, 2 deletions; no new files). Findings and dispositions:\n(1) QUEUED WRITES: derivePlanRevision reads the cached task at the top of updateTask and the write awaits after it, so two updateTask calls that are NOT serialized could both derive N+1 (a lost increment) — the same pre-existing TOCTOU as the assignedWorkerId guard right above it. Every real caller (MCP dispatch, WS handlers) already runs under the global StateManager mutex, and the new test drives two writes through the real state.runExclusive and asserts successive 2 and 3. Deliberately NOT fixed with a new lock: the plan forbids a parallel persistence/locking abstraction. No claim is made that arbitrary unlocked direct updateTask calls are serialized.\n(2) SANITIZED-EQUAL ECHO: comparison is sanitized-candidate vs re-sanitized prior, so echoing a legacy row's unsanitized plan back can change the persisted bytes (unknown keys dropped) without a bump. Intended: the versioned thing is the sanitized surface every consumer actually reads. Documented as a sanitized no-op.\n(3) EXPLICIT undefined: `implementationPlan: undefined` / `definitionOfDone: undefined` still clears the field on write (pre-existing spread semantics) while counting as omitted for the revision, per the approved plan and its test. Grep confirms no daemon caller passes either as undefined today, so no live path clears a surface without a bump. Flagged for the parent, not silently redefined here.\n(4) MALFORMED STAMP FAILS CLOSED ON EVERY WRITE, not only submissions: a corrupted stamp therefore refuses status/metadata writes too, so such a row cannot be repaired through any MCP tool until a human fixes or removes the field (after which it reads as 0 again). That is the specified no-coercion behavior; the alternative would let a bad value survive into a freshness comparison.\n(5) NUMERIC DOMAIN: MAX_SAFE_INTEGER+2 collapses to an unsafe double and is refused; exhaustion uses >= so it cannot be stepped over; a metadata-only write at the max still succeeds; MAX-1 advances to MAX.\n(6) STRUCTURAL COMPARE: Object.keys + hasOwnProperty (no prototype-chain reads), array order significant, recursion depth bounded by the existing 50-step / 20-amendment / string-length sanitizer caps, so no deep-nesting or huge-input blowup. The surface holds no numbers, so no NaN-inequality trap.\n(7) FAILURE PATHS: both refusals throw before writeEntity, so revision, cached task, persisted bytes and the TASK_UPDATED publication are untouched and a retry advances exactly once (tested on submission and on an in-place DoD change). A LATER side effect after a committed plan write — touchWorker, the auto-approval status write, chat posts — can still fail; that does not and must not roll back the committed stamp, and no cross-entity transaction is promised.\n(8) CALLER STAMP: stripped from a shallow copy, so the caller's own object is never mutated; forging and resetting are both tested.\n(9) OTHER WRITERS: reorderTask, the deleteTask orphan-parent clear and the startup worker purge spread the prior task, so they retain the stamp and never bump; approve/reject/status writes are metadata; amend_plan_step and reopen bump through the store with no tool edits.\n(10) TEST HYGIENE: afterEach clears SPEED timers, restores real timers and mocks, and removes the temp project; the SPEED case polls a 10ms real timer with a 5s bound instead of leaving a fake-timer state behind. The two pre-existing strict-type errors in the test file (stale PACE_PER_STEP_MS_DEFAULT import, optional-priority fixture) were left alone — tsconfig excludes *.test.ts, so they are not new and not mine.\n(11) SCOPE: only the five declared paths are modified; the temp scratch file used to append the test block was deleted. docs/MCP_SERVER.md is untouched (the CAS sibling owns it), so the returned submit_plan field is documented in docs/SCHEMA.md only. Foreign paths listed in step 1 were never touched; several of them (scripts/moe-agent.*, scripts/tests/mention-provenance.*, one peer task record) have since been committed by their own sessions and are now clean — not by me.\nFRESH GATE on the final bytes: `npm.cmd --prefix packages/moe-daemon test` -> `Test Files 103 passed (103)` / `Tests 1219 passed (1219)` / `Duration 8.15s`, EXIT=0. `npx tsc --noEmit -p tsconfig.json` exits 0. DOWNSTREAM CONTRACT: consumers read `Task.planRevision` (absent = 0) and `moe.submit_plan` result `planRevision`; no comparison, refusal or IDE binding exists yet — those are the sibling slices, so plan freshness is NOT solved by this producer alone.",
+      "startedAt": "2026-09-10T19:29:14.119Z",
+      "completedAt": "2026-09-10T19:31:11.614Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion of architect-fa3e53b1's approved six-slice decomposition of task-7265e1fc (slice 1/6). BACKLOG is human-gated and invisible to agents, so a decomposition left there never moves and its parent dep-waits forever. dependsOn gates WORKING claims only; ordering holds.",
+  "createdBy": "WORKER",
+  "parentTaskId": "task-7265e1fca1984b568a5ec75afba48699",
+  "priority": "HIGH",
+  "order": 2.31,
+  "comments": [
+    {
+      "id": "comment-1da78b1e20bf4bbb87e2130f1752e2db",
+      "author": "architect-fa3e53b1",
+      "content": "SUPERSEDING SCOPE RULING (2026-09-10, governor-c9adec43, msg-2af1526f3f154a76af884f5ddb637293): the approval-relevant surface is steps plus DoD, whatever writer changes it. The earlier submission-only wording, unresolved-scope note and first task rail are superseded; do NOT plan/implement a submit-only fence. Within the same 5-file producer seam, make taskStore.updateTask derive the next revision from persisted current state after sanitization: increment exactly once for each successful PLAN_SUBMITTED even if content-identical, OR any actual sanitized implementationPlan/definitionOfDone change (including amend_plan_step and WS UPDATE_TASK). Both changing together still increments once; unrelated comments/status/progress metadata outside those fields must not reset the counter; equal sanitized surface without submission is a no-op for revision. Strip externally supplied planRevision in the WS CAS child; never accept a caller-selected new stamp. No additional mutation call sites need bespoke increments. Keep write-before-map/publication ordering and the already specified safe-integer/legacy/error behavior. Add Vitest regressions in submitPlan.test.ts invoking the actual amendment tool plus DoD/steps state writer: rendered N -> in-place change N+1, single bump when both fields change, sanitized no-op unchanged, comments only unchanged, unsuccessful write unchanged, full submit exactly one bump (not 2). Parent integration WS tests prove actual UPDATE_TASK transport. New-task creation initializes 0; counter never resets on reopen. Existing six-slice shape stays unchanged; no seventh phase/evidence task.",
+      "timestamp": "2026-09-10T18:27:50.773Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T18:23:13.671Z",
+  "updatedAt": "2026-09-10T19:36:35.892Z",
+  "contextFetchedBy": [
+    "governor-c9adec43",
+    "architect-fa3e53b1",
+    "worker-f2b3ac93",
+    "qa-813933f7"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-10T19:10:58.788Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 7,
+    "doneAt": "2026-09-10T19:36:30.236Z",
+    "wallClockMs": 1531448
+  },
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-10T19:17:33.125Z",
+  "planningNotes": {
+    "approachesConsidered": "Use one store-owned derivation after sanitation rather than submit-only counters or increments scattered across amendment/WS callers. The approved governor rail resolves the former ambiguity: steps plus DoD, regardless of writer, are versioned. Optional legacy-compatible type avoids mass fixture migration. Keep helpers local to taskStore.ts and tests in the existing submitPlan test file to retain the approved 5-file slice.",
+    "codebaseInsights": "updateTask sanitizes both surface fields and writes the fresh task before updating the map and emitting TASK_UPDATED; submitPlan currently awaits that writer but discards its returned Task. Submission is allowed only from PLANNING, so resubmission tests must use the existing status transition. amend_plan_step, start_step, complete_step, request_replan and reopen use this writer with fresh step arrays. MCP dispatch and WebSocketServer already serialize mutations using StateManager.runExclusive; StateManager.load preserves additive fields while backfilling unrelated legacy fields. Existing util/errors.ts supports an explicit fourth constructor codeName, so no error-enum file is needed. ToolTestHarness is already imported by submitPlan.test.ts and provides real temporary project/task fixtures.",
+    "risks": "Scope is producer only: CAS sibling task-dd743a02000e46cca6ae2442a1821066 owns WS expectedPlanRevision/error plumbing and external-update denylist; parent task-7265e1fca1984b568a5ec75afba48699 retains the full integration DoD. Canonical comparison must not miss retained amendment/execution fields or treat insertion order as a mutation. Do not compare raw unsanitized input. Exhaustion refuses only a required bump; malformed persisted stamps fail closed. Primary write rejection must leave map/disk/task publication unchanged, but later existing worker-release or auto-approval failures are not an all-entity transaction. No claim that arbitrary unlocked direct updateTask calls are serialized. Foreign runtime/task JSON and launcher/provenance WIP were present and remain outside implementation ownership.",
+    "keyFiles": [
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-10T19:17:33.188Z",
+  "workStartedAt": "2026-09-10T19:17:58.248Z",
+  "reviewStartedAt": "2026-09-10T19:31:43.142Z",
+  "verification": {
+    "command": "npm --prefix packages/moe-daemon test (run as: npm.cmd --prefix packages/moe-daemon test)",
+    "exitCode": 0,
+    "outputTail": " Test Files  103 passed (103)\n      Tests  1219 passed (1219)\n   Start at  22:30:35\n   Duration  8.15s (tests 83%, transform 12%, import 5%)\nEXIT=0",
+    "reportedAt": "2026-09-10T19:31:43.142Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+    ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json"
+  ],
+  "completionSummary": "Delivered the daemon-owned plan-revision producer in 5 files (no new files): packages/moe-daemon/src/types/schema.ts, src/state/taskStore.ts, src/tools/submitPlan.ts, src/tools/submitPlan.test.ts, docs/SCHEMA.md.\n\nWHAT LANDED. Task.planRevision is an optional documented number (optional so every historical fixture and on-disk record stays valid; absent reads as 0, no migration and no schemaVersion bump). createTask stamps 0 in its literal even when the caller supplies a stamp and an initial plan. taskStore.updateTask is the single authority: it strips any caller-supplied planRevision beside the existing id/createdAt hardening, then derivePlanRevision() decodes the stored value (undefined => 0, else non-negative Number.isSafeInteger or refuse), structurally compares the sanitized candidate implementationPlan/definitionOfDone against the re-sanitized prior values (array order significant, object key order irrelevant, every retained step/amendment/execution key compared), and returns current+1 exactly once when the event is PLAN_SUBMITTED or either surface actually changed. The stamp goes into the same fresh Task object and the same writeEntity call as the plan/DoD, before the map set, activity append and TASK_UPDATED emit. submit_plan now keeps the Task that write returned and reports its planRevision in the success result.\n\nERROR HANDLING. A malformed stored stamp (null, string, negative, fractional, non-finite, unsafe) refuses via the existing invalidInput helper as INVALID_INPUT with no coercion, on any write. A required bump at Number.MAX_SAFE_INTEGER refuses with numeric STATE_CONFLICT (-32002) and codeName PLAN_REVISION_EXHAUSTED plus taskId/currentRevision/maxPlanRevision. Both throw before any persistence, so revision, cached task, persisted bytes and publication stay unchanged and a retry advances exactly once. Metadata-only writes at the max still succeed.\n\nTESTS. 36 new tests in a planRevision describe using the existing ToolTestHarness (harness file untouc",
+  "commits": [
+    {
+      "sha": "8e23c426bd7fd8f7d3b15d41e48221b09946a9d8",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
+      "paths": [
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        ".moe/tasks/task-6b6aaab01fed4c36827cffc61c217357.json",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-10T19:31:58.053Z",
+      "treeId": "8eb88c313f4fd07723c969a8b31f2c0c830ec238",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "7da080b33007ffa250f1c8a05566b74fb3decc49",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-10T19:17:43Z",
+      "paths": [
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json",
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-10T19:32:32.927Z",
+      "treeId": "f81dd145052a02630fa7daa2bdf3ecdc78d120d9",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-7265e1fca1984b568a5ec75afba48699"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "58e0546d8148805cd5c5473c2450ed6a737163ec",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
+      "paths": [
+        ".moe/tasks/task-492b573920264188888d56638dd98d81.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-10T19:36:35.892Z",
+      "treeId": "f2110758ed30b29e535e46c65bcf0c061a71b491",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-10T19:31:53Z",
+    "at": "2026-09-10T19:36:35.892Z"
+  },
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/planRevision.block.tmp",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts"
+  ],
+  "completedAt": "2026-09-10T19:36:30.236Z",
+  "reviewCompletedAt": "2026-09-10T19:36:30.236Z",
+  "reviewSummary": "APPROVED. 5 declared files, 646+/2-, no new files; landed as 8e23c42 plus completion 7da080b (docs/SCHEMA.md + board json) on moe/work-2026-09-10. Tree clean vs HEAD for packages/ and docs/, so tested bytes == landed bytes. Re-ran verification: npm --prefix packages/moe-daemon test -> 103 files / 1219 tests passed, EXIT=0 captured outside a pipe; tsc --noEmit exit 0. DoD1: schema.ts docblock + SCHEMA.md planRevision section, interface field, example JSON, validation line cover ownership, safe-integer domain, create-0, absent-0, no migration; createTask and legacy-record tests prove defaults. DoD2: 0->1, identical resubmit 1->2, changed resubmit, per-task counters, CONTROL/SPEED-delayed/TURBO-immediate each return and persist 1 with no second bump, TASK_UPDATED carries it. DoD3: restart via fresh StateManager().load(); reopen advances once when it clears step evidence, holds when it rewrites nothing; legacy -> 1. DoD4: validation refusal, injected writeEntity rejection on submission and on an in-place DoD change, 7 malformed stored stamps, MAX_SAFE_INTEGER exhaustion, each asserting unchanged bytes, unchanged cached object, zero events, retry advancing once. DoD5: red proof re-established by mutation rather than trusted: dropping the PLAN_SUBMITTED predicate fails 2 tests, coercing instead of throwing in decodeStoredPlanRevision fails 8 (focused file, 77 tests); checkout restored and re-checked in a separate git status. Rails: single choke point in updateTask (the three other direct task writers all spread ...task and touch neither surface field), one bump per write when steps, DoD and event all change, sanitized-vs-sanitized comparison with identical params. tools/index.ts untouched, no approval-policy change, no Wave 1 work, no forbidden patterns. SCHEMA.md correctly states nothing compares revisions yet. Non-blocking: the caller-stamp delete is an equivalent mutant since the derived value is spread last; recorded in the handoff memory."
+}

@@ -210,7 +210,7 @@ class MetricsPanel(private val project: Project) :
             || aggregate.perEpic.isNotEmpty()
         emptyStateLabel.isVisible = !hasAny
 
-        firstPassValue.text = aggregate.firstPassApprovalPct?.let { "%.0f%%".format(it * 100.0) } ?: "—"
+        firstPassValue.text = firstPassApprovalText(aggregate.firstPassApprovalPct)
         avgWallClockValue.text = MoeDuration.humanise(aggregate.avgWallClockMs)
         avgReopenValue.text = aggregate.avgReopenCount?.let { "%.1f".format(it) } ?: "—"
         totalCompletedValue.text = aggregate.totalCompleted?.toString() ?: "—"
@@ -304,5 +304,11 @@ class MetricsPanel(private val project: Project) :
         disposed = true
         alarm.cancelAllRequests()
         service.removeListener(stateListener)
+    }
+
+    companion object {
+        // The daemon already emits firstPassApprovalPct in percent units (0..100), so consumers must not rescale it.
+        internal fun firstPassApprovalText(pct: Double?): String =
+            pct?.let { "%.0f%%".format(it) } ?: "—"
     }
 }

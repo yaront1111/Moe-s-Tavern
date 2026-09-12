@@ -1,0 +1,257 @@
+{
+  "id": "task-9d731a5e5eb14951a9d342e5976883b6",
+  "epicId": "epic-3b8eb56d7d16495e8c24cb2243d0cfd4",
+  "title": "Retire task time-cap presentation in VS Code",
+  "description": "Objective: remove deprecated task time-budget presentation and client fields, after JetBrains retirement lands. Deliverable: task details and board cards ignore legacy time-budget data, while existing uncapped elapsed wall-clock and other live metrics remain. Scope exactly five files: moe-vscode/src/panels/TaskDetailPanel.ts (remove task.budget, its visibility contribution, and remaining KPI from renderMetrics); moe-vscode/src/types/moe.ts (remove TaskBudget and Task.budget); moe-vscode/media/board.js (replace budgetSuffix/cap ratios/indicators with the existing elapsed-only presentation); moe-vscode/src/providers/BoardViewProvider.ts (rename matching inline badge class/style); new moe-vscode/tests/task-time-budget.test.cjs. Test the actual TaskDetailPanel-generated HTML and actual media/board.js renderTaskCard with node:test, TypeScript transpileModule and node:vm, following tests/daemon-start.test.cjs; do not duplicate renderer logic or add a dependency. Stub required IDE/DOM/transport hooks, fail loudly for unexpected dependencies, and dispose clients/timers in finally. Compare output for identical tasks with/without legacy caps; missing/null/malformed legacy data must be ignored without throws. Preserve existing uncapped timing gates/fallbacks, HTML escaping, steps/reopens/rejects/wall-clock, critiques, failed DoD and handoffs. Do not introduce a new recorded-duration-only badge where current uncapped behavior omits it. NOT in scope: taskDetail.js, other media styles with no budget usage, live chat/reopen limits, daemon schema/deprecation/data rewriting, percentage metrics fix, or additional time-tracking features. Exact gate from repo root on Windows: npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE. Unix: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. Use npm.cmd if PowerShell policy blocks npm.ps1, and preserve foreign work.",
+  "definitionOfDone": [
+    "TaskDetailPanel no longer reads task.budget or renders remaining/cap values; a budget-only task has no empty Metrics section.",
+    "The board's actual renderTaskCard output has no legacy cap denominator, utilization warning/approval indicators or task-budget class, and retains the existing elapsed-only output and HTML escaping.",
+    "TaskBudget and Task.budget are removed from the VS Code client model; valid live TaskMetrics durations and counters remain supported.",
+    "Native node:test regressions cover actual detail and board renderers with absent, populated, null and malformed legacy budget values plus timestamp edge cases; populated-cap assertions fail on old rendered output.",
+    "Steps, reopens, rejects, wall-clock fallback, critique/failed-DoD/handoff data and live chat/reopen limits remain unchanged.",
+    "Full moe-vscode npm test and npm run compile pass with positive test counts and captured red-first regression evidence."
+  ],
+  "taskRails": [
+    "Keep the five-file scope; no runtime/test framework changes or taskDetail.js churn.",
+    "Preserve existing uncapped wall-clock behavior and error handling, rather than deleting useful elapsed timing along with the retired cap.",
+    "JetBrains prerequisites land first; do not weaken their tests."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "VERIFY SEQUENCING AND READ THE EXACT BEHAVIOR TO PRESERVE. Read-only, no edits. (a) A task rail says JetBrains lands first, so prove task-435683c2df8f47e7b77a77dc51ba62e9 landed - epicSiblings landing.merged true, or `git log <branch> --grep \"Moe-Task: task-435683c2df8f47e7b77a77dc51ba62e9\"`. It was WORKING on 2026-09-11; if it has not landed, moe.report_blocked naming its id. (b) Read media/board.js lines 809-847 carefully, because the single most important fact in this task lives there: the uncapped presentation ALREADY EXISTS inside budgetSuffix. When capMs is null the function already renders the elapsed-only label with a wall-clock tooltip and no status mark. Retirement therefore means keeping that branch and deleting the capped one - it does not mean inventing new output. Note the guard at line 814 especially: `if (capMs == null && !firstClaimAt) return ''`, which after the removal must become a guard on firstClaimAt alone, so a task carrying a recorded duration but NO firstClaimAt keeps rendering nothing exactly as it does today. That is the rail about not introducing a new recorded-duration-only badge, and it is the easiest thing in this task to get wrong. (c) Read the other three seams: TaskDetailPanel.renderMetrics at 724-770 reads task.budget at 726, includes it in the empty-section guard at 731 and pushes the remaining-versus-cap KPI at 764-767; types/moe.ts declares TaskBudget at 201 and Task.budget at 276; BoardViewProvider.ts carries the .task-budget style at 523. Confirm by `grep -rni budget moe-vscode/src moe-vscode/media` that these are the only occurrences. (d) Read tests/daemon-start.test.cjs and tests/metrics-view.test.cjs for the convention: node:test with node:assert/strict, TypeScript transpileModule and node:vm executing the real source rather than a copy of it. Record foreign dirty paths and preserve them. Own only the five files in this plan; taskDetail.js is explicitly out of scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "note": "Read-only. (a) Prereq task-435683c2 LANDED on moe/work-2026-09-10: git log --grep 'Moe-Task: task-435683c2...' -> e09bcb6 + e0ed8ca feat commits. (b) board.js budgetSuffix 809-844: uncapped branch already emits '[<elapsed>]' + title 'Wall-clock: <elapsed>', no mark; guard 814 `capMs == null && !firstClaimAt` -> becomes `!firstClaimAt` (recorded wallClockMs w/o firstClaimAt keeps rendering ''). Elapsed fallback 816-825 (firstClaimAt->doneAt|Date.now, isNaN guard, Math.max(0), null->0) kept verbatim; note unparseable firstClaimAt/doneAt renders '[0s]' today (preserve). Call site 850, interpolation 971. (c) TaskDetailPanel.renderMetrics 724-811: budget read 726, guard 731, cap KPI 764-767; usedMs 745-756 also feeds Wall-clock KPI (keep). moe.ts TaskBudget 201-205, Task.budget 276. BoardViewProvider .task-budget style 523-529. grep -rni budget over moe-vscode (excl node_modules) = exactly these 13 lines in 4 owned files; taskDetail.js has none. (d) Convention: node:test + node:assert/strict + ts.transpileModule(CommonJS/ES2020/esModuleInterop) + vm.createContext with require stub that throws on unexpected names (metrics-view). Transpiled TaskDetailPanel requires only 'vscode' (MoeDaemonClient import elided); BoardViewProvider requires vscode + 4 panel modules. board.js top-level calls acquireVsCodeApi/getElementById(epicFilter,addEpicBtn,searchInput,searchClear)/document+body+window.addEventListener/setInterval(2s)/setTimeout(30s) -> test must clear timers in finally. Line endings: 4 owned sources CRLF (autocrlf=true); metrics-view.test.cjs LF. Foreign dirty paths (preserve, not mine): 8 modified .moe/tasks/*.json; untracked .moe/epics/epic-3b8eb56d..json, .moe/resources/, .moe/tasks/task-{808869c5,9e851d4e,dd739724,e5a45262}*.json, docs/plans/2026-09-11-provider-registry-spike.md, packages/moe-daemon/src/{delivery,providers}/. moe-vscode tree clean.",
+      "startedAt": "2026-09-11T10:31:38.549Z",
+      "completedAt": "2026-09-11T10:35:08.443Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "RED FIRST AGAINST THE REAL RENDERERS. Create moe-vscode/tests/task-time-budget.test.cjs following the established convention - node:test, node:assert/strict, node:vm, and TypeScript transpileModule for the panel source - executing the production TaskDetailPanel markup generator and the production renderTaskCard from media/board.js. Do not reimplement either renderer and do not add a dependency. Stub only what those modules genuinely need from the IDE, DOM and transport surfaces, make an unexpected require throw loudly rather than silently returning a stub, and dispose any client or timer in a finally block. Write the failing cases now, against unmodified source: two tasks identical except that one carries a populated legacy time cap must produce IDENTICAL board card output and IDENTICAL detail markup. Today they differ - the board appends a cap denominator and a status mark, and the detail adds a remaining-versus-cap KPI - so these fail on the old behavior, which is what the epic rail requires. Run `npm --prefix moe-vscode test` from the repository root and save the red output; it must be an assertion failure about differing rendered output, not a transpile or module-resolution error. Leave the two existing test files untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "newFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "note": "New tests/task-time-budget.test.cjs (node:test + assert/strict + vm + ts.transpileModule, no new deps). Executes REAL renderers: media/board.js loaded into a vm webview context -> context.renderTaskCard; TaskDetailPanel transpiled + TaskDetailPanel.createOrShow -> captured panel.webview.html; BoardViewProvider transpiled -> getHtmlContent stylesheet (class/selector agreement). Strict Proxy stubs throw on any undefined IDE/DOM/transport member; require() throws on unexpected module names (4 BoardViewProvider panel modules get throw-on-touch proxies); board load-time setInterval/setTimeout are real, tracked and cleared in finally; panel/provider disposed in finally. Date.now pinned to 2026-09-11T10:10Z inside each vm context. RED on unmodified source, from repo root `npm --prefix moe-vscode test` -> EXIT=1, `tests 19 / pass 13 / fail 6`, every failure AssertionError on rendered output: card `[10m/1h ✓]` + title 'Budget: used 10m of 1h' vs `[10m]`; emitted class task-budget vs task-elapsed; never-claimed capped card `[0s/1h ✓]` vs no badge; stylesheet `.task-budget` rule present; detail KPI 'Budget remaining 50m / 1h'; cap-only detail renders 'Metrics' heading + 'Budget remaining 1h / 1h'. Log saved at %TEMP%\\moe-9d73-red.saved.log. Existing daemon-start (7) + metrics-view (6) untouched and passing.",
+      "startedAt": "2026-09-11T10:35:12.765Z",
+      "completedAt": "2026-09-11T10:41:11.133Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "COLLAPSE THE BOARD BADGE TO ITS EXISTING ELAPSED-ONLY FORM. Edit moe-vscode/media/board.js only. Keep the function, keep its place in renderTaskCard, and delete only the cap half: remove the capMs lookup and the task.budget read, remove the ratio computation and the three status marks, and reduce the label and tooltip to the wall-clock forms the uncapped branch already produces. Change the early return at line 814 to gate on firstClaimAt alone, preserving today's behavior that a task with no first-claim timestamp renders no badge at all even when a recorded duration exists. KEEP the elapsed derivation exactly as it is, including the fallback that computes elapsed time from firstClaimAt to doneAt or to now, and its guard against unparseable timestamps - that fallback is live behavior this task must not delete along with the retired cap. Rename the function and its local at line 850 away from the retired term, and change the emitted class name to match the rename; the interpolated values keep going through the existing escapeHtml helper. Touch nothing else in the file: the display-status mapping, the chips, the drag handling and the card layout all stay. Then rename the matching inline style in moe-vscode/src/providers/BoardViewProvider.ts at line 523 so the selector and the emitted class still agree - a rename only, with the same declarations.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "note": "board.js: budgetSuffix -> elapsedSuffix (local budgetHtml -> elapsedHtml at call + card interpolation). Removed task.budget read, capMs, ratio and the three status marks; label/tooltip reduced to the existing uncapped forms '[<elapsed>]' / 'Wall-clock: <elapsed>' (both still through escapeHtml); emitted class task-budget -> task-elapsed. Guard now `if (!firstClaimAt) return ''` (recorded wallClockMs without firstClaimAt still renders nothing). Elapsed derivation (wallClockMs precedence, firstClaimAt->doneAt|Date.now fallback, isNaN guard, Math.max(0), null->0) kept byte-identical. Nothing else in board.js touched. BoardViewProvider.ts: `.task-budget {` -> `.task-elapsed {`, same declarations. CRLF preserved (python byte count: 0 bare LF in both). `npm --prefix moe-vscode test`: tests 19 / pass 17 / fail 2 — all 4 board tests now green; the 2 remaining reds are the detail-panel tests owned by step-4.",
+      "startedAt": "2026-09-11T10:41:11.999Z",
+      "completedAt": "2026-09-11T10:41:56.965Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "REMOVE THE DETAIL KPI AND THE EMPTY-SECTION CONTRIBUTION. Edit moe-vscode/src/panels/TaskDetailPanel.ts only. In renderMetrics delete the local read of task.budget at line 726, drop it from the early-return guard at line 731 so a task whose ONLY metric data was a legacy cap now renders no Metrics section at all rather than an empty heading - that is the first Definition-of-Done item and it is a real user-visible improvement, not a side effect - and delete the remaining-versus-cap KPI at lines 764-767. Everything else in that method stays exactly as it is: the steps KPI, the wall-clock KPI together with its derivation from firstClaimAt and its Number.isNaN guards, the reopens and rejects KPIs, the critique block, the failed Definition-of-Done items and the handoff rendering. Note that usedMs is still needed by the wall-clock KPI, so do not remove it along with its former second consumer. No other panel, no taskDetail.js, no style file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "TaskDetailPanel.renderMetrics: deleted `const budget = task.budget`, dropped `!budget` from the empty-section guard (cap-only task now renders no Metrics section), deleted the 'Budget remaining' KPI block. usedMs + Wall-clock KPI (firstClaimAt->doneAt|Date.now fallback, Number.isNaN guards), Steps/Reopens/Rejects KPIs, critique, failed DoD and handoffs untouched. CRLF preserved (0 bare LF). `npm --prefix moe-vscode test` EXIT=0: tests 19 / pass 19 / fail 0 (both detail reds now green).",
+      "startedAt": "2026-09-11T10:41:57.839Z",
+      "completedAt": "2026-09-11T10:42:19.962Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "REMOVE THE CLIENT MODEL SURFACE AND PROVE THE TEXT IS GONE. In moe-vscode/src/types/moe.ts delete the TaskBudget interface at line 201 and the optional budget member on Task at line 276. Both are optional or standalone, so no construction site needs changing, and the raw daemon client keeps passing unknown payload keys through untouched - do not add or change any transport parser. Keep TaskMetrics and every other interface exactly as they are, since live durations and counters must survive. Then run the guard: `grep -rni budget moe-vscode/src moe-vscode/media` must return nothing. If it reports a leftover outside these five files, report it rather than widening scope. Run `npm --prefix moe-vscode run compile` at this point as an early check that nothing else referenced the removed type.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "types/moe.ts: deleted `interface TaskBudget` and `Task.budget?`; TaskMetrics and every other interface untouched; no transport parser changed (raw payload keys still pass through). CRLF preserved. Guard `grep -rni budget moe-vscode/src moe-vscode/media` -> no output (grep exit 1). `npm --prefix moe-vscode run compile` (tsc -p ./) EXIT=0 — nothing else referenced the removed type. dist/ output is gitignored (.gitignore:6). Only the 5 owned moe-vscode paths are dirty.",
+      "startedAt": "2026-09-11T10:42:20.833Z",
+      "completedAt": "2026-09-11T10:42:44.165Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "COMPLETE THE MATRIX, RUN THE GATE, REVIEW, HAND OFF. (a) Finish the test file so it covers, against both real renderers: a legacy cap that is absent, populated, explicitly null, and malformed as a string, a number and an array - every one producing output identical to the no-cap case and none of them throwing, which is the error handling requirement; a task with firstClaimAt and no recorded duration still showing derived elapsed time; a task with a recorded duration but NO firstClaimAt still showing no board badge, which pins the guard change; unparseable and future timestamps handled without a throw or a negative value; and the preservation set intact - steps, reopens, rejects, wall-clock, critique, failed Definition-of-Done items and handoffs. Add one assertion that a detail view whose only metric data was a legacy cap emits no Metrics section at all. Assert on exact rendered substrings, not on truthiness. (b) Run the gate fresh from the repository root. Windows PowerShell, exactly: npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE . Unix: npm --prefix moe-vscode test && npm --prefix moe-vscode run compile. If PowerShell execution policy blocks the npm shim, invoke npm.cmd. Require exit 0 from both, nonzero test counts, the new file actually collected, and the two pre-existing test files unchanged and passing. (c) Adversarially review the diff: does any cap denominator, utilization mark or retired class name survive in rendered output; is the elapsed fallback and its timestamp guarding still intact; does a task with a duration but no first claim still render nothing; did the detail method keep usedMs for the wall-clock KPI; do the emitted class and the style selector still match after the rename; is escaping unchanged; and did anything outside the five owned files change - taskDetail.js in particular must be untouched. (d) Complete through moe.complete_task with the exact command, exit code and counts, the saved red evidence from step 2, and every modified path in modifiedFiles. Note that this unblocks task-c6e2eca5e19f4aaf9323f02aefadb29a, which edits the same types, board and detail panel files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs",
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs",
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/types/moe.ts"
+      ],
+      "note": "(a) Final test file (299 lines, 11 tests) against the REAL renderers: every card/detail render compared bare vs 13 legacy cap shapes (4 populated incl. warnedAt/escalatedAt + zero cap; null, undefined, {}, {wallClockMs:null|'soon'|-60000}, string, number, array) -> identical markup, no throws; DURATION_CASES table (running->now 10m, doneAt 5m, recorded precedence 2m, recorded w/o firstClaimAt = no card badge but detail 2m, unparseable firstClaimAt/doneAt -> card [0s]/detail no KPI, future + inverted -> 0s, negative recorded -> 0s); dedicated guard pin (recorded duration w/o first claim -> no badge); cap-only detail -> no Metrics section; class/selector agreement via BoardViewProvider.getHtmlContent stylesheet (.task-elapsed present once, .task-budget absent); rich task preserves chips (priority, progress 1/3, question, reopen ↻ 2, handoff 🤝 1, critique title escaped, id, worker) and exact compact Metrics section (Steps 2 / 3, Wall-clock 1h 30m, Reopens 2, Rejects 1, critique BLOCK + escaped concern + reviewer line, failed DoD '(2 failures)' + escaped '&amp;', handoff title escaped, '—' for blank pitfalls); title escaping next to the badge + in detail input. (b) Exact gate from repo root, PowerShell: `npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE` -> exit 0; tests 24 / pass 24 / fail 0 (daemon-start 7 + metrics-view 6 unchanged + 11 new); tsc clean. (c) Red proof of the FINAL file vs HEAD (44f6ba8) sources in a scratch dir outside the repo (NODE_PATH -> moe-vscode/node_modules): EXIT=1, 11/11 fail, 11 AssertionError / 0 harness errors (e.g. '[10m/1h ✓]', '[2m/1h ✓]' on recorded-w/o-claim, 'Budget remaining 50m / 1h', cap-only 'Metrics' heading, '.task-budget' rule). Mutation check on NEW code in scratch copy: 10/10 killed (guard removed/loosened, fallback deleted, isNaN guard deleted, recorded ignored, class drift, detail Wall-clock KPI deleted, Number.isNaN deleted, cap re-admitted to section guard, stylesheet renamed back). Adversarial review: usedMs kept for Wall-clock; elapsed derivation byte-identical; escaping unchanged; `grep -rni budget moe-vscode/src moe-vscode/media` empty; taskDetail.js + both existing test files untouched; CRLF preserved in the 4 sources. Theoretical only: board still renders '[0s]' for an unparseable firstClaimAt (pre-existing uncapped behavior, pinned, intentionally not changed).",
+      "startedAt": "2026-09-11T10:42:45.027Z",
+      "completedAt": "2026-09-11T10:56:17.556Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human said \"unblock board\". Decomposition child of task-0d11e05f promoted out of human-gated BACKLOG so the parent's dependency block can clear. Keeps dependsOn on task-435683c2 — that gate applies to WORKING claims only, planning proceeds now.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0d11e05fd60945029385c80e28da9e1f",
+  "dependsOn": [
+    "task-435683c2df8f47e7b77a77dc51ba62e9"
+  ],
+  "priority": "MEDIUM",
+  "order": 3.53,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-10T17:41:38.049Z",
+  "updatedAt": "2026-09-11T11:03:23.559Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-11T09:41:00.939Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-11T11:02:49.647Z",
+    "wallClockMs": 4908708
+  },
+  "contextFetchedBy": [
+    "architect-8b93cc67",
+    "worker-de4739a8",
+    "qa-8db40c97"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-11T09:42:24.451Z",
+  "planningNotes": {
+    "approachesConsidered": "Deleting the board badge function entirely - rejected: its uncapped branch is the presentation the Definition of Done says to retain, and deleting it would remove live elapsed-time display along with the retired cap, which a task rail forbids. Dropping the early return so every task with a recorded duration gets a badge - rejected for the same reason in reverse: that would introduce a badge where today none appears. Keeping the retired class name to avoid touching the provider - rejected: the name is part of the retired vocabulary and the Definition of Done asks for the rename; it is a one-line selector change with identical declarations. Writing the tests against a copy of the render logic - rejected by the task description and by the existing convention, which transpiles and executes the real source, and which is also what makes a genuine red possible before any change. Removing usedMs along with the cap KPI - rejected: the wall-clock KPI still needs it, and that mistake would silently delete a live metric.",
+    "codebaseInsights": "Measured live on 2026-09-11. The decisive fact is that the uncapped presentation already exists: board.js budgetSuffix has two branches, and when no cap is present it already emits the elapsed-only label with a wall-clock tooltip and no status mark. So this retirement deletes a branch rather than designing new output, which is exactly why the task rails forbid inventing a new recorded-duration-only badge. The subtlety that decides correctness is the early return at line 814, `if (capMs == null && !firstClaimAt) return ''`: today a task with a recorded wallClockMs but no firstClaimAt and no cap renders nothing, and that must stay true after the cap disappears, so the guard becomes a firstClaimAt check rather than being dropped. The elapsed fallback that derives a duration from firstClaimAt to doneAt or to now, with its unparseable-timestamp guard, is live behavior in both the board and the detail panel and must survive. In TaskDetailPanel, usedMs has two consumers - the wall-clock KPI and the retired cap KPI - so only the second goes, and the budget term must also leave the empty-section guard, which is what makes a cap-only task stop rendering an empty Metrics heading. There are exactly six occurrences of the retired term across src and media, all inside the five owned files, and taskDetail.js has none, which is why the scope excludes it.",
+    "risks": "The guard at board.js:814 is the likeliest defect: change it carelessly and either every task grows a badge it never had, or tasks that should show elapsed time lose it. Pin both directions with tests. Do not delete the elapsed derivation or its timestamp guards while removing the cap. In the detail panel, keep usedMs and remember the empty-section guard, or a cap-only task will still render a bare Metrics heading and the first Definition-of-Done item fails. After the class rename, the emitted markup and the inline style must still agree - they live in two different files. The red must be an assertion failure about differing rendered output, not a transpile error, or it proves nothing about the old behavior. These files are contended: task-c6e2eca5e19f4aaf9323f02aefadb29a edits the same types, board and detail panel and is sequenced behind this one, so land cleanly. Keep taskDetail.js untouched - it is explicitly out of scope. If the PowerShell execution policy blocks the npm shim, use npm.cmd rather than changing the gate command.",
+    "keyFiles": [
+      "moe-vscode/media/board.js (budgetSuffix at 809-847, the early return at 814, the local and call at 850, the card interpolation at 971)",
+      "moe-vscode/src/panels/TaskDetailPanel.ts (renderMetrics 724-770: budget read at 726, empty-section guard at 731, cap KPI at 764-767)",
+      "moe-vscode/src/types/moe.ts (TaskBudget at 201, Task.budget at 276)",
+      "moe-vscode/src/providers/BoardViewProvider.ts:523 (.task-budget inline style, rename only)",
+      "moe-vscode/tests/task-time-budget.test.cjs (new)",
+      "moe-vscode/tests/daemon-start.test.cjs and tests/metrics-view.test.cjs (the node:test + vm + transpile convention)"
+    ]
+  },
+  "planApprovedAt": "2026-09-11T09:42:24.514Z",
+  "workStartedAt": "2026-09-11T10:31:38.549Z",
+  "reviewStartedAt": "2026-09-11T10:57:32.939Z",
+  "verification": {
+    "command": "npm --prefix moe-vscode test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm --prefix moe-vscode run compile; exit $LASTEXITCODE",
+    "exitCode": 0,
+    "outputTail": "> node --test tests/*.test.cjs ... ✔ board card of a claimed task shows only its elapsed wall-clock under every legacy cap shape ✔ board card of a never-claimed task has no elapsed badge under every legacy cap shape ✔ board card shows no badge for a recorded duration without a first claim ✔ board card elapsed badge keeps its duration rules under every legacy cap shape ✔ board stylesheet styles the class the elapsed badge emits and drops the retired class ✔ board card keeps its chips and elapsed badge for a task with every live metric ✔ task detail markup is identical with or without any legacy cap ✔ task detail renders no Metrics section when the only metric data is a legacy cap ✔ task detail wall-clock KPI keeps its duration rules under every legacy cap shape ✔ task detail keeps every live metric, critique, failed DoD item and handoff ✔ task title stays escaped next to the elapsed badge and in the detail | ℹ tests 24 ℹ suites 0 ℹ pass 24 ℹ fail 0 ℹ cancelled 0 ℹ skipped 0 ℹ todo 0 | > moe-vscode@0.8.0 compile > tsc -p ./ (no errors) | GATE_EXIT=0. RED (final test file vs HEAD 44f6ba8 sources, scratch dir): OLD-SOURCE EXIT=1, tests 11 pass 0 fail 11, 11 AssertionError / 0 other errors.",
+    "reportedAt": "2026-09-11T10:57:32.939Z"
+  },
+  "filesModified": [
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/tests/task-time-budget.test.cjs",
+    ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+    ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+  ],
+  "completionSummary": "Retired the legacy task time-cap presentation in VS Code. Touched exactly 5 files.\n- media/board.js: budgetSuffix is now elapsedSuffix, and budgetHtml is now elapsedHtml. The cap read, the ratio and the ✓⚠✗ marks are gone. The badge is '[<elapsed>]' with the title 'Wall-clock: <elapsed>', and its class changed from task-budget to task-elapsed. The guard is now `!firstClaimAt`, so a recorded wallClockMs without firstClaimAt still shows no badge. The elapsed derivation is byte-identical: recorded value first, otherwise firstClaimAt to doneAt or now, with the isNaN guard and Math.max(0).\n- BoardViewProvider.ts: the selector is renamed to .task-elapsed with the same declarations.\n- TaskDetailPanel.renderMetrics: removed the budget read, the budget term in the empty-section guard and the 'Budget remaining' KPI. usedMs stays for the Wall-clock KPI, and a cap-only task now renders no Metrics section.\n- types/moe.ts: removed TaskBudget and Task.budget.\n- NEW tests/task-time-budget.test.cjs has 11 node:test tests. They run the REAL renderTaskCard (board.js in vm), TaskDetailPanel.createOrShow HTML and the BoardViewProvider stylesheet. Stubs are strict and throw loudly; timers and panels are disposed in finally.\n- Coverage: the output with each of 13 legacy cap shapes (populated, zero, null, undefined, {}, non-numeric, negative, string, number, array) matches the output with no cap. There is a duration/timestamp table (now, doneAt, recorded, recorded without a first claim, unparseable, future, inverted, negative) and a class/selector agreement check. A rich task pins chips, KPIs, critique, failed DoD, handoffs and escaping.\nRed evidence:\n- Step 2 in the repo: 19 tests / 6 fail, all AssertionError on rendered output ('[10m/1h ✓]', 'Budget remaining 50m / 1h', the cap-only Metrics heading, .task-budget).\n- The final file against HEAD sources in a scratch dir outside the repo: 11/11 AssertionError, 0 harness errors.\n- Mutation run on the new code: 10/10 killed.\nChecks: `grep -rn",
+  "commits": [
+    {
+      "sha": "fe608c7c54a2157336f218f775a88b2fe65aa558",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-11T10:31:27Z",
+      "paths": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-11T10:57:49.708Z",
+      "treeId": "5e7770c25c8235e17a474965d5ae5ed7b1c3988e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "moe-vscode/media/board.js",
+          "taskId": "task-c6e2eca5e19f4aaf9323f02aefadb29a"
+        },
+        {
+          "path": "moe-vscode/src/panels/TaskDetailPanel.ts",
+          "taskId": "task-c6e2eca5e19f4aaf9323f02aefadb29a"
+        },
+        {
+          "path": "moe-vscode/src/types/moe.ts",
+          "taskId": "task-34dba87e4e1948bcba69e85f3f34bfd3"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "d607ec2534699b09535c5fd35f0b0a76c1a82d62",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T10:57:53Z",
+      "paths": [
+        ".moe/tasks/task-9d731a5e5eb14951a9d342e5976883b6.json",
+        ".moe/tasks/task-e7f534f147b74650ba06c2b98c022afb.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-11T11:03:23.559Z",
+      "treeId": "e91823c96c9e7c038486b5acfe735f42f9df6c90",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/task-time-budget.test.cjs",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/types/moe.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T10:57:53Z",
+    "at": "2026-09-11T11:03:23.559Z"
+  },
+  "completedAt": "2026-09-11T11:02:49.647Z",
+  "reviewCompletedAt": "2026-09-11T11:02:49.647Z",
+  "reviewSummary": "All 6 DoD items + rails verified. Completion fe608c7 (worker, pushed, ancestor of origin/moe/work-2026-09-10) holds exactly the 5 scoped files (+309/-37); Moe-Contested trailers but every byte landed: git diff HEAD on the 5 files is empty. taskDetail.js and the 2 existing tests are untouched. Prereq task-435683c2 landed (e0ed8ca/e09bcb6). I re-ran the exact gate from the repo root (pwsh): npm --prefix moe-vscode test gave tests 24, pass 24, fail 0 (7 daemon-start + 6 metrics-view + 11 new); npm run compile (tsc -p ./, 203 files incl. the 3 touched TS) exit 0. Red proof: new test vs fe608c7^ sources in a scratch dir outside the repo exited 1 with 11/11 fail, 11 AssertionError and 0 harness errors. Old output showed '[10m/1h ✓]', 'Budget remaining 50m / 1h', a Metrics heading for a cap-only task, and .task-budget. Mutations on a scratch HEAD copy: 11/11 real mutants killed (board firstClaimAt guard, elapsed fallback, NaN guard, tooltip, selector rename, detail empty-section guard, wall-clock KPI, detail fallback, rejects, reopens source, title escaping). 2 survivors are equivalent: the badge label escape (durations only) and the Math.max clamp (humanise maps <=0 to 0s). Diff: elapsedSuffix keeps the uncapped branch verbatim. Its guard is now !firstClaimAt, so a recorded duration without a first claim still shows no badge. Class task-elapsed matches the .task-elapsed selector, same declarations. The detail keeps usedMs for Wall-clock, and a cap-only task renders no Metrics section. TaskBudget and Task.budget are gone; TaskMetrics is unchanged. grep budget in src/media is empty, and added lines have no forbidden patterns. Tests run the real renderers (vm + transpileModule) with throw-on-touch stubs; timers, panel and provider are disposed in finally; 0.4s."
+}

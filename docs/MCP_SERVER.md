@@ -112,6 +112,8 @@ All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-a
 
 Three tools are deliberately **guard-exempt** even though the proxy injects `workerId` into them: `moe.get_commit_scope`, `moe.record_commit` and `moe.declare_files`. The wrapper calls the first two **after** the CLI exits — by then QA may already own the REVIEW task, a seat-only `unblock_worker` may have left it unassigned, or the task may be `BLOCKED`/`DONE` — and a governor uses `declare_files` on tasks it never owns. They are allowed in every task status.
 
+`moe.record_candidate` is likewise exempt from the ownership guard and allowed in every task status, for the same post-`complete_task` reason. Instead, the **attempt** fence guards it: a caller whose attempt has been superseded cannot record (see its section).
+
 ---
 
 ## Tools (Implemented)
@@ -225,6 +227,12 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     }>,
     commentSummary: { total, returned, omitted, truncated, hint?: string }
   } | null,
+  currentCandidate?: Candidate,  // the task's CURRENT candidate — the whole stored record
+                                 // (.moe/candidates/<id>.json), not a projection. Selected as the
+                                 // last by createdAt then id, the same rule record_candidate lists
+                                 // by. Surfaced whenever a candidate exists, at any status; the key
+                                 // is OMITTED (never null) when the task has none. QA passes its
+                                 // `id` to qa_approve/qa_reject to bind the decision to these bytes.
   worker: {
     id, type, status, currentTaskId, lastActivityAt, lastError, errorCount, teamId
   } | null, // lean: excludes chatCursors, modifiedFiles, and branch
@@ -237,6 +245,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 ```
 
 By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
+
+**Reviewed bytes.** `currentCandidate` is the record QA must read before signing off, and its `id` is what `moe.qa_approve` / `moe.qa_reject` bind the decision to. Because it is re-resolved on every call, a reviewer who re-reads a task after the runner recorded a newer candidate sees the new one — and an approval still naming the old one is refused with `CANDIDATE_MISMATCH`. Projects that never call `moe.record_candidate` never see the key.
 
 **Commit evidence.** `commits`/`landing`/`lastCommitOutcome` come from the wrapper's `moe.record_commit` reports (the daemon never runs git). A prerequisite task has landed iff `epicSiblings[*].landed` is true — or `git log <branch> --grep 'Moe-Task: <sibling>'` finds it; uncommitted work in a peer's checkout is not a prerequisite. For a `REVIEW` task the `nextAction` reason tells QA to confirm a completion commit is recorded in `task.commits` (`git show <sha>`) before approving. A RESUME context lists `unattributedPaths` with a `moe.declare_files` hint so the resuming session can claim what its predecessor forgot to report.
 
@@ -252,8 +262,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
   taskId: string,
   workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
   steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[],
-  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? },
-  budget?: { wallClockMs?: number }  // soft cap on first-claim → DONE
+  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? }
 }
 ```
 
@@ -268,14 +277,15 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 - **Step bounds:** max 100 steps, each `description` ≤10000 chars, each `affectedFiles` and `newFiles` ≤50 entries.
 - **Affected-path existence gate:** every `affectedFiles` entry must exist on disk under the project root, unless some step declares it in `newFiles`. A plan citing a path that exists nowhere is rejected with `INVALID_INPUT`, `context.missingPaths`, `context.projectRoot`, and a message teaching both fixes — correct the path (they are relative to the PROJECT ROOT, so `packages/moe-daemon/src/x.ts`, not `src/x.ts`) or declare files this task creates in that step's `newFiles`. The exemption is plan-wide, so a file created in step 1 may be cited by step 2. `newFiles` still count toward the distinct-file total (deduped against `affectedFiles`) and are still scanned by the rails check, so declaring a path new cannot dodge either gate. The check runs after the rails and plan-size gates, and fails open: an unreadable project root, or any stat error other than `ENOENT`/`ENOTDIR`, is treated as "exists".
 - **Plan-size gate:** oversized plans are rejected with `CONSTRAINT_VIOLATION` — more than 12 steps or more than 10 *distinct* affected files (union across steps) — with `suggestedAction` pointing at `moe.create_task` ("split the task"). Past the softer thresholds (8 steps / 5 distinct files) the response carries a `warnings: string[]` array instead. Thresholds configurable via `project.json` `settings.taskSizing { warnSteps, maxSteps, warnDistinctFiles, maxDistinctFiles }`.
-- `budget.wallClockMs` (when supplied) must be `> 0`; prior `warnedAt`/`escalatedAt` marks are preserved on resubmits. Plan submission refreshes `metrics.plannedStepCount`.
+- Plan submission refreshes `metrics.plannedStepCount`.
 - **CONTROL mode side effect:** the daemon posts `📋 Plan ready for critique — <title> (<id>)` to `#governors` with the step count, distinct-file count, any size warnings, a size rubric line, and a DoD preview. If at least one registered governor exists, `task.pendingPlanCritique` is set to record who is expected to weigh in. Critique is informational; humans still own approval.
 - **Warn-zone persistence + unsupervised size critique:** warn-zone warnings are persisted as `task.planSizeWarnings` (cleared by a compliant resubmit). With `settings.taskSizing.autoCritique: true`, CONTROL mode, and NO governor online, the daemon auto-blocks a warn-zone plan back to `PLANNING` (verdict recorded as `planCritiqueResult` by `moe-daemon-size-critic`, bounded by the same `critiqueBlockCount` cap as governor blocks; at the cap the task rests in `AWAITING_APPROVAL` with a `🛑 HUMAN DECISION REQUIRED` post). The response's `status` is then `"PLANNING"` and `nextAction` routes to a re-plan via `moe-epic-breakdown`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, budget, warnings?: string[], message, nextAction }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, planRevision, warnings?: string[], message, nextAction }
 ```
+- `planRevision` is the revision this submission committed (read from the write's own Task, not a later cache read). It is the token a client sends back as `expectedPlanRevision` when it later approves the plan — see [Plan approval — `expectedPlanRevision` compare-and-swap](#plan-approval--expectedplanrevision-compare-and-swap).
 
 ---
 
@@ -435,6 +445,93 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 ---
 
+### moe.finalize_attempt
+
+**Runner-called.** Closes a task's execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. `complete_task` hands the task to QA but deliberately leaves the attempt **open** in `finalizing`, because the bytes are only landed after the session exits and the wrapper commits them. This tool is the acknowledgement of that artifact boundary, and closing the attempt is what lifts the two holds the open attempt imposes.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,           // task the attempt belongs to
+  attemptId: string,        // the attempt to close, as returned by moe.claim_next_task
+  generation?: number,      // fencing token from the same claim; when supplied it must equal the current attempt's
+  outcome: 'landed' | 'nothing-to-commit' | 'rescued' | 'failed',   // what the runner's landing actually did
+  landedRevision?: string,  // /^[0-9a-f]{40}$/i — REQUIRED when outcome is 'landed', refused as a bare ref name
+  workerId?: string,        // worker seat that held the attempt (auto-injected by proxy)
+  runnerId?: string         // wrapper/runner session reporting the landing
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, attemptId, taskId, generation, phase: "closed", outcome, landedRevision, message }
+// landedRevision is null when the runner reported no landing
+```
+
+**Notes:**
+- **The runner declares the bytes final, not the CLI's exit.** That is the whole point of an explicit operation: an interactive TUI seat stays open long after the work is landed, and a provider mode without one-shot semantics has no exit to infer anything from. Both would otherwise be stuck with an attempt nothing ever closes.
+- **Closing lifts BOTH finalizing holds** — `moe.claim_next_task` refuses that worker's next task while it holds a finalizing attempt, and `moe.qa_approve` refuses that task's approval while the task has one. Neither hold depends on anything except the presence of a finalizing attempt, so this call is the deterministic way out of both.
+- **Both holds refuse with `-32002` / `ATTEMPT_FINALIZING`, and that refusal is NOT fatal.** Its `MoeError.context` carries `{ attemptId, generation, taskId, workerId, retryable: true }`. Note that **`context` is not forwarded over the MCP wire** (a wire refusal carries `{ code, message, data: { tool, codeName } }` only), so a remote caller keys on `codeName === 'ATTEMPT_FINALIZING'` — or on the message, which names the attempt and says the refusal is retryable. Finalize the attempt and retry; do not escalate.
+- **Fenced.** `attemptId`, plus `generation` when supplied, goes through `assertAttemptCurrent`, so a superseded attempt is refused by name and closes nothing.
+- **Idempotent.** A retry after a lost response is safe: when the attempt is already `closed` the call returns the same successful response and **writes nothing at all** — no second record, no touched `lastPhaseAt`, a byte-identical `.moe/attempts/<id>.json`. The already-closed answer is deliberately evaluated *before* the fence (the fence resolves the current attempt through a helper that ignores closed attempts, and would otherwise refuse the retry as superseded); it is not a fencing bypass, because closing an already-closed attempt changes nothing and every open case still goes through the guard.
+- **Only a `finalizing` attempt may be closed here.** A `running` attempt is refused — closing it would hand the seat back with nothing landed, which is the exact race the hold exists to stop. `reconciling` belongs to the recovery slice.
+- **The outcome is reported, not recorded.** `outcome` and `landedRevision` are echoed back but are **not** persisted: nothing is added to the `ExecutionAttempt` schema for them, and no activity event or board broadcast is emitted. A durable delivery record is `moe.record_delivery_receipt`'s job in the receipt slice. The daemon never runs git, so it has verified neither value — it checks `landedRevision`'s shape only.
+- Not `blocking`, so dispatch serializes it under the state mutex like every other tool. There is no ownership or status gate: the runner finalizes after `complete_task`, when QA may already own the REVIEW task, so the attempt fence is the guard.
+
+**Errors.** Every refusal writes nothing. JSON-RPC code, then `MoeError.codeName`:
+- `-32001 TASK_NOT_FOUND`: unknown `taskId`
+- `-32001 ATTEMPT_NOT_FOUND`: unknown `attemptId`
+- `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt exists but belongs to another task
+- `-32002 ATTEMPT_SUPERSEDED`: `attemptId`/`generation` is not the task's current attempt
+- `-32002 ATTEMPT_NOT_FINALIZING`: the attempt is open but in another phase
+- `-32602 INVALID_INPUT`: an outcome outside the vocabulary, a `landedRevision` that is not 40 hex characters, or a `generation` that is not a positive integer
+- `-32602 MISSING_REQUIRED`: `taskId`, `attemptId` or `outcome` is absent, or `landedRevision` is absent with `outcome: 'landed'`
+
+---
+
+### moe.reattach_attempt
+
+**Runner-called.** Reattaches a runner to its own execution attempt after a daemon restart, moving the attempt from `reconciling` back to `running` and ending the hold on its task. A restarted daemon cannot see the processes the previous one was watching, so it parks every `running` attempt in `reconciling` and **holds** the task instead of releasing it; this tool is how that hold ends in the good case.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,            // task the attempt belongs to
+  workerId: string,          // worker seat that owns the attempt (auto-injected by proxy)
+  runnerId: string,          // wrapper/runner session driving the process
+  attemptId: string,         // the attempt to reattach, as returned by moe.claim_next_task
+  generation: number,        // fencing token from the same claim
+  processStartedAt: string,  // the process start time EXACTLY as recorded on the attempt
+  host: string               // the host EXACTLY as recorded on the attempt
+}
+```
+All seven are required; `additionalProperties` is `false`.
+
+**Returns:**
+```typescript
+{ success: true, attemptId, taskId, generation, phase: "running", message }
+```
+
+**Notes:**
+- **A daemon restart now holds, it does not purge.** This is a deliberate change from the old purge-everything startup. On every start the daemon moves each `running` attempt to `reconciling` *before* the worker purge, and the purge then **spares** any worker seat that owns a non-closed attempt: its record stays on disk and in the map with its `currentTaskId` intact, and its task stays `WORKING` and assigned rather than being routed through the release path. Previously a restart mid-build deleted the worker and handed live work to the next claimant.
+- **`reconciling` means the daemon has lost sight of the execution — not that it thinks the process is alive, and not that it thinks it is dead.** It is the absence of both. Nothing in the hold consults `lastActivityAt` or any other idle signal, in either direction: a quiet build is not evidence of a dead worker.
+- **All four identity elements must match exactly**: the attempt id, the `generation`, the recorded `processStartedAt` and the recorded `host`. `processStartedAt` is compared as the **exact stored string**, never parsed to a date — a re-serialised spelling of the same instant is refused, because parsing would silently widen the match. An attempt that recorded no `processStartedAt`/`host` can never be matched.
+- **What a match does and does not prove.** Matching narrows **which process** the runner means: it rules out a reused pid, a stale session and another machine. It is **not** evidence that the process is alive — the daemon never probes a process, and nothing may treat these values as proof of liveness. What the match buys is that the seat is not handed to a stranger while its owner may still be mid-build.
+- **Two refusals, both by name.** A wrong identity is `-32002` / **`ATTEMPT_IDENTITY_MISMATCH`**. A *competing* claim on a held task — `moe.claim_next_task` from any worker other than the holder — is `-32002` / **`ATTEMPT_RECONCILING`**, raised before any ranking, eligibility scan or assignment write, so a refused claim never changes an owner. Unlike the finalizing hold, this one is scoped **by task, not by caller**: the whole point is to stop a *different* worker taking a task whose owner is still out there. It is retryable (`context.retryable: true`), and since `MoeError.context` is not forwarded over the wire, the message names the attempt; key on `codeName`.
+- **Idempotent.** Reattaching an already-`running` attempt is a successful no-op that writes nothing — a byte-identical `.moe/attempts/<id>.json`, no touched `lastPhaseAt` — so a retry after a lost response is safe.
+- **Writes only the attempt.** The task and the worker record are deliberately left alone: the hold's whole claim is that neither was ever disturbed, and writing them here would create a second source of truth for an ownership that never changed.
+- Not `blocking`, so dispatch serializes it under the state mutex like every other tool.
+
+**Errors.** Every refusal writes nothing and leaves the task, worker and attempt files byte-identical. JSON-RPC code, then `MoeError.codeName`:
+- `-32001 ATTEMPT_NOT_FOUND`: unknown `attemptId`
+- `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt exists but belongs to another task
+- `-32002 ATTEMPT_IDENTITY_MISMATCH`: the `generation`, `processStartedAt` or `host` differs from the recorded one, or the attempt recorded neither hint
+- `-32002 ATTEMPT_NOT_REATTACHABLE`: the attempt is `closed` (terminal history, seat already given up) or `finalizing` (its bytes are still landing — call `moe.finalize_attempt` instead)
+- `-32602 INVALID_INPUT`: a blank field, or a `generation` that is not a positive integer
+- `-32602 MISSING_REQUIRED`: any of the seven parameters is absent
+
+---
+
 ### moe.get_commit_scope
 
 **Wrapper-called; not for agents.** Returns everything the agent wrapper's post-flight needs to attribute dirty paths to one task: the task's ASSERTED and PLANNED path tiers, every other live task's declared paths (PEER), which peers are active, the DENY/BOARD lists and the resolved commit policy. State-only — the daemon never runs git; the wrapper joins this with its own `git status` snapshot and the persisted per-task baseline (`<gitdir>/moe/baseline/<taskId>.tsv`). Attribution rules and codes: `docs/CONFIGURATION.md` → `autoCommit`, `docs/TROUBLESHOOTING.md` → `MOE_ATTR_*`.
@@ -534,6 +631,50 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 **Errors:**
 - `taskId is required` / `Task not found: <taskId>`
 - `[INVALID_INPUT]` on a malformed `sha`, an unknown `outcome`/`kind`, or a missing `sessionId`/`role`
+
+---
+
+### moe.record_candidate
+
+**Runner-called.** Freezes the exact bytes a task is offering for delivery as an immutable `Candidate` (docs/SCHEMA.md `## Candidate`), so that review and checks can bind to fixed bytes instead of to a moving working tree. Each candidate is one file at `.moe/candidates/<id>.json`. This slice only records candidates; check runs, review binding and delivery receipts bind to them in later tasks.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,          // must exist
+  attemptId: string,       // the task's CURRENT execution attempt
+  generation?: number,     // optional fencing token; when supplied it must equal the current attempt's generation
+  id?: string,             // optional candidate id, [A-Za-z0-9_-]{1,128}. Supply one so a crash retry is idempotent;
+                           // when omitted the daemon generates "cand-<32 hex>"
+  baseRevision: string,    // /^[0-9a-f]{7,40}$/i: the commit the bytes were built on, as the runner observed it
+  treeSha: string,         // /^[0-9a-f]{7,40}$/i: the tree or commit naming the offered bytes, as the runner observed it
+  deliveryTarget: string,  // e.g. "refs/heads/wave1-pilot"; non-blank, no surrounding whitespace or control chars, ≤255 chars
+  workerId?: string        // caller (auto-injected by proxy); not stored on the candidate
+}
+```
+
+**Returns:**
+```typescript
+{ success: true, candidate: Candidate, duplicate: boolean }
+// candidate: the stored record { id, attemptId, taskId, baseRevision, treeSha, deliveryTarget, createdAt }
+// duplicate: true when an identical candidate already existed; it is returned unchanged and nothing is written
+```
+
+**Notes:**
+- **Fenced before anything is written.** The caller's `attemptId`, plus `generation` when supplied, goes through `assertAttemptCurrent`. A superseded or closed attempt is refused and leaves no candidate behind.
+- **Immutable.** A candidate is never edited, so a changed tree needs a **new** `id`. Re-recording an existing `id` with any field different is refused (`CANDIDATE_IMMUTABLE`).
+- **A byte-identical re-record is idempotent.** Re-recording an existing `id` with identical fields is safe: it returns the existing candidate (`duplicate: true`, original `createdAt`) and writes nothing. A runner that may retry after a crash should therefore choose the `id` itself and reuse it on the retry. If the daemon generated the id, a retry records a second candidate.
+- **The shas are runner-reported.** The daemon never runs git. It records `baseRevision` and `treeSha` exactly as reported and checks their shape only, and nothing in the record claims the daemon verified them.
+- `createdAt` is the daemon's clock. The tool emits no activity event, no chat line and no board broadcast, because nothing consumes one yet.
+- **No ownership or status gate.** The runner records after `complete_task`, when QA may already own the REVIEW task, so the attempt fence is the guard. The tool is not `blocking`, so dispatch serializes it under the state mutex like every other tool.
+
+**Errors.** Every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName`:
+- `-32002 ATTEMPT_SUPERSEDED`: `attemptId` or `generation` is not the task's current attempt (a newer attempt exists, or every attempt is closed)
+- `-32001 TASK_NOT_FOUND`: unknown `taskId`
+- `-32001 ATTEMPT_NOT_FOUND` / `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt does not exist, or belongs to another task. These are reachable only on a task with no attempt records, where the fence has nothing to compare against.
+- `-32002 CANDIDATE_IMMUTABLE`: the `id` already exists and a field differs. The message names the differing fields; record the change under a new id.
+- `-32602 INVALID_INPUT`: a malformed field, such as a bad sha shape, a blank or padded `deliveryTarget`, an invalid `id`, a `generation` that is not a positive integer, or non-object arguments
+- `-32602 MISSING_REQUIRED`: `taskId`, `attemptId`, `baseRevision`, `treeSha` or `deliveryTarget` is absent or `null`
 
 ---
 
@@ -797,6 +938,8 @@ When `taskId` is provided the priority/order ranking is bypassed — you get the
 
 **One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
 
+**Finalizing hold:** a worker that still holds an execution attempt in the `finalizing` phase cannot claim its next task — the call is **refused with a thrown `-32002` / `ATTEMPT_FINALIZING`** (not a `hasNext: false` answer), raised beside the one-task-per-worker check and before any ranking or assignment write, so a refused claim never changes an owner. `complete_task` leaves that attempt open on purpose: the wrapper only lands the bytes after the CLI exits, so starting task B now would open a second attempt across the first. The refusal is retryable, not fatal (`context.retryable: true`; over the wire, key on `codeName`), and `moe.finalize_attempt` is what clears it. The hold is scoped to the calling worker — another worker's finalizing attempt is not this caller's business.
+
 **BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason`, `blockedResourceId` and `blockedOnTaskIds` (each present only when set on the task), and `nextAction` points at `moe.release_task` instead of `get_context`, spelling out the two workable exits: end the session and let the wrapper idle (the resource grant / dependency auto-unblock / a human clears it), or `moe.release_task { taskId }` to hand the task back with its `blockedReason` intact and free the slot for other work — never re-enter `wait_for_task` hoping for different work (nothing else is claimable while the hold stands). Note that an assignee-reported **non-resource** `report_blocked` frees the seat at report time, so a BLOCKED hold is the resource-block (hold+idle) shape or a third-party (workerId-less) block on an assigned task — an assignee-reported non-resource BLOCKED task is unassigned and simply not offered. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); a set `blockedOnTaskIds` means it auto-unblocks when every listed task is DONE/ARCHIVED; neither set means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
 
 With `preferAdjacentInEpic` on (default), candidates in the caller's currently-recorded epic (or explicit `epicId`) are ranked ahead of other epics before priority/order — so a worker waking from `wait_for_task` picks up the next adjacent task instead of jumping to an unrelated epic.
@@ -843,7 +986,6 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
 
 **Notes:**
 - On first claim the daemon stamps `task.metrics.firstClaimAt` (idempotent).
-- After the claim, the daemon re-evaluates `task.budget` (warn at 80%, escalate at 100% to `#governors`).
 - `fileCollision[]` is populated when the claimed task's normalized `affectedFiles` overlap with any other `WORKING` task — advisory only, the claim still succeeds, and a heads-up is posted to `#workers`. Files matching `settings.appendOnlyFiles` (default `["CHANGELOG.md"]`) are dropped from the comparison first, so shared append-only files don't bury the real overlaps; a task whose only overlap was append-only produces no entry at all. Supplying the setting **replaces** the default list, and `[]` disables the suppression — see docs/CONFIGURATION.md.
 - When `task.priorHandoffs` is non-empty, `nextAction.tool` is `moe.get_handoff_history` (instead of `moe.get_context`) so the worker reads the handoff before redoing finished work.
 - `staleHandoffDiskState: true` is returned when the newest handoff carries a `diskState` signature (see `moe.release_task`) and a fresh recompute differs — the working tree moved since that note was written, so its claims (especially a refusal or "blocked by" reason) describe a tree that no longer exists and must be re-verified. `handoffHint` gets a matching sentence appended. The flag is **informational**: the daemon takes no automatic action on it. No flag is emitted when the newest handoff has no `diskState`, when the recompute fails, or when the signatures match — and in those cases no git subprocess runs at all unless a stored signature exists, so ordinary polling claims stay free.
@@ -1339,6 +1481,8 @@ List all registered workers with presence derived from `lastActivityAt`. **Displ
 
 Mark a worker `DEAD`, release every task it holds (routed via `nextStatusForRelease`: WORKING stays WORKING-unassigned, or →REVIEW if all steps are done; PLANNING/REVIEW/AWAITING_APPROVAL stay put; BLOCKED stays BLOCKED), and post chat-leave messages. Called by the agent wrapper's exit trap on terminal close (`trap … EXIT` in `moe-agent.sh`, top-level `finally` in `moe-agent.ps1`). There is no idle-based auto-release: a hard-crashed worker's task stays assigned until daemon restart, this tool, or `release_task`. **Idempotent** — repeat calls on an already-`DEAD` worker are no-ops.
 
+The daemon-restart purge is no longer unconditional: a worker that owns a non-closed execution attempt is **spared**, so its identity — the worker record, its map entry and its `currentTaskId` — survives the restart and its task is held rather than released (see `moe.reattach_attempt`). Every worker with no attempt, or only closed ones, is purged exactly as before.
+
 **Parameters:**
 ```typescript
 {
@@ -1412,7 +1556,8 @@ QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of 
 ```typescript
 {
   taskId: string,
-  summary: string,     // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
+  summary: string,       // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
+  candidateId?: string,  // The candidate you actually reviewed — get_context.currentCandidate.id
   workerId?: string
 }
 ```
@@ -1424,7 +1569,7 @@ The summary is persisted on the task as `reviewSummary`.
 {
   success: true, taskId, status: "DONE", summary, message,
   warning?: string,      // the NO-COMPLETION-COMMIT line, when it fired
-  warnings: string[],    // ALWAYS present ([] when clean): "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging"
+  warnings: string[],    // ALWAYS present ([] when clean): the NO-COMPLETION-COMMIT line "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging" and/or the NO-REVIEWED-CANDIDATE line (see the candidate gate below)
   commitEvidence: {      // task.commits split by kind — a 4-FIELD PROJECTION per entry: { sha, ref, pushed: boolean|null, recordedAt }. Full TaskCommit entries (paths, recordedBy, status…) live in task.commits / get_context.
     completion: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,   // only entries recorded at/after task.reviewStartedAt count against the warning
     checkpoint: Array<{ sha, ref, pushed: boolean | null, recordedAt }>,
@@ -1434,6 +1579,10 @@ The summary is persisted on the task as `reviewSummary`.
 ```
 
 **Notes:**
+- **Reviewed-candidate binding (a hard refusal, unlike the commit gate).** An approval must apply to the bytes the reviewer actually read. Pass `candidateId` — the id from `get_context`'s `currentCandidate` — and if the task has since moved on to a different candidate the call is refused with `-32002` / `CANDIDATE_MISMATCH` **before any write**: no `Review` record, no DONE write, no worker touch, no chat line, a byte-identical task file and candidate files. The refusal's `context` carries `expectedCandidateId` (what you reviewed) and `currentCandidateId` (what the task holds now); re-read the current candidate and decide again. A `candidateId` naming a candidate of a *different* task is a mismatch, not a match. (`MoeError.context` is not forwarded over the MCP wire, so a remote caller reads both ids from the message text.)
+- **A `Review` record is persisted for every bound decision**, approve and reject alike: `{ taskId, candidateId, reviewerId, decision, summary }` at `.moe/reviews/<id>.json` (see docs/SCHEMA.md). `reviewerId` is the caller's `workerId`, or `human` on the IDE/human path. It is written *before* the status flip, so a DONE task always carries the record of which bytes were signed off. Reviews are append-only — reviewing a reopened task again appends a second record.
+- **Incremental adoption.** A task with **no candidate recorded** behaves exactly as it did before this gate existed, **whether or not `candidateId` is supplied**: the approval lands, no `Review` is written, and `warnings`/`commitEvidence`/`message` are unchanged — a well-formed `candidateId` binds nothing there and adds no warning. When a candidate *does* exist but `candidateId` is omitted, the approval still lands and is still bound to the current candidate, but `warnings` gains `NO-REVIEWED-CANDIDATE: task <id> has current candidate <cand> but qa_approve named none — pass candidateId so the decision is bound to the bytes you actually read`. `candidateId: null` counts as omitted. Any other `candidateId` that is not a valid entity id — blank, not a string, a character outside `[A-Za-z0-9_-]`, or longer than 128 — is refused `-32602` / `INVALID_INPUT` on every path, a task with no candidate included, and is never treated as omitted.
+- **Finalizing hold (a hard refusal, unlike the commit gate).** While the task has an execution attempt in the `finalizing` phase, approval is refused with `-32002` / `ATTEMPT_FINALIZING` before any mutation — no DONE write, no worker touch, no chat line, a byte-identical task file. The bytes are not landed yet, so DONE would be premature. The hold is scoped **by task, not by worker**, because the IDE/human approval path carries no `workerId` at all and the REVIEW handoff has already cleared `assignedWorkerId`. It is lifted by `moe.finalize_attempt`, and its `context.retryable` is `true` — retry after the runner finalizes rather than escalating. See `moe.finalize_attempt`.
 - **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
 - **Approval always lands** — the gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
@@ -1444,6 +1593,7 @@ The summary is persisted on the task as `reviewSummary`.
 - `summary` missing/empty → `MISSING_REQUIRED` (checked after ownership/context guards)
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to approve`
+- `candidateId` is not the task's current candidate → `-32002` / `CANDIDATE_MISMATCH`, with `context.expectedCandidateId` + `context.currentCandidateId`
 
 ---
 
@@ -1458,6 +1608,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   reason: string,                  // max 2000 chars
   failedDodItems?: string[],       // max 20
   issues?: QAIssue[],              // max 20; type ∈ test_failure|lint|security|missing_feature|regression|other
+  candidateId?: string,            // The candidate you actually reviewed — get_context.currentCandidate.id
   workerId?: string
 }
 ```
@@ -1468,7 +1619,9 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
   success: true, taskId, status: "WORKING" | "PLANNING",
   reopenCount, maxReopens, exceededReopenCap: boolean,
   repeatedFailedDodItem?: string,
-  reason, rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
+  reason,
+  warnings?: string[],             // present ONLY when the NO-REVIEWED-CANDIDATE line fired (see the candidate gate below); otherwise the key is absent, never []
+  rejectionDetails, rejectionHistory: RejectionHistoryEntry[],
   failedDodItems: FailedDodItem[],
   message,
   nextAction
@@ -1476,6 +1629,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
 ```
 
 **Notes:**
+- **Reviewed-candidate binding — identical to `qa_approve`'s.** Pass the `candidateId` you reviewed; a mismatch against the task's current candidate is refused with `-32002` / `CANDIDATE_MISMATCH` before any write (no `Review`, no status flip, no history entry), carrying `context.expectedCandidateId` + `context.currentCandidateId`. A bound rejection persists a `Review` with `decision: "reject"` and `summary` = the rejection `reason`, written before the status flip. A task with no candidate recorded behaves exactly as before — no `Review` and no `warnings` key — even when a `candidateId` is supplied. An omitted (or `null`) `candidateId` on a task that has one still lands, bound to the current candidate, and `warnings` is exactly one line: `NO-REVIEWED-CANDIDATE: task <id> has current candidate <cand> but qa_reject named none — pass candidateId so the decision is bound to the bytes you actually read`. A malformed `candidateId` is refused `INVALID_INPUT` on every path, as in `qa_approve`.
 - Increments `reopenCount` and `metrics.rejectCount`; sets `reopenReason`.
 - Appends a `RejectionHistoryEntry` to `rejectionHistory[]` (newest-first, capped at 20).
 - Populates `failedDodItems[]` (append-only, capped at last 100) — every supplied DoD item is recorded with `rejectedAt` + `rejectedBy`.
@@ -1489,6 +1643,7 @@ QA rejects a task in REVIEW status, moving it back to WORKING for fixes — or t
 - `reason is required - explain which DoD items failed and why`
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to reject`
+- `candidateId` is not the task's current candidate → `-32002` / `CANDIDATE_MISMATCH`, with `context.expectedCandidateId` + `context.currentCandidateId`
 
 ---
 
@@ -1966,6 +2121,7 @@ Return per-task `TaskMetrics` plus an aggregate over the full filtered set. Aggr
 ```
 
 **Notes:**
+- `aggregate.firstPassApprovalPct` is an integer **percentage on the 0..100 scale**, not a 0..1 ratio — a first-pass rate of one task in two is emitted as `50`. Clients must render it as-is and must never multiply it by 100 (both IDE plugins once did, showing `5000%`). The same 0..100 unit applies to the `firstPassApprovalPct` in the plugin `GET_METRICS` response.
 - Per-task entries are sorted newest-first by `metrics.doneAt → metrics.firstClaimAt → updatedAt → createdAt`.
 - `sinceIso` uses the most recent lifecycle timestamp available on each task, so in-flight tasks aren't excluded just because they haven't reached DONE.
 
@@ -2006,30 +2162,6 @@ Worker (or governor) hands the task back to the architect for a fresh plan. Snap
 - Resets `implementationPlan = []` and `stepsCompleted = []`.
 - Marks the assigned worker `IDLE` with `currentTaskId = null`.
 - Activity event: `TASK_REOPENED`.
-
----
-
-### moe.set_task_budget
-
-Set or clear the wall-clock budget on a task. Daemon warns at 80% and escalates at 100% in `#governors`. Re-evaluates the budget immediately, so tightening the cap on an in-flight task fires the warning right away if the new threshold has already been crossed.
-
-**Parameters:**
-```typescript
-{
-  taskId: string,
-  wallClockMs?: number   // soft cap on first-claim → DONE; omit or 0 to clear
-}
-```
-
-`wallClockMs` (when not clearing) must be a finite positive number.
-
-**Returns:**
-```typescript
-{ success: true, taskId, budget: TaskBudget | null }
-```
-
-**Notes:**
-- Preserves existing `warnedAt`/`escalatedAt` marks when the cap is adjusted upward.
 
 ---
 
@@ -2250,27 +2382,102 @@ Read the activity log with filtering and pagination — newest first.
 
 ### moe.heartbeat
 
-Liveness ping: refreshes the calling worker's `lastActivityAt` with no other side effects.
+Presence ping: refreshes the calling worker's `lastActivityAt`, optionally records a presence kind on the seat's open execution attempt, and tells a runner when it must reattach.
 
 **Parameters:**
 ```typescript
 {
-  workerId: string      // Required: worker to refresh
+  workerId: string           // Required: worker to refresh
+  presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'
 }
 ```
 
-**Returns:**
+`presenceKind` is what the sidecar reports about itself: `process` — the CLI subprocess it launched is still there; `provider` — that process is in a call to its model provider; `waiting` — it is parked waiting for input (a human, an approval); `progress` — it observed the execution actually move (output, a tool call). The latest one wins; it is stored on the attempt as `presenceKind` + `presenceAt`. Any other value is rejected as invalid input rather than stored.
+
+**Returns — acknowledgement:**
 ```typescript
 { ok: true }
 ```
 
+**Returns — reattach required:**
+```typescript
+{
+  ok: false,
+  reattachRequired: true,
+  reason: 'no-worker-record' | 'no-open-attempt' | 'attempt-reconciling',
+  reattachWith: 'moe.reattach_attempt',
+  attemptId?: string,        // present when an attempt exists (the reconciling case)
+  phase?: string
+}
+```
+
+Exactly three conditions produce it:
+
+| `reason` | Condition |
+|---|---|
+| `no-worker-record` | No worker record for `workerId` — a daemon restart purged the seat and the runner has not re-registered. Returned before any refresh; nothing is created or resurrected. |
+| `no-open-attempt` | The worker exists but owns no open attempt (no current task, the attempt is closed, or the task's open attempt belongs to another seat). |
+| `attempt-reconciling` | The seat's attempt is parked in `reconciling` by a restart that lost sight of it. **No presence is recorded on this path** — a runner that has not proven which process it is does not get to look present. |
+
 **Notes:**
 - Called by the agent-wrapper heartbeat sidecar during long silent local steps (builds, test runs) so a live CLI isn't mistaken for a stale one; not intended to be called by agents directly
-- No-ops safely on a missing or `DEAD` worker record
+- Reattach-required is a **returned value, never an error**, so a sidecar does not log a routine daemon restart as a failure. Recover with `moe.reattach_attempt`
+- `lastActivityAt` is still refreshed for a live worker even when the response is reattach-required — a long silent build must keep looking alive either way. Still no-ops safely on a `DEAD` record
+- An old-style ping that sends no `presenceKind` behaves exactly as before and writes nothing to the attempt, so an un-upgraded wrapper is safe
+- Presence is written without touching the attempt's `lastPhaseAt`. The reconcile-window sweep measures its window from that field, so a 60s ping must never be able to extend it — do not reroute this write through the phase setter
+- A presence kind is the sidecar's **claim about itself, not verified liveness**; the daemon probes no process, and it still never infers death from silence
 
 ## Plugin WebSocket Messages
 
 The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
+
+### Plan approval — `expectedPlanRevision` compare-and-swap
+
+**There is no `moe.approve_task` MCP tool, and none is being added.** Plan approval is a human-gated action that reaches the daemon *only* over `/ws`, through the two messages below. `moe.set_task_status` keeps its existing role/policy and is not an approval route.
+
+Both routes accept an **optional** `expectedPlanRevision`: the `planRevision` the approver actually reviewed. The daemon compares it to the task's current revision under the state mutex, **before** it cancels any pending SPEED timer and before it writes anything, so a refused approval leaves the task byte-identical (same status, `updatedAt`, `planApprovedAt` absence, assignment, activity log, pending auto-approval timer) and publishes nothing.
+
+**`APPROVE_TASK` request:**
+```typescript
+{ type: 'APPROVE_TASK', payload: { taskId: string, expectedPlanRevision?: number } }
+```
+
+**`UPDATE_TASK` request** (the AWAITING_APPROVAL → WORKING drag, e.g. a JetBrains board drop into the Working column — it delegates to the same approval path and still ignores the rest of `updates`):
+```typescript
+{ type: 'UPDATE_TASK', payload: { taskId: string, updates: { status: 'WORKING' }, expectedPlanRevision?: number } }
+```
+
+The token is **command metadata beside `taskId`/`updates`, never a task field.** `planRevision` and `expectedPlanRevision` are both on the `UPDATE_TASK` denylist, so a client that puts either inside `updates` has it stripped: a forged stamp can never be persisted, and a token smuggled through `updates` is never read as the token.
+
+**Token rules**
+
+- **Omitting the key** is the only token-free (legacy, unchecked) approval. JSON cannot carry `undefined`, so omission is the wire signal — an explicit `null` is a *malformed* token, not an omission.
+- A supplied token must be a **non-negative safe integer**. `null`, strings (`"3"`), booleans, fractional (`3.5`), negative, unsafe (`Number.MAX_SAFE_INTEGER + 1`), `NaN` and `Infinity` are all refused with `INVALID_INPUT` (`-32602`). There is no coercion and no fallback to the legacy path.
+- A **legacy task row with no stored `planRevision`** has effective revision `0`, so an explicit `0` matches it and approves.
+- Any **non-equal** revision is refused — a *newer* token is as stale-or-forged as an older one.
+- Unchanged and still token-free: **SPEED/TURBO auto-approval** and the **`moe.set_task_status` relaxed-mode** approval. They take the legacy path and are unaffected.
+
+**Mismatch `ERROR` frame** (identical for both routes; `operation` echoes the request type):
+```json
+{
+  "type": "ERROR",
+  "message": "[PLAN_REVISION_MISMATCH] Plan for task task-abc123 changed since it was reviewed (approved revision 4, current revision 5). Re-open the plan, review the current revision and approve again.",
+  "operation": "APPROVE_TASK",
+  "code": -32002,
+  "codeName": "PLAN_REVISION_MISMATCH",
+  "context": { "taskId": "task-abc123", "expectedPlanRevision": 4, "currentPlanRevision": 5 }
+}
+```
+
+`message`, `operation` and `context.taskId`/`context.epicId` are the pre-existing fields and are unchanged for every message type. `code` and `codeName` are added **only** when the failure is a `MoeError`; a plain error (an illegal status transition, say) still carries neither. **No other exception context is ever forwarded** — `context` is built from the request payload plus an allowlist of exactly `expectedPlanRevision` and `currentPlanRevision` (finite numbers only), so debugging fields such as `field`/`reason`/paths never reach a client.
+
+A malformed token produces the same shape with `code: -32602` and `codeName: "INVALID_INPUT"`, and no revision numbers in `context`.
+
+> **Two detail-key spellings — parse both.** `PLAN_REVISION_MISMATCH` carries `expectedPlanRevision` + `currentPlanRevision`. The *producer's* separate `PLAN_REVISION_EXHAUSTED` error (a required bump refused at `Number.MAX_SAFE_INTEGER`, see [`docs/SCHEMA.md`](SCHEMA.md)) carries `currentRevision` + `maxPlanRevision` — a different spelling for the same idea. It shipped first and downstream parsers already bind to it, so it was deliberately left alone rather than renamed. Only the mismatch pair crosses the `/ws` error-context allowlist; the exhaustion details stay daemon-side.
+
+Clients get the token from the `planRevision` returned by `moe.submit_plan` (see above) or from the task record in `STATE_SNAPSHOT`/`TASK_UPDATED`. Send back the revision that was **rendered and reviewed**, never a newer value re-read from a cache.
+
+End-to-end behaviour across both IDEs — a human reproduction checklist, the recovery paths, and what this deliberately does *not* fence — is in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
 
 ### `GET_METRICS` → `METRICS`
 

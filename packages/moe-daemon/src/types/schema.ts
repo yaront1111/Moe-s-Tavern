@@ -196,6 +196,17 @@ export interface ProjectSettings {
    */
   reviewStaleTimeoutMs?: number;
   /**
+   * How long (ms) an execution attempt may sit in the `reconciling` phase —
+   * parked there by a daemon restart that lost sight of it — without a runner
+   * reattaching, before the sweep closes it and releases its task for exactly
+   * one successor. Bounds that phase ONLY: a `running` attempt (including one
+   * that reattached successfully) and a `finalizing` one are never checked
+   * against it, so this is NOT an idle timeout and a quiet build is still not
+   * evidence of a dead worker. Measured from the attempt's own lastPhaseAt,
+   * never from a worker's lastActivityAt. default: 7200000 (2 h)
+   */
+  reconcileWindowMs?: number;
+  /**
    * Project-relative globs for files every task appends to (changelogs,
    * release notes). Claim-time fileCollision warnings ignore them so real
    * overlaps stay visible. Literal paths, `*` (one segment) and `**` (across
@@ -487,6 +498,13 @@ export interface TaskVerification {
   exitCode: number;
   outputTail?: string;
   reportedAt: string; // ISO
+  /**
+   * Always 'agent-reported': this candidate-less evidence is the completing
+   * agent's own claim, never runner-observed CheckRun evidence. complete_task
+   * stamps it on every new report and get_context forces it on every read.
+   * Optional only so records written before the label existed still load.
+   */
+  source?: 'agent-reported';
 }
 
 export type TaskCommitKind = 'completion' | 'checkpoint' | 'rescue';
@@ -591,6 +609,26 @@ export interface Task {
   definitionOfDone: string[];
   taskRails: string[];
   implementationPlan: ImplementationStep[];
+  /**
+   * Monotonic version of the approval-relevant plan surface
+   * (`implementationPlan` + `definitionOfDone`), owned exclusively by the
+   * daemon: `createTask` stamps 0, and `taskStore.updateTask` derives the next
+   * value inside the SAME task write that persists the surface — every
+   * successful `moe.submit_plan` (even a byte-identical resubmission) plus any
+   * write that actually changes the sanitized steps or DoD, whoever the writer
+   * is. Metadata-only writes keep it; reopen never resets it.
+   *
+   * A caller-supplied value is stripped, so it can be neither forged nor reset.
+   * Optional because records written before this field exist: an absent stamp
+   * is read as 0 (no migration, no schemaVersion bump) and materializes as a
+   * real number on the row's next successful write. The domain is a
+   * non-negative safe integer — shared with the Kotlin/JSON clients' Long — and
+   * a stored value outside it fails closed rather than being coerced.
+   *
+   * Consumers (a stale-approval check, an IDE review dialog) compare the
+   * revision they rendered against this one; see docs/SCHEMA.md.
+   */
+  planRevision?: number;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;
@@ -832,6 +870,220 @@ export interface ResourceSettings {
   /** Hard lease cap in ms before the reaper force-releases. default: 86400000 (24h) */
   maxLeaseMs?: number;
   description?: string;
+}
+
+// =============================================================================
+// Execution attempts — durable identity for one execution of one task
+// =============================================================================
+//
+// Every execution of a task gets a record, so a later call can be told whether
+// it belongs to the current attempt or a superseded one. Purely additive: no
+// existing type changed, no schemaVersion bump, no migration (same shape as the
+// Task.planRevision addition above).
+// =============================================================================
+
+/**
+ * Lifecycle of one attempt. `closed` is terminal. Which phase may legally
+ * follow which is NOT decided here — that belongs to the work that wires
+ * attempts into claim/complete/release, which is the only thing that knows.
+ */
+export type ExecutionAttemptPhase = 'running' | 'finalizing' | 'reconciling' | 'closed';
+
+/**
+ * What a runner's sidecar SAYS it is doing when it pings moe.heartbeat:
+ *  - `process`  — the CLI subprocess it launched is still there
+ *  - `provider` — that process is in a call to its model provider
+ *  - `waiting`  — it is parked waiting for input (a human, an approval)
+ *  - `progress` — it observed the execution actually move (output, a tool call)
+ *
+ * A CLAIM, NEVER A VERDICT. Nothing may treat any of these as proof that the
+ * execution is alive: the daemon does not probe a process, and a sidecar can
+ * report `process` for one that died a second ago. At best a kind narrows what
+ * a human or a later probe should ask about — exactly like processStartedAt
+ * and host below. The inverse is equally out of bounds: the absence of a
+ * presence kind is not evidence of death, because a quiet build is not
+ * evidence of a dead worker.
+ */
+export type AttemptPresenceKind = 'process' | 'provider' | 'waiting' | 'progress';
+
+/** One execution of one task; persisted at .moe/attempts/<id>.json (daemon sole-writer). */
+export interface ExecutionAttempt {
+  id: string;
+  taskId: string;
+  /** Worker seat that opened the attempt. */
+  workerId: string;
+  /** Wrapper/runner session that owns the process side of the attempt. */
+  runnerId: string;
+  /**
+   * Fencing token: monotonic per task, starting at 1, NEVER reused — not after
+   * a closed attempt, not after a deleted record, not after a daemon restart.
+   * Allocated as (max generation over every prior attempt for the task) + 1, so
+   * it must never be derived from how many attempt records currently exist.
+   * The domain is a positive safe integer, shared with the Kotlin/JSON clients'
+   * Long; a value outside it fails closed rather than being coerced.
+   */
+  generation: number;
+  /** Checkout/worktree the attempt runs against. */
+  workspace: string;
+  phase: ExecutionAttemptPhase;
+  startedAt: string;
+  /** When `phase` last changed. */
+  lastPhaseAt: string;
+  /**
+   * Advisory hints for a later reattachment path, not evidence of liveness: a
+   * recorded process start time and host CANNOT prove the process is still
+   * alive, and nothing may treat them as proof. At best they narrow which
+   * candidate process an external probe should ask about.
+   */
+  processStartedAt?: string;
+  host?: string;
+  /**
+   * Latest presence kind reported for this attempt, and when it was reported.
+   * Both optional: every attempt written before presence existed stays valid,
+   * so there is no migration. Written ONLY by recordAttemptPresence in
+   * state/attemptStore.ts, which deliberately never touches `lastPhaseAt` —
+   * the reconcile-window sweep measures its window from that field, and a 60s
+   * ping that refreshed it would make a reconciling attempt immortal.
+   *
+   * Read the AttemptPresenceKind comment before using either of these: they are
+   * a sidecar's self-report, not verified liveness.
+   */
+  presenceKind?: AttemptPresenceKind;
+  presenceAt?: string;
+}
+
+// =============================================================================
+// Candidates — the exact bytes a task is offering for delivery
+// =============================================================================
+//
+// A candidate names one fixed set of bytes, so review and checks can bind to
+// something immutable instead of to a moving working tree. Purely additive: no
+// existing type changed, no schemaVersion bump, no migration (same shape as the
+// ExecutionAttempt addition above).
+// =============================================================================
+
+/**
+ * One offered set of bytes for one task; persisted at .moe/candidates/<id>.json
+ * (daemon sole-writer, via state/candidateStore.ts only).
+ *
+ * IMMUTABLE. A candidate is never edited: a changed tree is a NEW candidate
+ * with a new id, and the store refuses a same-id record that differs in any
+ * field. There is deliberately no `updatedAt` and no update path — adding
+ * either later would be a design regression, not a feature.
+ *
+ * PROVENANCE. `baseRevision` and `treeSha` are what the runner REPORTED. The
+ * daemon is state-only and never runs git, so it has observed and verified
+ * neither; a consumer that needs proof must re-derive it from the repository.
+ */
+export interface Candidate {
+  readonly id: string;
+  /** Execution attempt that produced these bytes (an ExecutionAttempt id). */
+  readonly attemptId: string;
+  readonly taskId: string;
+  /** Runner-reported commit the bytes were built on. */
+  readonly baseRevision: string;
+  /** Runner-reported tree or commit sha naming the offered bytes. */
+  readonly treeSha: string;
+  /** Where the runner intends to deliver the bytes, e.g. `refs/heads/wave1-pilot`. */
+  readonly deliveryTarget: string;
+  /** Daemon clock when the candidate was first recorded. */
+  readonly createdAt: string;
+}
+
+// =============================================================================
+// Reviews — which bytes a reviewer actually signed off on
+// =============================================================================
+//
+// A QA decision is worthless unless it names the bytes it was made against. A
+// Review binds one decision to one Candidate, so an approval can never be read
+// as blessing a tree the reviewer never saw. Purely additive: no existing type
+// changed, no schemaVersion bump, no migration (same shape as the Candidate
+// addition above).
+// =============================================================================
+
+/** The two outcomes a reviewer can record. There is no third, and no "pending". */
+export type ReviewDecision = 'approve' | 'reject';
+
+/**
+ * One QA decision about one candidate; persisted at .moe/reviews/<id>.json
+ * (daemon sole-writer, via state/reviewStore.ts only).
+ *
+ * APPEND-ONLY. A review is never edited and never deleted: reviewing a reopened
+ * task again APPENDS a second record. state/reviewStore.ts has no update and no
+ * delete function, and that absence is the rule — a later caller cannot misuse
+ * a function that does not exist.
+ *
+ * `candidateId` is the whole point of the record. It is the candidate that was
+ * CURRENT when the decision landed, which qa_approve/qa_reject have already
+ * checked against the candidate the reviewer said they read.
+ */
+export interface Review {
+  readonly id: string;
+  readonly taskId: string;
+  /** The exact Candidate the decision was made against. */
+  readonly candidateId: string;
+  /** Worker seat that made the call, or `human` on the IDE/human approval path. */
+  readonly reviewerId: string;
+  readonly decision: ReviewDecision;
+  /** What the reviewer said they verified — qa_approve's summary, qa_reject's reason. */
+  readonly summary: string;
+  /** Daemon clock when the decision was recorded. */
+  readonly createdAt: string;
+}
+
+// =============================================================================
+// Check runs — what a check reported about one candidate's exact bytes
+// =============================================================================
+//
+// A CheckRun is the result someone REPORTED for one command run against one
+// Candidate's tree, so a later gate can ask about exactly those bytes instead of
+// about a task. Purely additive: no existing type changed, no schemaVersion
+// bump, no migration (same shape as the Candidate addition above).
+// =============================================================================
+
+/**
+ * Where a check result says it came from. DECLARED PROVENANCE, nothing more:
+ * the daemon never executes the command and does not authenticate the caller,
+ * so `runner-observed` is a claim about the source of the result — not proof
+ * that the command ran, and not a verified identity of whoever reported it.
+ * There is no third value and no default.
+ */
+export type CheckRunSource = 'runner-observed' | 'agent-reported';
+
+/**
+ * One reported command result for one candidate; persisted at
+ * .moe/checks/<id>.json (daemon sole-writer, via state/checkRunStore.ts only).
+ *
+ * IMMUTABLE. A check run is never edited and never deleted, and a candidate
+ * ACCUMULATES runs rather than owning one row that is overwritten: running the
+ * check again is a new record under a new id.
+ *
+ * RECORDING IS NOT ELIGIBILITY. Recording checks shape, that the candidate
+ * exists and that the reported tree equals the candidate's. Whether a stored
+ * run satisfies a gate (its command, exit code or source) is decided later by
+ * policy, and rows loaded from disk are never re-checked or repaired.
+ */
+export interface CheckRun {
+  readonly id: string;
+  /** The Candidate whose bytes were checked. */
+  readonly candidateId: string;
+  /** The tree the reporter says it checked. Recording refuses one that differs from the candidate's. */
+  readonly treeSha: string;
+  /** The command exactly as reported: never trimmed, rewritten or run. */
+  readonly command: string;
+  /** Signed exit code as reported. A failing run is recorded exactly like a passing one. */
+  readonly exitCode: number;
+  /** The END of the output, at most 16384 UTF-8 bytes, starting on a whole character; '' when none was sent. */
+  readonly outputTail: string;
+  /** The runner the report names. Reported, not authenticated. */
+  readonly runnerId: string;
+  readonly source: CheckRunSource;
+  /**
+   * Daemon clock when the run was first recorded. Every NEW record is stamped
+   * with it, and a caller can never supply it. Optional ONLY so rows written
+   * before the field existed still load; lists order such rows first.
+   */
+  readonly createdAt?: string;
 }
 
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';

@@ -9,6 +9,7 @@
 import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { closeOpenAttempts } from './attemptStore.js';
 
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
@@ -136,6 +137,15 @@ export async function releaseWorkerTasks(
       released.push({ taskId: task.id, previousStatus: prevStatus, newStatus: nextStatus });
     } catch (err) {
       logger.warn({ workerId, taskId: task.id, error: err, reason }, 'releaseWorkerTasks: failed to release task');
+      continue; // Still assigned: it keeps its seat, and so its attempt.
+    }
+    // The seat is given up, so its attempt ends — after the unassign, never
+    // before, and whatever status the task was routed to. Logged, not thrown:
+    // the release already happened, and the next claim closes a leftover.
+    try {
+      await closeOpenAttempts(state, task.id);
+    } catch (err) {
+      logger.warn({ workerId, taskId: task.id, error: err, reason }, 'releaseWorkerTasks: failed to close the released attempt');
     }
   }
   return released;

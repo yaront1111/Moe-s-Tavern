@@ -9,6 +9,8 @@
 #
 # Cases, assertions and the independent store read live in
 # mention-provenance-seed.py, shared with the bash twin so the two cannot drift.
+param([ValidateSet('powershell', 'pwsh')][string]$PowerShell)
+
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
@@ -36,7 +38,56 @@ if (-not $py) {
     Write-Host 'SKIP mention-provenance.ps1: python 3 is not available'
     exit 0
 }
-$psExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+$psExe = if ($PowerShell) { $PowerShell } elseif (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+Write-Host "[child] $psExe"
+
+# The stored-timestamp guard lives in Get-MoeStoredMentionRecord and runs in the
+# CHILD host, not in this one. On PowerShell 6+ ConvertFrom-Json coerces an ISO
+# string to [datetime], so the guard has to re-read the RAW token -- and if the
+# reader type does not resolve THERE it throws on precisely the record it exists
+# to fix. Probe the selected child and record what actually answered; a host
+# that cannot be probed is not a host this harness may report green on.
+$probeScript = '$ErrorActionPreference = ''Stop''; "PROBE_HOST exe=" + (Get-Process -Id $PID).Path + " version=" + $PSVersionTable.PSVersion.ToString(); if ($PSVersionTable.PSVersion.Major -ge 6) { "PROBE_TYPES reader=" + [Newtonsoft.Json.JsonTextReader].Assembly.FullName + " jobject=" + [Newtonsoft.Json.Linq.JObject].Assembly.FullName } else { "PROBE_TYPES not-required host=WindowsPowerShell-" + $PSVersionTable.PSVersion.ToString() + " ConvertFrom-Json leaves ISO strings as [string] here" }'
+# Printed single-quoted with inner quotes doubled, so the line above is a
+# literally re-runnable command rather than an approximation of one.
+$probeDisplay = "$psExe -NoProfile -Command '" + ($probeScript -replace "'", "''") + "'"
+Write-Host "[probe] $probeDisplay"
+$probeOut = @()
+$probeRc = 1
+try {
+    $prevProbeEap = $ErrorActionPreference
+    # Continue, not Stop: a child that writes to stderr must be REPORTED with
+    # its own output below, not turned into an opaque terminating error here.
+    $ErrorActionPreference = 'Continue'
+    $probeOut = @(& $psExe -NoProfile -Command $probeScript 2>&1 | ForEach-Object { "$_" })
+    $probeRc = $LASTEXITCODE
+} catch {
+    $probeOut = @("probe could not be launched: $_")
+    $probeRc = 1
+} finally {
+    $ErrorActionPreference = $prevProbeEap
+}
+$probeHostLine = @($probeOut | Where-Object { $_ -like 'PROBE_HOST *' })[0]
+$probeTypeLine = @($probeOut | Where-Object { $_ -like 'PROBE_TYPES *' })[0]
+if ($probeRc -ne 0 -or -not $probeHostLine -or -not $probeTypeLine) {
+    $probeOut | ForEach-Object { Write-Host "  $_" }
+    Write-Host "FAIL: child host probe failed (exit $probeRc); the stored-timestamp guard cannot be trusted on $psExe" -ForegroundColor Red
+    exit 1
+}
+Write-Host ("PROVENANCE_HOST " + ($probeHostLine -replace '^PROBE_HOST ', ''))
+Write-Host ("PROVENANCE_JSON_TYPES " + ($probeTypeLine -replace '^PROBE_TYPES ', ''))
+$childMajor = 0
+if ($probeHostLine -match 'version=(\d+)\.') { $childMajor = [int]$Matches[1] }
+if ($childMajor -lt 1) {
+    Write-Host "FAIL: child host reported no parseable version: $probeHostLine" -ForegroundColor Red
+    exit 1
+}
+# PS5 never reaches the raw-token branch, so it must NOT be made to depend on a
+# Core-only assembly; PS6+ does reach it, so an unresolved reader is a failure.
+if ($childMajor -ge 6 -and $probeTypeLine -notmatch 'reader=\S+.*jobject=\S+') {
+    Write-Host "FAIL: PowerShell $childMajor coerces ISO strings to [datetime] but resolved no raw-token JSON reader: $probeTypeLine" -ForegroundColor Red
+    exit 1
+}
 
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("moe-mention-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $projectDir = Join-Path $tempRoot 'project'

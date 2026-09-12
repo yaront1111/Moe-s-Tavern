@@ -23,7 +23,33 @@ import type {
     PinEntry,
     Decision,
     MetricsAggregate,
+    PluginOutboundMessage,
 } from '../types/moe';
+
+/**
+ * The APPROVE_TASK wire payload, read straight off the outbound message union so
+ * the approval method stays bound to the shape the daemon actually parses.
+ */
+type ApproveTaskPayload = Extract<PluginOutboundMessage, { type: 'APPROVE_TASK' }>['payload'];
+
+/** The at-most-three context keys an onError subscriber may see. */
+interface DaemonErrorContext {
+    taskId?: string;
+    expectedPlanRevision?: number;
+    currentPlanRevision?: number;
+}
+
+/**
+ * Public shape of the onError event. Everything past `message` is optional, so
+ * subscribers that read only operation and message keep compiling untouched.
+ */
+interface DaemonErrorEvent {
+    operation?: string;
+    message: string;
+    code?: number;
+    codeName?: string;
+    context?: DaemonErrorContext;
+}
 
 // Re-export types for backward compatibility with existing importers.
 export type { Task, Epic, ConnectionState, Worker, Team, RailProposal, ActivityEvent, TaskPriority, EpicStatus, ProjectSettings, ChatMessage, ChatChannel };
@@ -44,6 +70,33 @@ function getOutputChannel(): vscode.OutputChannel {
 
 function log(message: string): void {
     getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
+}
+
+/**
+ * Pick the allowlisted fields out of a daemon error context.
+ *
+ * The daemon's error contexts are free-form debugging data — internal field
+ * names, reason strings, project paths — so the received object is NEVER spread
+ * into the public event. At most these three keys cross, and only with the
+ * right type. Returns undefined when nothing survives, so the caller can omit
+ * the property entirely rather than publish an empty object.
+ */
+function allowlistedErrorContext(context: unknown): DaemonErrorContext | undefined {
+    if (typeof context !== 'object' || context === null) {
+        return undefined;
+    }
+    const source = context as Record<string, unknown>;
+    const picked: DaemonErrorContext = {};
+    if (typeof source.taskId === 'string') {
+        picked.taskId = source.taskId;
+    }
+    if (typeof source.expectedPlanRevision === 'number' && Number.isFinite(source.expectedPlanRevision)) {
+        picked.expectedPlanRevision = source.expectedPlanRevision;
+    }
+    if (typeof source.currentPlanRevision === 'number' && Number.isFinite(source.currentPlanRevision)) {
+        picked.currentPlanRevision = source.currentPlanRevision;
+    }
+    return Object.keys(picked).length > 0 ? picked : undefined;
 }
 
 function pathsMatch(a: string, b: string): boolean {
@@ -120,7 +173,7 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onDecisionResolved = new vscode.EventEmitter<Decision>();
     public readonly onDecisionResolved = this._onDecisionResolved.event;
 
-    private readonly _onError = new vscode.EventEmitter<{ operation?: string; message: string }>();
+    private readonly _onError = new vscode.EventEmitter<DaemonErrorEvent>();
     public readonly onError = this._onError.event;
 
     private readonly _onMetrics = new vscode.EventEmitter<MetricsAggregate>();
@@ -385,8 +438,42 @@ export class MoeDaemonClient implements vscode.Disposable {
         this.sendMessage('DELETE_TASK', { taskId });
     }
 
-    approveTask(taskId: string): boolean {
-        return this.sendMessage('APPROVE_TASK', { taskId });
+    /**
+     * Approve a plan. `expectedPlanRevision` is the revision the human actually
+     * reviewed; the daemon compares it against the task's current revision and
+     * refuses the approval if the plan moved underneath the reviewer.
+     *
+     * Omitting it is the legacy, unchecked approval — omission is the daemon's
+     * ONLY unchecked opt-out, so the key must be absent rather than null. That
+     * is also why a malformed token is refused right here instead of degrading
+     * into the token-free frame: that fallback would approve a plan nobody
+     * reviewed, which is precisely the hole this guard closes.
+     *
+     * The token is whatever the reviewed panel hands in. This method never
+     * reads cached state to manufacture one — the newest revision is by
+     * definition not the reviewed one.
+     */
+    approveTask(taskId: string, expectedPlanRevision?: number): boolean {
+        if (expectedPlanRevision === undefined) {
+            const legacyPayload: ApproveTaskPayload = { taskId };
+            return this.sendMessage('APPROVE_TASK', legacyPayload);
+        }
+        // Never coerce. Number.isSafeInteger already rejects fractional, NaN,
+        // Infinity and out-of-range values, and a numeric conversion here would
+        // be exactly the silent fallback this check exists to prevent. The
+        // typeof guard matters because untyped webview messages reach this.
+        if (typeof expectedPlanRevision !== 'number'
+            || !Number.isSafeInteger(expectedPlanRevision)
+            || expectedPlanRevision < 0) {
+            const message = `APPROVE_TASK refused for ${taskId}: expectedPlanRevision must be a `
+                + `non-negative safe integer, got ${String(expectedPlanRevision)} `
+                + `(${typeof expectedPlanRevision})`;
+            log(message);
+            this._onError.fire({ operation: 'APPROVE_TASK', message });
+            return false;
+        }
+        const payload: ApproveTaskPayload = { taskId, expectedPlanRevision };
+        return this.sendMessage('APPROVE_TASK', payload);
     }
 
     rejectTask(taskId: string, reason: string): boolean {
@@ -968,13 +1055,24 @@ export class MoeDaemonClient implements vscode.Disposable {
                     log(`Archived ${payload?.archived ?? 0} done tasks`);
                     break;
 
-                case 'ERROR':
+                case 'ERROR': {
                     log(`Daemon error: ${message.message ?? payload?.message ?? 'unknown'}`);
+                    // The daemon puts operation/code/codeName at the TOP level;
+                    // the nested payload lookup is the older shape and stays on
+                    // as the fallback. Reading only the nested one is why a
+                    // stale-approval refusal used to arrive uncorrelated.
+                    const code = message.code ?? payload?.code;
+                    const codeName = message.codeName ?? payload?.codeName;
+                    const context = allowlistedErrorContext(message.context ?? payload?.context);
                     this._onError.fire({
-                        operation: payload?.operation,
+                        operation: message.operation ?? payload?.operation,
                         message: message.message ?? payload?.message ?? 'Unknown error',
+                        ...(typeof code === 'number' && Number.isFinite(code) && { code }),
+                        ...(typeof codeName === 'string' && codeName.length > 0 && { codeName }),
+                        ...(context && { context }),
                     });
                     break;
+                }
 
                 case 'DAEMON_SHUTTING_DOWN':
                     log('Daemon is shutting down');

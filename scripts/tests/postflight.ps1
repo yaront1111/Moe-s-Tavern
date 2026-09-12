@@ -5,6 +5,10 @@ $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('moe-postflight-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+# Background children a scenario spawns as a GENUINE probe target (scenario M2
+# needs a real live process id, not a fabricated one). Stopped in the outer
+# finally so a failing case cannot leak a ten-minute sleep onto the box.
+$script:M2LivePids = @()
 
 try {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -137,7 +141,21 @@ switch (tool) {
   case 'join_team': ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': ok({ messages: [], cursor: null, truncated: 0 }); break;
+  case 'chat_read': {
+    // FAKE_MENTION=1 models one unread message tagging the caller. The record
+    // is also appended to the store the wrapper re-reads bodies from, so the
+    // mention passes provenance instead of degrading to a delivery marker.
+    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
+      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
+      const dir = path.join(moe, 'messages');
+      ensureDir(dir);
+      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
+      ok({ messages: [msg], cursor: null, truncated: 0 });
+      break;
+    }
+    ok({ messages: [], cursor: null, truncated: 0 });
+    break;
+  }
   case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
   case 'claim_next_task': {
     if (process.env.FAKE_CLAIM_MODE === 'resume') {
@@ -156,6 +174,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
+      // Nothing claimable and nothing held: the board state that used to make
+      // the wrapper launch a CLI and tell it to claim itself.
+      ok({ hasNext: false });
     } else {
       ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
     }
@@ -168,6 +190,14 @@ switch (tool) {
     // so a stale id silently answers with a different task.
     // 'empty'    => daemon answered but carried no task.
     // 'mismatch' => the real fallback: some OTHER task comes back.
+    // get_context with NO taskId is the post-flight adoption probe
+    // (getContext.ts falls back to the caller's currentTaskId). Every other
+    // caller passes a taskId, so this cannot disturb the other scenarios.
+    if (!args.taskId) {
+      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
+      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
+      break;
+    }
     if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
     const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
       ? 'task-someone-elses'
@@ -1088,6 +1118,194 @@ switch (tool) {
                 $scopeScenariosRun++
                 Write-Host '[scenario M] ok'
 
+                # Scenario M2 — the live-session guard on scenario M's recovery
+                # predicate. "A baseline that never reached a completed landing"
+                # is true for a CRASHED session AND for one that is still
+                # running and about to commit: a worker calls complete_task, the
+                # task flips to REVIEW, and a QA seat claims it inside the window
+                # before the worker's CLI exits and its post-flight commits. The
+                # old predicate made that QA pre-flight land the live worker's
+                # entire implementation as its own `... recovered` checkpoint —
+                # measured twice on 2026-09-11 (ac6c9dc carried
+                # util/enforcement.ts +144 and util/enforcement.test.ts +472;
+                # b5925e2 carried delivery/acceptance.test.ts +2184), leaving
+                # each worker's feat(...) completion holding only a board record.
+                # The live-session marker beside the baseline discriminates the
+                # two. Five sub-cases: (a) and (b) are the fix; (c), (d) and (e)
+                # are the behaviour that must NOT move and are asserted before
+                # AND after it. Twin: scenario M2 in postflight.sh.
+                Write-Host '[scenario M2] a live owner''s baseline is skipped; a dead one still recovers'
+
+                # The fixtures must spell the marker exactly as moe-agent.ps1
+                # writes it, so the case proves the real probe rather than a
+                # private harness format.
+                function Get-M2MarkerHost { return ([string]$env:COMPUTERNAME).ToLowerInvariant() }
+                function Get-M2StartToken([int]$ProcId) {
+                    try {
+                        $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
+                        if ($null -eq $p) { return '' }
+                        return ([string]$p.StartTime.ToUniversalTime().Ticks)
+                    } catch { return '' }
+                }
+                function Write-M2LiveMarker([string]$dir, [int]$ProcId, [string]$StartToken, [string]$MarkerHost = '', [string]$Ns = 'win32') {
+                    if (-not $MarkerHost) { $MarkerHost = Get-M2MarkerHost }
+                    $bdir = Join-Path $dir '.git\moe\baseline'
+                    New-Item -ItemType Directory -Force -Path $bdir | Out-Null
+                    $line = "#moe-live v1 task=task-resume pid=$ProcId host=$MarkerHost ns=$Ns worker=worker-owner session=worker-owner@2026-09-11T10:27:44Z start=$StartToken"
+                    [System.IO.File]::WriteAllText((Join-Path $bdir 'task-resume.live'), ($line + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+                }
+                function New-M2Project([string]$dir, [string]$RecordStatus) {
+                    New-ScopeProject $dir @('ignored.txt')
+                    Write-TaskRecord $dir @('impl.txt') $RecordStatus $null 'task-resume' 'Resume smoke'
+                    Set-Content -Path (Join-Path $dir 'impl.txt') -Value 'impl'
+                    $bdir = Join-Path $dir '.git\moe\baseline'
+                    New-Item -ItemType Directory -Force -Path $bdir | Out-Null
+                    $head = ((& git -C $dir rev-parse HEAD 2>$null) -join '').Trim()
+                    $lines = @("#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head=$head landed=0")
+                    foreach ($p in @('.moe/project.json', '.moe/messages/chan-general.jsonl', '.moe/tasks/task-postflight.json', '.moe/tasks/task-resume.json')) {
+                        if (-not (Test-Path -LiteralPath (Join-Path $dir $p))) { continue }
+                        $h = ((& git -C $dir hash-object -- $p 2>$null) -join '').Trim()
+                        $lines += "B`t$h`t$p"
+                    }
+                    [System.IO.File]::WriteAllText((Join-Path $bdir 'task-resume.tsv'), (($lines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+                }
+                function Get-M2Subjects([string]$dir) {
+                    return @(& git -C $dir log --pretty=%s --fixed-strings --grep='Moe-Task: task-resume' 2>$null | Where-Object { $_ })
+                }
+                function Invoke-M2Run([string]$dir, [string]$outFile, [string]$ClaimMode, [string]$Status, [string]$Role, [string]$WorkerId) {
+                    $env:FAKE_CLAIM_MODE = $ClaimMode
+                    try {
+                        Assert-ScopeRun 'M2' (Invoke-GateWrapper $dir $outFile -Status $Status -Role $Role -WorkerId $WorkerId) $outFile
+                    } finally { Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue }
+                }
+
+                # A REAL long-lived child: a fabricated id would pass against a
+                # wrapper that never probes at all, or probes the wrong table.
+                $m2LiveProc = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 600') -PassThru -WindowStyle Hidden
+                $script:M2LivePids += $m2LiveProc.Id
+                $m2LivePid = $m2LiveProc.Id
+                $m2LiveStart = Get-M2StartToken $m2LivePid
+                if (-not $m2LiveStart) { throw 'SCENARIO M2 FAILED: could not read the spawned probe target''s start time' }
+                $m2MarkerHost = Get-M2MarkerHost
+                $m2SkipLine = "MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-resume pid=$m2LivePid host=$m2MarkerHost worker=worker-owner reason=live"
+
+                # M2-a — the measured race, on the real claim shape: a qa seat
+                # claiming a task already at REVIEW while its worker still runs.
+                $scopeM2aDir = Join-Path $tempRoot 'scope-m2a'
+                New-M2Project $scopeM2aDir 'REVIEW'
+                Write-M2LiveMarker $scopeM2aDir $m2LivePid $m2LiveStart
+                $scopeM2aOut = Join-Path $tempRoot 'scope-m2a.out'
+                Invoke-M2Run $scopeM2aDir $scopeM2aOut 'resume' 'REVIEW' 'qa' 'qa-scope-m2'
+                $scopeM2aText = Get-Content -Raw -Path $scopeM2aOut
+                if ($scopeM2aText.Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Write-Host $scopeM2aText
+                    throw 'SCENARIO M2 FAILED: (a) the second seat recovered a LIVE owner''s baseline'
+                }
+                if (-not $scopeM2aText.Contains($m2SkipLine)) {
+                    Write-Host $scopeM2aText
+                    throw "SCENARIO M2 FAILED: (a) expected the exact skip line [$m2SkipLine]"
+                }
+                if ($scopeM2aText.IndexOf($m2SkipLine) -gt $scopeM2aText.IndexOf('Command: ')) {
+                    throw 'SCENARIO M2 FAILED: (a) the skip decision must be taken BEFORE the CLI launch'
+                }
+                # The pre-flight is the only producer of a `... recovered`
+                # subject, so its absence IS the fix and its presence IS the bug.
+                if (@(Get-M2Subjects $scopeM2aDir | Where-Object { $_.EndsWith(' recovered') }).Count -ne 0) {
+                    throw 'SCENARIO M2 FAILED: (a) a ''... recovered'' checkpoint was landed while the owner was alive'
+                }
+                # The owner's claim must survive: a seat that stands down must
+                # not stamp its own id over the marker, or the NEXT seat would
+                # see a dead owner and steal.
+                $scopeM2aMarker = Join-Path $scopeM2aDir '.git\moe\baseline\task-resume.live'
+                if (-not (Test-Path -LiteralPath $scopeM2aMarker)) { throw 'SCENARIO M2 FAILED: (a) the live owner''s marker was deleted by the seat that stood down' }
+                if (-not ([System.IO.File]::ReadAllText($scopeM2aMarker)).Contains("pid=$m2LivePid")) {
+                    throw 'SCENARIO M2 FAILED: (a) the live owner''s marker was overwritten by the seat that stood down'
+                }
+
+                # M2-b — the same guard on the idle (BLOCKED-hold) path, where
+                # the pre-flight is the ONLY git actor, so the dirty bytes and
+                # the baseline are observable directly after the run instead of
+                # inferred from commit subjects.
+                $scopeM2bDir = Join-Path $tempRoot 'scope-m2b'
+                New-M2Project $scopeM2bDir 'BLOCKED'
+                Write-M2LiveMarker $scopeM2bDir $m2LivePid $m2LiveStart
+                $scopeM2bOut = Join-Path $tempRoot 'scope-m2b.out'
+                Invoke-M2Run $scopeM2bDir $scopeM2bOut 'blocked' 'BLOCKED' 'worker' 'worker-scope-m2b'
+                $scopeM2bText = Get-Content -Raw -Path $scopeM2bOut
+                if (-not $scopeM2bText.Contains('[blocked] task-resume is BLOCKED')) { Write-Host $scopeM2bText; throw 'SCENARIO M2 FAILED: (b) the BLOCKED hold suppression must still fire' }
+                if ($scopeM2bText.Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Write-Host $scopeM2bText
+                    throw 'SCENARIO M2 FAILED: (b) the idle path recovered a LIVE owner''s baseline'
+                }
+                if (-not $scopeM2bText.Contains($m2SkipLine)) { Write-Host $scopeM2bText; throw 'SCENARIO M2 FAILED: (b) expected the named skip line on the idle path' }
+                if (@(Get-M2Subjects $scopeM2bDir).Count -ne 0) { throw 'SCENARIO M2 FAILED: (b) no commit at all may be landed for a live owner''s task' }
+                if (@(& git -C $scopeM2bDir status --porcelain 2>$null) -notcontains '?? impl.txt') {
+                    throw 'SCENARIO M2 FAILED: (b) impl.txt must still be present AND unstaged so the real owner can land it'
+                }
+                $scopeM2bBaseline = Join-Path $scopeM2bDir '.git\moe\baseline\task-resume.tsv'
+                if (-not (Test-Path -LiteralPath $scopeM2bBaseline)) { throw 'SCENARIO M2 FAILED: (b) the baseline must be left intact on a skip' }
+                if (-not ([System.IO.File]::ReadAllText($scopeM2bBaseline)).Contains(' landed=0')) {
+                    throw 'SCENARIO M2 FAILED: (b) a skip must not mark the live owner''s baseline landed'
+                }
+
+                # M2-c — THE BEHAVIOUR THAT MUST NOT MOVE. A genuine crash leaves
+                # a marker whose process is gone; the 2026-08-28 lost-code path
+                # must recover it exactly as before. Spawn and reap a real child
+                # so the id is definitively dead rather than merely unlikely.
+                $m2DeadProc = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 600') -PassThru -WindowStyle Hidden
+                $m2DeadPid = $m2DeadProc.Id
+                $m2DeadStart = Get-M2StartToken $m2DeadPid
+                Stop-Process -Id $m2DeadPid -Force -ErrorAction SilentlyContinue
+                $m2DeadProc.WaitForExit(10000) | Out-Null
+                if ($null -ne (Get-Process -Id $m2DeadPid -ErrorAction SilentlyContinue)) { throw 'SCENARIO M2 FAILED: (c) the probe target did not actually die' }
+                $scopeM2cDir = Join-Path $tempRoot 'scope-m2c'
+                New-M2Project $scopeM2cDir 'BLOCKED'
+                Write-M2LiveMarker $scopeM2cDir $m2DeadPid $m2DeadStart
+                $scopeM2cOut = Join-Path $tempRoot 'scope-m2c.out'
+                Invoke-M2Run $scopeM2cDir $scopeM2cOut 'blocked' 'BLOCKED' 'worker' 'worker-scope-m2c'
+                $scopeM2cText = Get-Content -Raw -Path $scopeM2cOut
+                if (-not $scopeM2cText.Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Write-Host $scopeM2cText
+                    throw 'SCENARIO M2 FAILED: (c) a crashed owner''s baseline MUST still be recovered'
+                }
+                if ((Get-CommittedPaths $scopeM2cDir) -ne '.moe/tasks/task-resume.json impl.txt') {
+                    throw "SCENARIO M2 FAILED: (c) the crash recovery must carry EXACTLY the own record + impl.txt; got [$(Get-CommittedPaths $scopeM2cDir)]"
+                }
+                if (Test-Path -LiteralPath (Join-Path $scopeM2cDir '.git\moe\baseline\task-resume.live')) {
+                    throw 'SCENARIO M2 FAILED: (c) a stale marker must be deleted once its process is proven gone'
+                }
+
+                # M2-d — process-id REUSE. A live id whose recorded start token
+                # does not match the process now holding it is a recycled id,
+                # not the owner: it must recover, or a long-lived box would
+                # suppress crash recovery by coincidence.
+                $scopeM2dDir = Join-Path $tempRoot 'scope-m2d'
+                New-M2Project $scopeM2dDir 'BLOCKED'
+                Write-M2LiveMarker $scopeM2dDir $m2LivePid ($m2LiveStart + '999')
+                $scopeM2dOut = Join-Path $tempRoot 'scope-m2d.out'
+                Invoke-M2Run $scopeM2dDir $scopeM2dOut 'blocked' 'BLOCKED' 'worker' 'worker-scope-m2d'
+                if (-not (Get-Content -Raw -Path $scopeM2dOut).Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Get-Content $scopeM2dOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO M2 FAILED: (d) a recycled process id must NOT be mistaken for the owner'
+                }
+
+                # M2-e — BACK-COMPATIBILITY. Every task in flight when this
+                # change lands has a baseline and no marker; those must keep
+                # recovering exactly as today.
+                $scopeM2eDir = Join-Path $tempRoot 'scope-m2e'
+                New-M2Project $scopeM2eDir 'BLOCKED'
+                if (Test-Path -LiteralPath (Join-Path $scopeM2eDir '.git\moe\baseline\task-resume.live')) { throw 'SCENARIO M2 FAILED: (e) fixture error — the no-marker case must have no marker' }
+                $scopeM2eOut = Join-Path $tempRoot 'scope-m2e.out'
+                Invoke-M2Run $scopeM2eDir $scopeM2eOut 'blocked' 'BLOCKED' 'worker' 'worker-scope-m2e'
+                if (-not (Get-Content -Raw -Path $scopeM2eOut).Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Get-Content $scopeM2eOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO M2 FAILED: (e) a baseline with NO marker must recover exactly as before'
+                }
+
+                Stop-Process -Id $m2LivePid -Force -ErrorAction SilentlyContinue
+                $scopeScenariosRun++
+                Write-Host '[scenario M2] ok'
+
                 # Scenario N — plumbing keeps the shared index intact: a peer's
                 # pre-staged entry survives (B under plumbing) AND the landed
                 # path reads clean in `git status` after the index refresh.
@@ -1628,11 +1846,97 @@ switch (tool) {
                 $scopeScenariosRun++
                 Write-Host '[scenario Z] ok'
 
+                # Scenario AA -- the reproduction. No claimable task, single-shot
+                # run (Invoke-GateWrapper always passes -NoLoop, exactly the
+                # shape whose fast path used to be gated off): the wrapper must
+                # do its own waiting and launch NOTHING rather than hand a CLI a
+                # prompt telling it to claim. A CLI that ran here would have
+                # edited with no baseline and landed nothing.
+                Write-Host '[scenario AA] a taskless single-shot run never launches an unbound CLI'
+                $scopeAADir = Join-Path $tempRoot 'scope-aa'
+                New-ScopeProject $scopeAADir @()
+                $scopeAAOut = Join-Path $tempRoot 'scope-aa.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                # The single-shot wait is bounded by MOE_TASKLESS_WAIT_SEC; 5s
+                # keeps the scenario inside the harness's per-wrapper timeout
+                # instead of idling for the 300s production default.
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AA' (Invoke-GateWrapper $scopeAADir $scopeAAOut 'REVIEW' $createFileCmd 'worker' 'worker-scope-aa') $scopeAAOut
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                if (Test-Path (Join-Path $scopeAADir 'session-new.txt')) {
+                    Get-Content $scopeAAOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO AA FAILED: a CLI was launched with no task bound -- it would edit with no baseline and land nothing'
+                }
+                $scopeAAText = Get-Content -Raw -Path $scopeAAOut
+                if (-not $scopeAAText.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle')) {
+                    Write-Host $scopeAAText
+                    throw 'SCENARIO AA FAILED: the suppressed launch must be named, not silent'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AA] ok'
+
+                # Scenario AB -- the adoption alarm. The one legitimate taskless
+                # launch is a chat-only session answering a routed mention; it
+                # holds no task and so has no baseline by design. If it
+                # nonetheless ends holding one and left the tree dirty, the
+                # wrapper must REFUSE under a named code, leave the bytes alone
+                # (no invented baseline, no staging) and page #governors.
+                Write-Host '[scenario AB] a chat-only session that adopts a task refuses to land, loudly'
+                $scopeABDir = Join-Path $tempRoot 'scope-ab'
+                New-ScopeProject $scopeABDir @()
+                Set-Content -Path (Join-Path $scopeABDir 'peer-mod.txt') -Value 'peer-base'
+                & git -C $scopeABDir add peer-mod.txt 2>$null | Out-Null
+                & git -C $scopeABDir commit -qm peer-base 2>$null | Out-Null
+                Set-Content -Path (Join-Path $scopeABDir 'peer-mod.txt') -Value 'peer-dirty'
+                $scopeABHead = ((& git -C $scopeABDir rev-parse HEAD 2>$null) -join '')
+                $scopeABOut = Join-Path $tempRoot 'scope-ab.out'
+                $env:FAKE_CLAIM_MODE = 'idle'
+                $env:FAKE_MENTION = '1'
+                $env:FAKE_ADOPTED_TASK_ID = 'task-adopted'
+                $env:MOE_TASKLESS_WAIT_SEC = '5'
+                try {
+                    Assert-ScopeRun 'AB' (Invoke-GateWrapper $scopeABDir $scopeABOut 'REVIEW' $createFileCmd 'worker' 'worker-scope-ab') $scopeABOut
+                } finally {
+                    Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_MENTION -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_ADOPTED_TASK_ID -ErrorAction SilentlyContinue
+                    Remove-Item Env:MOE_TASKLESS_WAIT_SEC -ErrorAction SilentlyContinue
+                }
+                if (-not (Test-Path (Join-Path $scopeABDir 'session-new.txt'))) {
+                    Get-Content $scopeABOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO AB FAILED: the chat-only session was never launched, so the adoption path was not exercised'
+                }
+                $scopeABText = Get-Content -Raw -Path $scopeABOut
+                if (-not $scopeABText.Contains('MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted')) {
+                    Write-Host $scopeABText
+                    throw 'SCENARIO AB FAILED: an adopted task with a dirty tree must refuse under the named code, not exit silently'
+                }
+                if (((& git -C $scopeABDir rev-parse HEAD 2>$null) -join '') -ne $scopeABHead) {
+                    throw 'SCENARIO AB FAILED: the refusal still moved the branch -- nothing may land without a baseline'
+                }
+                $scopeABStatus = @(& git -C $scopeABDir status --porcelain 2>$null)
+                if ($scopeABStatus -notcontains '?? session-new.txt') {
+                    throw "SCENARIO AB FAILED: the adopted session's bytes must stay in the working tree, unstaged; status was [$($scopeABStatus -join '|')]"
+                }
+                if ($scopeABStatus -notcontains ' M peer-mod.txt') {
+                    throw "SCENARIO AB FAILED: the peer's dirty file must be untouched by the refusal; status was [$($scopeABStatus -join '|')]"
+                }
+                $scopeABChat = Get-Content -Raw -Path (Join-Path $scopeABDir '.moe\messages\chan-general.jsonl') -ErrorAction SilentlyContinue
+                if (-not ($scopeABChat -and $scopeABChat.Contains('MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-adopted'))) {
+                    throw 'SCENARIO AB FAILED: the refusal must page #governors, not just print'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AB] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 25) {
-                    throw "Expected 25 commit-scope scenarios (A-V, X-Z); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 28) {
+                    throw "Expected 28 commit-scope scenarios (A-V, M2, X-Z, AA, AB); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
@@ -1845,6 +2149,9 @@ switch (tool) {
     Write-Error $_
     exit 1
 } finally {
+    foreach ($m2pid in $script:M2LivePids) {
+        try { Stop-Process -Id $m2pid -Force -ErrorAction SilentlyContinue } catch {}
+    }
     # MOE_POSTFLIGHT_KEEP_TEMP=1 keeps the throwaway repos + wrapper logs for
     # post-mortem inspection of a failing scenario.
     if ($env:MOE_POSTFLIGHT_KEEP_TEMP -eq '1') {

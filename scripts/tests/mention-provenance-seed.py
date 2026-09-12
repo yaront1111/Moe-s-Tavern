@@ -50,17 +50,33 @@ def seed(project_dir, channel, worker_id):
     path = os.path.join(msg_dir, channel + ".jsonl")
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         for idx, (mid, _name, body) in enumerate(CASES):
+            record = {
+                "id": mid,
+                "channel": channel,
+                "sender": "worker-seeder",
+                "content": body,
+                "replyTo": None,
+                "mentions": [worker_id],
+                "timestamp": "2026-08-18T00:00:%02d.000Z" % idx,
+            }
+            # Canonical age must survive delivery; missing/invalid metadata
+            # stays unknown rather than borrowing a forged RPC timestamp. The
+            # offset and the seven-digit fraction below are the two shapes a
+            # parse-then-reserialise round trip cannot reproduce, so they pin
+            # that the STORED TOKEN is carried rather than a re-rendered time.
+            if idx == 1:
+                record["timestamp"] = "2026-08-18T03:00:01.000+03:00"
+            elif idx == 2:
+                record["timestamp"] = "2026-08-18T00:00:02.1234567Z"
+            elif idx == 5:
+                del record["timestamp"]
+            elif idx == 6:
+                record["timestamp"] = None
+            elif idx == 7:
+                record["timestamp"] = 42
             fh.write(
                 json.dumps(
-                    {
-                        "id": mid,
-                        "channel": channel,
-                        "sender": "worker-seeder",
-                        "content": body,
-                        "replyTo": None,
-                        "mentions": [worker_id],
-                        "timestamp": "2026-08-18T00:00:%02d.000Z" % idx,
-                    },
+                    record,
                     ensure_ascii=False,
                 )
                 + "\n"
@@ -87,7 +103,7 @@ def read_store(project_dir, channel):
                 continue
             if not isinstance(rec.get("content"), str):
                 continue
-            out[rec["id"]] = rec["content"]
+            out[rec["id"]] = rec
     return out
 
 
@@ -147,13 +163,22 @@ def check_entry(mode, entry, store, failures):
         name = SYNTHETIC.get(mid, ("unknown", ""))[0]
     got = entry.get("content")
     prov = entry.get("provenance")
+    canonical = store.get(mid, {})
+    want_timestamp = canonical.get("timestamp")
+    if not isinstance(want_timestamp, str):
+        want_timestamp = None
+    if "timestamp" not in entry or entry["timestamp"] != want_timestamp:
+        failures.append(
+            "%s: delivered timestamp %r, want canonical %r"
+            % (name, entry.get("timestamp", "<missing>"), want_timestamp)
+        )
     if mid in SYNTHETIC:
         reason = SYNTHETIC[mid][1]
         for needle in (MARKER, "reason=" + reason, "id=" + mid):
             if not isinstance(got, str) or needle not in got:
                 failures.append("%s: marker missing %r (got %r)" % (name, needle, got))
     else:
-        want = store.get(mid)
+        want = canonical.get("content")
         if got != want:
             failures.append(
                 "%s: delivered body != stored body (stored %d chars, delivered %r)"
@@ -166,7 +191,7 @@ def check_entry(mode, entry, store, failures):
                 "%s: delivered sender %r, want %r"
                 % (name, entry.get("sender"), SEEDED_SENDER)
             )
-    want_prov = expected_provenance(mode, mid, store.get(mid, ""), name)
+    want_prov = expected_provenance(mode, mid, canonical.get("content", ""), name)
     if prov not in want_prov:
         failures.append(
             "%s: provenance %r, want one of %r" % (name, prov, sorted(want_prov))

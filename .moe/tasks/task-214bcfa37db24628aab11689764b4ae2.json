@@ -1,0 +1,252 @@
+{
+  "id": "task-214bcfa37db24628aab11689764b4ae2",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Persist immutable candidate-bound CheckRun records",
+  "description": "First implementation slice of human-confirmed CheckRun decomposition. Objective: make process-result reports durably retrievable for one immutable Candidate without executing their command or changing delivery policy.\n\nDeliverable, five owned paths: packages/moe-daemon/src/types/schema.ts adds CheckRun; state/StateManager.ts owns/loads checkRuns; new state/checkRunStore.ts and state/checkRunStore.test.ts; docs/SCHEMA.md documents the record and bounds. Use the delivered candidateStore pattern: stateless functions taking StateManager first; callers hold state.runExclusive; writeEntity('checks',id,record) before map publication; detached copies from all readers. Proposed public seam is validateCheckRunParams(unknown), recordCheckRun(state,params)->{checkRun,duplicate}, getCheckRun(state,id), listCheckRunsForCandidate(state,candidateId); export MAX_CHECK_LOG_BYTES=16384. No update/delete API. Optional caller id supports retry; absent id generates check-<uuid>. Persist one .moe/checks/<id>.json; candidateId groups multiple runs, not one overwritable row per candidate.\n\nStored fields from frozen acceptance.test.ts: id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source ('runner-observed'|'agent-reported'). Add optional createdAt for backward-compatible fixture/history reading; every NEW write stamps server time, never trusts a caller timestamp; deterministic lists order missing timestamps first then createdAt/id. Existing fixture rows without createdAt and deliberately ineligible tree/command rows must still load unchanged; recording and downstream eligibility are different boundaries.\n\nValidate rather than coerce: entity-id shape/bounds for id/candidateId/runnerId; treeSha 7-40 hex, preserved exactly; command nonblank, at most 500 characters, preserved verbatim; exitCode any signed safe integer including zero/nonzero (unlike complete_task); source explicitly one of the two literals; outputTail optional string, absent becomes ''. Bound stored outputTail to the final 16384 UTF-8 bytes ending on complete Unicode characters (UTF-8 normalize malformed surrogate input deterministically, no replacement character introduced solely by truncating a valid character). Identical normalized same-id reports replay with unchanged bytes/timestamp; differing normalized content refuses -32002/CHECK_RUN_IMMUTABLE. Validation, candidate lookup (-32001/CANDIDATE_NOT_FOUND), exact reported tree-token equality (-32002/CHECK_RUN_TREE_MISMATCH; context candidateId,expectedTreeSha,actualTreeSha), replay/conflict, then durable write, in that order. No SHA prefix/truncation/coercion. Write failure propagates and publishes nothing.\n\nDepends on Candidate delivery for its accessor and on QA-candidate binding solely to serialize its active schema/StateManager/docs edits; this adds no dependency to that peer. Original task-867f69a6 remains the full DoD gate and will own tool registration. NOT in scope: registered tool, registry, completeTask/getContext provenance, TaskVerification shape, policy/claim/QA gating, wrapper, runner authentication, migrations, schemaVersion bump, acceptance-test edits or unskips. source is declared provenance, not daemon execution proof or authenticated identity.\n\nVerification at repo root, Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". macOS/Linux: (cd packages/moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json). Capture exit codes/nonzero executed test counts; meaningful assertion-red mutation proof, no missing-module red. No prebuild/clean or peer output deletion.",
+  "definitionOfDone": [
+    "CheckRun and StateManager.checkRuns persist/load .moe/checks/<id>.json and list multiple independent runs by candidate with copy-safe deterministic results, proven across fresh StateManager reload and an absent checks directory.",
+    "Tests prove exact source/command/exitCode/tree preservation, missing Candidate refusal -32001/CANDIDATE_NOT_FOUND and mismatched tree refusal -32002/CHECK_RUN_TREE_MISMATCH with no disk/map changes.",
+    "Tests prove identical normalized same-id replay preserves original bytes/time, differing report refuses -32002/CHECK_RUN_IMMUTABLE, a fresh id creates a separate run, and injected write failure publishes nothing.",
+    "UTF-8 tests cover empty, exact-cap and over-cap ASCII, multibyte/emoji cutoff, malformed surrogate normalization and huge log input; persisted suffix is at most 16384 bytes and documented in docs/SCHEMA.md.",
+    "Malformed IDs/source/numeric/string inputs are rejected without writes; loader retains compatible historical/frozen fixture rows without assigning them eligibility, and no command is executed.",
+    "Named focused test gate, full daemon npm test and tsc exit 0 with nonzero executed counts; mutation proves tests reject tree-check removal, map-before-write or character-count truncation, while held-out acceptance.test.ts remains unchanged."
+  ],
+  "taskRails": [
+    "Store/schema slice only; preserve source modules by responsibility and keep the five-path ownership boundary.",
+    "Do not treat source as authenticated runner proof; never execute the command or fabricate a Candidate.",
+    "Use the existing persistence and state mutex patterns, no parallel datastore or implicit current-attempt requirement.",
+    "Wait for declared shared-file prerequisites to land; preserve all peer hunks and all held-out assertions."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CHECK THE SHARED-FILE PREREQUISITE FIRST, THEN READ THE PATTERN. Read-only, no edits. (a) A task rail says to wait for declared shared-file prerequisites, and this is not academic: task-5b85773867594a8eb0cea350f2c6008f edits packages/moe-daemon/src/types/schema.ts, src/state/StateManager.ts and docs/SCHEMA.md - the same three shared files this task touches - and it was WORKING with zero completed steps when this plan was written. Prove it landed by landing.merged or a Moe-Task trailer commit BEFORE editing any of those three. If it has not landed, moe.report_blocked naming it rather than editing around it; the whole reason that edge exists is to serialize these files. The two NEW files are yours alone and are safe to write regardless. (b) Read src/state/candidateStore.ts end to end. It is the pattern this task copies and it was QA-verified against these exact concerns: stateless functions taking the state handle first, callers holding the state mutex, writeEntity before map publication, detached copies handed to every reader, no update or delete function in existence, and an export-list test pinning its public surface. Note how it refuses a differing same-id record and replays a byte-identical one, and note its error handling order, which this store mirrors. (c) Read the CheckRun line in the frozen header of src/delivery/acceptance.test.ts. The stored fields are id, candidateId, treeSha, command, exitCode, outputTail, runnerId and source, and createdAt is NOT among them - this task adds it as OPTIONAL so historical and frozen fixture rows keep loading, while every new write stamps server time. Do not edit that file; a later sibling owns the unskip. (d) Confirm the candidate accessor you will call and that .moe/checks needs no scaffolding, since writeEntity creates its own directory and writes atomically.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only. (a) Shared-file prerequisite LANDED: task-5b85773867594a8eb0cea350f2c6008f status DONE; `git log --grep 'Moe-Task: task-5b857738...'` finds 7b33028, 9225483, 97071e0 (completion) and 3ac1207 (qa checkpoint, board only). Candidate task-4d7074c0 DONE. No source dirt at HEAD 3ac1207; the only dirty paths are .moe/* board rows of other sessions (untouched). (b) candidateStore.ts read end to end: stateless fns with state first, RECORDED_FIELDS + private replayOrRefuse, writeEntity then map.set, copy() on every read, export-list test, refusal helper asserting code AND codeName. recordCandidate.test.ts:220 holds the no-child-process source guard to mirror. (c) acceptance.test.ts header lines 30-32 freeze record_check_run {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source}; fixture rows at 1255-1309 carry NO createdAt and two are deliberately ineligible (other tree, other command) - they must load verbatim. (d) Accessor: getCandidate(state,id) in candidateStore.ts (copy or null). persistence.ts writeEntity validates the id, mkdirs .moe/<kind> and writes atomically; loadEntities returns an empty map for a missing dir. Constraints found: stateModules.test.ts caps StateManager.ts below 1500 lines (now 1477) and forbids runtime import cycles in src/state (checkRunStore -> candidateStore -> attemptStore is acyclic); taskTimeBudgetDocs.test.ts greps docs/SCHEMA.md for retired time-cap terms, so the new section avoids them. schema.ts and SCHEMA.md are CRLF, the state/*.ts files LF. Baseline before any edit: `npm --prefix packages/moe-daemon test` exit 0, 115 files, 1601 passed | 3 skipped. Tooling: schema.ts, StateManager.ts and docs/SCHEMA.md are contested by task-b1c98508/task-95a1d08e plans, so they are edited with the Edit tool only (TOOL-tier attribution), not sed or Serena replace_content. Red proof for this task is the mutation series in step 6, as the DoD specifies, never a missing-module failure.",
+      "startedAt": "2026-09-12T19:28:41.491Z",
+      "completedAt": "2026-09-12T19:33:42.742Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DECLARE THE RECORD AND GIVE IT A HOME. In src/types/schema.ts add an exported CheckRun interface with the eight frozen fields plus an optional createdAt, and a source union of exactly the two literals runner-observed and agent-reported. Document two things in the comment because they are the contract's sharp edges: source is DECLARED PROVENANCE, not proof that the daemon executed anything and not an authenticated identity, which a task rail states outright and which a later reader will otherwise assume; and createdAt is optional only for backward compatibility with rows written before it existed, while every new write stamps it from the server clock and never from a caller-supplied value. Keep it additive - no existing type changes, no schemaVersion bump, no migration, which an epic rail forbids. In src/state/StateManager.ts add a checkRuns map beside the existing candidates map and one loadEntities call over the checks directory in load, exactly as candidates were wired. loadEntities tolerates a missing directory, so a project that has never recorded a check loads empty, and that case needs a test later.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "schema.ts (+55, CRLF kept, 0 lone LF): new section after Review with `export type CheckRunSource = 'runner-observed' | 'agent-reported'` and `export interface CheckRun` - readonly id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source, plus OPTIONAL createdAt. Comments state both sharp edges: source is declared provenance (the daemon neither runs the command nor authenticates the caller), and createdAt is optional only so rows written before the field existed still load, while every new record is stamped by the daemon clock and a caller can never supply it. Also documents immutability, many runs per candidate, and that recording is not eligibility. Purely additive: no existing type touched, no schemaVersion bump, no migration. StateManager.ts (+5, LF kept): `CheckRun` added to the type-only schema import, `checkRuns = new Map<string, CheckRun>()` beside reviews, and `this.checkRuns = loadEntities<CheckRun>(path.join(this.moePath, 'checks'))` in load after reviews (missing dir loads empty). StateManager.ts is now 1483 lines, under the 1500 stateModules budget. Verification: `npx tsc --noEmit -p tsconfig.json` exit 0 (pwd packages/moe-daemon); `npx vitest run src/state/stateModules.test.ts src/state/candidateStore.test.ts src/state/StateManager.test.ts` RUN root D:/projexts/moes/packages/moe-daemon, 3 files, 151 passed, exit 0. Both shared files edited with the Edit tool (TOOL-tier attribution for contested paths). The missing-directory and reload tests are written in step 4.",
+      "startedAt": "2026-09-12T19:34:18.929Z",
+      "completedAt": "2026-09-12T19:36:39.644Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "WRITE THE STORE, INCLUDING THE BYTE BOUND. Create src/state/checkRunStore.ts with exactly four exported functions plus the cap constant: validateCheckRunParams over unknown input, recordCheckRun returning the record and a duplicate flag, getCheckRun, listCheckRunsForCandidate, and MAX_CHECK_LOG_BYTES set to 16384. No update and no delete function may EXIST, not merely go uncalled, and pin the export list with a test the way candidateStore does. VALIDATE, NEVER COERCE: entity-id shape and bounds for id, candidateId and runnerId; treeSha seven to forty hex characters preserved exactly with no prefixing, truncation or case coercion; command non-blank, at most five hundred characters, preserved verbatim; exitCode any signed safe integer INCLUDING zero and negatives, which deliberately differs from complete_task's stricter rule; source strictly one of the two literals; outputTail an optional string that becomes the empty string when absent. THE BYTE BOUND is the subtlest part of this task, so implement it deliberately: encode the tail to UTF-8, and if it exceeds the cap keep the FINAL cap bytes, then advance the start index while the leading byte is a continuation byte so the slice never begins mid-character, and only then decode. Encoding already normalizes malformed surrogate input deterministically, which is acceptable because that input was already malformed; what must never happen is a replacement character introduced solely by cutting a VALID character in half. Counting characters instead of bytes is the wrong implementation and a later mutation must prove the tests catch it. ERROR HANDLING is a specified, testable ORDER here rather than a set of scattered guards, so follow it exactly: validate, then look up the candidate and refuse a missing one with the not-found code and CANDIDATE_NOT_FOUND, then compare the reported tree token to the candidate's for exact equality and refuse a mismatch with the state-conflict code and CHECK_RUN_TREE_MISMATCH carrying candidateId, expectedTreeSha and actualTreeSha, then handle replay - an identical normalized same-id report returns the stored record unchanged in bytes and timestamp while a differing one refuses with CHECK_RUN_IMMUTABLE - and only then write durably. A write failure propagates and publishes nothing. Group by candidateId: many runs per candidate, never one overwritable row. Order lists deterministically with rows lacking a timestamp first, then by createdAt and id, so a frozen fixture without one still sorts predictably. Never execute the command and never fabricate a candidate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts"
+      ],
+      "note": "Created src/state/checkRunStore.ts (297 lines, LF, every function under 50 lines). Runtime exports are exactly MAX_CHECK_LOG_BYTES=16384, validateCheckRunParams(unknown), recordCheckRun(state, params) -> {checkRun, duplicate}, getCheckRun and listCheckRunsForCandidate (types RecordCheckRunParams / ValidCheckRunParams / RecordCheckRunResult are erased). No update or delete function exists. Validation refuses and never coerces: id optional (undefined = absent; null, blank or bad shape = INVALID_INPUT via validateEntityId); candidateId and runnerId non-blank entity ids; treeSha 7-40 hex kept exactly (same regex as candidateStore); command non-blank, at most 500 chars, never trimmed; exitCode any Number.isSafeInteger incl. 0 and negatives (-0 stored as 0 so memory equals a reload); source exactly runner-observed or agent-reported with no default; outputTail optional string, absent = '', null or non-string = INVALID_INPUT (same as complete_task). Byte bound: Buffer.from(tail,'utf8') normalizes lone surrogates to U+FFFD; start = max(0, len - 16384), advanced while (byte & 0xC0) === 0x80, then decoded, so the kept suffix starts on a whole character. Error handling runs in the specified order: validate -> getCandidate or -32001 CANDIDATE_NOT_FOUND {candidateId} -> exact tree token equality or -32002 CHECK_RUN_TREE_MISMATCH {candidateId, expectedTreeSha, actualTreeSha} -> same-id replayOrRefuse over the 7 normalized recorded fields (identical = stored copy with duplicate:true and no write; different = -32002 CHECK_RUN_IMMUTABLE {checkRunId, differingFields}) -> writeEntity('checks') BEFORE map.set, with a write failure propagating. createdAt always comes from the daemon clock; caller fields beyond the eight are dropped. Lists put rows with no string createdAt first, then sort by createdAt, then id, and return copies. The module never spawns or runs anything (grep for child_process/spawn/execSync: none). Verification: tsc --noEmit exit 0; stateModules.test.ts (import-cycle + size guards) 3 passed, exit 0. Behaviour tests land in step 4; red proof by mutation in step 6.",
+      "startedAt": "2026-09-12T19:36:56.217Z",
+      "completedAt": "2026-09-12T19:43:25.613Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "TEST THE STORE. Create src/state/checkRunStore.test.ts using ToolTestHarness, asserting exact values everywhere and, for every refusal, BOTH the numeric code and the exact codeName string, since several codes share a number in this codebase. Persistence: a recorded run round-trips, several independent runs group under one candidate, results are copies so mutating a returned record cannot reach stored state, a fresh StateManager over the same directory loads them after a restart, and an ABSENT checks directory loads empty rather than throwing. Preservation: source, command, exitCode - including zero and a negative - and the tree token survive byte-exactly. Error handling cases, each asserting the disk and the map are untouched afterwards: a missing candidate, a mismatched tree with all three context keys present, and a differing same-id report. Replay: an identical normalized same-id report returns the original bytes AND the original timestamp and writes nothing; a fresh id creates a separate run; an injected writeEntity failure publishes nothing. UTF-8, which is where this record is most likely to be wrong: an empty tail, a tail exactly at the cap, an over-cap ASCII tail, a multibyte and an emoji tail whose cut falls mid-character, malformed surrogate input, and a very large log. In every case assert the persisted byte length is at most the cap and that no replacement character was introduced by cutting a valid character. Malformed input: bad identifiers, an unknown source, a fractional or unsafe exitCode, a non-string command and an over-long command are each refused with no write. Compatibility: a historical fixture row without createdAt still loads and still sorts deterministically, and loading it grants it no eligibility - recording and downstream eligibility are different boundaries and a test should say so. Add a source-level assertion that the module contains no child-process or execution call, mirroring the candidate store's guard. Run the focused file and require green with nonzero counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "note": "Created src/state/checkRunStore.test.ts (ToolTestHarness, real attemptStore/candidateStore fixtures: cand-a, cand-b, cand-upper with an upper-case tree, cand-short with a 7-char tree). Every refusal asserts code AND codeName; the NOT_FOUND, TREE_MISMATCH and IMMUTABLE cases pin the full `[CODENAME] ` message and context in one toEqual, and a snapshot() of every check file's bytes plus the in-memory map must be unchanged afterwards. Cases (89 tests): persistence with exact key order and daemon clock; generated check-<32 hex> id; caller createdAt ignored; 8 preservation rows (agent-reported failing run, -1, MIN/MAX_SAFE_INTEGER, untrimmed command, 500-char command, upper-case tree, 7-char tree); -0 stored as 0; grouping and createdAt-then-id order across candidates; copies from record/get/list; export list pinned to exactly MAX_CHECK_LOG_BYTES, getCheckRun, listCheckRunsForCandidate, recordCheckRun, validateCheckRunParams (no update or delete); source guard for child_process/exec/spawn/fork. Refusals: missing candidate (-32001 CANDIDATE_NOT_FOUND, nothing fabricated); 5 wrong-tree rows (other tree, 7-char prefix, upper case, lower case of an upper tree, full sha extending a short tree) as -32002 CHECK_RUN_TREE_MISMATCH with candidateId/expectedTreeSha/actualTreeSha; an order test pinning input, then candidate, then tree, then same-id; 7 same-id rows as -32002 CHECK_RUN_IMMUTABLE with differingFields. Replay: identical report returns original record and createdAt, writeEntity spy not called, bytes unchanged, returned copy; normalized comparison (different raw logs with the same final 16384 bytes, and absent vs '') replays; a fresh id makes a separate run. Durability: injected writeEntity failure rejects with the same error object and publishes nothing, then a retry records; reload into a fresh StateManager incl. immutability after restart; absent checks dir loads empty and scaffolds nothing; historical fixture rows (no createdAt, wrong tree, other command, one dated) load verbatim with strict equality and unchanged bytes, list timestamp-less first, and the same wrong-tree report is still refused when recorded - recording is not eligibility. UTF-8: 16 rows (absent, empty, exact cap, cap+1 ASCII, 2/3/4-byte cuts at every offset, a log within the cap in characters but over it in bytes, emoji log cut mid-emoji, lone high/low and reversed surrogates, a cut through a normalized U+FFFD, a ~8 MB log) each asserting byte length, at most 16384 bytes, exact U+FFFD count and exact suffix in memory, on disk and from validateCheckRunParams. Malformed: 33 rows (ids, candidateId, runnerId, treeSha, command, exitCode string/fractional/unsafe/NaN/-Infinity/boolean, source, outputTail) plus 3 non-object reports, all -32602 with the exact codeName and no write. Run: `npx vitest run src/state/checkRunStore.test.ts` RUN root D:/projexts/moes/packages/moe-daemon, 1 file, 89 passed, exit 0, 2.10s. The file is 548 lines, over the 300-line bar: the five-path boundary allows only one test file, and most of the length is the refusal and UTF-8 tables. Assertion-red evidence comes from the step 6 mutation series.",
+      "startedAt": "2026-09-12T19:46:08.260Z",
+      "completedAt": "2026-09-12T19:48:34.045Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "DOCUMENT THE RECORD. Add a CheckRun section to docs/SCHEMA.md beside the Candidate section, following that section's conventions. Cover every field including the optional timestamp and why it is optional; the two source values with an explicit statement that source is declared provenance rather than execution proof or authenticated identity; the sixteen-kilobyte byte cap on the stored tail, stated in BYTES rather than characters and noting that the kept portion is the end of the log and always begins on a character boundary; the grouping rule that a candidate carries many runs rather than one overwritable row; the immutability rule with the replay exception; and the storage location of one file per run. Name the three refusals a caller can hit so the document describes the error handling a caller must expect, not only the happy path. That file is contended by sibling Wave 1 cards, so re-read the landed text immediately before editing and add your section rather than restructuring theirs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Re-read the landed docs/SCHEMA.md first: no diff against HEAD, last touched by 97071e0 (the prerequisite), and the Review / Chat Channel / validation-rule headings were where step 1 found them. Added text only (git diff --numstat: 73 insertions, 0 deletions; CRLF kept, 0 lone LF), nothing restructured. (1) New `## CheckRun` section between `## Review` and `## Chat Channel`, following the Candidate/Review conventions: **File:** `.moe/checks/{check-run-id}.json`, one file per run, and a note that only state/checkRunStore.ts writes it (no MCP tool yet; moe.record_check_run is the later slice). Then an annotated TypeScript interface covering every field, with createdAt optional only so rows written before the field existed still load and always the daemon's clock. Then **Provenance** (source is declared provenance, not proof the command ran and not an authenticated identity; no third value, no default), **Output tail** (16384 bytes of UTF-8, not characters; keeps the END of the log; always begins on a whole character; the cut never adds U+FFFD; malformed surrogates are normalized; absent means \"\"), **Many runs per candidate**, **Immutability** (compared after normalization; identical replay returns createdAt and writes nothing), and **Refusals** in order: malformed -32602 INVALID_INPUT/MISSING_REQUIRED, -32001 CANDIDATE_NOT_FOUND {candidateId}, -32002 CHECK_RUN_TREE_MISMATCH {candidateId, expectedTreeSha, actualTreeSha}, -32002 CHECK_RUN_IMMUTABLE {checkRunId, differingFields}; a failed write propagates. Closes with **Recording is not eligibility** (historical rows load unchanged, never re-checked), **Queries** order and copies, and an example with a failing exitCode. (2) New `### CheckRun` block in Validation Rules after `### Review`, covering id shape, the tree rule, the command bound, the exitCode domain, the source literals, the outputTail byte bound, absent vs wrong-type refusals, and the daemon-only createdAt. The added lines avoid every term taskTimeBudgetDocs.test.ts greps for. Verification: `npx vitest run src/util/taskTimeBudgetDocs.test.ts src/state/checkRunStore.test.ts` gave 2 files, 106 passed, exit 0. Edited with the Edit tool because the path is contested.",
+      "startedAt": "2026-09-12T19:49:44.100Z",
+      "completedAt": "2026-09-12T19:50:54.014Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "GATE, MUTATION RED, REVIEW, HAND OFF. (a) Run the named gate from the repository root. Windows: cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\". Elsewhere the same three commands from that directory. Require exit 0 from each with nonzero executed counts, and confirm the held-out acceptance file is unchanged and its skipped count is exactly what it was - this task does not unskip anything. Capture the exit code separately from any filtered output, because a pipeline swallows it, and re-run an unrelated failing file alone before attributing a flake to this change. Do not run a prebuild or clean, and never delete a peer's output. (b) Mutation proof, in a scratch copy and never in the shared checkout peers are working in, restoring after each and re-verifying with a separate status call. The Definition of Done names three: remove the tree-equality check, which must break the mismatch case; set the map before writeEntity, which must break the injected-failure case; and truncate by character count instead of bytes, which must break the multibyte cases - if that last one does NOT fail, your UTF-8 tests are using ASCII and prove nothing. Add a fourth of your own: make the replay path skip the content comparison, which must break the differing-same-id refusal. Name the failing test for each; a missing-module error is not red proof. (c) Adversarially review: is every refusal genuinely before any write, proven by untouched disk and map rather than only by a thrown error; can a caller's timestamp ever reach a stored record; does the store hand out copies rather than live objects; is the tail bounded in bytes and always cut on a character boundary; does a candidate really accumulate runs rather than overwrite; do update and delete functions genuinely not exist; is there no execution of the reported command anywhere; and did anything outside the five declared paths change. (d) Complete through moe.complete_task with the commands, exit codes, counts and mutation results, listing every modified path, and state plainly that this slice stops at persistence: no tool is registered, no registry entry is added, and the original CheckRun card remains the full gate that will own registration.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "note": "(a) GATE, run from the PowerShell tool at the repo root because cmd /d /c from Git Bash is a false green: `cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\"` gave GATE_EXIT=0 ($LASTEXITCODE read before filtering). Focused run: 1 file, 89 passed. `npm test` (> moe-daemon@0.8.0 test): 116 files passed, 1690 passed | 3 skipped. Baseline was 115 files, 1601 | 3 skipped, so +1 file, +89 tests and the skipped count is unchanged. tsc ran last in the && chain and exited 0. The gate was re-run after the final test edit below, with the same counts. acceptance.test.ts: `git diff --stat` is empty (untouched, nothing unskipped). (b) MUTATIONS, in scratch D:/moe-214b-scratch via a driver that restores from pristine before and after each run, requires every anchor to match exactly once, and runs vitest --root on the scratch tree. The unmutated run was 89/89 both first and last. The four named mutations: tree-check-off turned 7 red (5 'refuses ... as CHECK_RUN_TREE_MISMATCH, writing nothing' rows with \"expected a MoeError refusal, but the call succeeded\", plus the order test and the historical-rows test). map-before-write turned 'publishes nothing when the write fails, hands the caller that error, and a retry records it' red with \"expected { id: 'check-1', ... } to be null\". char-count-truncation turned 12 UTF-8 rows red: the 2/3/4-byte cuts, the within-cap-in-characters log, the emoji log and the huge log show byte lengths like \"expected 16385 to be 16383\" and \"expected 24576 to be 16383\", and the surrogate rows show \"expected +0 to be 1\", so the tests are not ASCII-only. replay-skips-compare turned 9 red (7 same-id rows, the order test, and immutability after restart). 17 extra mutations each turned their own test red: no-boundary-skip 9, replay-rewrites 11, candidate-check-after-replay 1 (order test), tree-prefix-match 3, write-failure-swallowed 1, caller-createdAt 1, copy-off 1, reload-off 2 (the StateManager load line), missing-createdAt-last 1, sort-off 2, negative-exit-refused 2, negzero-kept 1, source-defaults 1, command-trimmed 1, null-tail-as-absent 1, export-delete 1 (export list), exec-import 1 (source guard). No leak: cmp shows the repo files equal pristine, and no mutation markers remain in the repo store. Junction deleted, real node_modules verified, scratch removed. (c) ADVERSARIAL REVIEW. Every refusal happens before writeEntity, and a snapshot proves disk bytes and map unchanged. createdAt is daemon-only. Readers return copies. The tail is bounded in bytes and cut on a character boundary. A candidate accumulates runs. No update or delete export exists, and nothing is executed. Only the five declared paths are dirty outside .moe. One fix made: the fresh-id test now pins its clocks (T1/T2) instead of relying on the wall clock never stepping back. Theoretical only, left as is: (1) same-id check-then-write assumes the caller holds state.mutex, as candidateStore does; the future tool gets it from non-blocking dispatch. (2) Buffer.from allocates the whole tail, but MCP input is capped by the daemon's 2 MiB WebSocket maxPayload. (3) A historical row without outputTail cannot be replayed, because '' differs from absent; this refuses conservatively. (4) .moe/checks/ is not gitignored, the same as candidates/ and reviews/. (d) Scope stops at persistence: no tool registered, no registry entry, no MCP_SERVER.md change. task-867f69a6 remains the full gate and owns registration.",
+      "startedAt": "2026-09-12T19:54:43.173Z",
+      "completedAt": "2026-09-12T19:58:02.754Z"
+    }
+  ],
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Operator instruction after being shown the trade-off. Planning is not dependency-gated; claiming is. Its real content dependency (task-4d7074c0, the frozen Candidate record) is DONE and the check-run wire shape is frozen in the held-out acceptance test, so this is planned against a contract that exists rather than declared intent. The remaining edge to task-5b857738 is file-overlap sequencing and continues to gate any WORKING claim.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-867f69a6cdb748a8ab68fcbeec0de711",
+  "dependsOn": [
+    "task-4d7074c001af47e881572e9efae30a41",
+    "task-5b85773867594a8eb0cea350f2c6008f"
+  ],
+  "priority": "HIGH",
+  "order": 96,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-12T14:10:44.557Z",
+  "updatedAt": "2026-09-12T20:10:38.755Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-12T17:45:09.917Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T20:09:53.604Z",
+    "wallClockMs": 8683687
+  },
+  "contextFetchedBy": [
+    "architect-8b93cc67",
+    "architect-2d25447a",
+    "worker-de4739a8",
+    "qa-813933f7"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-12T17:47:43.224Z",
+  "planningNotes": {
+    "approachesConsidered": "Truncating the output tail by character count - rejected and explicitly mutation-tested against: the cap is specified in bytes, and character counting both overshoots the byte budget for multibyte logs and fails the stated requirement. Truncating bytes without adjusting to a character boundary - rejected: it introduces a replacement character for a valid character, which the description forbids in so many words; advancing past leading continuation bytes is the fix. Refusing malformed surrogate input outright - rejected: encoding normalizes it deterministically and the input was already malformed, so normalizing is the specified behaviour rather than a refusal. Storing one row per candidate and overwriting - rejected: a candidate accumulates runs, and overwriting would destroy the history the later gate card needs. Making createdAt required - rejected: it would break historical and frozen fixture rows, which must keep loading. Adding an update path for a corrected report - rejected: records are immutable, a corrected report is a new id, and the function must not exist at all. Registering a tool here - out of scope by the description; the original CheckRun card owns registration and remains the full gate.",
+    "codebaseInsights": "This card arrived unusually well specified: the public seam, the validation rules, the refusal codes, the order of operations and the byte-cap semantics are all dictated in the description, so the work here is sequencing and pinning rather than design. Two things are worth stating that the description leaves implicit. First, the shared-file edge is real work, not bookkeeping: the in-flight candidate-binding card edits the same schema, state manager and schema document, which is exactly why that dependency exists, and it was WORKING with zero completed steps when this was planned - so the two NEW files are safe to write at any time while the three shared ones must wait. Second, the frozen acceptance header does not list createdAt among the CheckRun fields, which is why this task adds it as optional rather than required: historical and fixture rows must keep loading, and the list ordering has to cope with rows that have no timestamp at all. The candidate store is the right model in every respect and was QA-verified against these same concerns, down to an export-list test and a source-level assertion that no child process is spawned; its error handling order is the one this store mirrors.",
+    "risks": "The byte bound is where this record will be wrong if it is wrong anywhere, and an ASCII-only test suite would pass while proving nothing - which is precisely why one of the required mutations is character-count truncation. The second hazard is ordering: validation, candidate lookup, tree equality, replay, then write, in that exact sequence, with every refusal proven by untouched disk and map rather than by a thrown error alone. Do not let a caller timestamp reach a stored record. Do not hand out live cached objects. The three shared files must wait for the in-flight sibling to land, and the schema document is contended by other Wave 1 cards, so re-read immediately before editing. Do not touch the held-out acceptance file or change its skipped count; this slice unskips nothing. Keep source honest in both the type comment and the document: it is declared provenance, and describing it as execution proof would mislead every later slice that builds on it. Finally, the daemon suite has been observed flaking under heavy fleet load, so re-run an unrelated failing file alone before treating it as yours.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/candidateStore.ts (the QA-verified pattern to copy: stateless functions, mutex-held callers, write before publish, detached copies, no update path, export-list test)",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts (frozen header: the eight CheckRun fields and the two source literals; do NOT edit, a later sibling owns the unskip)",
+      "packages/moe-daemon/src/types/schema.ts and src/state/StateManager.ts (shared with the in-flight task-5b857738 - verify it landed first)",
+      "packages/moe-daemon/src/state/persistence.ts (writeEntity creates its own directory and writes atomically; loadEntities tolerates a missing one)",
+      "docs/SCHEMA.md (contended by sibling Wave 1 cards - add, do not restructure)"
+    ]
+  },
+  "planApprovedAt": "2026-09-12T17:47:43.300Z",
+  "workStartedAt": "2026-09-12T19:28:41.491Z",
+  "reviewStartedAt": "2026-09-12T19:59:40.653Z",
+  "verification": {
+    "command": "cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\"",
+    "exitCode": 0,
+    "outputTail": "GATE_EXIT=0 (PowerShell tool, repo root, $LASTEXITCODE read before filtering; re-run after the final test edit)\n[focused] RUN v5.0.0 D:/projexts/moes/packages/moe-daemon\n Test Files  1 passed (1)\n      Tests  89 passed (89)\n> moe-daemon@0.8.0 test\n RUN  v5.0.0 D:/projexts/moes/packages/moe-daemon\n Test Files  116 passed (116)\n      Tests  1690 passed | 3 skipped (1693)\n[tsc --noEmit -p tsconfig.json: last command in the && chain, exit 0]\nBaseline before any edit: 115 files, 1601 passed | 3 skipped (skip count unchanged; acceptance.test.ts git diff empty)\nMutation red (scratch copy, unmutated 89/89 first and last): tree-check-off 7 red, map-before-write 1 red, char-count-truncation 12 red (e.g. expected 24576 to be 16383), replay-skips-compare 9 red, plus 17 more mutations each red on its own named test.",
+    "reportedAt": "2026-09-12T19:59:40.653Z"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/checkRunStore.ts",
+    "packages/moe-daemon/src/state/checkRunStore.test.ts",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-214bcfa37db24628aab11689764b4ae2.json",
+    ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json"
+  ],
+  "completionSummary": "Persistence slice for candidate-bound CheckRun records; five paths. schema.ts: additive CheckRunSource ('runner-observed'|'agent-reported', declared provenance only) and readonly CheckRun {id,candidateId,treeSha,command,exitCode,outputTail,runnerId,source, optional createdAt}. StateManager.ts: checkRuns map + loadEntities(.moe/checks). New state/checkRunStore.ts exports exactly MAX_CHECK_LOG_BYTES=16384, validateCheckRunParams, recordCheckRun->{checkRun,duplicate}, getCheckRun, listCheckRunsForCandidate; no update/delete. Validates without coercing (entity ids; treeSha 7-40 hex exact; command non-blank <=500 verbatim; any safe-integer exitCode; exact source; optional string tail -> '', bounded to its final 16384 UTF-8 bytes on a character boundary, surrogates normalized). Order: validate -> -32001 CANDIDATE_NOT_FOUND -> -32002 CHECK_RUN_TREE_MISMATCH {candidateId,expectedTreeSha,actualTreeSha} -> normalized same-id replay (duplicate:true, no write, original createdAt) or -32002 CHECK_RUN_IMMUTABLE -> writeEntity before map.set. Daemon-clock createdAt, copies, lists order missing createdAt first then createdAt/id; nothing executed. checkRunStore.test.ts: 89 tests covering persistence, reload, absent dir, preservation, refusals with byte+map snapshots, order, replay, write failure, historical fixture rows (loaded verbatim, not eligibility), 16 UTF-8 rows, 36 malformed inputs, export list, no child process. docs/SCHEMA.md: CheckRun section + validation rules (73 insertions, 0 deletions). Gate exit 0: focused 89 passed; npm test 116 files, 1690 passed | 3 skipped (baseline 115/1601|3); tsc 0; acceptance.test.ts untouched. 21 scratch mutations all red on named tests, including the three DoD ones and replay-skips-compare. Stops at persistence: no tool registered, no registry entry; task-867f69a6 remains the full gate and owns registration. Contested shared files were written with Edit only; QA please confirm git show --stat on the completion commit lists all five paths.",
+  "commits": [
+    {
+      "sha": "fac1e3d461d040f60d4921becbff56ac3ad3b988",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-de4739a8@2026-09-12T19:28:25Z",
+      "paths": [
+        ".moe/tasks/task-214bcfa37db24628aab11689764b4ae2.json",
+        ".moe/tasks/task-5b85773867594a8eb0cea350f2c6008f.json",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts",
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-de4739a8",
+      "recordedAt": "2026-09-12T20:00:23.368Z",
+      "treeId": "7861ff7438b624bbc3d3dc71cb638e0718ef40ec",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/state/StateManager.ts",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-95a1d08e21dd45688cb296914daf4417"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "ee8da0b25b261fbdc8ab5158b46f258a5ad1f6d2",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-813933f7@2026-09-12T19:59:44Z",
+      "paths": [
+        ".moe/tasks/task-214bcfa37db24628aab11689764b4ae2.json"
+      ],
+      "recordedBy": "qa-813933f7",
+      "recordedAt": "2026-09-12T20:10:38.755Z",
+      "treeId": "54a1ccca1f62c42f1c137f053fa4bcfecff7426a",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/checkRunStore.test.ts",
+    "packages/moe-daemon/src/state/checkRunStore.ts",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-813933f7@2026-09-12T19:59:44Z",
+    "at": "2026-09-12T20:10:38.755Z"
+  },
+  "completedAt": "2026-09-12T20:09:53.604Z",
+  "reviewCompletedAt": "2026-09-12T20:09:53.604Z",
+  "reviewSummary": "All 6 DoD items and the rails verified.\nGATE re-run from repo root (PowerShell): cmd /d /c \"cd /d packages\\moe-daemon && npx vitest run src/state/checkRunStore.test.ts && npm test && npx tsc --noEmit -p tsconfig.json\" (plus an end marker). Exit 0: focused 89 passed; npm test 116 files, 1690 passed | 3 skipped (baseline 115/1601|3, so +1 file, +89 tests, skips unchanged); tsc 0.\nCOMMIT fac1e3d, pushed after reviewStartedAt. Parent 3ac1207, so prereq task-5b857738 landed. Source paths are exactly the 5 owned ones, insertions only, blobs identical to the tested bytes. acceptance.test.ts hash equals HEAD; not in the commit.\nCODE:\n- order: validate, then -32001 CANDIDATE_NOT_FOUND, then -32002 CHECK_RUN_TREE_MISMATCH {candidateId,expectedTreeSha,actualTreeSha}, then normalized replay or CHECK_RUN_IMMUTABLE, then writeEntity before map.set\n- daemon createdAt; readers return copies\n- exports only MAX_CHECK_LOG_BYTES=16384 + 4 fns\n- UTF-8 byte tail with continuation-byte skip\n- no child_process, no forbidden patterns\n- StateManager wiring mirrors candidates/reviews\n- acceptance check fixtures load as-is; SCHEMA.md accurate\nMUTATION audit (isolated scratch, exactly-once anchors, pristine restore; unmutated 89/89 first and last): 41/41 red on named tests.\n- DoD-named: tree-check-off 7, map-before-write 1, char-count-truncation 12 (expected 24576 to be 16383)\n- also: replay-skips-compare 9, reload-empty 2, replay-falls-through 2, 4 returns-live, same-id-after-write 11, replay-before-candidate 1, tree case-fold/prefix, codeName/context key, continuation-skip-off 9, cap off-by-one 3, caller createdAt, exitCode/command/source/id validation, 3 sort mutations, each RECORDED_FIELDS drop\nScratch torn down; repo == pristine. Persistence only, no tool/registry; task-867f69a6 owns registration."
+}
