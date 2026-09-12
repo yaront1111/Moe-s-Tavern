@@ -107,7 +107,7 @@
       "completedAt": "2026-09-11T23:46:10.678Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,18 +120,21 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:36:05.147Z",
-  "updatedAt": "2026-09-11T23:47:14.333Z",
+  "updatedAt": "2026-09-12T00:14:38.931Z",
   "contextFetchedBy": [
     "worker-6dd2f337",
     "architect-8b93cc67",
     "worker-53c83cb5",
-    "worker-f2b3ac93"
+    "worker-f2b3ac93",
+    "qa-8db40c97"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-11T12:10:23.686Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-12T00:14:38.930Z",
+    "wallClockMs": 43455244
   },
   "stepsCompleted": [
     "step-1",
@@ -175,7 +178,53 @@
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1",
-    "scripts/moe-agent.sh"
+    "scripts/moe-agent.sh",
+    ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+    ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json"
   ],
-  "completionSummary": "A CLI that can edit code is now only ever launched with a task already bound. Modified: scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/taskless-handoff.test.mjs, scripts/tests/postflight.sh, scripts/tests/postflight.ps1 (+663/-109).\n\nMEASURED DEFECT (the card was partly stale). Sibling ea61fcb had already added the chat-only prompt and this harness, plus a no-task launch-skip fast path, but only for claude+headless+loop. Four narrower holes survived: (1) -NoLoop, because the fast path was gated on loopEnabled; (2) a routed mention plus interactive or non-claude; (3) sh had no fast path for codex/gemini at all while ps1's was CLI-agnostic; (4) a null claim RPC rendered the in-agent claim chain. Each launched an editing CLI with no baseline and no landing.\n\nFIX. One launch decision for all four CLI types before the dispatch, emitting MOE_TASKLESS_NO_LAUNCH reason=idle|claim-failed, deliberately NOT gated on loopEnabled; the two per-branch fast paths deleted as subsumed. The taskless prompt is chat-only for every claiming role under AutoClaim. A wrapper-side wait sits right after the claim RPC and before the untouched parse, so a claimed session flows through the EXISTING baseline block and launch - which is also where the recovery-race sibling writes its live-session marker, so a claiming session gets baseline AND marker with zero new code. AutoClaim=false and the governor prompt are byte-identical to before.\n\nTHE WAIT IS NOT moe.wait_for_task, AND THAT IS MEASURED. My first canary failed with the daemon answering {\"code\":-32000,\"message\":\"Proxy shutting down before response received\"}: both wrappers pipe one JSON line into a fresh moe-proxy and close stdin, and gracefulShutdown() errors every pending request after a flat 2s, so a blocking long-poll cannot survive that transport in either wrapper. So a LOOPING run's wait is its own outer relaunch loop (launch suppressed, no second loop added) and a SINGLE-SHOT run re-claims every 5s up to MOE_TASKLESS_WAIT"
+  "completionSummary": "A CLI that can edit code is now only ever launched with a task already bound. Modified: scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/taskless-handoff.test.mjs, scripts/tests/postflight.sh, scripts/tests/postflight.ps1 (+663/-109).\n\nMEASURED DEFECT (the card was partly stale). Sibling ea61fcb had already added the chat-only prompt and this harness, plus a no-task launch-skip fast path, but only for claude+headless+loop. Four narrower holes survived: (1) -NoLoop, because the fast path was gated on loopEnabled; (2) a routed mention plus interactive or non-claude; (3) sh had no fast path for codex/gemini at all while ps1's was CLI-agnostic; (4) a null claim RPC rendered the in-agent claim chain. Each launched an editing CLI with no baseline and no landing.\n\nFIX. One launch decision for all four CLI types before the dispatch, emitting MOE_TASKLESS_NO_LAUNCH reason=idle|claim-failed, deliberately NOT gated on loopEnabled; the two per-branch fast paths deleted as subsumed. The taskless prompt is chat-only for every claiming role under AutoClaim. A wrapper-side wait sits right after the claim RPC and before the untouched parse, so a claimed session flows through the EXISTING baseline block and launch - which is also where the recovery-race sibling writes its live-session marker, so a claiming session gets baseline AND marker with zero new code. AutoClaim=false and the governor prompt are byte-identical to before.\n\nTHE WAIT IS NOT moe.wait_for_task, AND THAT IS MEASURED. My first canary failed with the daemon answering {\"code\":-32000,\"message\":\"Proxy shutting down before response received\"}: both wrappers pipe one JSON line into a fresh moe-proxy and close stdin, and gracefulShutdown() errors every pending request after a flat 2s, so a blocking long-poll cannot survive that transport in either wrapper. So a LOOPING run's wait is its own outer relaunch loop (launch suppressed, no second loop added) and a SINGLE-SHOT run re-claims every 5s up to MOE_TASKLESS_WAIT",
+  "commits": [
+    {
+      "sha": "081a6f7e72112edbfa8b76b2d5f2608e757cc380",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f2b3ac93@2026-09-11T21:29:10Z",
+      "paths": [
+        ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
+        ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/taskless-handoff.test.mjs"
+      ],
+      "recordedBy": "worker-f2b3ac93",
+      "recordedAt": "2026-09-11T23:47:29.602Z",
+      "treeId": "77588b2c27ad136a8590d4643b4852732fe2d7f8",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    ".moe-tmp-canary.sh",
+    ".moe-tmp-patch-ps.py",
+    ".moe-tmp-fix.py",
+    ".moe-tmp-patch.py",
+    ".moe-tmp-patch-sh.py",
+    ".moe-tmp-repro.sh"
+  ],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/tools/createTask.test.ts",
+    "packages/moe-daemon/src/tools/createTask.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f2b3ac93@2026-09-11T21:29:10Z",
+    "at": "2026-09-11T23:47:29.602Z"
+  },
+  "completedAt": "2026-09-12T00:14:38.930Z",
+  "reviewCompletedAt": "2026-09-12T00:14:38.930Z",
+  "reviewSummary": "Re-ran every gate myself + an independent RED proof. Commit 081a6f7 (completion, pushed, 7 paths) read via git show.\n\nGATES (re-run, not trusted): node --test taskless-handoff+agent-runtime = 43/43 pass, exit 0. parity-check.sh exit 0 PASS; parity-check.ps1 exit 0 PASS (so MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE + both MOE_TASKLESS_NO_LAUNCH reasons are symmetric). postflight.sh and postflight.ps1 run SEQUENTIALLY at MOE_POSTFLIGHT_TIMEOUT_SEC=180: both exit 0, \"scenarios run: 28\", scenarios AA and AB ok. npm run lint exit 0.\n\nRED PROOF (epic rail: test must fail on old behaviour): ran the NEW test against the PARENT wrappers (081a6f7^) in a temp tree -> tests 39, pass 21, fail 18. Matches the worker's claim exactly.\n\nDoD 1: old wrappers rendered the in-CLI claim chain on -NoLoop, interactive, non-claude and null-claim-RPC; all four now render the chat-only prompt. The wrapper wait sits before the UNTOUCHED claim parse, so a claimed session flows through the unmodified baseline block and the sibling's live-session marker.\nDoD 2: both wrappers in lockstep, parity-check proves it. Recovery untouched (no +/- on live_marker / Remove-MoeLiveMarker / CHECKPOINT_RECOVERED, comments only). Attribution unrelaxed: adoption path runs git status only, no staging, no invented baseline; scenario AB asserts HEAD unmoved, own bytes untracked, PEER's dirty file untouched, #governors line in the store.\nDoD 3: idle + resume covered (AA, the four chat-only cases, resume contract preserved); wrapper-launched end-to-end evidence is AA/AB, which I re-ran.\n\nScope: 5 source files + 2 board records. The 7 \"$PYTHON_CMD\" unquotings are necessary (py -3 fails 127 quoted); the 10 left quoted are all [ -n ] tests, correct.\n\nNOTED, not a defect: an idle interactive/TUI seat now launches nothing (skip deliberately not gated on loopEnabled). That is the task mandate; AutoClaim=false is the escape hatch. Residual by design: an adopted task's bytes stay unlanded for a human."
 }
