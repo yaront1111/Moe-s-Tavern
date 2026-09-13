@@ -120,7 +120,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-11T10:36:05.147Z",
-  "updatedAt": "2026-09-12T00:14:38.931Z",
+  "updatedAt": "2026-09-12T00:15:23.714Z",
   "contextFetchedBy": [
     "worker-6dd2f337",
     "architect-8b93cc67",
@@ -180,7 +180,8 @@
     "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh",
     ".moe/tasks/task-58f7db9a9e44469e9351b2cdea73b47d.json",
-    ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json"
+    ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json",
+    ".moe/tasks/task-d7fa98f4e43d434a96cad9440b153f1c.json"
   ],
   "completionSummary": "A CLI that can edit code is now only ever launched with a task already bound. Modified: scripts/moe-agent.ps1, scripts/moe-agent.sh, scripts/tests/taskless-handoff.test.mjs, scripts/tests/postflight.sh, scripts/tests/postflight.ps1 (+663/-109).\n\nMEASURED DEFECT (the card was partly stale). Sibling ea61fcb had already added the chat-only prompt and this harness, plus a no-task launch-skip fast path, but only for claude+headless+loop. Four narrower holes survived: (1) -NoLoop, because the fast path was gated on loopEnabled; (2) a routed mention plus interactive or non-claude; (3) sh had no fast path for codex/gemini at all while ps1's was CLI-agnostic; (4) a null claim RPC rendered the in-agent claim chain. Each launched an editing CLI with no baseline and no landing.\n\nFIX. One launch decision for all four CLI types before the dispatch, emitting MOE_TASKLESS_NO_LAUNCH reason=idle|claim-failed, deliberately NOT gated on loopEnabled; the two per-branch fast paths deleted as subsumed. The taskless prompt is chat-only for every claiming role under AutoClaim. A wrapper-side wait sits right after the claim RPC and before the untouched parse, so a claimed session flows through the EXISTING baseline block and launch - which is also where the recovery-race sibling writes its live-session marker, so a claiming session gets baseline AND marker with zero new code. AutoClaim=false and the governor prompt are byte-identical to before.\n\nTHE WAIT IS NOT moe.wait_for_task, AND THAT IS MEASURED. My first canary failed with the daemon answering {\"code\":-32000,\"message\":\"Proxy shutting down before response received\"}: both wrappers pipe one JSON line into a fresh moe-proxy and close stdin, and gracefulShutdown() errors every pending request after a flat 2s, so a blocking long-poll cannot survive that transport in either wrapper. So a LOOPING run's wait is its own outer relaunch loop (launch suppressed, no second loop added) and a SINGLE-SHOT run re-claims every 5s up to MOE_TASKLESS_WAIT",
   "commits": [
@@ -204,6 +205,22 @@
       "treeId": "77588b2c27ad136a8590d4643b4852732fe2d7f8",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "f2245340cdf0f9dd2045741c469b58cf911aea30",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8db40c97@2026-09-11T23:47:28Z",
+      "paths": [
+        ".moe/tasks/task-80737065b0394e288b54af9810248ce2.json",
+        ".moe/tasks/task-d7fa98f4e43d434a96cad9440b153f1c.json"
+      ],
+      "recordedBy": "qa-8db40c97",
+      "recordedAt": "2026-09-12T00:15:23.714Z",
+      "treeId": "a9a4657ca75f6d89bac6b25c412e018323b5baab",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -220,9 +237,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-f2b3ac93@2026-09-11T21:29:10Z",
-    "at": "2026-09-11T23:47:29.602Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8db40c97@2026-09-11T23:47:28Z",
+    "at": "2026-09-12T00:15:23.714Z"
   },
   "completedAt": "2026-09-12T00:14:38.930Z",
   "reviewCompletedAt": "2026-09-12T00:14:38.930Z",

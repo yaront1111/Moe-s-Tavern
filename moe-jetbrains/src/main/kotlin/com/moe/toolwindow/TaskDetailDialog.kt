@@ -51,6 +51,7 @@ class TaskDetailDialog(
     private var planScrollPane: JScrollPane? = null
     private var planContainer: JPanel? = null
     private var blockerContainer: JPanel? = null
+    private var deliveryContainer: JPanel? = null
     private var stateListener: MoeStateListener? = null
     private val log = Logger.getInstance(TaskDetailDialog::class.java)
 
@@ -61,10 +62,11 @@ class TaskDetailDialog(
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
                 val updated = state.tasks.find { it.id == task.id } ?: return
-                // One listener, two live sections. Neither refresh may take the
+                // One listener for all live sections. No refresh may take the
                 // dialog down: log and leave the last good content standing.
                 safeRefresh("plan panel") { refreshPlanPanel(updated) }
                 safeRefresh("blocker section") { refreshBlockerSection(updated) }
+                safeRefresh("delivery section") { refreshDeliverySection(updated) }
             }
             override fun onStatus(connected: Boolean, message: String) {}
         }
@@ -90,6 +92,14 @@ class TaskDetailDialog(
         blockerContainer = blockerWrapper
         buildBlockerPanel(task)?.let { blockerWrapper.add(it, BorderLayout.CENTER) }
         panel.add(blockerWrapper)
+
+        val deliveryWrapper = JPanel(BorderLayout()).apply { isOpaque = false; isVisible = false }
+        deliveryContainer = deliveryWrapper
+        buildDeliveryPanel(task)?.let {
+            deliveryWrapper.add(it, BorderLayout.CENTER)
+            deliveryWrapper.isVisible = true
+        }
+        panel.add(deliveryWrapper)
 
         panel.add(JBLabel(MoeBundle.message("moe.label.priority")))
         priorityCombo.selectedItem = task.priority
@@ -248,6 +258,47 @@ class TaskDetailDialog(
             }
             container.revalidate()
             container.repaint()
+        }
+    }
+
+    /** Optional read-only evidence; no control or approval behavior is added here. */
+    private fun buildDeliveryPanel(t: Task): JPanel? {
+        val rows = DeliveryPresentation.rows(t.delivery)
+        if (rows.isEmpty()) return null
+        return JPanel(VerticalLayout(4)).apply {
+            isOpaque = false
+            border = BorderFactory.createTitledBorder(
+                JBUI.Borders.customLine(JBColor.border()), MoeBundle.message(DeliveryPresentation.TITLE_KEY)
+            )
+            for (row in rows) {
+                add(JBLabel(MoeBundle.message(row.labelKey)))
+                // Keep the abbreviated revision and a selectable full token, without a copy action.
+                // Text areas also keep runner text literal rather than interpreting JLabel HTML.
+                val text = if (row.value == row.fullValue) row.value else "${row.value}\n${row.fullValue}"
+                add(JBTextArea(text).apply {
+                    isEditable = false
+                    isOpaque = false
+                    lineWrap = true
+                    wrapStyleWord = true
+                    columns = 52
+                    toolTipText = row.fullValue
+                })
+            }
+        }
+    }
+
+    private fun refreshDeliverySection(updated: Task) {
+        val container = deliveryContainer ?: return
+        javax.swing.SwingUtilities.invokeLater {
+            if (stateListener == null) return@invokeLater
+            safeRefresh("delivery section") {
+                val content = buildDeliveryPanel(updated)
+                container.removeAll()
+                content?.let { container.add(it, BorderLayout.CENTER) }
+                container.isVisible = content != null
+                container.parent?.revalidate()
+                container.repaint()
+            }
         }
     }
 
