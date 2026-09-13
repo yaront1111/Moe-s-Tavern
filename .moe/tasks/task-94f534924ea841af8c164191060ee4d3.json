@@ -107,7 +107,7 @@
       "completedAt": "2026-09-13T02:33:21.421Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -124,16 +124,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:08.677Z",
-  "updatedAt": "2026-09-13T02:35:42.600Z",
+  "updatedAt": "2026-09-13T03:07:19.526Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "worker-b88fa8e8"
+    "worker-b88fa8e8",
+    "qa-9dc36824"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T17:45:25.533Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-13T03:07:19.526Z",
+    "wallClockMs": 33713993
   },
   "stepsCompleted": [
     "step-1",
@@ -381,5 +384,8 @@
     "outputTail": "[cwd packages/moe-daemon, HEAD 81bdc8a + this task's working tree]\nnpx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts -> EXIT=0\n Test Files  2 passed (2)\n      Tests  60 passed | 2 skipped (62)\nnpm --prefix packages/moe-daemon test (repo root) -> EXIT=0\n Test Files  118 passed (118)\n      Tests  1953 passed | 2 skipped (1955)\nnpx tsc --noEmit -p tsconfig.json -> EXIT=0 (no output)\nBaseline at 111e532: named 20 passed | 3 skipped; full 117 files, 1838 passed | 3 skipped.\nRed proof: step-2 note (acceptance + unit on old code); step-6 mutation series none 56/0, old 5 red, filter 2, clause 2, label 3, withheld 2, none 56/0.",
     "reportedAt": "2026-09-13T02:35:29.068Z"
   },
-  "completionSummary": "Under a strict settings.deliveryPolicy, a DONE prerequisite that lacks its delivery evidence now withholds its dependents. The default legacy policy is unchanged.\n\n- Rule: `dependencyUnblock.dependencyShortfall`.\n  - An absent or ARCHIVED prerequisite is satisfied. A non-DONE one is unmet, with no evidence claim.\n  - A DONE one is judged by `evaluateDeliveryEvidence` (delivery/policy.ts, task-c484696d), used verbatim. It is already a predicate over any task, so NO extraction was needed.\n  - `isDependencySatisfied` delegates to it and fails closed. It backs both claim gates, the wait_for_task matcher, the blockedOnTaskIds auto-unblock, the stale-block alert and the unmet counts. Cycle detection is untouched.\n- Refusal: an explicit claim throws -32003 `DEPENDENCY_EVIDENCE_MISSING` (util/claimGuards) before any write, with context `{taskId, prerequisiteTaskId, missingEvidence}`. A prerequisite unmet on status keeps today's NOT_ALLOWED text and takes precedence.\n- Self-review fix (adds tools/reportBlocked.ts, for DoD 4): report_blocked judged raw DONE/ARCHIVED and answered `dependenciesSatisfied:true` for a DONE prerequisite without evidence. It now uses the same predicate. `blockResolution` and the stale-block alert name the missing evidence, and DONE-held rows alert at 1x the timeout.\n- Tests: criterion 2 unskipped with its assertions unedited. dependencyUnblock.test.ts is +509 -0. Red proof is in the step-2 note (old code) and the step-6 mutation series.\n- Docs: MCP_SERVER.md (claim_next_task, report_blocked) and CONFIGURATION.md (deliveryPolicy).\n- Boundaries:\n  - This card reads recorded evidence only and re-runs nothing, so a CheckRun that lies about a gate still releases a dependent.\n  - ARCHIVED is not judged.\n  - A `record_check_run` after DONE releases a BLOCKED dependent only at the next 5-minute sweep, and wakes no parked wait_for_task.\n- Follow-up, left because of a collision with task-b1c98508: the SCHEMA.md:413-416 alert comment and the roles/governor*.md"
+  "completionSummary": "Under a strict settings.deliveryPolicy, a DONE prerequisite that lacks its delivery evidence now withholds its dependents. The default legacy policy is unchanged.\n\n- Rule: `dependencyUnblock.dependencyShortfall`.\n  - An absent or ARCHIVED prerequisite is satisfied. A non-DONE one is unmet, with no evidence claim.\n  - A DONE one is judged by `evaluateDeliveryEvidence` (delivery/policy.ts, task-c484696d), used verbatim. It is already a predicate over any task, so NO extraction was needed.\n  - `isDependencySatisfied` delegates to it and fails closed. It backs both claim gates, the wait_for_task matcher, the blockedOnTaskIds auto-unblock, the stale-block alert and the unmet counts. Cycle detection is untouched.\n- Refusal: an explicit claim throws -32003 `DEPENDENCY_EVIDENCE_MISSING` (util/claimGuards) before any write, with context `{taskId, prerequisiteTaskId, missingEvidence}`. A prerequisite unmet on status keeps today's NOT_ALLOWED text and takes precedence.\n- Self-review fix (adds tools/reportBlocked.ts, for DoD 4): report_blocked judged raw DONE/ARCHIVED and answered `dependenciesSatisfied:true` for a DONE prerequisite without evidence. It now uses the same predicate. `blockResolution` and the stale-block alert name the missing evidence, and DONE-held rows alert at 1x the timeout.\n- Tests: criterion 2 unskipped with its assertions unedited. dependencyUnblock.test.ts is +509 -0. Red proof is in the step-2 note (old code) and the step-6 mutation series.\n- Docs: MCP_SERVER.md (claim_next_task, report_blocked) and CONFIGURATION.md (deliveryPolicy).\n- Boundaries:\n  - This card reads recorded evidence only and re-runs nothing, so a CheckRun that lies about a gate still releases a dependent.\n  - ARCHIVED is not judged.\n  - A `record_check_run` after DONE releases a BLOCKED dependent only at the next 5-minute sweep, and wakes no parked wait_for_task.\n- Follow-up, left because of a collision with task-b1c98508: the SCHEMA.md:413-416 alert comment and the roles/governor*.md",
+  "completedAt": "2026-09-13T03:07:19.526Z",
+  "reviewCompletedAt": "2026-09-13T03:07:19.526Z",
+  "reviewSummary": "Verified task-94f53492 against all 7 DoD items + rails. Commits: completion 8ef4b89 (dependencyUnblock.ts/.test.ts, reportBlocked.ts, MCP_SERVER.md; recorded after reviewStartedAt) + checkpoint a303f04 (claimGuards.ts, claimNextTask.ts, acceptance.test.ts +1/-1 it.skip->it only, CONFIGURATION.md). Re-ran in repo @11b6216: `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts` exit 0, 60 passed | 2 skipped (baseline 20|3); `npm test` exit 0, 118 files, 1953 passed | 2 skipped; tsc 0. DoD5: dependencyUnblock.test.ts +509 -0, no other pre-existing test touched. One rule: dependencyShortfall/isDependencySatisfied consume evaluateDeliveryEvidence verbatim and fail closed; claim gate, wait matcher, auto-unblock, report_blocked filter and stale alert read it; cycle detection untouched. QA mutations (HEAD probe, 21 mutants, none 60/0 first+last, all tests collected), all red on named cases: old status-only rule 23 (crit2 'call resolved'); each of 5 decoy lookups (source/tree/command/exit/current candidate) reddens its own decoy case + crit2; write-before-throw 3 (byte purity); prose context 2; wrong prerequisite id 2; precedence swap 1; evidence on status-unmet 8; fail-open 4; missing id unmet 2; ARCHIVED judged 1; planning gated 1; report_blocked raw filter 2; alert class 2, label 3. NOTE: branch diverged from origin (ahead 27/behind 14); merged probe 120 files, 1984 passed | 2 failed (only origin aae0067 qaApprove round-anchor cases; conflict file not this card's) | 2 skipped, tsc 0. Boundaries: recorded evidence only; DONE judged on required check only; record_check_run wakes nothing (5-min sweep restores). Doc follow-up (SCHEMA.md, governor docs) posted to #general."
 }
