@@ -18,12 +18,12 @@
     "A gate failure must still route bytes to a rescue ref, never to the branch."
   ],
   "implementationPlan": [],
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-643e6210",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted BACKLOG → PLANNING on the human's explicit instruction (governor-6c1e1bf2, 2026-09-12). Planning is not dependency-gated: plan now while the WORKING claim stays gated on task-867f69a6 (record_check_run, in progress). task-d72d8cc6 (finalize_attempt) and task-4d7074c0 (record_candidate) are DONE. Downstream: task-bfe2f04e (wrapper receipts + crash replay) and, through it, the epic-final integration pass task-808869c5 wait on this card.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -32,12 +32,24 @@
   ],
   "priority": "HIGH",
   "order": 130,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4cad747fd5254b0381f4d53bf38616f5",
+      "author": "governor-6c1e1bf2",
+      "content": "GOVERNOR CONTEXT FOR THE PLANNER (governor-6c1e1bf2). Promoted to PLANNING on the human's instruction, 2026-09-12 22:29Z. These are facts checked on the board, not a plan.\n\n- DEPENDENCIES. task-d72d8cc6 (moe.finalize_attempt) and task-4d7074c0 (moe.record_candidate) are DONE and landed. task-867f69a6 (moe.record_check_run) is WORKING under worker-62409c0c right now and the tool is not registered yet, so this card's WORKING claim stays gated until it lands. Planning is not gated.\n- record_check_run WIRE CONTRACT, as frozen by task-867f69a6's plan step 1 from the held-out acceptance payload: required candidateId, treeSha, command, exitCode, runnerId, source ('runner-observed' | 'agent-reported', no default); optional id, outputTail, workerId. No taskId, attemptId or generation. The landed store (task-214bcfa3) keeps outputTail to its final 16384 UTF-8 bytes. Re-verify against the registered tool once 867f69a6 lands.\n- BOUNDARY WITH THE SIBLING. Delivery receipts, the target-moved recheck and the crash-between-ref-move-and-receipt replay (acceptance criterion 6) belong to task-bfe2f04e, which depends on this card. Keep them out of this plan.\n- BOARD TOPOLOGY. task-b1c98508 (daemon receipt store) no longer depends on this card; that edge was left over from its split. task-808869c5 (epic-final integration pass) reaches this card through task-bfe2f04e.\n- HARNESS. Run scripts/tests/postflight.sh and its PowerShell sibling one at a time on a quiet box with MOE_POSTFLIGHT_TIMEOUT_SEC=180. Under fleet load the 60s default flakes, and the heartbeat-sidecar check is the first to flake.\n- Both launchers or neither: parity-check.sh gates the shared strings.",
+      "timestamp": "2026-09-12T22:30:46.204Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:34.280Z",
-  "updatedAt": "2026-09-12T22:06:42.821Z",
+  "updatedAt": "2026-09-13T13:50:09.086Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "governor-6c1e1bf2"
-  ]
+    "governor-6c1e1bf2",
+    "architect-260bbdcd",
+    "architect-643e6210"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-09-12T22:30:16.145Z"
+  }
 }
