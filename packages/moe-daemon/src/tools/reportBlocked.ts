@@ -7,7 +7,12 @@ import { assertWorkerOwns } from '../util/enforcement.js';
 import { findFreshestLiveWorkerByRole } from '../util/workerLiveness.js';
 import { RESOURCE_ID_RE } from '../state/resourceStore.js';
 import { MAX_TASK_DEPENDENCY_IDS } from '../state/taskStore.js';
-import { findDependencyPath, formatDependencyCycle } from '../state/dependencyUnblock.js';
+import {
+  describeUnmetDependency,
+  findDependencyPath,
+  formatDependencyCycle,
+  isDependencySatisfied,
+} from '../state/dependencyUnblock.js';
 
 const MAX_REASON_LENGTH = 2000;
 
@@ -29,7 +34,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold). Declare the tasks you wait on via blockedOnTaskIds (ids in the reason text are auto-parsed too) — the daemon auto-unblocks the task when they are all DONE/ARCHIVED. If EVERY task you name is already DONE/ARCHIVED the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat writes nothing, pages nobody, and answers reasonUpdated:false.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold). Declare the tasks you wait on via blockedOnTaskIds (ids in the reason text are auto-parsed too) — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded). If EVERY task you name already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat writes nothing, pages nobody, and answers reasonUpdated:false.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -193,13 +198,16 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // already landed. The already-BLOCKED reason-update arm deliberately
       // KEEPS the union (satisfied ids included): that is the backfill path —
       // store the DONE ids and the next dependency sweep repairs the row.
+      // "Satisfied" is isDependencySatisfied, the answer that scan reads, so
+      // the two cannot disagree: under a strict settings.deliveryPolicy a DONE
+      // id still lacking its required check is unmet, so it is recorded and
+      // the row blocks on it rather than being told to continue on a delivery
+      // the record does not support. The getTask guard keeps an id missing
+      // from the board recorded, exactly as before.
       let satisfiedBlockedOnIds: string[] = [];
       let recordedBlockedOnIds = mergedBlockedOnIds;
       if (flipped) {
-        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => {
-          const dep = state.getTask(id);
-          return !!dep && (dep.status === 'DONE' || dep.status === 'ARCHIVED');
-        });
+        satisfiedBlockedOnIds = mergedBlockedOnIds.filter((id) => !!state.getTask(id) && isDependencySatisfied(state, id));
         if (satisfiedBlockedOnIds.length > 0) {
           const satisfied = new Set(satisfiedBlockedOnIds);
           recordedBlockedOnIds = mergedBlockedOnIds.filter((id) => !satisfied.has(id));
@@ -440,9 +448,19 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
               'If this is an interactive TUI, return control to its operator so the CLI can exit normally.'
           }
         : undefined;
+      // A recorded id that is already DONE is withheld by the delivery evidence
+      // rule, not unfinished, so "once it is DONE" alone would read as already
+      // satisfied: name what it lacks. Always empty under the default policy.
+      const heldOnEvidence = recordedBlockedOnIds.filter(
+        (id) => state.getTask(id)?.status === 'DONE' && !isDependencySatisfied(state, id)
+      );
       const blockResolution = freeSeat
         ? recordedBlockedOnIds.length > 0
-          ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED.`
+          ? `It auto-unblocks (returning unassigned, claimable by anyone) once ${recordedBlockedOnIds.join(', ')} are DONE/ARCHIVED.` +
+            (heldOnEvidence.length > 0
+              ? ' Already DONE but still withheld until the delivery evidence settings.deliveryPolicy requires is recorded: ' +
+                `${heldOnEvidence.map((id) => describeUnmetDependency(state, id)).join(', ')}.`
+              : '')
           : 'No unmet blockedOnTaskIds were recorded. A human/governor must clear the real blocker via moe.set_task_status; unblock_worker cannot reach an unassigned task. Re-file actual task dependencies if applicable.'
         : undefined;
       const nextAction = freeSeat ? undefined : deliveredButBlocked

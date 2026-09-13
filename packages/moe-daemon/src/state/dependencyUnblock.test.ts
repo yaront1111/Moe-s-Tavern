@@ -9,6 +9,7 @@ import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { qaApproveTool } from '../tools/qaApprove.js';
 import { setTaskStatusTool } from '../tools/setTaskStatus.js';
 import { archiveTaskTool } from '../tools/archiveTask.js';
+import { reportBlockedTool } from '../tools/reportBlocked.js';
 import {
   DEPENDENCY_WAIT_ALERT_MULTIPLIER,
   alertStaleBlocks,
@@ -789,6 +790,138 @@ describe('dependencyUnblock — delivery evidence on a DONE prerequisite', () =>
 
       expect(row('task-E').status).toBe('BLOCKED');
       expect(row('task-E').blockedOnTaskIds).toEqual(['task-P']);
+    });
+  });
+
+  // report_blocked filters already-satisfied ids out of a fresh block. It must
+  // judge them by the same rule, or a dependent is told to continue on exactly
+  // the delivery the claim gate and the auto-unblock withhold.
+  describe('report_blocked at report time', () => {
+    const REPORTER: Partial<Task> = { id: 'task-W', status: 'WORKING', order: 4 };
+
+    interface ReportResult {
+      taskStatus: string;
+      dependenciesSatisfied?: boolean;
+      blockedOnTaskIds?: string[];
+      satisfiedBlockedOnTaskIds?: string[];
+      blockResolution?: string;
+    }
+
+    /** task-W, an unassigned WORKING row, reports a block naming task-P. */
+    const reportOnP = async (): Promise<ReportResult> =>
+      (await reportBlockedTool(h.state).handler(
+        { taskId: 'task-W', reason: 'Waiting on the prerequisite to land.', blockedOnTaskIds: ['task-P'] },
+        h.state
+      )) as ReportResult;
+
+    it('blocks on a DONE prerequisite still lacking its required check, and the dependency scan releases it once the pass is recorded', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBeUndefined();
+      expect(result.taskStatus).toBe('BLOCKED');
+      expect(result.blockedOnTaskIds).toEqual(['task-P']);
+      expect(row('task-W').status).toBe('BLOCKED');
+      expect(row('task-W').blockedOnTaskIds).toEqual(['task-P']);
+      // "once task-P is DONE" alone would read as already satisfied: the resolution names what it lacks.
+      expect(result.blockResolution).toBe(
+        'It auto-unblocks (returning unassigned, claimable by anyone) once task-P are DONE/ARCHIVED. ' +
+          'Already DONE but still withheld until the delivery evidence settings.deliveryPolicy requires is recorded: ' +
+          'task-P [DONE, missing required-check:node gate.cjs].'
+      );
+
+      await recordCheckRun(h.state, RUNNER_PASS);
+
+      expect((await runDependencyUnblock(h.state)).sort()).toEqual(['task-E', 'task-W']);
+      expect(row('task-W').status).toBe('WORKING');
+    });
+
+    it('fails closed: under an unrecognised deliveryPolicy the DONE prerequisite is recorded and the row blocks', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS], tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBeUndefined();
+      expect(row('task-W').status).toBe('BLOCKED');
+      expect(row('task-W').blockedOnTaskIds).toEqual(['task-P']);
+      expect(result.blockResolution).toContain('task-P [DONE, delivery evidence could not be judged: check settings.deliveryPolicy].');
+    });
+
+    it.each<[string, Fixture]>([
+      ['under the default policy with no evidence at all', { settings: DEFAULT_POLICY_SETTINGS, candidates: false }],
+      ['under the strict policy once a runner-observed pass is recorded', { checks: [...FAILED_RUN_AND_DECOYS, RUNNER_PASS] }],
+    ])('still answers dependenciesSatisfied without blocking for a DONE prerequisite %s', async (_label, fixture) => {
+      await seed({ ...fixture, tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBe(true);
+      expect(result.satisfiedBlockedOnTaskIds).toEqual(['task-P']);
+      expect(row('task-W').status).toBe('WORKING');
+      expect(row('task-W').blockedOnTaskIds ?? null).toBeNull();
+    });
+  });
+
+  describe('the stale-block alert', () => {
+    const HOUR = 60 * 60 * 1000;
+    /** Another row held on task-P, blocked past the default one-hour timeout but inside the 2× bound. */
+    const HELD_PAST_TIMEOUT: Partial<Task> = {
+      id: 'task-S',
+      status: 'BLOCKED',
+      order: 5,
+      blockedOnTaskIds: ['task-P'],
+      blockedFromStatus: 'WORKING',
+      blockedReason: 'Waiting on task-P to land.',
+      blockedAt: new Date(Date.now() - 1.5 * HOUR).toISOString(),
+    };
+
+    function captureGovernorPosts(): string[] {
+      const posts: string[] = [];
+      vi.spyOn(h.state, 'postToRoleChannel').mockImplementation(async (role: string, msg: string) => {
+        if (role === 'governors') posts.push(msg);
+      });
+      return posts;
+    }
+    const postFor = (posts: string[], id: string): string | undefined => posts.find((m) => m.startsWith(`⚠️ ${id} `));
+
+    it('pages #governors at the blocked timeout for a row held on a DONE prerequisite and names the evidence it lacks', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(2);
+      for (const id of ['task-E', 'task-S']) {
+        expect(postFor(posts, id)).toContain('waiting on task-P [DONE, missing required-check:node gate.cjs]');
+        expect(postFor(posts, id)).toContain('are DONE but lack the delivery evidence settings.deliveryPolicy requires');
+        expect(row(id).status).toBe('BLOCKED'); // alert only
+      }
+    });
+
+    it('names evidence that cannot be judged at all instead of throwing out of the pass', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS], tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(2);
+      expect(postFor(posts, 'task-S')).toContain('task-P [DONE, delivery evidence could not be judged: check settings.deliveryPolicy]');
+    });
+
+    it('under the default policy a row waiting on a DONE prerequisite draws no alert, because the dependency scan owns it', async () => {
+      await seed({ settings: DEFAULT_POLICY_SETTINGS, candidates: false, tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(0);
+      expect(posts).toEqual([]);
+    });
+
+    it('the blocked-timeout sweep keeps the held row BLOCKED on its prerequisite and pages the evidence it lacks', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+      const posts = captureGovernorPosts();
+
+      await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));
+
+      expect(row('task-E').status).toBe('BLOCKED');
+      expect(row('task-E').blockedOnTaskIds).toEqual(['task-P']);
+      expect(postFor(posts, 'task-E')).toContain('waiting on task-P [DONE, missing required-check:node gate.cjs]');
     });
   });
 });
