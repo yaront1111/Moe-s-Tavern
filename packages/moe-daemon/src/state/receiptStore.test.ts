@@ -628,10 +628,10 @@ describe('moe.record_delivery_receipt', () => {
   });
 
   it.each([
-    ['no arguments at all', undefined, 'INVALID_INPUT'],
-    ['a missing landedRevision', { ...LANDING, landedRevision: undefined }, 'MISSING_REQUIRED'],
-    ['a ref name as landedRevision', { ...LANDING, landedRevision: 'HEAD' }, 'INVALID_INPUT'],
-  ])('refuses %s through the handler as %s, writing nothing', async (_label, args, codeName) => {
+    ['no arguments at all', 'INVALID_INPUT', undefined],
+    ['a missing landedRevision', 'MISSING_REQUIRED', { ...LANDING, landedRevision: undefined }],
+    ['a ref name as landedRevision', 'INVALID_INPUT', { ...LANDING, landedRevision: 'HEAD' }],
+  ])('refuses %s through the handler as %s, writing nothing', async (_label, codeName, args) => {
     const error = await refusal(registered().handler(args, h.state));
 
     expect([error.code, error.codeName]).toEqual([-32602, codeName]);

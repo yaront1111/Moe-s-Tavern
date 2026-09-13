@@ -1,0 +1,46 @@
+{
+  "id": "task-bfe2f04ea25941cbbeaa9d07bd4dc1e7",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Land receipts from both wrappers and reconcile a crash between the ref move and the receipt",
+  "description": "Split out of task-b1c9850824fe4437a8c70b4ee083602b on 2026-09-12, applying the operator's earlier ruling that a card at the size gate's ceiling is split rather than planned whole. That card needed roughly twelve files across TypeScript and both launcher scripts. It keeps the daemon side: the DeliveryReceipt type, its store and the recording tool. This card owns the wrapper side, which is where acceptance criterion 6 actually lives.\n\nObjective: make the landing itself prove where the code went, and make a crash between the ref move and the bookkeeping recoverable without landing twice.\n\nDeliverable, in scripts/moe-agent.ps1 and scripts/moe-agent.sh with their harnesses:\n- Every successful landing records a delivery receipt through the tool delivered by the prerequisite card, carrying the target name, the target revision before and after, the landed revision and the push result when the policy requires one.\n- When the target revision moved between the check run and the landing, the wrapper reconstructs the candidate against the new tip and reruns the gate. A cached check result is reused ONLY when the candidate tree and the base both match exactly.\n- Replaying a landing after a crash between the ref update and the receipt write reconciles to the landing that already happened and writes the one missing receipt, rather than moving the target a second time.\n\nUnskips the acceptance case \"a crash between an external effect and its bookkeeping does not repeat the effect\" (src/delivery/acceptance.test.ts, describe at line 1982). That case executes the ACTUAL platform wrapper, generates its Codex and transport shims at runtime, routes every business call through the production McpAdapter, and kills the whole process tree while the receipt request is in flight. Its assertions may not be edited.\n\nNot in scope: the receipt type, store and tool, which the prerequisite card delivers; batch or queued integration of several candidates, which is Wave 2.\n\nVerification: npx vitest run src/delivery/acceptance.test.ts from packages/moe-daemon, then bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh from the repo root.",
+  "definitionOfDone": [
+    "Both wrappers write a delivery receipt on every successful landing, carrying target before and after, the landed revision and the push result",
+    "A target that moved between check and landing forces a rebuilt candidate and a rerun gate; a cached result is reused only on an exact candidate tree and base match",
+    "Replaying the landing after a crash between the ref update and the receipt write reconciles to the existing landing and writes the one missing receipt, never moving the target twice",
+    "The acceptance case for a crash between effect and bookkeeping is unskipped and passes with no edit to its assertions",
+    "Wrapper string parity holds across both launchers and the postflight harness covers the new landing path",
+    "npx vitest run src/delivery/acceptance.test.ts passes, bash scripts/tests/postflight.sh passes, and bash scripts/tests/parity-check.sh passes"
+  ],
+  "taskRails": [
+    "Reconciliation must be idempotent: never land the same candidate twice after a crash.",
+    "The wrapper stays the only git actor; the daemon must not gain a git or process action from this card.",
+    "Wave 2 owns queued or batched integration; this card handles one candidate at a time.",
+    "Both launchers change together and parity-check must stay green."
+  ],
+  "implementationPlan": [],
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b1c9850824fe4437a8c70b4ee083602b",
+    "task-49ec8755a9ad4fa29c87294adf61804d"
+  ],
+  "priority": "HIGH",
+  "order": 145,
+  "comments": [
+    {
+      "id": "comment-d779eb1613a24e7290c56997ac4ae7fd",
+      "author": "worker-62409c0c",
+      "content": "CONTRACT NOTES FROM THE DAEMON HALF (task-b1c9850824fe4437a8c70b4ee083602b, going to REVIEW now), for whoever plans this wrapper half.\n\nCALL:\n- `moe.record_delivery_receipt { candidateId, target, targetBefore, targetAfter, landedRevision, pushResult? }`.\n- There is no id: the daemon generates `receipt-<32 hex>`. The candidate is the key: at most one receipt per candidate, never rewritten.\n\nINPUT RULES (refused, never coerced):\n- Revisions must be exactly 40 hex. They are stored verbatim and compared exactly, case included.\n- `target`: non-blank, unpadded, no control chars, at most 255 chars.\n- `pushResult`: a non-blank string of at most 2000 chars, or null/omitted when no push was required (both are stored as null). Longer is REFUSED, not truncated, so send a bounded one-line summary, not raw push output.\n\nANSWER: `{ success: true, receipt, duplicate }`.\n- `duplicate: false`: this call recorded the landing.\n- `duplicate: true`: an identical receipt already existed and nothing was written. Read it as \"already recorded\", never as a reason to land again, and never infer either answer from the absence of an error.\n\nA REPLAY MUST BE THE SAME REPORT. Any differing field is refused with `-32002`, `data.codeName` `DELIVERY_RECEIPT_CONFLICT`. The message names the differing fields; the error context does not cross the wire.\n- So persist the report, especially `targetBefore`, BEFORE moving the ref.\n- A `targetBefore` recomputed from the current tip after a crash WILL conflict.\n- Criterion 6 projects `targetBefore: base` and replays `held.args` expecting one file with identical bytes, which the duplicate path satisfies.\n\nOTHER REFUSALS:\n- `-32002 DELIVERY_RECEIPT_AMBIGUOUS`: two receipts on disk for one candidate, which only hand-placed files cause.\n- `-32001 CANDIDATE_NOT_FOUND`: checked only when no receipt exists yet, so a replay still reconciles when the candidate record is gone.\n- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`.\n- A failed write is `-32000` with no receipt anywhere; retry the same report.\n\nThe daemon verifies nothing about the ref: a receipt is only what the wrapper reported.\n\nSTALE POINTER: acceptance.test.ts:1982 still says \"UNSKIP OWNER: task-b1c98508...\". Per comment-25467e45, criterion 6 belongs to this card. It was left untouched because the daemon-half plan forbade editing that file; update it when you unskip.",
+      "timestamp": "2026-09-13T02:25:20.451Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-12T18:47:26.339Z",
+  "updatedAt": "2026-09-13T02:25:20.451Z"
+}

@@ -78,7 +78,7 @@
     {
       "stepId": "step-5",
       "description": "ADD THE TOOL AND REGISTER IT. Create packages/moe-daemon/src/tools/recordDeliveryReceipt.ts following the shape of the neighbouring tool modules: an exported factory returning a ToolDefinition named `moe.record_delivery_receipt`, an input schema declaring the contract fields with additionalProperties false and the push result optional, and a handler whose whole body runs inside state.runExclusive and delegates to the store rather than reimplementing any rule. Do NOT mark it blocking. Return the recorded receipt along with whether this call created it or matched an existing one, because the sibling wrapper card needs to tell a fresh landing from a reconciled replay and inferring that from an absent error is exactly the ambiguity that makes crash recovery land twice. Describe it in the tool description as wrapper-called and not for agents, the way the other landing-side tools are described. Then register it in getTools() in src/tools/index.ts, which a definition-of-done item requires and without which the tool is silently invisible to MCP. Document it in docs/MCP_SERVER.md in the existing per-tool format: purpose, parameters, returns, and notes covering that it is idempotent per candidate, that a contradicting report is refused by name rather than overwriting, that the created-or-matched flag is how a replay is recognised, and the boundary that the daemon records a reported landing and verifies nothing about the target itself.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/index.ts",
         "docs/MCP_SERVER.md"
@@ -86,18 +86,29 @@
       "newFiles": [
         "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts"
       ],
-      "startedAt": "2026-09-13T00:48:17.450Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
+        "packages/moe-daemon/src/tools/index.ts",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/receiptStore.test.ts"
+      ],
+      "note": "TOOL, REGISTRATION, DOCS, TEST FILE LANDED. Finished across two sessions: the first died after writing the bytes but before complete_step, and this session re-verified them.\n\n- NEW packages/moe-daemon/src/tools/recordDeliveryReceipt.ts (LF, 90 lines):\n  - recordDeliveryReceiptTool(state) returns a ToolDefinition named 'moe.record_delivery_receipt'.\n  - inputSchema has 7 string properties: candidateId, target, targetBefore, targetAfter, landedRevision, optional pushResult, workerId. The 5 contract fields are required; additionalProperties is false; there is no id and no createdAt.\n  - The whole handler body runs inside state.runExclusive. It validates with the store's validateDeliveryReceiptParams, delegates to recordDeliveryReceipt and returns {success:true, receipt, duplicate}. duplicate=false means created; true means an existing receipt matched and nothing was written. No rule is reimplemented in the handler.\n  - NOT blocking. The description starts 'Wrapper-called; not for agents', names each refusal, and says reported-not-verified.\n- packages/moe-daemon/src/tools/index.ts (+2): import plus a getTools() entry after recordCheckRunTool.\n- docs/MCP_SERVER.md:\n  - The no-gate exemption paragraph is at :119.\n  - '### moe.record_delivery_receipt' at :764-835 covers purpose, parameters, returns and an example.\n  - Its notes cover: duplicate is the replay signal; idempotent per candidate and never overwritten; a CONFLICT refusal by name; reported not verified (the daemon runs no git and reads no ref); the existing receipt is consulted first; no createdAt.\n  - Errors are listed in check order: INVALID_INPUT/MISSING_REQUIRED, AMBIGUOUS, CONFLICT, CANDIDATE_NOT_FOUND, then a failed write as -32000.\n- packages/moe-daemon/src/state/receiptStore.test.ts is now in the repo. It is cmp-identical to the scratch draft that was red-run in step 2.\n\nATTRIBUTION QUIRK, for QA:\n- The docs bytes from this task (docs/SCHEMA.md from step 3, docs/MCP_SERVER.md from this step) were swept into PEER checkpoint a303f04, 'wip(task-94f53492...)', at 2026-09-13 03:50 +0300.\n- `git log -S 'moe.record_delivery_receipt' -- docs/MCP_SERVER.md` and `git log -S '## DeliveryReceipt' -- docs/SCHEMA.md` both return a303f04.\n- The content is this task's. The code files landed in this task's own checkpoint 792b02c. Nothing is left dirty, so this task's completion commit will not re-list the docs.\n- a303f04 also changed acceptance.test.ts by 2 lines. That is the peer's edit, not this task's; this plan forbids editing that file.\n\nVERIFIED (fresh, this session, packages/moe-daemon):\n- `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`: exit 0.\n- `node node_modules/vitest/vitest.mjs run src/state/receiptStore.test.ts src/tools/registry.test.ts src/util/taskTimeBudgetDocs.test.ts`: exit 0, 3 files, 94 passed. Coverage: the registry guard (every *Tool factory registered), the docs guard (documented tools are a subset of registered ones) and the receipt tests.\n- Logs: %TEMP%/moe-b1c9-evidence/s2-step5-{tsc,vitest}.log.\n\nDocs parity: only docs/ and acceptance.test.ts name record_check_run. There is no role map or other tool list that needed an entry.",
+      "startedAt": "2026-09-13T00:48:17.450Z",
+      "completedAt": "2026-09-13T02:13:28.481Z"
     },
     {
       "stepId": "step-6",
       "description": "RUN THE GATE AND ESTABLISH THE RED BY MUTATION. From packages/moe-daemon run this card's narrowed command: `npx vitest run src/state/receiptStore.test.ts`. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Because this is a new store there is no old behaviour to fail against directly, so establish the red by mutation, restoring the checkout after each one and re-verifying with a separate status check rather than trusting the edit: remove the existing-receipt short circuit so a repeat call writes a second time and name the test that fails; make the contradiction check pass through so a differing report overwrites the stored record and name the test that fails; swap the persist-before-publish order so a rejected write still leaves a record in the map and name the test that fails; and drop the one-receipt-per-candidate rule and name the test that fails. Do NOT touch src/delivery/acceptance.test.ts: criterion 6 moved to the sibling card with the wrapper work, so every skip state in that file stays exactly as it is. Keep the commands, exit codes, counts and the four mutation results for the verification argument of moe.complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GATE PLUS RED BY MUTATION. This step changed no repo bytes: it produced evidence only.\n\nGATE (fresh, this session; each exit code captured before any grep):\n- Narrowed plan command, `cd packages/moe-daemon && npx vitest run src/state/receiptStore.test.ts`: exit 0. Test Files 1 passed (1), Tests 75 passed (75).\n- Full suite from the repo root, `npm --prefix packages/moe-daemon test`: exit 0. Test Files 118 passed (118), Tests 1945 passed | 2 skipped (1947).\n- BASELINE, measured on the same tree without this card's test file (`node node_modules/vitest/vitest.mjs run --exclude src/state/receiptStore.test.ts`): exit 0, 117 files, 1870 passed | 2 skipped.\n  - Delta: exactly +1 file and +75 tests, skips unchanged at 2. That is strictly above baseline and is exactly receiptStore.test.ts.\n- `cd packages/moe-daemon && npx tsc --noEmit -p tsconfig.json`: exit 0, empty output.\n\nMUTATION SETUP:\n- Scratch D:/moe-b1c9-scratch. src, docs, scripts and config were re-synced from the repo this session, and `diff -rq` came back clean.\n- Driver: mutate.mjs. It restores receiptStore.ts, recordDeliveryReceipt.ts and index.ts from pristine/ before AND after every run. Each anchor must match exactly once. The shared checkout is never edited.\n- Series: `node D:/moe-b1c9-scratch/mutate.mjs none <12 mutants> none`. The `none` run gave 75/75 both first and last.\n\nPLAN MUTANT 1, no-short-circuit (a repeat report writes a second receipt): 15 red. Named tests:\n- 'replays an identical report for the same candidate: the stored receipt, duplicate, zero writes, identical bytes' (duplicate:false vs true).\n- All 7 'refuses <contradiction> by name for a candidate that already has a receipt, writing nothing' (expected a MoeError refusal, but the call succeeded).\n- 'loads the held-out acceptance fixture verbatim and reconciles a replay of that landing to it' ([CANDIDATE_NOT_FOUND] cand-P-current).\n- 'serializes concurrent identical reports inside its own handler' ([false,false] vs [false,true]).\n- The MCP replay test, plus the omitted/null, no-push, order and restart tests.\n\nPLAN MUTANT 2, conflict-overwrites (a differing report rewrites the stored receipt under its own id): 12 red. Named tests:\n- The same 7 'refuses ... by name' (the call succeeded).\n- 'refuses a report of no push once a push result was recorded'.\n- 'checks in order', the fixture test and the restart test.\n- The MCP test (expected undefined to deeply equal { code: -32002 }).\n- Mutant 2b, conflict-replays-silently (a differing report is answered duplicate:true): the same 12 red.\n\nPLAN MUTANT 3, publish-before-persist: 2 red.\n- 'publishes nothing when the write fails, hands the caller that error, and a retry then records it' (expected 1 to be +0: the rejected write left a receipt in the map).\n- 'hands a failed write to the caller unchanged, over MCP too, leaving no receipt and no success'.\n\nPLAN MUTANT 4, ambiguity-picks-first (drops the one-receipt-per-candidate refusal): 1 red.\n- 'refuses to answer or record for a candidate that already has two receipts on disk' (the call succeeded).\n\nEXTRA MUTANTS, all red:\n- replay-rewrites-same-bytes: 5 red, via the writeEntity spy. File bytes alone cannot catch a same-bytes rewrite.\n- candidate-checked-first: 1 red, the fixture test.\n- push-null-dropped: 11 red ('expected undefined to be null' and the key list).\n- field-renamed: 19 red.\n- revision-case-folded: 1 red ('records upper-case revisions exactly as reported').\n- handler-without-mutex: 1 red ('serializes concurrent identical reports').\n- unregistered: 9 red ('must be registered in getTools()').\n\nRESTORE VERIFIED SEPARATELY, not taken from the driver alone:\n- The driver printed 'scratch targets restored to pristine: true' and 'repo targets still equal pristine: true'.\n- `git status --short -- packages docs scripts` came back empty.\n- `cmp` of the repo against pristine/ for all 3 targets: identical.\n\nACCEPTANCE FILE UNTOUCHED:\n- `git diff --quiet HEAD -- src/delivery/acceptance.test.ts` is clean.\n- Skip markers (.skip/.skipIf/.todo): 3 at HEAD, 3 in the worktree.\n- 0 commits naming this task touch the file.\n\nLogs: %TEMP%/moe-b1c9-evidence/s2-step6-{narrowed,npmtest,baseline,tsc,mutants}.log and mutants/*.json.\n\nFound while reading the red titles, fixed in step 7: the handler-refusal it.each title 'refuses %s through the handler as %s' fills its second %s with the args, not the codeName. It is cosmetic, and the assertions do use the codeName.",
+      "startedAt": "2026-09-13T02:15:55.365Z",
+      "completedAt": "2026-09-13T02:18:14.730Z"
     },
     {
       "stepId": "step-7",
       "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: a repeated identical report writes zero bytes, checked by comparing the stored file before and after rather than by trusting the store's short circuit; a contradicting report for the same candidate is refused by name and cannot overwrite the record of what actually happened; no candidate can end up with two receipts, since the wrapper's crash replay asks this store whether the landing already happened; every mutation persists before it publishes, so a rejected write leaves the map clean and a crash cannot expose a receipt that is not on disk; the field names match the held-out fixture exactly, because the policy evaluation and the wrapper both read that shape and a renamed field breaks them silently; a null push result is preserved as null rather than dropped or coerced; the tool is registered, is not blocking, and returns whether it created or matched so a replay is recognisable; and nothing in this card gained a git action, a process action or any inspection of a real ref. Confirm the file count is the eight in scope and that no wrapper, harness or acceptance-case change crept in. Then call moe.complete_task with the verification evidence, list every modified path in modifiedFiles, and tell QA plainly: that four definition-of-done items moved to task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 under the split recorded in this card's comment and are deliberately absent here, that this card delivers the idempotent recording primitive the replay depends on rather than the replay itself, and the honest boundary that a receipt is what a wrapper reported about a landing it performed — the daemon verifies nothing about the target, so a receipt cannot prove on its own that the code is where it claims.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/StateManager.ts",
@@ -105,11 +116,17 @@
         "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
         "packages/moe-daemon/src/tools/index.ts",
         "packages/moe-daemon/src/state/receiptStore.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/receiptStore.test.ts"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW: one defect found and fixed; every plan item confirmed with evidence.\n\nFIXED (receiptStore.test.ts, +4/-4):\n- The handler-refusal it.each title 'refuses %s through the handler as %s' filled its second %s with the args object (\"as undefined\") instead of the codeName.\n- Tuples are reordered to [label, codeName, args]. Titles now read \"... as INVALID_INPUT\" or \"... as MISSING_REQUIRED\". The assertions are unchanged.\n\nCONFIRMED:\n1. An identical replay writes zero bytes. The writeEntity spy is not called, the raw file bytes are equal and there is one file, in the store, restart, fixture and real-McpAdapter tests. Mutant replay-rewrites-same-bytes: 5 red, caught by the spy.\n2. A contradiction is refused by name and never overwrites: DELIVERY_RECEIPT_CONFLICT {candidateId, receiptId, differingFields}, with the hex snapshot of files plus map unchanged. The upsert mutant and the silent-replay mutant: 12 red each.\n3. No candidate gets two receipts.\n   - Lookup-then-write runs under the state mutex: dispatch plus the handler's own reentrant runExclusive.\n   - The concurrency test gives 1 write and duplicates [false, true]. handler-without-mutex: red.\n   - Hand-placed twins are refused DELIVERY_RECEIPT_AMBIGUOUS. Ambiguity mutant: red.\n4. Persist before publish.\n   - A rejected write leaves the map empty and no file; a retry records. Mutant: 2 red.\n   - Torn write: atomicWrite's temp file is <file>.<pid>.<ts>.<rand>.tmp and loadEntities reads only *.json, so it never loads.\n   - Crash after rename but before map.set: the restart loads the file, and a replay answers duplicate:true.\n5. Field names match the held-out fixtures.\n   - Criterion 2 (acceptance.test.ts:1245-1253) is exactly the 7 fields with pushResult:null.\n   - Criterion 6 (:2127-2163) projects the same 6 non-id fields and replays held.args expecting one file with identical bytes, which is the duplicate path.\n   - field-renamed mutant: 19 red.\n6. A null or omitted pushResult is stored as null. push-null-dropped mutant: 11 red.\n7. Registered once, not blocking, returns {success, receipt, duplicate}. unregistered mutant: 9 red.\n8. No git, process or ref access. NO_PROCESS regex tests cover the store and the tool. A grep for eval(, innerHTML, dangerouslySetInnerHTML, __proto__ and any across the 4 code files found nothing.\n\nSCOPE, 8 files:\n- This task's own commits (subject-anchored) touch schema.ts, StateManager.ts, receiptStore.ts, receiptStore.test.ts, recordDeliveryReceipt.ts and tools/index.ts.\n- SCHEMA.md and MCP_SERVER.md came via peer a303f04. The CONFIGURATION.md change in that commit is the peer's.\n- No wrapper, script, harness or acceptance change: acceptance.test.ts is clean with 3/3 skip markers.\n- Existing files changed additively only: schema.ts +43 (type only), StateManager.ts +5, index.ts +2.\n\nNOTED, NOT FIXED:\n- Trust: like record_candidate and record_check_run, there is no caller authentication, and a wrapper and its agent share one workerId. A squatted receipt makes the real report fail loudly as CONFLICT, never silently.\n- A replay must be the SAME report. A wrapper that recomputes targetBefore after moving the ref gets CONFLICT, and a pushResult over 2000 chars is refused rather than truncated. Sibling task-bfe2f04e must persist its report before moving the ref and send a bounded pushResult.\n- pushResult stays type 'string' in the schema: no tool schema here uses type arrays, and null is accepted and documented.\n- The per-candidate lookup is O(receipts). Hand edits to .moe/receipts take effect only on restart, same as checks.\n- receiptStore.test.ts is 646 lines. It stays one file: the plan's command names it, and a split would add a ninth path.\n\nRE-VERIFIED AFTER THE FIX:\n- `cd packages/moe-daemon && npx vitest run src/state/receiptStore.test.ts`: exit 0, 75 passed.\n- `npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts`: exit 0, 79 passed | 2 skipped.\n- `npx tsc --noEmit -p tsconfig.json`: exit 0, 0 bytes.\n- `npm --prefix packages/moe-daemon test`: exit 0, 118 files, 1945 passed | 2 skipped.\n- Mutation rerun: identical counts, none 75/75 first and last, repo untouched. Scratch differed only in 3 files a peer is editing now, none imported by the receipt tests.\n- NOT RUN: scripts/tests/postflight.sh. No script changed, and comment-25467e45 moved it to task-bfe2f04e.\n\nLogs: %TEMP%/moe-b1c9-evidence/s2-step7-*.log.",
+      "startedAt": "2026-09-13T02:21:00.877Z",
+      "completedAt": "2026-09-13T02:24:38.111Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-62409c0c",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-9dc36824",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -143,17 +160,18 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:52.486Z",
-  "updatedAt": "2026-09-13T01:36:56.537Z",
+  "updatedAt": "2026-09-13T02:27:37.125Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "governor-6c1e1bf2",
-    "worker-62409c0c"
+    "worker-62409c0c",
+    "qa-9dc36824"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T18:46:32.548Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 4
+    "executedStepCount": 7
   },
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -162,7 +180,10 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-12T18:49:18.259Z",
@@ -309,16 +330,34 @@
       "treeId": "038c747dd42fb87bb2e87d57d76f37dcc46a6e87",
       "status": "WORKING",
       "pushed": false
+    },
+    {
+      "sha": "71d56014d9ee1f6a5300a15d6e651f7a2386f595",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-62409c0c@2026-09-13T01:51:57Z",
+      "paths": [
+        ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json"
+      ],
+      "recordedBy": "worker-62409c0c",
+      "recordedAt": "2026-09-13T01:52:02.590Z",
+      "treeId": "373196588a9538ce707eb5f7e08ff1491881f01e",
+      "status": "WORKING",
+      "pushed": false
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json",
-    "packages/moe-daemon/src/state/receiptStore.test.ts",
-    "packages/moe-daemon/src/state/receiptStore.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/state/StateManager.ts",
     "packages/moe-daemon/src/tools/index.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/SCHEMA.md",
+    "packages/moe-daemon/src/state/receiptStore.ts",
     "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
-    "packages/moe-daemon/src/types/schema.ts"
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/state/receiptStore.test.ts"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
@@ -333,7 +372,15 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-62409c0c@2026-09-13T01:36:51Z",
-    "at": "2026-09-13T01:36:56.537Z"
-  }
+    "sessionId": "worker-62409c0c@2026-09-13T01:51:57Z",
+    "at": "2026-09-13T01:52:02.590Z"
+  },
+  "reviewStartedAt": "2026-09-13T02:27:17.070Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/state/receiptStore.test.ts src/delivery/acceptance.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\n     Tests  79 passed | 2 skipped (81)   [fresh final run: receiptStore 75 passed; acceptance 4 passed, 2 skipped, skip markers unchanged 3/3]\n\nAlso fresh this session, after the last code edit (step 7), each exit captured before grep:\n- npx vitest run src/state/receiptStore.test.ts: exit 0, Tests 75 passed (75)\n- npm --prefix packages/moe-daemon test: exit 0, Test Files 118 passed (118), Tests 1945 passed | 2 skipped (1947)\n- baseline, same tree with --exclude src/state/receiptStore.test.ts: exit 0, 117 files, 1870 passed | 2 skipped. Delta is exactly +1 file / +75 tests\n- npx tsc --noEmit -p tsconfig.json: exit 0, no output\n\nMutation red (scratch tree, repo never edited; driver saved at %TEMP%/moe-b1c9-evidence/mutate.mjs), 14 runs, none 75/75 first and last:\n- no-short-circuit 15 red\n- conflict-overwrites 12\n- conflict-replays-silently 12\n- publish-before-persist 2\n- ambiguity-picks-first 1\n- replay-rewrites-same-bytes 5\n- candidate-checked-first 1\n- push-null-dropped 11\n- field-renamed 19\n- revision-case-folded 1\n- handler-without-mutex 1\n- unregistered 9\n\nNOT RUN: bash scripts/tests/postflight.sh. No script changed; comment-25467e45 moved it to task-bfe2f04e.",
+    "reportedAt": "2026-09-13T02:27:17.070Z"
+  },
+  "completionSummary": "Daemon half of the delivery receipt. The wrapper half was split to task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 (comment-25467e45).\nDELIVERED:\n- DeliveryReceipt in schema.ts: exactly the 7 held-out fixture fields; pushResult is string|null.\n- StateManager.receipts, loaded from .moe/receipts.\n- state/receiptStore.ts: an idempotent recorder, one receipt per candidate. An identical report returns duplicate:true and writes 0 bytes. A differing one gets DELIVERY_RECEIPT_CONFLICT (with differingFields); twins on disk get DELIVERY_RECEIPT_AMBIGUOUS; a new receipt needs its candidate (CANDIDATE_NOT_FOUND). It persists before it publishes.\n- moe.record_delivery_receipt: registered in getTools(), not blocking, holds the mutex, returns {success,receipt,duplicate}.\n- Docs in SCHEMA.md and MCP_SERVER.md. Those bytes landed in peer checkpoint a303f04 (git log -S proves it). The 2-line report_blocked hunk now dirty in MCP_SERVER.md (:889) is the peer's; if my completion commit carries it, that is path attribution, not my edit.\nMOVED TO THE SIBLING, deliberately absent here:\n- both wrappers writing receipts\n- the target-moved rebuild and gate rerun\n- the crash replay itself\n- unskipping acceptance criterion 6 (acceptance.test.ts untouched)\n- postflight.sh (not run; no script changed)\nThis card is the idempotent recording primitive the replay depends on, not the replay.\nBOUNDARY: a receipt is what a wrapper REPORTED about a landing it performed. The daemon runs no git and verifies nothing about the target, so a receipt cannot prove on its own that the code is where it claims.\nEVIDENCE: 12 mutants all red, including the 4 planned: short circuit 15, contradiction pass-through 12, publish-before-persist 2, one-per-candidate 1. Suite 1945 passed vs baseline 1870 (+75). tsc exit 0.\nFOR THE SIBLING (see its comment): a replay must be the SAME report, so persist it before moving the ref. pushResult must be at most 2000 chars."
 }
