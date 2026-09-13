@@ -116,8 +116,8 @@
       "completedAt": "2026-09-13T00:01:00.793Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-9dc36824",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -133,7 +133,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:15.135Z",
-  "updatedAt": "2026-09-13T00:03:22.594Z",
+  "updatedAt": "2026-09-13T00:21:24.279Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "worker-62409c0c",
@@ -143,7 +143,9 @@
     "firstClaimAt": "2026-09-12T18:41:55.776Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-13T00:21:24.279Z",
+    "wallClockMs": 20368503
   },
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -202,7 +204,70 @@
     "docs/MCP_SERVER.md",
     "docs/SCHEMA.md",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
-    "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+    ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json"
   ],
-  "completionSummary": "DONE gate driven by settings.deliveryPolicy.\n\nNEW packages/moe-daemon/src/delivery/policy.ts is the single authority: a plain predicate over ANY task. evaluateDeliveryEvidence(state, task, attestations?) returns {policy, satisfied, missingEvidence}. task-94f53492 consumes the token vocabulary through EVIDENCE_TOKENS / requiredCheckToken: completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<trimmed qualityGate>. The last renders 'required-check:node gate.cjs' exactly.\n\nRules:\n- Absent/null = legacy. The soft NO-COMPLETION-COMMIT gate is unchanged on purpose: the wrapper lands commits after the CLI exits. An unknown value is INVALID_INPUT.\n- local-branch: completion commit at/after reviewStartedAt. remote-push: one recorded pushed. merged-pull-request / manual-artifact: an attestation to qa_approve, accepted only under its own policy, persisted as task.deliveryEvidence {verifiedDelivery:false}.\n- Landing is judged only before DONE, because criterion 2's DONE P has no commits. The required check (current candidate, its tree, gate command, exit 0, runner-observed, only when the wrapper runs the gate) is judged in every status.\n- The refusal comes before any write: -32003 DELIVERY_EVIDENCE_MISSING, context {taskId, deliveryPolicy, missingEvidence}, message naming each token.\n\nScope growth to 9 paths: schema.ts types, SCHEMA.md, and the WebSocketServer.ts denylist + test for deliveryEvidence (self-review found a board could forge verifiedDelivery:true).\n\nEvidence:\n- qaApprove.test.ts 42 -> 118 (+764/-0). Red on old code: 30 failed | 48 passed. WS fix red: 1 | 22.\n- Mutation series all caught except 2 documented equivalents.\n- Full suite 1838 passed | 3 skipped; tsc 0.\n\nHonest limits: the gate reads RECORDED evidence and re-runs nothing. DONE via set_task_status or a board move still bypasses qa_approve. get_context does not project deliveryEvidence. CLAUDE.md's soft-gate wording is left to the epic-final docs task."
+  "completionSummary": "DONE gate driven by settings.deliveryPolicy.\n\nNEW packages/moe-daemon/src/delivery/policy.ts is the single authority: a plain predicate over ANY task. evaluateDeliveryEvidence(state, task, attestations?) returns {policy, satisfied, missingEvidence}. task-94f53492 consumes the token vocabulary through EVIDENCE_TOKENS / requiredCheckToken: completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<trimmed qualityGate>. The last renders 'required-check:node gate.cjs' exactly.\n\nRules:\n- Absent/null = legacy. The soft NO-COMPLETION-COMMIT gate is unchanged on purpose: the wrapper lands commits after the CLI exits. An unknown value is INVALID_INPUT.\n- local-branch: completion commit at/after reviewStartedAt. remote-push: one recorded pushed. merged-pull-request / manual-artifact: an attestation to qa_approve, accepted only under its own policy, persisted as task.deliveryEvidence {verifiedDelivery:false}.\n- Landing is judged only before DONE, because criterion 2's DONE P has no commits. The required check (current candidate, its tree, gate command, exit 0, runner-observed, only when the wrapper runs the gate) is judged in every status.\n- The refusal comes before any write: -32003 DELIVERY_EVIDENCE_MISSING, context {taskId, deliveryPolicy, missingEvidence}, message naming each token.\n\nScope growth to 9 paths: schema.ts types, SCHEMA.md, and the WebSocketServer.ts denylist + test for deliveryEvidence (self-review found a board could forge verifiedDelivery:true).\n\nEvidence:\n- qaApprove.test.ts 42 -> 118 (+764/-0). Red on old code: 30 failed | 48 passed. WS fix red: 1 | 22.\n- Mutation series all caught except 2 documented equivalents.\n- Full suite 1838 passed | 3 skipped; tsc 0.\n\nHonest limits: the gate reads RECORDED evidence and re-runs nothing. DONE via set_task_status or a board move still bypasses qa_approve. get_context does not project deliveryEvidence. CLAUDE.md's soft-gate wording is left to the epic-final docs task.",
+  "commits": [
+    {
+      "sha": "111e532c18444892810f8f3ad62ddc752b1077df",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-62409c0c@2026-09-12T23:11:03Z",
+      "paths": [
+        ".moe/tasks/task-867f69a6cdb748a8ab68fcbeec0de711.json",
+        ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-62409c0c",
+      "recordedAt": "2026-09-13T00:03:35.828Z",
+      "treeId": "c34f6cf6f6772aefbe8daa6d06e30cbe8f512fce",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        }
+      ],
+      "pushed": false
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/qaApprove.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-62409c0c@2026-09-12T23:11:03Z",
+    "at": "2026-09-13T00:03:35.828Z"
+  },
+  "completedAt": "2026-09-13T00:21:24.279Z",
+  "reviewCompletedAt": "2026-09-13T00:21:24.279Z",
+  "reviewSummary": "Verified 111e532 (11 paths, completion commit recorded; NOT pushed, branch ahead 5/behind 14 of origin). Re-ran in packages/moe-daemon: `npx vitest run src/tools/qaApprove.test.ts` exit 0, 118 passed; `npm test` exit 0, 117 files, 1838 passed | 3 skipped; `npx tsc --noEmit -p tsconfig.json` exit 0. DoD: 1 CONFIGURATION.md deliveryPolicy row, 4 strict values + legacy; 2 strict refusal -32003 DELIVERY_EVIDENCE_MISSING before any write, message and context name each token; 3 qaApprove.test.ts +764/-0, the 42 old cases untouched, and a default-goes-strict mutant turns 15 of them red, so they pin the default; 4 manual-artifact needs manualArtifact, label verifiedDelivery:false persisted; 5 three autoCommit=false tests; 6 green above. Own scratch audit (HEAD archive = repo counts): 24/24 mutations red, none 122/122 first+last: old handler 30, gate-off 14, gate after review write 3, gate before binding 1, unknown policy as default 6, landing judged on DONE 25, check source/tree/command/exit/oldest candidate 4/4/3/4/5, lookup fails open 2, push not required 3, stale commit 3, manual by commit 1, label verified 2, WS denylist 1. Verbatim criterion-2 fixture probe: evaluateDeliveryEvidence = ['required-check:node gate.cjs'] through the agent-reported pass, [] after runner-observed, red under every check mutant. acceptance.test.ts blob unchanged. NOTE: merging origin conflicts in qaApprove.ts with main aae0067 (round-anchored commit filter). Resolution = move that anchor into completionCommitsForReview: merged suite 119 files 1871 passed | 3 skipped, tsc 0. Re-inlining it in qaApprove.ts silently splits soft vs strict counting. Details in task channel."
 }
