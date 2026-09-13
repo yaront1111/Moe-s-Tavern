@@ -117,12 +117,12 @@
       "startedAt": "2026-09-13T14:04:48.496Z"
     }
   ],
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c8e523ea",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Operator asked for more planning with an empty PLANNING queue. Promoted out of human-gated BACKLOG: dependsOnUnmet is 0 (task-b1c98508, the delivery receipt, has landed), so this is a genuinely ready row rather than planning ahead of an undelivered contract. The only other unassigned rows still have unmet dependencies.",
+  "reopenReason": "Blocker resolved by operator: the stale qaApprove.ts merge conflict is gone, the checkout is on main 91e14c2 which contains the declared bytes (PR #187). Resume step 6: rerun gates, complete_task.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -146,7 +146,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:26.996Z",
-  "updatedAt": "2026-09-13T18:14:56.039Z",
+  "updatedAt": "2026-09-13T18:37:36.591Z",
   "metrics": {
     "firstClaimAt": "2026-09-13T13:36:47.503Z",
     "plannedStepCount": 6,
@@ -155,7 +155,8 @@
   },
   "contextFetchedBy": [
     "architect-8b93cc67",
-    "worker-9f2c3ad4"
+    "worker-9f2c3ad4",
+    "worker-c8e523ea"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -196,10 +197,10 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
   ],
-  "blockedReason": "Implementation and required mutations are finished, but step6 explicitly requires green full daemon suite and tsc; cannot safely mark complete. Pre-existing unmerged packages/moe-daemon/src/tools/qaApprove.ts remains UU with conflict markers at lines29,31,33,138,147,172. Fresh root npm.cmd --prefix packages/moe-daemon test exits1:1416 tests pass,29 files cannot load that conflict (baseline1399 pass/same29 failed files). Fresh npx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json exits1 with TS1185 on those markers. Shared foreign merge is outside this task and was not edited. Resolve it through its owner, then resume step6 and rerun gates. Plugin full Gradle gate is green197/197, own daemon17/17, all6 scratch mutants killed; scratch-only HEAD substitution of conflicted file gives tsc0 and WebSocket+projection43/43, but cannot replace required repo gate. All10 owned paths declared for wrapper checkpoint; step6 evidence is in task comment and Serena handoff. Gradle lease released and no builds left running.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-13T14:12:12.436Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "e33c9d1",
@@ -244,5 +245,7 @@
     "sessionId": "operator@2026-09-13T18:14:56.027Z",
     "at": "2026-09-13T18:14:56.039Z"
   },
-  "planRevision": 0
+  "planRevision": 0,
+  "priorBlockedReason": "Implementation and required mutations are finished, but step6 explicitly requires green full daemon suite and tsc; cannot safely mark complete. Pre-existing unmerged packages/moe-daemon/src/tools/qaApprove.ts remains UU with conflict markers at lines29,31,33,138,147,172. Fresh root npm.cmd --prefix packages/moe-daemon test exits1:1416 tests pass,29 files cannot load that conflict (baseline1399 pass/same29 failed files). Fresh npx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json exits1 with TS1185 on those markers. Shared foreign merge is outside this task and was not edited. Resolve it through its owner, then resume step6 and rerun gates. Plugin full Gradle gate is green197/197, own daemon17/17, all6 scratch mutants killed; scratch-only HEAD substitution of conflicted file gives tsc0 and WebSocket+projection43/43, but cannot replace required repo gate. All10 owned paths declared for wrapper checkpoint; step6 evidence is in task comment and Serena handoff. Gradle lease released and no builds left running.",
+  "blockedOnTaskIds": null
 }
