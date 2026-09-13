@@ -20,59 +20,94 @@
     {
       "stepId": "step-1",
       "description": "READ THE HELD-OUT CASE AS THE CONTRACT AND MAP THE ONE SHARED SEAM (read-only, no edits). This card owns unskipping acceptance criterion 2, whose assertions may not be edited, so that case is the specification. Read src/delivery/acceptance.test.ts from the describe at line 1179 to line 1425, plus the STRICT_SETTINGS fixture at line 249 and the PILOT_TARGET and PILOT_GATE_COMMAND constants at lines 224 and 264. Extract the exact contract. The strict policy is `deliveryPolicy: 'local-branch'` with `qualityGate: 'node gate.cjs'` and `qualityGateScope: 'everyTask'`, so the required gate command comes from the existing qualityGate setting and the policy switch is deliveryPolicy; an absent or default policy must change nothing. The refusal is a thrown error with numeric code -32003, codeName exactly `DEPENDENCY_EVIDENCE_MISSING`, `context.prerequisiteTaskId` naming the prerequisite, and `context.missingEvidence` deep-equal to the single-element array `['required-check:node gate.cjs']`, so it is an array of prefixed strings and not a sentence. `runDependencyUnblock(state, 'task-P')` must return an empty array while the evidence is missing and `['task-E']` once it exists. Every refusal is byte-pure across the dependent task file, the blocked task file and the failed check record. STUDY THE FOUR DECOY RECORDS the case plants, because each one kills a specific sloppy lookup: a passing run for an OLDER candidate of the same task kills any-pass-ever-for-this-task; a pass carrying the current candidate id but a different tree kills a lookup keyed on candidate id alone; a pass on the right candidate and tree under a different command kills any-check-passed; and an `agent-reported` pass on the right candidate, tree and command kills any-source-counts. The evidence rule is therefore: the task's CURRENT candidate, that candidate's own tree, the required gate command, exit code zero, and source `runner-observed`. Now map the production seam, which is better than the card implies: `isDependencySatisfied` at src/state/dependencyUnblock.ts line 32 is called by both `unmetDependsOn` and `unmetBlockedOnTaskIds`, and claimNextTask.ts imports `unmetDependsOn` at line 9 and gates on it at lines 266 and 304. One rule placed there covers the claim gate AND the blockedOnTaskIds auto-unblock, which is the fourth definition-of-done item for free. Enumerate every caller of that function before changing it and confirm the cycle-detection helpers use `dependencyEdges` instead, because the evidence rule must never reach cycle detection. Finally confirm what your prerequisites delivered: the check record store and `moe.record_check_run` belong to task-867f69a6cdb748a8ab68fcbeec0de711 and the policy evidence helper to task-c484696db72c4ce4855dfc599a7b2072; neither is in the tree yet. Read whatever they landed and use it verbatim. Produce no diff in this step.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/acceptance.test.ts",
         "packages/moe-daemon/src/state/dependencyUnblock.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts"
-      ]
+      ],
+      "note": "Read-only; no repo bytes changed (hash-object == HEAD for all 5 planned paths + docs/MCP_SERVER.md). HEAD 111e532 on moe/work-2026-09-10.\n\nPREREQS LANDED: task-c484696d DONE (111e532) -> delivery/policy.ts; task-867f69a6 DONE (3feff7c/11d569c) -> record_check_run + checkRunStore.\n\nCONTRACT (acceptance.test.ts:1179-1431): STRICT_SETTINGS deliveryPolicy 'local-branch', qualityGate 'node gate.cjs', scope everyTask. Explicit claim of task-D must THROW code -32003, codeName DEPENDENCY_EVIDENCE_MISSING, context.prerequisiteTaskId 'task-P', context.missingEvidence deep-equal ['required-check:node gate.cjs']. runDependencyUnblock -> [] while held, ['task-E'] after runner pass. Byte-pure D/E/failed-check files. Decoys: old-candidate pass, current-id other-tree pass, other-command pass, agent-reported pass.\n\nHELPER: evaluateDeliveryEvidence(state, task, attestations={}) -> {policy, satisfied, missingEvidence}; already a plain predicate over ANY task, so NO extraction needed. For DONE/ARCHIVED it judges only the required check (landing skipped by design). Only throw = unrecognised deliveryPolicy (INVALID_INPUT). Store-read failures are caught inside hasPassingCheck and report the token missing. Tokens come from requiredCheckToken; describeMissingEvidence renders reasons.\n\nSEAM: isDependencySatisfied (dependencyUnblock.ts:32) backs unmetDependsOn + unmetBlockedOnTaskIds. Callers of unmetDependsOn: claimEligibility.isClaimGatedByDependsOn (claimNextTask ranked filter :307, explicit gate :271, and waitForTask.ts:168, so the wait/claim mirror inherits automatically), claimNextTask :272 message, getContext :323 dependsOnUnmet, listTasks :115, searchTasks :167, setTaskDependencies :84. unmetBlockedOnTaskIds: runDependencyUnblock :119, alertStaleBlocks :225. Cycle detection: findDependencyPath uses dependencyEdges + raw status; it never calls isDependencySatisfied, so it stays clear.\n\nCODES: -32003 = MoeErrorCode.CONSTRAINT_VIOLATION (also NOT_ALLOWED). The sibling deliveryEvidenceRefusal uses CONSTRAINT_VIOLATION. McpAdapter:308-315 already adds {tool, codeName} to every thrown MoeError, so a plain throw matches the attempt refusals. claimGuards.ts has no state import; renderable reasons get passed in by the caller.\n\nARCHIVED: archiveTask ARCHIVABLE_FROM = BACKLOG/REVIEW/DONE/PLANNING/BLOCKED, so ARCHIVED != delivered. Keep it satisfied per the plan; the archive release already existed from any status (handoff note).\n\nSCOPE FLAG: docs/MCP_SERVER.md:1679 says 'At the time of writing, dependsOn still gates WORKING claims on status alone', which this card makes false. Plan: narrow Edit there plus the claim_next_task dependency paragraph (:1018) naming the new refusal. That is a 6th path, a shared collision file with task-b1c98508.\n\nBASELINE (fresh, repo): named `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts` exit 0, 2 files, 20 passed | 3 skipped. `npm test` exit 0, 117 files, 1838 passed | 3 skipped.\n\nMETHOD: red proof runs in scratch D:/moe-94f5-scratch (src/docs/scripts copy, node_modules junction, pristine/ of targets) so the shared checkout never sits red; test bytes land in the repo only with the implementation.",
+      "startedAt": "2026-09-13T00:22:05.717Z",
+      "completedAt": "2026-09-13T00:31:00.426Z"
     },
     {
       "stepId": "step-2",
       "description": "CAPTURE THE RED PROOF, THEN ADD THE UNIT CASES. Unskip only acceptance criterion 2 by changing its `it.skip` to `it`, touching not one assertion, and run `npx vitest run src/delivery/acceptance.test.ts` from packages/moe-daemon. SAVE the failing output: it is the epic rail's fails-on-old-behaviour evidence and the definition-of-done item requiring the case to pass unedited. The counterexample the case names is a released dependent: the prerequisite being DONE is the whole test today, so the claim succeeds and the auto-unblock flips the blocked task straight back. Record which assertion fails first. Then ADD cases to src/state/dependencyUnblock.test.ts without touching any existing one, because a definition-of-done item requires the existing dependency tests to stay green unmodified. Cover: under the default policy a DONE prerequisite with no evidence at all still satisfies its dependents, which is the behaviour-preservation guarantee; under the strict policy the four decoy shapes from step 1 each fail to satisfy, one case per decoy so a regression names which lookup broke; a matching runner-observed pass on the current candidate and tree satisfies; a prerequisite that is DONE but has no candidate at all reports the missing evidence rather than throwing; a prerequisite id that does not exist on the board still counts as satisfied, which a task rail requires; and a prerequisite in a status other than DONE is unmet for the reason it already is today, with no evidence claim in the message. Add one case asserting the shortfall reports evidence as an array of prefixed strings, matching the acceptance case exactly. Assert exact code names and deep-equal arrays, never truthiness.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/acceptance.test.ts",
         "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
-      ]
+      ],
+      "note": "RED PROOF CAPTURED IN SCRATCH, not the shared checkout, so peers' npm test never goes red. No repo bytes changed in this step. The test bytes land in the repo together with the implementation (end of step 4): the acceptance unskip as a one-word Edit, and the unit cases composed from the same draft that produced this red. The landed bytes will equal the red-run bytes.\n\nSCRATCH: D:/moe-94f5-scratch\n- Copies of src, docs, scripts and moe-daemon/scripts, with a node_modules junction.\n- pristine/ holds the 5 targets plus MCP_SERVER.md, and drafts/ holds dependency-evidence.describe.txt and compose.mjs.\n\nEVIDENCE DIR: C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-94f5-evidence\n\n(1) ACCEPTANCE CRITERION 2, OLD CODE (HEAD 111e532)\n- Change: only `it.skip(` became `it(` at acceptance.test.ts:1187. The diff against pristine is exactly 1 line, and `it.skip` now appears 2 times.\n- Command: `vitest run --root <scratch>/packages/moe-daemon src/delivery/acceptance.test.ts` exited 1 with 1 failed | 3 passed | 2 skipped.\n- Log: red-acceptance-old-code.log.\n- First failing assertion: `Error: expected a MoeError refusal, but the call resolved`, raised by captureRefusal (:147) from assertStillHeld's claimD (:1332). The explicit claim of task-D SUCCEEDED even though P's only runner-observed gate run on its current candidate exited 1. That is the named RELEASED-DEPENDENT counterexample. The auto-unblock half is shown by unit case 'holds task-E byte for byte…', which fails on old code with `expected [ 'task-E' ] to deeply equal []`.\n\n(2) UNIT CASES, OLD CODE\n- The new top-level describe 'dependencyUnblock — delivery evidence on a DONE prerequisite' has 31 cases. The file diff against pristine is +376 -0, so no existing case or line was touched.\n- The run exited 1 with 25 failed | 23 passed (48). All 17 pre-existing cases pass.\n- Artifacts: red-unit-old-code.json and red-unit-old-code.log.\n\nBEHAVIOURAL RED (15):\n- the 5 decoy shapes, one case each (failed run, older-candidate pass, other-tree pass, other-command pass, agent-reported pass): `expected true to be false`\n- no-candidate DONE prerequisite: `expected true to be false`\n- candidates.values throws, and checkRuns.values throws: both `expected true to be false`\n- unrecognised deliveryPolicy scan: `expected true to be false`\n- cycle-detection guard precondition: `expected true to be false`\n- explicit claim refusal: `call resolved`\n- MCP wire refusal: `expected undefined to deeply equal {code:-32003…}`\n- invalid-policy claim: `call resolved`\n- ranked claim / wait matcher (isClaimGatedByDependsOn): `expected false to be true`\n- auto-unblock hold: `[ 'task-E' ] vs []`\n- updateTask DONE hook: `expected 'WORKING' to be 'BLOCKED'`\n\nMISSING-EXPORT RED (10, dependencyShortfall not yet exported, so NOT counted as behavioural evidence):\n- exact token-array shape\n- missing-id shortfall\n- 6 non-DONE statuses\n- ARCHIVED shortfall\n\nPRESERVATION GUARDS THAT PASS ON OLD CODE BY DESIGN (6):\n- default policy with no evidence\n- default policy with a failed run plus every decoy\n- the runner-observed pass releases\n- status-unmet refusal word for word\n- status refusal precedence over an evidence shortfall\n- planning proceeds\n\nCases cover every step-2 item. Tokens are asserted as the literal 'required-check:node gate.cjs', with exact codeName/code/context/message and deep-equal arrays.",
+      "startedAt": "2026-09-13T00:31:13.301Z",
+      "completedAt": "2026-09-13T00:41:54.402Z"
     },
     {
       "stepId": "step-3",
       "description": "PUT THE EVIDENCE RULE IN THE ONE SHARED PLACE. In src/state/dependencyUnblock.ts add a function that reports a prerequisite's shortfall rather than a bare boolean: it returns whether the prerequisite satisfies its dependents and, when it does not, the list of missing evidence as prefixed strings. Then make the existing `isDependencySatisfied` delegate to it and keep returning a boolean, so `unmetDependsOn`, `unmetBlockedOnTaskIds` and every current caller inherit the new rule with no signature change and the auto-unblock path needs no separate edit. Order the checks so today's behaviour is untouched wherever the policy does not demand evidence: a prerequisite that is missing from the board counts satisfied exactly as it does now, a prerequisite whose status is not DONE or ARCHIVED is unmet for the existing reason with no evidence claim attached, and only a DONE prerequisite under a policy that requires a gate is asked for evidence. Resolve the policy and the required command through the helper delivered by task-c484696db72c4ce4855dfc599a7b2072 and do NOT re-implement the matching rules locally: the four decoy records exist precisely to catch a second, subtly different implementation. If that helper turns out to be shaped only as a can-this-task-go-DONE check rather than a reusable predicate over any task, EXTRACT the predicate into something both callers share rather than copying it, and say so in the step note. Error handling: a store read that fails, or evidence records that cannot be resolved, must report the evidence as MISSING and withhold, never fall through to satisfied — failing open here would release a dependent on exactly the promise this card exists to check. Add no new record type and no migration.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/dependencyUnblock.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "note": "Rule placed at ONE seam in packages/moe-daemon/src/state/dependencyUnblock.ts (+56/-6, LF kept, no record type or migration).\n\nNEW\n- `interface DependencyShortfall {satisfied: boolean; missingEvidence: string[]}`.\n- `export function dependencyShortfall(state, taskId)`, which checks in this order:\n  - absent task, or ARCHIVED: {true, []}. Absent id stays satisfied per the task rail. ARCHIVED is not judged because archiveTask allows it from BACKLOG/REVIEW/PLANNING/BLOCKED.\n  - status other than DONE: {false, []}. Unmet on status, no evidence claim.\n  - DONE: returns `evaluateDeliveryEvidence(state, dep)`'s {satisfied, missingEvidence}.\n\nHELPER CONSUMED VERBATIM\n- `evaluateDeliveryEvidence` from delivery/policy.ts (task-c484696d). It is already a plain predicate over any task, so NO extraction was needed and no matching rule is copied here.\n- Policy resolution, requiredCheckCommand, the current-candidate/tree/command/exit-0/runner-observed lookup and the tokens all live in policy.ts.\n- For a DONE task it judges only the required check.\n\nisDependencySatisfied\n- Now delegates to dependencyShortfall and still returns a boolean, so unmetDependsOn, unmetBlockedOnTaskIds, claimEligibility (claim ranked pool + wait_for_task matcher), runDependencyUnblock, alertStaleBlocks, getContext, listTasks, searchTasks and setTaskDependencies inherit it with no signature change.\n\nFAIL CLOSED\n- Store-read failures are already caught inside policy.hasPassingCheck, which reports the token missing.\n- The only throw left is an unrecognised deliveryPolicy (INVALID_INPUT). isDependencySatisfied catches it with logger.warn and returns false, so the dependents are withheld and runDependencyUnblock still never throws.\n- dependencyShortfall itself propagates that error, so the claim refusal (step 4) can name the bad setting.\n- Header comment updated. Cycle detection is untouched: findDependencyPath/dependencyEdges still read raw status.\n\nVERIFICATION (fresh)\n- Repo, unmodified existing suites: `npx vitest run src/state/dependencyUnblock.test.ts src/tools/claimNextTask.contract.test.ts src/tools/waitForTask.test.ts src/tools/getContext.test.ts src/tools/listTasks.test.ts src/tools/setTaskDependencies.test.ts src/tools/reportBlocked.test.ts src/tools/qaApprove.test.ts src/tools/searchTasks.test.ts` → exit 0, 9 files, 263 passed.\n- `npx tsc --noEmit -p tsconfig.json` → exit 0.\n- Scratch draft unit cases against this code: 44 passed | 4 failed.\n  - Every evidence-rule and auto-unblock case passes, including all 5 decoys, fail-closed store reads, invalid policy and cycle guard.\n  - The 4 failures are the claim-refusal cases owned by step 4: DEPENDENCY_EVIDENCE_MISSING shape, MCP wire, INVALID_INPUT claim, and status-refusal precedence. The precedence case passed on old code and now bites, because without step 4 the old message would list DONE task-P as 'unmet ... until DONE/ARCHIVED'.\n- Scratch acceptance now fails one assertion later: `expected 'NOT_ALLOWED' to be 'DEPENDENCY_EVIDENCE_MISSING'`.\n- Logs are step3-*.log/json in the evidence dir.",
+      "startedAt": "2026-09-13T00:42:17.287Z",
+      "completedAt": "2026-09-13T00:44:02.248Z"
     },
     {
       "stepId": "step-4",
       "description": "MAKE THE CLAIM REFUSAL NAME WHAT IS MISSING. Add one exported refusal builder to src/util/claimGuards.ts beside the existing claim refusals, keeping that module pure of any StateManager import: it takes the dependent task, the prerequisite task id and the missing-evidence list, and returns a MoeError carrying the code that resolves to -32003, codeName exactly `DEPENDENCY_EVIDENCE_MISSING`, a message naming both tasks and the missing gate readably, and a context carrying the dependent task id, `prerequisiteTaskId` and `missingEvidence` as the array. Check which MoeErrorCode member maps to -32003 and use it by name rather than writing the number. Then in src/tools/claimNextTask.ts use the detailed shortfall at both dependency gates, the explicit-taskId claim around line 266 and the ranked-candidate gate around line 304, keeping them mirrored as the comment there already demands. Where a prerequisite is unmet purely on status, keep today's existing message and behaviour verbatim; only a DONE prerequisite failing on evidence raises the new refusal, so an ordinary not-yet-finished dependency reads exactly as it does now. Throw the refusal rather than returning it, matching the acceptance case's capture helper, and raise it before any assignment write so a refused claim leaves every file byte-identical. Follow whatever the neighbouring attempt refusals in this file do to surface the tool name on the error payload, so all the claim refusals look alike on the wire. Change nothing about claimable statuses, ranking, the alreadyAssigned resume or the attempt opening already in this file, and do not touch the rule that planning proceeds regardless — these gates are reached for WORKING candidates only, which is what keeps the third definition-of-done item true.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/claimGuards.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "REFUSAL AND CLAIM GATE\n\nutil/claimGuards.ts (+45, LF, still no state import):\n- Adds `DEPENDENCY_EVIDENCE_MISSING`, `interface DependencyEvidenceRef {taskId, prerequisiteTaskId, missing: [{token, reason}]}`, and `dependencyEvidenceRefusal(ref)`.\n- The error is `MoeErrorCode.CONSTRAINT_VIOLATION` (-32003, the same member qa_approve's DELIVERY_EVIDENCE_MISSING uses), with context `{taskId, prerequisiteTaskId, missingEvidence: token[]}`.\n- The message names both tasks and each `token (reason)`, because context does not cross the wire.\n- Reasons are rendered by the caller with policy.describeMissingEvidence, which keeps the guard module pure.\n\ntools/claimNextTask.ts (+39/-7, CRLF kept):\n- New module-level `dependsOnClaimRefusal(state, task)`, built from `unmetDependsOn` plus `dependencyShortfall`.\n- Refusal precedence:\n  - Any prerequisite not yet DONE: today's NOT_ALLOWED text, word for word, listing only those ids.\n  - Otherwise: the first evidence shortfall raises DEPENDENCY_EVIDENCE_MISSING.\n  - An unrecognised policy throws INVALID_INPUT out of dependencyShortfall.\n- The explicit-taskId gate now reads `throw dependsOnClaimRefusal(state, requested)`. It sits in the same place, before any assignment write, and keeps the same `!ownedBySelf && isClaimGatedByDependsOn` guard, so the resume exemption is unchanged.\n- The ranked gate has no code change: `isClaimGatedByDependsOn` already shares the predicate with wait_for_task's matcher, and the ranked pool skips rows rather than refusing them. Only a comment was added.\n- Tool-name surfacing: none is needed. McpAdapter adds `{tool, codeName}` to every thrown MoeError, the same as the attempt refusals; the wire test proves it.\n- Nothing changed in statuses, ranking, alreadyAssigned or attempts.\n\nTESTS LANDED\n\nBoth files hold the exact red-run bytes:\n- acceptance.test.ts: `+1 -1`, only the `it.skip` → `it` swap at :1187. cmp matches the scratch copy, and it.skip now appears 2 times.\n- dependencyUnblock.test.ts: `+376 -0`. The repo file was cmp-identical to pristine before the cp, and it is cmp-identical to the red-run file after.\n\nDOCS: SCOPE GROWTH, NARROW EDITS\n- docs/MCP_SERVER.md, 2 lines:\n  - The claim_next_task dependency-gating paragraph now documents the refusal shape and precedence.\n  - :1679 said \"At the time of writing, dependsOn still gates WORKING claims on status alone\", which this card made false. It is replaced.\n- docs/CONFIGURATION.md: one sentence in the deliveryPolicy row saying strict evidence also gates dependents.\n- docs/SCHEMA.md: my 2-line dependsOn-comment edit is REVERTED (0 hunks of mine left). A peer (task-b1c98508 receipts) was editing SCHEMA.md at the same moment, and path-level landing would have swept its DeliveryReceipt sections into this task. Follow-up for the docs task.\n- MCP_SERVER.md is a known collision file with b1c98508; right now it carries only my 2 lines.\n\nVERIFICATION (fresh, repo)\n- Named gate `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts`: exit 0, 2 files, 52 passed | 2 skipped. Baseline was 20 passed | 3 skipped. Criterion 2 passes unedited.\n- Unmodified related suites, exit 0, 11 files, 313 passed | 3 skipped: dependencyUnblock, claimNextTask.contract, claimNextTask, waitForTask, getContext, listTasks, setTaskDependencies, reportBlocked, qaApprove, searchTasks, acceptance.\n- tsc --noEmit exit 0.",
+      "startedAt": "2026-09-13T00:45:12.393Z",
+      "completedAt": "2026-09-13T00:48:53.775Z"
     },
     {
       "stepId": "step-5",
       "description": "RUN THE NAMED GATE AND THE FULL SUITE WITH RECORDED EVIDENCE. From packages/moe-daemon run this card's own command: `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts`. Criterion 2 must pass with its assertions untouched; if it does not, fix the production code, never the case. Then run the whole package suite from the repo root, `npm --prefix packages/moe-daemon test` on Unix and the same with npm.cmd on Windows, plus `npx tsc --noEmit -p tsconfig.json`. Capture each exit code separately from any filtered output, because a grep pipeline swallows it on this box, and require exit 0 everywhere with counts strictly greater than the baseline. Three suites deserve particular attention because this change sits under a widely shared function: the existing dependency tests, which a definition-of-done item requires to pass UNMODIFIED, so treat any edit to them as a signal you changed default behaviour; the claim tests, which cover both dependency gates plus the attempt refusals added earlier in this epic; and anything covering the blocked-timeout sweep or the stale-block alert, since those walk the same blocked rows. Confirm criterion 2 is the only case whose skip state changed and that the others still collect. Keep the exact commands, exit codes and counts for the verification argument of moe.complete_task, and keep the step-2 red output as the fails-on-old-behaviour proof.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "FRESH VERIFICATION, this session. No bytes changed in this step.\n\nSTATE\n- HEAD is 71d5601. My source bytes equal checkpoint a303f04, and `git diff --stat a303f04 HEAD` on all my paths is empty, so no peer has drifted them.\n- Exit codes were captured with `RC=$?` straight after each command, before any grep.\n\nNAMED GATE, cwd packages/moe-daemon: `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts`\n- EXIT=0. Test Files 2 passed (2); Tests 52 passed | 2 skipped (54).\n- Baseline at 111e532 was 20 passed | 3 skipped.\n\nFULL SUITE, repo root: `npm --prefix packages/moe-daemon test`\n- EXIT=0. Test Files 118 passed (118); Tests 1945 passed | 2 skipped (1947).\n- Baseline was 117 files, 1838 passed | 3 skipped. The extra file belongs to a peer; this card adds no test file.\n\nTSC: `npx tsc --noEmit -p tsconfig.json` gave EXIT=0 with empty output.\n\nFOCUS SUITES (JSON reporter, 0 failed in each)\n- dependencyUnblock 48, StateManager 112 (blocked-timeout sweep), sweeps 10 (stale-block alert and backstop).\n- Claim gates and attempts: reportBlocked 39, claimNextTask 47, claimNextTask.contract 24, waitForTask 10.\n- getContext 30, listTasks 6, searchTasks 10, setTaskDependencies 9, qaApprove 118, recordCheckRun 33.\n- acceptance: 4 passed, 2 skipped.\n- Total: 14 files, 500 passed, 0 failed, 2 skipped.\n\nSKIP STATE\n- Base 111e532 had `it.skip` at acceptance.test.ts :1187, :1852 and :1996. HEAD has :1852 and :1996 only.\n- The only commit touching that file since base is a303f04 (+1 -1).\n- JSON reporter: criterion 2 ('keeps D unclaimable and E blocked until an authoritative gate pass exists') PASSED. The generation-N and crash-between-effect cases still collect, as skipped.\n\nEXISTING DEPENDENCY TESTS UNMODIFIED\n- `git diff --numstat 111e532 HEAD` on dependencyUnblock.test.ts gives `376 0`.\n- The repo file is cmp-identical to the scratch red-run file.\n\nRED PROOF KEPT in C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-94f5-evidence\n- red-acceptance-old-code.log. First failure: `expected a MoeError refusal, but the call resolved` (claimD, :1332).\n- red-unit-old-code.json/.log: 25 failed | 23 passed on old code.\n- This session's logs: resume-{named,full,tsc,related}.\n\nSESSIONS: the 8 checkpoint-only sessions between 00:50Z and 01:52Z died at launch. Their transcripts come in identical-size pairs with the peer seat's, which points to API or spend refusals, not these commands.\n\nFLAG FOR STEP 6: reportBlocked.ts:199-202 filters blockedOnTaskIds at report time on RAW DONE/ARCHIVED, outside isDependencySatisfied. Under a strict policy, a DONE prerequisite without its required check answers dependenciesSatisfied:true, so the dependent is told to continue. That is a status-only release. Step 6 will fix it with a test and re-capture the final evidence.",
+      "startedAt": "2026-09-13T00:49:08.329Z",
+      "completedAt": "2026-09-13T02:13:31.877Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, THEN HAND OFF. Read the diff as an attacker and confirm each of these or fix it: under the default policy nothing whatsoever changed, proven by the untouched existing dependency tests rather than by reading the code; each of the four decoys is genuinely refused, so the lookup binds to the current candidate, that candidate's own tree, the required command, a zero exit and the runner-observed source, and an agent-reported pass never counts; the rule lives in one place so the claim gate and the blockedOnTaskIds auto-unblock cannot drift apart, and it did NOT leak into cycle detection, which must keep using the edge helper; a prerequisite absent from the board still counts satisfied, as a task rail requires; a prerequisite unmet purely on status still produces today's message with no evidence claim; a failed store read withholds rather than falling through to satisfied; planning on a dependent task still proceeds, because these gates are reached for WORKING candidates only; the refusal is thrown before any write and names both the prerequisite and the missing evidence as an array; and the evidence rules were consumed from the sibling helper rather than reimplemented. Confirm the file count is the five in scope, that no new record type or migration was added, and that the DONE gate itself, the check-run recording surface and the receipt work were left to their sibling cards. Then call moe.complete_task with the verification evidence, list every modified path in modifiedFiles, and tell QA plainly which helper this card consumed from task-c484696db72c4ce4855dfc599a7b2072, whether the predicate had to be extracted to be reusable, and the honest boundary that this card withholds dependents on RECORDED evidence — it re-runs nothing, so a check record that lies about a gate it never ran will still release a dependent.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/dependencyUnblock.ts",
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/util/claimGuards.ts",
         "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
         "packages/moe-daemon/src/delivery/acceptance.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "ADVERSARIAL REVIEW: each plan item confirmed, or found and fixed\n\nCONFIRMED\n- The default policy is unchanged, as the tests show. The pre-task dependency tests are untouched: dependencyUnblock.test.ts is add-only (+376 in step 4, +133 -0 here). The 39 reportBlocked.test.ts cases are unchanged and green, and the full suite is green.\n- The failed run and all 4 decoys are refused, one unit case each. The lookup (current candidate, its own tree, the command, exit 0, runner-observed) is CONSUMED from policy.ts evaluateDeliveryEvidence/hasPassingCheck (task-c484696d). That helper is already a predicate over any task, so NO extraction was needed.\n- One rule: isDependencySatisfied backs both claim gates, the wait_for_task matcher, the auto-unblock, the stale alert and the unmet counts. Cycle detection (findDependencyPath/dependencyEdges) still reads raw status.\n- A missing id counts as satisfied. A status-unmet prerequisite keeps the old message verbatim. A failed store read withholds. Planning proceeds (isClaimGatedByDependsOn is WORKING-only). The refusal is thrown before any write and names the prerequisite plus the token array. All of these have unit or acceptance cases.\n- Concurrency: every read is synchronous and in memory under the global mutex. The only write is report_blocked's existing flip.\n\nFOUND AND FIXED\n1. tools/reportBlocked.ts, the fresh-flip satisfied filter, was a THIRD inline copy of the rule (raw DONE/ARCHIVED).\n   - Under a strict policy, a DONE prerequisite without evidence answered dependenciesSatisfied:true (\"continue\") while the claim gate withheld it. That is a status-only release, against DoD 4.\n   - It now reads `!!getTask(id) && isDependencySatisfied(state, id)`; the guard keeps the old missing-id semantics.\n   - blockResolution now names the missing evidence for a DONE-held id. The tool description notes the strict nuance.\n2. alertStaleBlocks labelled a DONE-held prerequisite `task-P [DONE]` and paged only at 2x, saying \"auto-unblocks when DONE/ARCHIVED\".\n   - It now uses the exported describeUnmetDependency: `task-P [DONE, missing required-check:node gate.cjs]`.\n   - A new withheld class alerts at 1x, because no claim moves a DONE task, and gives truthful triage.\n   - Under an invalid policy the label reads \"could not be judged\" and the pass never throws.\n\nTHEORETICAL ONLY\n- Under an invalid policy, isDependencySatisfied logs a warn on every call.\n- Under a strict policy, list and search scan candidates and checks once per DONE prerequisite.\n\nSCOPE\n- The 5 planned files, plus MCP_SERVER.md and CONFIGURATION.md docs (step 4), plus reportBlocked.ts in this step, for DoD 4.\n- No new record type, no migration, and no change to the DONE gate, record_check_run or receipts.\n- Not updated because of a collision with task-b1c98508: the SCHEMA.md:413-416 alert comment and the alert-class text in roles/governor*.md.\n\nRED PROOF: scratch mutate2.mjs, one mutation at a time, final test file\n- none: 56/0.\n- old (HEAD sources): 5 red. Report-time `expected true to be undefined` x2, alert `expected 1 to be 2` x2, and the sweep label.\n- filter 2, clause 2, label 3, withheld 2.\n- none: 56/0.\n- Repo targets are cmp-identical to final.\n\nFINAL VERIFICATION (fresh)\n- `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts`: EXIT=0, 60 passed | 2 skipped. Baseline 20 | 3.\n- `npm --prefix packages/moe-daemon test`: EXIT=0, 118 files, 1953 passed | 2 skipped. Baseline 1838 | 3.\n- tsc: EXIT=0.\n- The 14 related files: 508 passed, 0 failed.\n- Logs: Temp\\moe-94f5-evidence\\final-*, step6-mut-*, step6-mutations.txt.",
+      "startedAt": "2026-09-13T02:15:10.271Z",
+      "completedAt": "2026-09-13T02:33:21.421Z"
     }
   ],
-  "status": "WORKING",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,16 +124,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:08.677Z",
-  "updatedAt": "2026-09-12T17:47:44.480Z",
+  "updatedAt": "2026-09-13T03:09:10.087Z",
   "contextFetchedBy": [
-    "architect-2d25447a"
+    "architect-2d25447a",
+    "worker-b88fa8e8",
+    "qa-9dc36824"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T17:45:25.533Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-09-13T03:07:19.526Z",
+    "wallClockMs": 33713993
   },
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-12T17:47:44.423Z",
   "planningNotes": {
@@ -114,5 +161,248 @@
       "packages/moe-daemon/src/state/candidateStore.ts"
     ]
   },
-  "planApprovedAt": "2026-09-12T17:47:44.480Z"
+  "planApprovedAt": "2026-09-12T17:47:44.480Z",
+  "workStartedAt": "2026-09-13T00:22:05.717Z",
+  "commits": [
+    {
+      "sha": "a303f04f810998093ba3922ab4da326d2885140e",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T00:21:33Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+        ".moe/tasks/task-c484696db72c4ce4855dfc599a7b2072.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T00:50:43.454Z",
+      "treeId": "15a531cfe53f821d5d61e2d6824336ed0e91dabb",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        },
+        {
+          "path": "packages/moe-daemon/src/delivery/acceptance.test.ts",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        }
+      ],
+      "pushed": false
+    },
+    {
+      "sha": "c34e7c02a4605d1299f491d02e1af57874c89fe3",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T00:51:14Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T00:51:19.487Z",
+      "treeId": "59a1782e3323dcb15042f901e217b2d42260f14f",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "0e9a7b11e6dc3521fc8e1a18c78bc040de0e7536",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T00:52:20Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T00:52:25.307Z",
+      "treeId": "cf85bab153fca517b39e18c411eac2248b2b2535",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "8ac6bd0091a237270cefe55ed5e0012d63fdd37d",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T00:54:26Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T00:54:31.531Z",
+      "treeId": "ec68738f7e7193d029611dab2df91d7144507a93",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "f750a0382d282103716321bf83caa666419f3c26",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T00:58:32Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T00:58:37.458Z",
+      "treeId": "7b64a480c9b183a9acc6e5c67a021aea31e75fa3",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "61c0971c7d7dc74f5abe6b7f51f8d5ef9af1b364",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T01:06:38Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T01:06:43.614Z",
+      "treeId": "4b1564d8d41d2cb6b7fca368513df985c304ad8a",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "348681108d2844493cf3fc7c2849571866f215d7",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T01:21:44Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T01:21:49.348Z",
+      "treeId": "32467cfed7de0efd7610ff09fc148bed9a31f2ce",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "89d7b1fb68a32d0bcbde794be0863faec311a224",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T01:36:50Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T01:36:55.335Z",
+      "treeId": "755783d928d86ded6a32f7d6885a0f929ea80a6f",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "d4e02afabf6f54781dd078aae9f75a3eedf1af61",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T01:51:56Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T01:52:01.188Z",
+      "treeId": "6e2980626a56937e93bd8fa9b7de9196cdedef50",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "8ef4b8999b1acef455dd25b210b614059620a361",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b88fa8e8@2026-09-13T02:07:02Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ],
+      "recordedBy": "worker-b88fa8e8",
+      "recordedAt": "2026-09-13T02:35:42.600Z",
+      "treeId": "4e0bf55c38c9deac8aa3516bbfe2b4e442755d36",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-b1c9850824fe4437a8c70b4ee083602b"
+        }
+      ],
+      "pushed": false
+    },
+    {
+      "sha": "ea8ea40067e89bc6fa5319e86108a4fff60e4845",
+      "ref": "refs/heads/moe/work-2026-09-10",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9dc36824@2026-09-13T02:55:32Z",
+      "paths": [
+        ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+        ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json"
+      ],
+      "recordedBy": "qa-9dc36824",
+      "recordedAt": "2026-09-13T03:09:10.086Z",
+      "treeId": "7353af3ff145c6eb10e9d520facc6ca63a597fbe",
+      "status": "DONE",
+      "pushed": false
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/tools/reportBlocked.ts",
+    ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json",
+    ".moe/tasks/task-b1c9850824fe4437a8c70b4ee083602b.json"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+    "packages/moe-daemon/src/tools/reportBlocked.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-9dc36824@2026-09-13T02:55:32Z",
+    "at": "2026-09-13T03:09:10.086Z"
+  },
+  "reviewStartedAt": "2026-09-13T02:35:29.068Z",
+  "verification": {
+    "command": "npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts",
+    "exitCode": 0,
+    "outputTail": "[cwd packages/moe-daemon, HEAD 81bdc8a + this task's working tree]\nnpx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts -> EXIT=0\n Test Files  2 passed (2)\n      Tests  60 passed | 2 skipped (62)\nnpm --prefix packages/moe-daemon test (repo root) -> EXIT=0\n Test Files  118 passed (118)\n      Tests  1953 passed | 2 skipped (1955)\nnpx tsc --noEmit -p tsconfig.json -> EXIT=0 (no output)\nBaseline at 111e532: named 20 passed | 3 skipped; full 117 files, 1838 passed | 3 skipped.\nRed proof: step-2 note (acceptance + unit on old code); step-6 mutation series none 56/0, old 5 red, filter 2, clause 2, label 3, withheld 2, none 56/0.",
+    "reportedAt": "2026-09-13T02:35:29.068Z"
+  },
+  "completionSummary": "Under a strict settings.deliveryPolicy, a DONE prerequisite that lacks its delivery evidence now withholds its dependents. The default legacy policy is unchanged.\n\n- Rule: `dependencyUnblock.dependencyShortfall`.\n  - An absent or ARCHIVED prerequisite is satisfied. A non-DONE one is unmet, with no evidence claim.\n  - A DONE one is judged by `evaluateDeliveryEvidence` (delivery/policy.ts, task-c484696d), used verbatim. It is already a predicate over any task, so NO extraction was needed.\n  - `isDependencySatisfied` delegates to it and fails closed. It backs both claim gates, the wait_for_task matcher, the blockedOnTaskIds auto-unblock, the stale-block alert and the unmet counts. Cycle detection is untouched.\n- Refusal: an explicit claim throws -32003 `DEPENDENCY_EVIDENCE_MISSING` (util/claimGuards) before any write, with context `{taskId, prerequisiteTaskId, missingEvidence}`. A prerequisite unmet on status keeps today's NOT_ALLOWED text and takes precedence.\n- Self-review fix (adds tools/reportBlocked.ts, for DoD 4): report_blocked judged raw DONE/ARCHIVED and answered `dependenciesSatisfied:true` for a DONE prerequisite without evidence. It now uses the same predicate. `blockResolution` and the stale-block alert name the missing evidence, and DONE-held rows alert at 1x the timeout.\n- Tests: criterion 2 unskipped with its assertions unedited. dependencyUnblock.test.ts is +509 -0. Red proof is in the step-2 note (old code) and the step-6 mutation series.\n- Docs: MCP_SERVER.md (claim_next_task, report_blocked) and CONFIGURATION.md (deliveryPolicy).\n- Boundaries:\n  - This card reads recorded evidence only and re-runs nothing, so a CheckRun that lies about a gate still releases a dependent.\n  - ARCHIVED is not judged.\n  - A `record_check_run` after DONE releases a BLOCKED dependent only at the next 5-minute sweep, and wakes no parked wait_for_task.\n- Follow-up, left because of a collision with task-b1c98508: the SCHEMA.md:413-416 alert comment and the roles/governor*.md",
+  "completedAt": "2026-09-13T03:07:19.526Z",
+  "reviewCompletedAt": "2026-09-13T03:07:19.526Z",
+  "reviewSummary": "Verified task-94f53492 against all 7 DoD items + rails. Commits: completion 8ef4b89 (dependencyUnblock.ts/.test.ts, reportBlocked.ts, MCP_SERVER.md; recorded after reviewStartedAt) + checkpoint a303f04 (claimGuards.ts, claimNextTask.ts, acceptance.test.ts +1/-1 it.skip->it only, CONFIGURATION.md). Re-ran in repo @11b6216: `npx vitest run src/state/dependencyUnblock.test.ts src/delivery/acceptance.test.ts` exit 0, 60 passed | 2 skipped (baseline 20|3); `npm test` exit 0, 118 files, 1953 passed | 2 skipped; tsc 0. DoD5: dependencyUnblock.test.ts +509 -0, no other pre-existing test touched. One rule: dependencyShortfall/isDependencySatisfied consume evaluateDeliveryEvidence verbatim and fail closed; claim gate, wait matcher, auto-unblock, report_blocked filter and stale alert read it; cycle detection untouched. QA mutations (HEAD probe, 21 mutants, none 60/0 first+last, all tests collected), all red on named cases: old status-only rule 23 (crit2 'call resolved'); each of 5 decoy lookups (source/tree/command/exit/current candidate) reddens its own decoy case + crit2; write-before-throw 3 (byte purity); prose context 2; wrong prerequisite id 2; precedence swap 1; evidence on status-unmet 8; fail-open 4; missing id unmet 2; ARCHIVED judged 1; planning gated 1; report_blocked raw filter 2; alert class 2, label 3. NOTE: branch diverged from origin (ahead 27/behind 14); merged probe 120 files, 1984 passed | 2 failed (only origin aae0067 qaApprove round-anchor cases; conflict file not this card's) | 2 skipped, tsc 0. Boundaries: recorded evidence only; DONE judged on required check only; record_check_run wakes nothing (5-min sweep restores). Doc follow-up (SCHEMA.md, governor docs) posted to #general."
 }

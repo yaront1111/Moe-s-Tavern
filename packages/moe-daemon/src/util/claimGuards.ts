@@ -60,6 +60,19 @@ export const ATTEMPT_FINALIZING = 'ATTEMPT_FINALIZING';
  * not evidence of a dead worker either way.
  */
 export const ATTEMPT_RECONCILING = 'ATTEMPT_RECONCILING';
+/**
+ * A dependsOn prerequisite is DONE, but it lacks the delivery evidence the
+ * project's settings.deliveryPolicy requires of it (for a DONE task: a
+ * runner-observed exit-0 run of the quality gate on its current candidate's
+ * tree). Its dependents stay withheld from WORKING claims until that evidence
+ * is recorded, so no work builds on a delivery the record does not support.
+ *
+ * A CONSTRAINT_VIOLATION (-32003), like qa_approve's DELIVERY_EVIDENCE_MISSING,
+ * because both refusals apply one rule (delivery/policy.ts). Only a DONE
+ * prerequisite raises it: one that has not finished keeps the plain
+ * unmet-dependencies refusal.
+ */
+export const DEPENDENCY_EVIDENCE_MISSING = 'DEPENDENCY_EVIDENCE_MISSING';
 
 /** The attempt fields a finalizing refusal names. Looked up by each caller. */
 export interface FinalizingAttemptRef {
@@ -130,6 +143,38 @@ export function attemptReconcilingRefusal(attempt: ReconcilingAttemptRef): MoeEr
       retryable: true,
     },
     ATTEMPT_RECONCILING
+  );
+}
+
+/** What a dependency evidence refusal names. Resolved by the caller, so this module stays free of state. */
+export interface DependencyEvidenceRef {
+  /** The dependent task the claim asked for. */
+  readonly taskId: string;
+  /** The DONE prerequisite whose evidence falls short. */
+  readonly prerequisiteTaskId: string;
+  /** Each missing token exactly as delivery/policy.ts builds it, with that module's readable reason. */
+  readonly missing: ReadonlyArray<{ readonly token: string; readonly reason: string }>;
+}
+
+/**
+ * The refusal claim_next_task throws for an explicit claim of a dependent whose
+ * DONE prerequisite lacks delivery evidence. context.missingEvidence is the
+ * token array; MoeError.context is not forwarded over the MCP wire, so the
+ * message names both tasks and every token with its reason as well.
+ */
+export function dependencyEvidenceRefusal(ref: DependencyEvidenceRef): MoeError {
+  const named = ref.missing.map(({ token, reason }) => `${token} (${reason})`).join(', ');
+  return new MoeError(
+    MoeErrorCode.CONSTRAINT_VIOLATION,
+    `Task ${ref.taskId} cannot be claimed yet: its prerequisite ${ref.prerequisiteTaskId} is DONE but lacks the ` +
+      `delivery evidence settings.deliveryPolicy requires: ${named}. dependsOn withholds WORKING claims until that ` +
+      'evidence is recorded; an architect/governor can edit the dependencies with moe.set_task_dependencies.',
+    {
+      taskId: ref.taskId,
+      prerequisiteTaskId: ref.prerequisiteTaskId,
+      missingEvidence: ref.missing.map(({ token }) => token),
+    },
+    DEPENDENCY_EVIDENCE_MISSING
   );
 }
 

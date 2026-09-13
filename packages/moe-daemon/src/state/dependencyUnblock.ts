@@ -1,9 +1,11 @@
 // =============================================================================
 // Dependency auto-unblock — the task-dependency analogue of the resource grant
 // path (resourceStore.grantNextLeases). A task BLOCKED with blockedOnTaskIds is
-// waiting on other tasks; when every listed prerequisite is DONE/ARCHIVED the
-// daemon restores it to blockedFromStatus. That single status write is what
-// wakes the fleet: TASK_UPDATED wakes wait_for_task waiters, and (for a legacy
+// waiting on other tasks; when every listed prerequisite is satisfied (DONE with
+// the delivery evidence its policy requires, ARCHIVED, or gone — see
+// isDependencySatisfied) the daemon restores it to blockedFromStatus. That
+// single status write is what wakes the fleet: TASK_UPDATED wakes
+// wait_for_task waiters, and (for a legacy
 // still-assigned row) the wrapper's next claim poll resumes the held task.
 //
 // Two entry points, one scan:
@@ -26,12 +28,58 @@
 
 import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
+import { evaluateDeliveryEvidence } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
-/** A dependency is satisfied when its task is DONE/ARCHIVED — or gone (deleted ids must not wedge a row forever). */
-export function isDependencySatisfied(state: StateManager, taskId: string): boolean {
+/** Whether one prerequisite releases its dependents, and what it still lacks when it does not. */
+export interface DependencyShortfall {
+  satisfied: boolean;
+  /**
+   * Evidence tokens exactly as delivery/policy.ts builds them. Non-empty only
+   * for a DONE prerequisite whose evidence falls short; a prerequisite unmet on
+   * status alone reports [].
+   */
+  missingEvidence: string[];
+}
+
+/**
+ * A dependency is satisfied when its task is gone (deleted ids must not wedge a
+ * row forever), ARCHIVED, or DONE with the delivery evidence the project's
+ * policy requires of it. Checked in that order, so only a DONE prerequisite is
+ * ever asked for evidence: any other status is unmet exactly as before, and
+ * under the default policy DONE alone still satisfies. ARCHIVED is not judged,
+ * because archiving is allowed from unfinished statuses and never claimed a
+ * delivery.
+ *
+ * The evidence is judged by evaluateDeliveryEvidence, the rule qa_approve
+ * applies, never by a copy of it. For a DONE task that rule asks only for the
+ * required check (a runner-observed exit-0 run of the gate on the current
+ * candidate's own tree), and a record lookup that fails reports it missing.
+ * Throws when the evidence cannot be judged at all: an unrecognised
+ * deliveryPolicy, which that rule refuses as invalid input.
+ */
+export function dependencyShortfall(state: StateManager, taskId: string): DependencyShortfall {
   const dep = state.getTask(taskId);
-  return !dep || dep.status === 'DONE' || dep.status === 'ARCHIVED';
+  if (!dep || dep.status === 'ARCHIVED') return { satisfied: true, missingEvidence: [] };
+  if (dep.status !== 'DONE') return { satisfied: false, missingEvidence: [] };
+  const { satisfied, missingEvidence } = evaluateDeliveryEvidence(state, dep);
+  return { satisfied, missingEvidence };
+}
+
+/**
+ * The yes/no every dependency gate reads: claim_next_task, wait_for_task, the
+ * auto-unblock below, the stale-block alert and the unmet counts. Fails closed:
+ * a DONE prerequisite whose evidence cannot be judged keeps its dependents
+ * withheld, because releasing them would build on exactly the promise the
+ * evidence exists to check.
+ */
+export function isDependencySatisfied(state: StateManager, taskId: string): boolean {
+  try {
+    return dependencyShortfall(state, taskId).satisfied;
+  } catch (error) {
+    logger.warn({ taskId, error }, 'dependencyUnblock: delivery evidence of a DONE prerequisite could not be judged; withholding its dependents');
+    return false;
+  }
 }
 
 /** The subset of `task.dependsOn` not yet satisfied. Empty for tasks with no declared deps. */
@@ -215,8 +263,26 @@ const NON_PROGRESSING_STATUSES = new Set<TaskStatus>(['BLOCKED', 'BACKLOG']);
 export const DEPENDENCY_WAIT_ALERT_MULTIPLIER = 2;
 
 /**
+ * An unmet prerequisite as the stale-block alert and report_blocked name it:
+ * `id [STATUS]`, and for a DONE one the delivery evidence it lacks, because
+ * DONE is unmet only while the evidence rule withholds it. Never throws:
+ * evidence that cannot be judged at all (an unrecognised deliveryPolicy) is
+ * named as such.
+ */
+export function describeUnmetDependency(state: StateManager, taskId: string): string {
+  const dep = state.getTask(taskId);
+  if (!dep || dep.status !== 'DONE') return `${taskId} [${dep?.status ?? 'missing'}]`;
+  try {
+    const { missingEvidence } = dependencyShortfall(state, taskId);
+    return missingEvidence.length > 0 ? `${taskId} [DONE, missing ${missingEvidence.join(', ')}]` : `${taskId} [DONE]`;
+  } catch {
+    return `${taskId} [DONE, delivery evidence could not be judged: check settings.deliveryPolicy]`;
+  }
+}
+
+/**
  * Visibility pass for stale blocks (resource-parked rows excluded — the lease
- * reaper bounds those). Three classes draw one line in #governors per block
+ * reaper bounds those). Four classes draw one line in #governors per block
  * instance; alert ONLY — never auto-park, the un-park decision is human triage
  * (set_task_status / unblock paths / promote the prerequisite):
  *   - dep-less rows past blockedTimeoutMs: no machine is on their side, nothing
@@ -225,6 +291,10 @@ export const DEPENDENCY_WAIT_ALERT_MULTIPLIER = 2;
  *     BLOCKED or BACKLOG: the auto-unblock cannot fire until a human moves the
  *     prerequisite — this is what makes a block cycle (A waits on B, B waits on
  *     A) or a BACKLOG-parked prerequisite visible instead of silently eternal;
+ *   - dep-waiting rows past blockedTimeoutMs whose unmet prerequisite is DONE
+ *     but withheld by the delivery evidence rule: no claim moves a DONE task,
+ *     so nothing clears it until that evidence is recorded or a human restores
+ *     the row — the line names the evidence each DONE prerequisite lacks;
  *   - dep-waiting rows past DEPENDENCY_WAIT_ALERT_MULTIPLIER × blockedTimeoutMs
  *     regardless: the general age bound.
  * Rows whose deps are all satisfied are skipped — runDependencyUnblock (which
@@ -258,11 +328,12 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
     } else {
       const unmet = unmetBlockedOnTaskIds(state, task);
       if (unmet.length === 0) continue;
-      const described = unmet.map((id) => `${id} [${state.getTask(id)?.status ?? 'missing'}]`);
+      const described = unmet.map((id) => describeUnmetDependency(state, id));
       const stuck = unmet.filter((id) => {
         const dep = state.getTask(id);
         return !!dep && NON_PROGRESSING_STATUSES.has(dep.status);
       });
+      const withheld = unmet.filter((id) => state.getTask(id)?.status === 'DONE');
       if (stuck.length > 0) {
         alert =
           `⚠️ ${task.id} (${task.title}) has been BLOCKED ${ageMin}m waiting on ${described.join(', ')} — ` +
@@ -270,6 +341,13 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
           `auto-unblock cannot fire (a BLOCKED prerequisite that waits back on this task is a dependency cycle; ` +
           `a BACKLOG one needs a human promote). Triage: unblock/promote the prerequisite, moe.set_task_status ` +
           `to restore this row, or re-file the block with the real blocker ids.`;
+      } else if (withheld.length > 0) {
+        alert =
+          `⚠️ ${task.id} (${task.title}) has been BLOCKED ${ageMin}m waiting on ${described.join(', ')} — ` +
+          `prerequisite(s) ${withheld.join(', ')} are DONE but lack the delivery evidence settings.deliveryPolicy requires, ` +
+          `and no claim moves a DONE task, so the auto-unblock cannot fire until that evidence is recorded. Triage: record a ` +
+          `runner-observed pass of the required gate on the prerequisite's current candidate, or moe.set_task_status to ` +
+          `restore this row.`;
       } else if (ageMs > DEPENDENCY_WAIT_ALERT_MULTIPLIER * state.blockedTimeoutMs) {
         alert =
           `⚠️ ${task.id} (${task.title}) has been BLOCKED ${ageMin}m waiting on ${described.join(', ')} — ` +

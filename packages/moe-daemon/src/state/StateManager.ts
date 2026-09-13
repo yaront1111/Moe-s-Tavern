@@ -39,6 +39,7 @@ import type {
   CheckRun,
   Decision,
   DecisionStatus,
+  DeliveryReceipt,
   Epic,
   ExecutionAttempt,
   ImplementationStep,
@@ -390,6 +391,8 @@ export class StateManager {
   reviews = new Map<string, Review>();
   /** Check runs, keyed by check-run id. Written only via state/checkRunStore.ts, which has no update or delete path. */
   checkRuns = new Map<string, CheckRun>();
+  /** Delivery receipts, keyed by receipt id. Written only via state/receiptStore.ts: at most one per candidate, never rewritten. */
+  receipts = new Map<string, DeliveryReceipt>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   emitter?: (event: StateChangeEvent) => void;
@@ -1108,6 +1111,8 @@ export class StateManager {
       this.reviews = loadEntities<Review>(path.join(this.moePath, 'reviews'));
       // And again: a project that has never recorded a check run loads empty.
       this.checkRuns = loadEntities<CheckRun>(path.join(this.moePath, 'checks'));
+      // And for receipts: a project where nothing has landed loads empty.
+      this.receipts = loadEntities<DeliveryReceipt>(path.join(this.moePath, 'receipts'));
       try {
         await this.purgeResolvedProposals();
       } catch (error) {

@@ -153,6 +153,17 @@ interface ProjectSettings {
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
 
+  // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
+  // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
+  // always lands. Strict values refuse approval with DELIVERY_EVIDENCE_MISSING
+  // unless: 'local-branch' a completion commit is recorded for the review round;
+  // 'remote-push' one recorded as pushed; 'merged-pull-request' / 'manual-artifact'
+  // the approval attests a merged pull request / manual artifact. Under any
+  // strict value, a qualityGate the wrapper runs for the task also needs a
+  // runner-observed exit-0 CheckRun on the current candidate. Any other value is
+  // refused as invalid input, never read as the default.
+  deliveryPolicy?: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
+
   // Branch a worker is expected to be on when it calls moe.complete_task:
   // a literal branch name or a `*` glob (e.g. "moe/work-*", what the agent
   // wrappers peel onto). Case-sensitive, anchored at both ends. Empty/unset
@@ -410,12 +421,23 @@ interface Task {
     exitCode: number;            // Always 0 (non-zero is rejected at complete_task)
     outputTail?: string;         // Last ≤2000 chars of its output
     reportedAt: string;          // ISO timestamp
+    source?: 'agent-reported';   // The completing agent's own claim, bound to no candidate or tree: complete_task
+                                 // stamps it on every new report and get_context forces it on every read. Optional
+                                 // only so older rows still load. Runner-observed results are CheckRun records instead
   };
   filesModified?: string[];      // ASSERTED paths: completed steps' modifiedFiles ?? affectedFiles (complete_task)
                                  // ∪ non-inferred paths landed via moe.record_commit
   completionSummary?: string;    // Worker's complete_task summary (≤2000 chars) — persisted and surfaced to QA
                                  // and to dependents via get_context (epicSiblings), no longer discarded
   reviewSummary?: string;        // What QA verified at approval — set by qa_approve (required there)
+  deliveryEvidence?: {           // Set by qa_approve when DONE rested on an ATTESTATION (deliveryPolicy manual-artifact
+                                 // or merged-pull-request); cleared by a later approval that needed none
+    kind: 'manual-artifact' | 'merged-pull-request';
+    reference: string;           // The artifact or pull request the reviewer named (trimmed, ≤500 chars)
+    verifiedDelivery: false;     // Always false: an attestation, never code delivery the daemon or a runner verified
+    recordedBy: string;          // Approving worker, or 'human' on the IDE/human path
+    recordedAt: string;          // ISO timestamp
+  };
 
   // Commit ledger — written only by moe.record_commit (wrapper post-flight)
   // and moe.declare_files; the daemon never runs git. Additive, no
@@ -1076,7 +1098,7 @@ interface Review {
 
 **File:** `.moe/checks/{check-run-id}.json` (one file per run)
 
-What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; no MCP tool records one yet (`moe.record_check_run` is a later slice). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
+What a check reported about one [Candidate](#candidate)'s exact bytes: the command, its exit code, the end of its output, the runner the report names, and where the report says the result came from. Binding the result to the candidate's tree lets a later gate ask about exactly those bytes instead of about a task. Only `packages/moe-daemon/src/state/checkRunStore.ts` writes the file; a runner records one through the `moe.record_check_run` MCP tool (docs/MCP_SERVER.md). Purely additive: no `schemaVersion` bump and no migration. A project that has never recorded a check run has no `checks/` directory and loads an empty collection.
 
 ```typescript
 interface CheckRun {
@@ -1129,6 +1151,64 @@ A failed write reaches the caller as an error, and the run is published nowhere.
   "runnerId": "runner-pilot",
   "source": "runner-observed",
   "createdAt": "2026-09-11T03:20:00.000Z"
+}
+```
+
+---
+
+## DeliveryReceipt
+
+**File:** `.moe/receipts/{receipt-id}.json` (one file per landed candidate)
+
+Where one [Candidate](#candidate)'s bytes landed, as the wrapper that landed them reported it: the target ref, where that ref pointed before and after, the revision that landed, and the push result when a push was required. Its job is crash recovery: a wrapper that dies after moving the target ref but before recording the landing asks on its next pass whether the candidate already landed, instead of landing it a second time. A wrapper records one through the `moe.record_delivery_receipt` MCP tool (docs/MCP_SERVER.md), and only `packages/moe-daemon/src/state/receiptStore.ts` writes the file. Purely additive: no `schemaVersion` bump and no migration. A project where nothing has landed has no `receipts/` directory and loads an empty collection.
+
+```typescript
+interface DeliveryReceipt {
+  readonly id: string;                // "receipt-<32 hex>", always generated by the daemon. Also the filename.
+  readonly candidateId: string;       // The Candidate whose bytes landed; must exist when the receipt is recorded
+  readonly target: string;            // The ref the wrapper landed on, e.g. "refs/heads/wave1-pilot", as reported
+  readonly targetBefore: string;      // 40 hex: where the target pointed before the landing
+                                      // (git's all-zero id when the ref did not exist)
+  readonly targetAfter: string;       // 40 hex: where the target pointed after the landing
+  readonly landedRevision: string;    // 40 hex: the revision the wrapper reports it landed
+  readonly pushResult: string | null; // The push result exactly as reported (at most 2000 chars);
+                                      // null when no push was required
+}
+```
+
+There is no `createdAt`: the seven fields above are the whole record, so a repeated report can leave the file byte-identical.
+
+**Reported, never verified.** A receipt is what a wrapper *reported* about a landing it performed. The daemon is state-only and never runs git: it neither performs the landing nor inspects the target ref, and it checks only the shape of each field and that the candidate exists. A receipt therefore cannot prove on its own that the bytes are where it says; a consumer that needs proof must re-derive it from the repository. Recording does not compare `target` with the candidate's `deliveryTarget`, or `targetAfter` with `landedRevision`: refusing a landing that already happened would leave a real ref move unrecorded, so the receipt says what was reported and a later policy decides what it is worth.
+
+**One receipt per candidate, never rewritten.** The candidate, not a caller-chosen id, is the key, because a crash replay re-sends the same report with no id. A report for a candidate that already has a receipt is compared field by field with the stored one, where an absent `pushResult` and `null` count as the same:
+
+- **Identical:** an idempotent no-op. The stored receipt is returned, nothing is written, and its file keeps the same bytes.
+- **Any difference:** refused with `-32002` `DELIVERY_RECEIPT_CONFLICT`, carrying `context.candidateId`, `context.receiptId` and `context.differingFields`. Nothing is written. A second landing is exactly what a receipt exists to expose, so it is never overwritten.
+
+The store has no update and no delete path.
+
+**Refusals.** Checked in this order; every refusal writes nothing:
+
+1. Malformed input: `-32602` `INVALID_INPUT` or `MISSING_REQUIRED` (see the DeliveryReceipt validation rules below).
+2. The candidate already has more than one receipt on disk, which only files placed by hand can cause: `-32002` `DELIVERY_RECEIPT_AMBIGUOUS`, with `context.candidateId` and `context.receiptIds`. Which one records the landing cannot be decided, so no answer is given and nothing more is written.
+3. The report contradicts the candidate's receipt: `-32002` `DELIVERY_RECEIPT_CONFLICT` (above).
+4. No receipt exists yet and `candidateId` names no candidate: `-32001` `CANDIDATE_NOT_FOUND`, with `context.candidateId`. No candidate is ever created on the caller's behalf.
+
+The existing receipt is consulted before the candidate, so a replay always reconciles to a stored landing, even one whose candidate record is gone. A failed write reaches the caller as an error, and the receipt is published nowhere.
+
+**Queries.** A receipt is read by id or looked up by candidate. The candidate lookup answers `null` when the candidate never landed, and refuses with `DELIVERY_RECEIPT_AMBIGUOUS` rather than choosing when more than one receipt names the candidate. Every read, and the record `recordDeliveryReceipt` returns, is a copy: editing it cannot change the stored receipt. Loading never re-checks or repairs a row.
+
+**Example:**
+
+```json
+{
+  "id": "receipt-9b8a7c6d5e4f30211f0e9d8c7b6a5948",
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "target": "refs/heads/wave1-pilot",
+  "targetBefore": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+  "targetAfter": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "landedRevision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "pushResult": null
 }
 ```
 
@@ -1602,6 +1682,16 @@ function generateId(prefix: string): string {
 - `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
 - An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
 - `createdAt` is always the daemon's clock; a caller cannot set it
+
+### DeliveryReceipt
+- At most one per candidate, never rewritten, and there is no delete path. A report for a candidate that already has a receipt is refused when any field differs (`DELIVERY_RECEIPT_CONFLICT`); an identical one is an idempotent no-op that returns the stored receipt and writes nothing. When two receipts on disk already name one candidate, both the lookup and any new report are refused (`DELIVERY_RECEIPT_AMBIGUOUS`)
+- `id` is always generated by the daemon (`receipt-<32 hex>`); a caller cannot choose it
+- `candidateId` must match `[A-Za-z0-9_-]{1,128}` and, for a new receipt, name an existing candidate (`CANDIDATE_NOT_FOUND`)
+- `target` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars: the rule a candidate's `deliveryTarget` follows. It is not compared with that `deliveryTarget`
+- `targetBefore`, `targetAfter` and `landedRevision` must each be exactly 40 hex characters, the shape `moe.finalize_attempt` accepts for `landedRevision`. They are validated for shape only, stored verbatim and compared exactly: never abbreviated, case-folded or coerced
+- `pushResult` is optional, and an absent or `null` value is stored as `null`. When present it must be a non-blank string of at most 2000 characters, stored verbatim: never trimmed or truncated
+- An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced, as is a report that is not an object
+- There is no `createdAt`: the record is exactly its seven fields
 
 ---
 

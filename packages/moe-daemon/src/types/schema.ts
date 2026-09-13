@@ -102,6 +102,13 @@ export interface AttributionSettings {
   exclude?: string[];
 }
 
+/**
+ * What DONE requires: settings.deliveryPolicy, judged by delivery/policy.ts.
+ * 'legacy' is the default, and what an absent or null value means: the soft
+ * NO-COMPLETION-COMMIT warning, approval always lands. The other four are strict.
+ */
+export type DeliveryPolicy = 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
+
 export interface ProjectSettings {
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
   speedModeDelayMs: number;
@@ -134,6 +141,17 @@ export interface ProjectSettings {
    * 'everyTask': the gate runs on every worker task completion.
    */
   qualityGateScope?: 'epicFinal' | 'everyTask';
+  /**
+   * What moe.qa_approve requires before DONE; see DeliveryPolicy and
+   * delivery/policy.ts. Absent or null means 'legacy' (soft warning, approval
+   * always lands). Strict values: 'local-branch' needs a completion commit
+   * recorded for the review round, 'remote-push' one recorded as pushed,
+   * 'merged-pull-request' and 'manual-artifact' an attestation passed to
+   * qa_approve. Under any strict value, a qualityGate the wrapper runs for the task
+   * also needs a runner-observed exit-0 CheckRun on its current candidate. Any
+   * other value is refused as invalid input, never read as the default.
+   */
+  deliveryPolicy?: DeliveryPolicy;
   /**
    * Branch a worker is expected to be on when it calls `moe.complete_task`.
    * Either a literal branch name or a `*` glob (e.g. "moe/work-*", which is
@@ -601,6 +619,24 @@ export interface NextAction {
   recommendedSkill?: SkillRecommendation;
 }
 
+/**
+ * What a DONE approval rested on when it was an ATTESTATION rather than recorded
+ * code delivery; persisted by moe.qa_approve under deliveryPolicy manual-artifact
+ * or merged-pull-request. The daemon never runs git and no runner observed it, so
+ * `verifiedDelivery` is the literal false: no reader can mistake a manual label
+ * for a verified landing.
+ */
+export interface TaskDeliveryEvidence {
+  /** manual-artifact: a deliverable checked by hand; merged-pull-request: a pull request declared merged. */
+  kind: 'manual-artifact' | 'merged-pull-request';
+  /** The artifact or pull request the reviewer named, trimmed (at most 500 chars). */
+  reference: string;
+  verifiedDelivery: false;
+  /** The approving worker, or 'human' on the IDE/human approval path. */
+  recordedBy: string;
+  recordedAt: string; // ISO
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -681,6 +717,12 @@ export interface Task {
   reviewCompletedAt?: string;
   /** What QA verified at approval (commands re-run, DoD items checked) — set by qa_approve. */
   reviewSummary?: string;
+  /**
+   * Set by qa_approve when DONE rested on an attestation (deliveryPolicy
+   * manual-artifact or merged-pull-request) instead of recorded code delivery;
+   * cleared by a later approval that needed none. See TaskDeliveryEvidence.
+   */
+  deliveryEvidence?: TaskDeliveryEvidence;
   /**
    * The worker's own account of what was delivered — the `summary` param of
    * moe.complete_task, persisted (it used to be accepted and discarded).
@@ -1084,6 +1126,49 @@ export interface CheckRun {
    * before the field existed still load; lists order such rows first.
    */
   readonly createdAt?: string;
+}
+
+// =============================================================================
+// Delivery receipts — where a wrapper says one candidate's bytes landed
+// =============================================================================
+//
+// A DeliveryReceipt records ONE landing of ONE Candidate as the wrapper that
+// performed it reported it, so a wrapper that crashed after moving the target
+// ref can ask on its next pass whether the landing already happened instead of
+// landing again. Purely additive: no existing type changed, no schemaVersion
+// bump, no migration (same shape as the CheckRun addition above).
+// =============================================================================
+
+/**
+ * One reported landing of one candidate; persisted at .moe/receipts/<id>.json
+ * (daemon sole-writer, via state/receiptStore.ts only).
+ *
+ * REPORTED, NEVER VERIFIED. This is the daemon's record of what a wrapper SAID
+ * about a landing it performed. The daemon is state-only and never runs git: it
+ * neither performs the landing nor inspects the target, so nothing may treat a
+ * receipt as independent proof that the bytes are where it says. A consumer
+ * that needs proof must re-derive it from the repository.
+ *
+ * AT MOST ONE PER CANDIDATE, NEVER REWRITTEN. The candidate is the key: an
+ * identical repeat report returns the stored receipt and writes nothing, and a
+ * report that contradicts it is refused, because overwriting would erase the
+ * evidence of a second landing. There is no update and no delete path.
+ */
+export interface DeliveryReceipt {
+  /** Always generated by the daemon; never chosen by the caller. */
+  readonly id: string;
+  /** The Candidate whose bytes landed. */
+  readonly candidateId: string;
+  /** The ref the wrapper landed on, e.g. `refs/heads/wave1-pilot`, as reported. */
+  readonly target: string;
+  /** Where the target pointed before the landing: 40 hex, git's all-zero id for a ref that did not exist. */
+  readonly targetBefore: string;
+  /** Where the target pointed after the landing: 40 hex. */
+  readonly targetAfter: string;
+  /** The revision the wrapper reports it landed: 40 hex. */
+  readonly landedRevision: string;
+  /** The push result exactly as reported; null when no push was required. */
+  readonly pushResult: string | null;
 }
 
 export type ProposalType = 'ADD_RAIL' | 'MODIFY_RAIL' | 'REMOVE_RAIL';

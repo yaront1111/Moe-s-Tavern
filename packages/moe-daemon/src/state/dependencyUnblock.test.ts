@@ -2,14 +2,18 @@
 // DONE/ARCHIVED transitions, the sweep backstop that repairs UNASSIGNED rows,
 // the resource-row exclusion, and the dep-less stale-block governor alert.
 
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { qaApproveTool } from '../tools/qaApprove.js';
 import { setTaskStatusTool } from '../tools/setTaskStatus.js';
 import { archiveTaskTool } from '../tools/archiveTask.js';
+import { reportBlockedTool } from '../tools/reportBlocked.js';
 import {
   DEPENDENCY_WAIT_ALERT_MULTIPLIER,
   alertStaleBlocks,
+  dependencyShortfall,
   findDependencyPath,
   formatDependencyCycle,
   isDependencySatisfied,
@@ -19,6 +23,11 @@ import {
 } from './dependencyUnblock.js';
 import { runBlockedTimeoutSweep } from './sweeps.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
+import { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';
+import { recordCheckRun } from './checkRunStore.js';
+import { isClaimGatedByDependsOn } from '../util/claimEligibility.js';
+import { MoeError } from '../util/errors.js';
+import type { CheckRun, Task } from '../types/schema.js';
 
 describe('dependencyUnblock', () => {
   const h = new ToolTestHarness();
@@ -413,6 +422,506 @@ describe('dependencyUnblock', () => {
       expect(roleMsgs.filter(([role]) => role === 'governors')).toHaveLength(2);
       expect(h.state.getTask('task-a1a1a1')!.status).toBe('BLOCKED');
       expect(h.state.getTask('task-b2b2b2')!.status).toBe('BLOCKED');
+    });
+  });
+});
+
+// =============================================================================
+// Delivery evidence on a DONE prerequisite (acceptance criterion 2)
+// =============================================================================
+//
+// Under a strict settings.deliveryPolicy, DONE alone no longer releases a
+// dependent: the prerequisite must also carry the evidence delivery/policy.ts
+// requires of it. The rule lives in isDependencySatisfied, so the claim gate,
+// the wait_for_task matcher and the blockedOnTaskIds auto-unblock read one
+// answer. Each decoy check record has its own case, so a regression names the
+// lookup that broke instead of failing one opaque scenario.
+describe('dependencyUnblock — delivery evidence on a DONE prerequisite', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  const GATE = 'node gate.cjs';
+  const TREE_CURRENT = 'c3'.repeat(20);
+  const TREE_OLD = 'd4'.repeat(20);
+  /** The harness project plus a gate the wrapper runs on every task. No deliveryPolicy, so the default applies. */
+  const DEFAULT_POLICY_SETTINGS = {
+    approvalMode: 'CONTROL',
+    speedModeDelayMs: 2000,
+    autoCreateBranch: true,
+    branchPattern: 'moe/{epicId}/{taskId}',
+    commitPattern: 'feat({epicId}): {taskTitle}',
+    agentCommand: 'claude',
+    autoCommit: true,
+    qualityGate: GATE,
+    qualityGateScope: 'everyTask',
+  };
+  const STRICT_SETTINGS = { ...DEFAULT_POLICY_SETTINGS, deliveryPolicy: 'local-branch' };
+
+  /** A stored CheckRun on task-P's current candidate; each decoy overrides what makes it wrong. */
+  const run = (id: string, overrides: Partial<CheckRun> = {}): CheckRun => ({
+    id,
+    candidateId: 'cand-P-current',
+    treeSha: TREE_CURRENT,
+    command: GATE,
+    exitCode: 0,
+    outputTail: 'gate ok',
+    runnerId: 'runner-pilot',
+    source: 'runner-observed',
+    ...overrides,
+  });
+  const RUNNER_PASS = run('check-P-current-runner-pass');
+  const FAILED_RUN = run('check-P-current-fail', { exitCode: 1, outputTail: 'gate failed' });
+  const OLD_CANDIDATE_PASS = run('check-P-old-pass', { candidateId: 'cand-P-old', treeSha: TREE_OLD });
+  const OTHER_TREE_PASS = run('check-P-current-other-tree-pass', { treeSha: TREE_OLD });
+  const OTHER_COMMAND_PASS = run('check-P-current-other-command-pass', { command: 'node lint.cjs', outputTail: 'lint ok' });
+  const AGENT_REPORTED_PASS = run('check-P-current-agent-pass', { source: 'agent-reported' });
+  const FAILED_RUN_AND_DECOYS = [FAILED_RUN, OLD_CANDIDATE_PASS, OTHER_TREE_PASS, OTHER_COMMAND_PASS, AGENT_REPORTED_PASS];
+
+  interface Fixture {
+    settings?: Record<string, unknown>;
+    prerequisite?: Partial<Task>;
+    /** false: task-P has no candidate at all. */
+    candidates?: boolean;
+    checks?: CheckRun[];
+    tasks?: Array<Partial<Task>>;
+  }
+
+  function writeRecord(kind: string, record: { id: string }): void {
+    const dir = path.join(h.moePath, kind);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${record.id}.json`), JSON.stringify(record, null, 2));
+  }
+
+  /**
+   * task-P (DONE unless overridden) with a current and an older candidate;
+   * task-D waits on it through dependsOn and task-E through a BLOCKED hold.
+   * Records are written before load(), exactly like acceptance criterion 2.
+   */
+  async function seed(fixture: Fixture = {}): Promise<void> {
+    h.setupMoeFolder({ settings: (fixture.settings ?? STRICT_SETTINGS) as never });
+    h.createEpic();
+    if (fixture.candidates !== false) {
+      const candidate = (id: string, treeSha: string, createdAt: string) => ({
+        id,
+        attemptId: 'attempt-P-1',
+        taskId: 'task-P',
+        baseRevision: 'a1'.repeat(20),
+        treeSha,
+        deliveryTarget: 'refs/heads/wave1-pilot',
+        createdAt,
+      });
+      writeRecord('candidates', candidate('cand-P-current', TREE_CURRENT, '2026-09-11T02:00:00.000Z'));
+      writeRecord('candidates', candidate('cand-P-old', TREE_OLD, '2026-09-11T01:00:00.000Z'));
+    }
+    for (const check of fixture.checks ?? []) writeRecord('checks', check);
+    h.createTask({ id: 'task-P', status: 'DONE', order: 1, ...fixture.prerequisite });
+    h.createTask({ id: 'task-D', status: 'WORKING', order: 2, dependsOn: ['task-P'] });
+    h.createTask({
+      id: 'task-E',
+      status: 'BLOCKED',
+      order: 3,
+      blockedOnTaskIds: ['task-P'],
+      blockedFromStatus: 'WORKING',
+      blockedReason: 'Waiting on task-P to land.',
+      blockedAt: '2026-09-11T00:00:00.000Z',
+    });
+    for (const task of fixture.tasks ?? []) h.createTask(task);
+    await h.state.load();
+  }
+
+  const row = (id: string): Task => h.state.getTask(id)!;
+
+  const claim = (args: Record<string, unknown>): Promise<unknown> =>
+    claimNextTaskTool(h.state).handler({ statuses: ['WORKING'], workerId: 'worker-N', ...args }, h.state);
+
+  /** The MoeError a call must be refused with; a call that resolves fails the case here. */
+  async function refusalOf(call: Promise<unknown>): Promise<MoeError> {
+    try {
+      await call;
+    } catch (err) {
+      if (err instanceof MoeError) return err;
+      throw err;
+    }
+    throw new Error('expected a MoeError refusal, but the call resolved');
+  }
+
+  describe('the evidence rule', () => {
+    it.each<[string, Fixture]>([
+      ['no candidate and no check run at all', { candidates: false }],
+      ['a failed gate run and every decoy', { checks: FAILED_RUN_AND_DECOYS }],
+    ])('under the default policy a DONE prerequisite with %s still releases its dependents', async (_label, fixture) => {
+      await seed({ ...fixture, settings: DEFAULT_POLICY_SETTINGS });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(true);
+      expect(unmetDependsOn(h.state, row('task-D'))).toEqual([]);
+      expect(await runDependencyUnblock(h.state, 'task-P')).toEqual(['task-E']);
+    });
+
+    it.each<[string, CheckRun]>([
+      ['a failed gate run on the current candidate', FAILED_RUN],
+      ['a pass for an older candidate of the same task', OLD_CANDIDATE_PASS],
+      ['a pass naming the current candidate on a tree it does not have', OTHER_TREE_PASS],
+      ['a pass of a command that is not the required gate', OTHER_COMMAND_PASS],
+      ['an agent-reported pass on the right candidate, tree and command', AGENT_REPORTED_PASS],
+    ])('under the strict policy %s does not release the dependents', async (_label, decoy) => {
+      await seed({ checks: [decoy] });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+      expect(unmetDependsOn(h.state, row('task-D'))).toEqual(['task-P']);
+      expect(unmetBlockedOnTaskIds(h.state, row('task-E'))).toEqual(['task-P']);
+    });
+
+    it('a runner-observed exit-0 gate run on the current candidate and its own tree releases the dependents', async () => {
+      await seed({ checks: [...FAILED_RUN_AND_DECOYS, RUNNER_PASS] });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(true);
+      expect(unmetDependsOn(h.state, row('task-D'))).toEqual([]);
+      expect(unmetBlockedOnTaskIds(h.state, row('task-E'))).toEqual([]);
+    });
+
+    it('reports the shortfall as the exact token array acceptance criterion 2 asserts', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+
+      expect(dependencyShortfall(h.state, 'task-P')).toEqual({
+        satisfied: false,
+        missingEvidence: ['required-check:node gate.cjs'],
+      });
+    });
+
+    it('a DONE prerequisite with no candidate at all is withheld and reports the missing check rather than throwing', async () => {
+      await seed({ candidates: false });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+      expect(dependencyShortfall(h.state, 'task-P')).toEqual({
+        satisfied: false,
+        missingEvidence: ['required-check:node gate.cjs'],
+      });
+    });
+
+    it('a prerequisite id missing from the board still counts as satisfied under the strict policy', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [{ id: 'task-G', status: 'WORKING', order: 4, dependsOn: ['task-gone'] }] });
+
+      expect(isDependencySatisfied(h.state, 'task-gone')).toBe(true);
+      expect(unmetDependsOn(h.state, row('task-G'))).toEqual([]);
+      expect(dependencyShortfall(h.state, 'task-gone')).toEqual({ satisfied: true, missingEvidence: [] });
+    });
+
+    it.each(['BACKLOG', 'PLANNING', 'AWAITING_APPROVAL', 'WORKING', 'REVIEW', 'BLOCKED'] as const)(
+      'a %s prerequisite is unmet on status alone: no evidence is asked for, and a matching pass does not stand in for DONE',
+      async (status) => {
+        await seed({ prerequisite: { status }, checks: [RUNNER_PASS] });
+
+        expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+        expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: false, missingEvidence: [] });
+      }
+    );
+
+    it('an ARCHIVED prerequisite still counts as satisfied: archiving is allowed from unfinished statuses, so it never claimed delivery', async () => {
+      await seed({ prerequisite: { status: 'ARCHIVED' }, checks: FAILED_RUN_AND_DECOYS });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(true);
+      expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: true, missingEvidence: [] });
+    });
+
+    it.each<[string, 'candidates' | 'checkRuns']>([
+      ['the candidate lookup', 'candidates'],
+      ['the check-run lookup', 'checkRuns'],
+    ])('withholds the dependents when %s throws, even with a matching pass on disk', async (_label, map) => {
+      await seed({ checks: [RUNNER_PASS] });
+      vi.spyOn(h.state[map], 'values').mockImplementation(() => {
+        throw new Error('records unreadable');
+      });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+      expect(await runDependencyUnblock(h.state, 'task-P')).toEqual([]);
+      expect(row('task-E').status).toBe('BLOCKED');
+    });
+
+    it('an unrecognised deliveryPolicy withholds the dependents without the scan throwing', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS] });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+      expect(await runDependencyUnblock(h.state, 'task-P')).toEqual([]);
+      expect(row('task-E').status).toBe('BLOCKED');
+      expect(() => dependencyShortfall(h.state, 'task-P')).toThrow('Invalid deliveryPolicy');
+    });
+
+    it('cycle detection ignores delivery evidence: edges out of a DONE prerequisite stay dead while it withholds dependents', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, prerequisite: { dependsOn: ['task-D'] } });
+
+      expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+      expect(findDependencyPath(h.state, 'task-P', 'task-D')).toBeNull();
+    });
+  });
+
+  describe('the claim gate', () => {
+    it('refuses an explicit claim behind a DONE prerequisite lacking evidence with DEPENDENCY_EVIDENCE_MISSING, before any write', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+      const taskFile = path.join(h.moePath, 'tasks', 'task-D.json');
+      const before = fs.readFileSync(taskFile, 'utf8');
+      const updateTask = vi.spyOn(h.state, 'updateTask');
+      const createWorker = vi.spyOn(h.state, 'createWorker');
+
+      const err = await refusalOf(claim({ taskId: 'task-D' }));
+
+      expect({ code: err.code, codeName: err.codeName, context: err.context }).toEqual({
+        code: -32003,
+        codeName: 'DEPENDENCY_EVIDENCE_MISSING',
+        context: { taskId: 'task-D', prerequisiteTaskId: 'task-P', missingEvidence: ['required-check:node gate.cjs'] },
+      });
+      expect(err.message).toBe(
+        '[DEPENDENCY_EVIDENCE_MISSING] Task task-D cannot be claimed yet: its prerequisite task-P is DONE but lacks the ' +
+          'delivery evidence settings.deliveryPolicy requires: required-check:node gate.cjs (no runner-observed exit-0 run ' +
+          'of "node gate.cjs" is recorded for the current candidate\'s tree). dependsOn withholds WORKING claims until that ' +
+          'evidence is recorded; an architect/governor can edit the dependencies with moe.set_task_dependencies.'
+      );
+      expect(updateTask).not.toHaveBeenCalled();
+      expect(createWorker).not.toHaveBeenCalled();
+      expect(fs.readFileSync(taskFile, 'utf8')).toBe(before);
+    });
+
+    it('over MCP the refusal keeps its code and codeName, and its message names the prerequisite and the missing evidence', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+
+      const wire = (await new McpAdapter(h.state).handle({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
+        params: { name: 'moe.claim_next_task', arguments: { statuses: ['WORKING'], taskId: 'task-D', workerId: 'worker-N' } },
+      })) as JsonRpcResponse;
+
+      expect(wire.error).toEqual({
+        code: -32003,
+        message: expect.stringContaining(
+          'its prerequisite task-P is DONE but lacks the delivery evidence settings.deliveryPolicy requires: required-check:node gate.cjs'
+        ),
+        data: { tool: 'moe.claim_next_task', codeName: 'DEPENDENCY_EVIDENCE_MISSING' },
+      });
+    });
+
+    it('keeps today\'s refusal word for word when a prerequisite is unmet on status, with no evidence claim', async () => {
+      await seed({ prerequisite: { status: 'REVIEW' } });
+
+      const err = await refusalOf(claim({ taskId: 'task-D' }));
+
+      expect({ code: err.code, codeName: err.codeName }).toEqual({ code: -32003, codeName: 'NOT_ALLOWED' });
+      expect(err.message).toBe(
+        '[NOT_ALLOWED] claim not allowed: Task task-D has unmet dependencies: task-P (dependsOn gates WORKING claims until ' +
+          'they are DONE/ARCHIVED). An architect/governor can edit them with moe.set_task_dependencies.'
+      );
+    });
+
+    it('names only the unfinished prerequisite when another one lacks evidence: the status refusal comes first', async () => {
+      await seed({
+        checks: FAILED_RUN_AND_DECOYS,
+        tasks: [
+          { id: 'task-R', status: 'REVIEW', order: 4 },
+          { id: 'task-M', status: 'WORKING', order: 5, dependsOn: ['task-P', 'task-R'] },
+        ],
+      });
+
+      const err = await refusalOf(claim({ taskId: 'task-M' }));
+
+      expect(err.codeName).toBe('NOT_ALLOWED');
+      expect(err.message).toBe(
+        '[NOT_ALLOWED] claim not allowed: Task task-M has unmet dependencies: task-R (dependsOn gates WORKING claims until ' +
+          'they are DONE/ARCHIVED). An architect/governor can edit them with moe.set_task_dependencies.'
+      );
+    });
+
+    it('refuses an explicit claim with INVALID_INPUT naming the setting when deliveryPolicy is unrecognised', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS] });
+
+      const err = await refusalOf(claim({ taskId: 'task-D' }));
+
+      expect({ code: err.code, codeName: err.codeName }).toEqual({ code: -32602, codeName: 'INVALID_INPUT' });
+      expect(err.message).toBe(
+        '[INVALID_INPUT] Invalid deliveryPolicy: must be one of legacy, local-branch, remote-push, merged-pull-request, ' +
+          'manual-artifact (got "local-brnach")'
+      );
+      expect(row('task-D').assignedWorkerId).toBeNull();
+    });
+
+    it('the ranked claim and the wait_for_task matcher both skip a dependent withheld on evidence', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [{ id: 'task-O', status: 'WORKING', order: 9 }] });
+
+      expect(isClaimGatedByDependsOn(h.state, row('task-D'))).toBe(true);
+      const result = (await claim({})) as { hasNext: boolean; task: { id: string } };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-O');
+      expect(row('task-D').assignedWorkerId).toBeNull();
+    });
+
+    it('planning a dependent still proceeds while its DONE prerequisite lacks evidence', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [{ id: 'task-Q', status: 'PLANNING', order: 4, dependsOn: ['task-P'] }] });
+
+      const result = (await claim({ statuses: ['PLANNING'], taskId: 'task-Q', workerId: 'architect-N' })) as {
+        hasNext: boolean;
+        task: { id: string };
+      };
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-Q');
+      expect(row('task-Q').assignedWorkerId).toBe('architect-N');
+    });
+  });
+
+  describe('the blockedOnTaskIds auto-unblock', () => {
+    it('holds task-E byte for byte while the evidence is missing and restores it once a runner-observed pass is recorded', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+      const taskFile = path.join(h.moePath, 'tasks', 'task-E.json');
+      const before = fs.readFileSync(taskFile, 'utf8');
+
+      expect(await runDependencyUnblock(h.state, 'task-P')).toEqual([]);
+      expect(fs.readFileSync(taskFile, 'utf8')).toBe(before);
+
+      await recordCheckRun(h.state, RUNNER_PASS);
+
+      expect(await runDependencyUnblock(h.state, 'task-P')).toEqual(['task-E']);
+      expect(row('task-E').status).toBe('WORKING');
+    });
+
+    it('does not release task-E through the updateTask hook when the prerequisite lands DONE without evidence', async () => {
+      await seed({ prerequisite: { status: 'REVIEW' }, checks: FAILED_RUN_AND_DECOYS });
+
+      await h.state.updateTask('task-P', { status: 'DONE' });
+
+      expect(row('task-E').status).toBe('BLOCKED');
+      expect(row('task-E').blockedOnTaskIds).toEqual(['task-P']);
+    });
+  });
+
+  // report_blocked filters already-satisfied ids out of a fresh block. It must
+  // judge them by the same rule, or a dependent is told to continue on exactly
+  // the delivery the claim gate and the auto-unblock withhold.
+  describe('report_blocked at report time', () => {
+    const REPORTER: Partial<Task> = { id: 'task-W', status: 'WORKING', order: 4 };
+
+    interface ReportResult {
+      taskStatus: string;
+      dependenciesSatisfied?: boolean;
+      blockedOnTaskIds?: string[];
+      satisfiedBlockedOnTaskIds?: string[];
+      blockResolution?: string;
+    }
+
+    /** task-W, an unassigned WORKING row, reports a block naming task-P. */
+    const reportOnP = async (): Promise<ReportResult> =>
+      (await reportBlockedTool(h.state).handler(
+        { taskId: 'task-W', reason: 'Waiting on the prerequisite to land.', blockedOnTaskIds: ['task-P'] },
+        h.state
+      )) as ReportResult;
+
+    it('blocks on a DONE prerequisite still lacking its required check, and the dependency scan releases it once the pass is recorded', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBeUndefined();
+      expect(result.taskStatus).toBe('BLOCKED');
+      expect(result.blockedOnTaskIds).toEqual(['task-P']);
+      expect(row('task-W').status).toBe('BLOCKED');
+      expect(row('task-W').blockedOnTaskIds).toEqual(['task-P']);
+      // "once task-P is DONE" alone would read as already satisfied: the resolution names what it lacks.
+      expect(result.blockResolution).toBe(
+        'It auto-unblocks (returning unassigned, claimable by anyone) once task-P are DONE/ARCHIVED. ' +
+          'Already DONE but still withheld until the delivery evidence settings.deliveryPolicy requires is recorded: ' +
+          'task-P [DONE, missing required-check:node gate.cjs].'
+      );
+
+      await recordCheckRun(h.state, RUNNER_PASS);
+
+      expect((await runDependencyUnblock(h.state)).sort()).toEqual(['task-E', 'task-W']);
+      expect(row('task-W').status).toBe('WORKING');
+    });
+
+    it('fails closed: under an unrecognised deliveryPolicy the DONE prerequisite is recorded and the row blocks', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS], tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBeUndefined();
+      expect(row('task-W').status).toBe('BLOCKED');
+      expect(row('task-W').blockedOnTaskIds).toEqual(['task-P']);
+      expect(result.blockResolution).toContain('task-P [DONE, delivery evidence could not be judged: check settings.deliveryPolicy].');
+    });
+
+    it.each<[string, Fixture]>([
+      ['under the default policy with no evidence at all', { settings: DEFAULT_POLICY_SETTINGS, candidates: false }],
+      ['under the strict policy once a runner-observed pass is recorded', { checks: [...FAILED_RUN_AND_DECOYS, RUNNER_PASS] }],
+    ])('still answers dependenciesSatisfied without blocking for a DONE prerequisite %s', async (_label, fixture) => {
+      await seed({ ...fixture, tasks: [REPORTER] });
+
+      const result = await reportOnP();
+
+      expect(result.dependenciesSatisfied).toBe(true);
+      expect(result.satisfiedBlockedOnTaskIds).toEqual(['task-P']);
+      expect(row('task-W').status).toBe('WORKING');
+      expect(row('task-W').blockedOnTaskIds ?? null).toBeNull();
+    });
+  });
+
+  describe('the stale-block alert', () => {
+    const HOUR = 60 * 60 * 1000;
+    /** Another row held on task-P, blocked past the default one-hour timeout but inside the 2× bound. */
+    const HELD_PAST_TIMEOUT: Partial<Task> = {
+      id: 'task-S',
+      status: 'BLOCKED',
+      order: 5,
+      blockedOnTaskIds: ['task-P'],
+      blockedFromStatus: 'WORKING',
+      blockedReason: 'Waiting on task-P to land.',
+      blockedAt: new Date(Date.now() - 1.5 * HOUR).toISOString(),
+    };
+
+    function captureGovernorPosts(): string[] {
+      const posts: string[] = [];
+      vi.spyOn(h.state, 'postToRoleChannel').mockImplementation(async (role: string, msg: string) => {
+        if (role === 'governors') posts.push(msg);
+      });
+      return posts;
+    }
+    const postFor = (posts: string[], id: string): string | undefined => posts.find((m) => m.startsWith(`⚠️ ${id} `));
+
+    it('pages #governors at the blocked timeout for a row held on a DONE prerequisite and names the evidence it lacks', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(2);
+      for (const id of ['task-E', 'task-S']) {
+        expect(postFor(posts, id)).toContain('waiting on task-P [DONE, missing required-check:node gate.cjs]');
+        expect(postFor(posts, id)).toContain('are DONE but lack the delivery evidence settings.deliveryPolicy requires');
+        expect(row(id).status).toBe('BLOCKED'); // alert only
+      }
+    });
+
+    it('names evidence that cannot be judged at all instead of throwing out of the pass', async () => {
+      await seed({ settings: { ...STRICT_SETTINGS, deliveryPolicy: 'local-brnach' }, checks: [RUNNER_PASS], tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(2);
+      expect(postFor(posts, 'task-S')).toContain('task-P [DONE, delivery evidence could not be judged: check settings.deliveryPolicy]');
+    });
+
+    it('under the default policy a row waiting on a DONE prerequisite draws no alert, because the dependency scan owns it', async () => {
+      await seed({ settings: DEFAULT_POLICY_SETTINGS, candidates: false, tasks: [HELD_PAST_TIMEOUT] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(0);
+      expect(posts).toEqual([]);
+    });
+
+    it('the blocked-timeout sweep keeps the held row BLOCKED on its prerequisite and pages the evidence it lacks', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS });
+      const posts = captureGovernorPosts();
+
+      await h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state));
+
+      expect(row('task-E').status).toBe('BLOCKED');
+      expect(row('task-E').blockedOnTaskIds).toEqual(['task-P']);
+      expect(postFor(posts, 'task-E')).toContain('waiting on task-P [DONE, missing required-check:node gate.cjs]');
     });
   });
 });
