@@ -19,53 +19,35 @@
     {
       "stepId": "step-1",
       "description": "CONFIRM THE DATA GAP THIS CARD ASSUMES AWAY, THEN READ THE SEAMS. Read-only, no edits. The card's deliverable says the plugin Task model 'gains the matching nullable fields', which reads as though the daemon already sends them. It does not, and that is the single most important fact for this task. Verify it yourself rather than trusting this note. (a) grep packages/moe-daemon/src/types/schema.ts for currentCandidate, latestCheckRun, deliveryReceipt and attemptPhase: zero hits. Candidate, CheckRun, DeliveryReceipt and ExecutionAttempt are SEPARATE records under .moe/candidates, .moe/checks, .moe/receipts and .moe/attempts, keyed by candidateId or taskId. They are not fields on Task. (b) Read StateManager.getSnapshot around line 1171: it serves project, epics, tasks, workers, proposals, teams, channels and decisions. The four delivery collections are absent, so the board socket never carries them. (c) Read WebSocketServer.sendStateSnapshot around line 285 and broadcast just above it: the plugin's whole view of a task is the raw persisted Task record from that snapshot plus TASK_UPDATED events. (d) Confirm the plugin has no way to ask for more: grep MoeCommandSender for sendMessage and note there is no per-task detail request, only mutations plus GET_CHANNELS, GET_MESSAGES and GET_PINS. (e) Note that get_context DOES already project currentCandidate (getContext.ts around line 287) but that is the MCP path for agents, not the plugin's WebSocket path. Write all of this into the step note. Conclusion to carry into step 2: this card cannot be delivered as a client-only change, and the scope must grow by one daemon-side projection. If any of the above turns out to be false because a sibling landed it meanwhile, say so and drop step 2.",
-      "status": "COMPLETED",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
-      "note": "Read-only confirmation: schema has zero currentCandidate/latestCheckRun/deliveryReceipt/attemptPhase hits; StateManager stores four separate maps and getSnapshot omits all. WebSocketServer broadcasts raw events and snapshot tasks. getContext selects last listCandidatesForTask result by createdAt/id, MCP only. MoeCommandSender has no task-detail query (plan's read-message list is incomplete: also GET_DECISIONS/ACTIVITY_LOG/METRICS, none fetch evidence). Thus step 2 serving-only projection is necessary approved scope growth, without altering getSnapshot/persistence. Receipt prerequisite is in git history (11b6216/81bdc8a/792b02c). Task baseline exists (13:47Z); shared foreign dirty paths preserved, including staged WebSocketServer and unrelated qaApprove.ts UU. No edits or tests in this exploration step.",
-      "startedAt": "2026-09-13T13:48:25.723Z",
-      "completedAt": "2026-09-13T13:49:01.924Z"
+      "startedAt": "2026-09-13T18:59:41.925Z"
     },
     {
       "stepId": "step-2",
       "description": "PROJECT THE EVIDENCE ONTO THE TASK THE BOARD IS SENT. Add a derived delivery projection in the daemon, and keep it strictly a SERVING concern: it is computed when a task is sent to a plugin client, never persisted onto the Task record and never written to disk. Create packages/moe-daemon/src/state/deliveryProjection.ts exporting one pure function that takes the state handle and a task and returns either undefined or a small object carrying the current candidate's id, short sha and base revision, the latest check run's command and exit code, the delivery receipt's target and landed revision, and the owning attempt's phase. Resolve each from the existing stores rather than re-reading disk, reusing their established selection rules: the candidate is the task's current one by createdAt then id, exactly as getContext.ts already selects it, and the check run and receipt hang off THAT candidate, not off the task, because a check or receipt belongs to a frozen candidate. Return undefined when the task has none of them, so a project that has never recorded delivery evidence produces byte-identical payloads to today, which is the third Definition-of-Done item and the compatibility guarantee for every existing client. Error handling: a missing or malformed record is treated as absent rather than throwing, because this runs inside snapshot serving on every board connect and one corrupt file must not take the socket down; log at debug and carry on. Then apply it in exactly two places in WebSocketServer.ts: sendStateSnapshot, mapping the filtered task list, and the TASK_UPDATED path in broadcast, so a live update carries the same shape as the initial snapshot. Do not touch getSnapshot itself, which other callers use and which must keep returning persisted records.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/deliveryProjection.ts",
         "packages/moe-daemon/src/server/WebSocketServer.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/state/deliveryProjection.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/state/deliveryProjection.ts",
-        "packages/moe-daemon/src/state/deliveryProjection.test.ts",
-        "packages/moe-daemon/src/server/WebSocketServer.ts"
-      ],
-      "note": "Implemented derived Task.delivery at snapshot serving and TASK_UPDATED only; raw getSnapshot/persisted tasks unchanged. Reuses candidate/check ordering, candidate-keyed receipt lookup (ambiguous omitted), candidate owning attempt or current pre-candidate attempt. Guards malformed records and debug logs failures. Full sha is retained alongside shortSha for copying. Tests advanced from step 5 to establish red first: scratch no-evidence stub 10 failed/1 passed -> real implementation 11 passed; repo focused gate now 14/14 including actual WebSocket snapshot/update/no-evidence byte-equality/archived/corrupt cases. Existing client GET_STATE auto-refresh every 3000ms covers evidence-only writes without store event changes. Baseline full daemon: exit1, 1399 tests pass, 29 files fail loading foreign qaApprove.ts merge markers. Unrelated staged hunks untouched.",
-      "startedAt": "2026-09-13T13:49:15.851Z",
-      "completedAt": "2026-09-13T13:55:04.572Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "PARSE IT IN THE JETBRAINS CLIENT. In moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt add a nullable delivery holder to Task plus the small data classes it needs, all with defaulted nullable members so every existing construction site and fixture keeps compiling. In moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt map it in BOTH Task construction sites, the private parseTasks used by parseState and the public parseTask used for single-task messages. Forgetting the second one is the classic miss in that file and the reason a snapshot can look right while a live update silently drops the data. Parse defensively, matching what the blocker-metadata work established there: a missing, null or wrong-shaped delivery object yields null rather than throwing; each scalar is read only after a kind guard so a number never becomes an id string; the exit code is read as an integer and left null when it is not one; and no value is trimmed, normalised or reformatted, because these are identifiers a human will compare against git. Error handling is the point of this step: malformed delivery metadata must never drop the otherwise valid task it rides on, since that would blank a board column over one bad record. Reuse the strict helpers already present rather than the permissive legacy getters.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
-        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
-      ],
-      "note": "Added nullable TaskDelivery and candidate/check/receipt data classes with nullable defaults. Both parseTasks and parseTask map delivery; strict strings preserve bytes and signed exit code uses guarded BigDecimal.intValueExact with Int bounds. Bad holder/nested shapes yield null without dropping task. Added 4 tests ahead of step 5. Fresh Gradle codec red: 22 tests/3 failed on old parser (payload missing), green: 22 tests/0 failed, BUILD SUCCESSFUL exit0; test task executed under jetbrains-gradle lease. Exact whitespace/case/command newline preserved; numeric string/Boolean/fraction/overflow/huge-exponent cases covered.",
-      "startedAt": "2026-09-13T13:55:04.689Z",
-      "completedAt": "2026-09-13T13:58:28.927Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "RENDER IT, THROUGH A PURE HELPER THE TESTS CAN DRIVE. The fourth Definition-of-Done item requires the rendering decision to be a pure headless-testable function, so create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt with no Swing and no IntelliJ imports, and declare its data types at TOP LEVEL rather than inside a companion object, because a classifier nested in a companion is not importable as Outer.Inner and has already cost this repo a failed build. It takes the parsed delivery holder and returns either nothing to show or an ordered list of label and value rows, each label a MoeBundle key rather than a literal string. Rules: show a row only when its value is actually present, so a partially populated task shows a partial block rather than empty labels; abbreviate a sha for display while keeping the full value available, since a reviewer compares the short form by eye and pastes the long one; render an exit code of zero as a pass and any non-zero as a failure, and note in a comment that a check run is what the runner REPORTED, never proof the daemon executed anything, which is the boundary the check-run card established and which this surface must not overstate. Then wire it into TaskDetailDialog.kt as a read-only block: no buttons, no actions, no approval flow changes, which is the first task rail. Reuse the existing single state listener and its disposal rather than adding a subscription, and refresh the block from the updated task so an approval or a landing is reflected without reopening the dialog. Add the message keys to moe-jetbrains/src/main/resources/messages/MoeBundle.properties.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
@@ -73,21 +55,12 @@
       ],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt"
-      ],
-      "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
-        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
-        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
-        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
-      ],
-      "note": "Pure headless helper with top-level row/outcome types; seven ordered optional rows, exact full tokens retained with 8-char display, reported exit 0 PASS/nonzero FAIL. Read-only dialog block reuses listener/disposal, hides whole wrapper when absent (no legacy spacing), refreshes only delivery content, and uses literal noneditable text areas with selectable full revision (no action/button). Added nine bundle keys. Test-first helper skeleton produced 7 tests/6 failures; implemented helper + dialog: fresh Gradle focused run BUILD SUCCESSFUL exit0, MoeJsonTest 22 + DeliveryPresentationTest 7 =29 green. Exhaustive 128 partial combinations, empty/null, exact strings, signed exits, full/short SHA, literal markup, bundle coverage.",
-      "startedAt": "2026-09-13T13:58:29.009Z",
-      "completedAt": "2026-09-13T14:01:21.606Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "TEST BOTH LAYERS, NAMING EVERY CASE. Daemon side, in a new packages/moe-daemon/src/state/deliveryProjection.test.ts using ToolTestHarness: a task with a candidate, a check and a receipt projects all of them; the candidate chosen is the current one when several exist; a check and receipt belonging to an OLDER candidate are not shown against a newer one; a task with no evidence projects undefined and its served payload is byte-identical to the unprojected record; a corrupt or missing record is treated as absent rather than throwing; and the attempt phase reflects the owning attempt. Plugin side, in moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt: a fully populated payload round-trips through BOTH parseState and parseTask with every value byte-exact, which is the first Definition-of-Done item; absent, null and wrong-typed delivery objects each yield null without dropping the task; and a numeric field arriving as a string does not become an id. New moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt, plain JUnit 4 in the MetricsPanelTest style: every row present renders in order; each partially populated combination renders only its own rows; nothing to show when empty, which pins the render-as-today guarantee; exit code zero versus non-zero; sha abbreviation keeps the full value; and a key-coverage check that loads the bundle from the test classpath and asserts every key the helper can emit is defined, so a missing localisation fails the build rather than shipping a raw placeholder. Assert exact strings and exact enum values throughout, never truthiness.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/deliveryProjection.test.ts",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
@@ -96,33 +69,25 @@
       "newFiles": [
         "packages/moe-daemon/src/state/deliveryProjection.test.ts",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/state/deliveryProjection.test.ts",
-        "packages/moe-daemon/src/server/WebSocketServer.ts"
-      ],
-      "note": "All planned cases are present (tests were advanced into implementation steps for red-first). Daemon 17/17 green: full projection, current candidate timestamp/id, older-candidate exclusion, latest check/legacy dates, owning/pre-candidate/missing/wrong-task attempt, malformed/null/ambiguous records, byte-identical raw+served legacy payload, no writes/mutation, actual WebSocket snapshot/update/direct-edit paths, archive filtering, and forged metadata refusal. Discovered plan gap: seven direct TASK_UPDATED replies were raw (would erase projected evidence); added shared serving helper for them and delivery to UPDATE_TASK denylist. Scratch tests first proved both defects (15 pass/2 fail), repo now17 green. Same owned server file, no new scope category. Plugin re-run fresh with --rerun-tasks BUILD SUCCESSFUL exit0, 29 tests/0 failures (22 codec +7 presentation), all 11 Gradle tasks executed.",
-      "startedAt": "2026-09-13T14:01:21.707Z",
-      "completedAt": "2026-09-13T14:04:48.429Z"
+      ]
     },
     {
       "stepId": "step-6",
       "description": "MUTATION RED, GATES, ADVERSARIAL REVIEW, HAND OFF. (a) These are new files, so establish the red by mutation, in a scratch copy and never in the shared checkout peers are working in, restoring after each and re-verifying with a separate status call. Perform at least four and name the failing test for each: make the projection return an object instead of undefined when there is no evidence, which must break the renders-as-today case; drop the parseTask mapping and keep only parseTasks, which must break the single-task round-trip and is the classic miss in that file; resolve the check and receipt from the task instead of from the current candidate, which must break the older-candidate case; and treat a non-zero exit code as a pass, which must break the exit-code case. A mutation that breaks nothing means that behaviour has no test. (b) Gates: the card names cd moe-jetbrains and ./gradlew test, so run it and require BUILD SUCCESSFUL with nonzero JUnit counts. Because step 2 touches the daemon, also run the daemon suite from the repository root with npm.cmd on Windows and require exit 0 with a count no lower than before, plus npx tsc --noEmit. Acquire the shared Gradle slot through the Moe resource protocol before the plugin leg and release it either way; never cancel a peer's build or delete a shared cache, and treat an UP-TO-DATE Gradle result as no test run. Set GRADLE_OPTS to raise the client heap if the Gradle daemon reports an out-of-memory during cleanup on this box. (c) Adversarially review: is the projection genuinely serving-only, with nothing persisted onto a Task record or written to disk; does a project with no delivery evidence produce byte-identical payloads; are both parser paths mapped; can malformed metadata drop a task or take down the snapshot; does the detail block add any action, which a task rail forbids; is the dashboard left to Wave 2; and did anything VS Code change, which is explicitly a follow-up card. (d) Complete through moe.complete_task with the commands, exit codes, counts and mutation results, listing every modified path. State plainly in the summary that the card assumed the plugin could already see this evidence, that it could not, and that the daemon projection in step 2 is the added scope that made the rest possible, so a reviewer can judge that expansion on the record.",
-      "status": "IN_PROGRESS",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/deliveryProjection.ts",
         "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt"
-      ],
-      "startedAt": "2026-09-13T14:04:48.496Z"
+      ]
     }
   ],
-  "status": "BLOCKED",
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Operator asked for more planning with an empty PLANNING queue. Promoted out of human-gated BACKLOG: dependsOnUnmet is 0 (task-b1c98508, the delivery receipt, has landed), so this is a genuinely ready row rather than planning ahead of an undelivered contract. The only other unassigned rows still have unmet dependencies.",
+  "reopenCount": 1,
+  "reopenReason": "Clearing the governance-caused claim fence. The orphan attempt-7cf32d14 is QA's generation-2 attempt, parked in reconciling by the 18:58:52Z daemon restart after qa_reject had already unassigned this row. A ranked moe.claim_next_task (statuses [\"WORKING\"], no taskId) closes it and opens a fresh generation. Only explicit-taskId claims stay refused until the reconcile window lapses (about 20:58:52Z). The repair spec is in the QA rejection; see the governor comment.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -142,32 +107,46 @@
       "author": "worker-9f2c3ad4",
       "content": "STEP 6 evidence (cannot complete gate): plugin `cd moe-jetbrains; ./gradlew.bat test --rerun-tasks` exit0 BUILD SUCCESSFUL, all11 Gradle tasks executed, 15 JUnit files/197 tests/0 failures/0 skipped. Lease jetbrains-gradle acquired and RELEASED. Root `npm.cmd --prefix packages/moe-daemon test -- --reporter=json --outputFile=D:/moe-9e851-probe/daemon-full.json` exit1:1416 passed tests,29 files cannot load because pre-existing qaApprove.ts conflict markers (baseline1399 passes/same29 failures; delta+17 own tests). `npx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json` exit1 solely TS1185 at qaApprove.ts lines29,31,33,138,147,172. Scratch ONLY replaced that foreign conflicted file with HEAD, yielding tsc exit0 and WebSocket+projection43/43. No shared conflict edits.\nSix scratch mutants all killed, restored SHA256 equality: empty-object4 red incl byte-identical legacy snapshot; task-wide older-candidate4 red incl older-candidate exclusion; dropped parseTask3 red incl full single-task roundtrip; nonzero-pass3 red incl signed exit-code outcome; direct reply raw1 red; delivery writable1 red. Restored scratch baselines17/17 daemon and29/29 plugin. Driver/logs/XML retained D:/moe-9e851-probe; node_modules junction removed safely. Earlier red-first: projection10 failures, codec3, presentation6; later WS fixes2. All 10 owned paths declared, diff --check clean.\nAdversarial review: projection has no writes, raw getSnapshot unchanged, unknown/malformed metadata contained, no-evidence raw+served bytes tested, both parsers wired; no actions/buttons/approval changes/board badges/dashboard/VSCode. Existing3s GET_STATE polling supplies evidence-only refresh. Two plan omissions fixed in existing server file: all7 direct task replies projected; incoming delivery denylisted. Card assumed plugin already saw evidence; it did not, so serving projection is essential approved daemon scope growth. Gate remains externally blocked; resolve foreign merge then rerun full daemon/tsc/plugin and complete step6/task.",
       "timestamp": "2026-09-13T14:10:51.666Z"
+    },
+    {
+      "id": "comment-910dd41f14bb4fb8b085a6f0a8fd6117",
+      "author": "qa-64519ef1",
+      "content": "QA EVIDENCE (qa-64519ef1, 2026-09-13), reviewed on HEAD 2fb9593. The source landed in e33c9d1, which is an ancestor of origin/main 91e14c2, and the worktree is byte-equal to it for all 10 paths. Nothing under moe-vscode changed.\n\nGATES, all re-run by QA:\n- Daemon: `npm test` in packages/moe-daemon gave 121 files and 2003 passed | 2 skipped (2005), exit 0. `npx tsc --noEmit -p tsconfig.json` exited 0. Logs are in D:/moe-qa-9e851.\n- Plugin: I took the jetbrains-gradle lease (released afterwards) and ran `gradlew.bat test --rerun-tasks` with GRADLE_OPTS=-Xmx1g. Exit 0, BUILD SUCCESSFUL, 11 tasks executed. Fresh JUnit XML: 15 suites, 197 tests, 0 failures, errors or skips. That includes MoeJsonTest 22 (4 delivery cases) and DeliveryPresentationTest 7.\n\nWORKER MUTANTS (D:/moe-9e851-probe): all killed.\n- empty-object: 4 red\n- older-candidate: 4 red\n- direct-replies-raw: 1 red\n- delivery-writable: 1 red\n- parseTask-dropped: 3 red\n- nonzero-pass: 3 red\nThe scratch and pristine targets, and the test files, are byte-equal to HEAD after EOL normalisation.\n\nCHECKED BY READING, ALL OK:\n- parseTasks and parseTask both map delivery, and the bothPaths tests cover both.\n- UPDATE_TASK denylist is in place. taskStore.createTask copies only known fields, so CREATE_TASK cannot forge `delivery` either.\n- Snapshot, broadcast and all 7 direct replies are projected, and getSnapshot is untouched.\n- javap on IC 2025.2 VerticalLayout: invisible children get no size and no gap, so the hidden wrapper keeps the legacy layout.\n- No buttons, actions or approval-flow changes, and no dashboard.\n\nREJECT CAUSE: the short-sha probe. It ran in a scratch git-archive tree whose node_modules junction has since been removed. With the store accepting every length, deliveryProjection returned undefined for sha lengths 7, 12 and 39. Only 40 produced the full projection. Output is in D:/moe-qa-9e851/probe-out.txt.\n\nNON-BLOCKING, optional: TaskDetailDialog rebuilds the delivery JBTextAreas on every 3s GET_STATE snapshot (refreshIntervalMs=3000, then publishState, then refreshDeliverySection calling removeAll). That clears a user's selection of the full sha. The blocker and plan sections already behave this way, and fixing it is not required for approval.",
+      "timestamp": "2026-09-13T18:57:47.010Z"
+    },
+    {
+      "id": "comment-9c5eb13927df40669a704295bc5d39c2",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-13 19:08Z: the claim fence on this row, checked against the live daemon code. These are facts, not a plan.\n- CAUSE. qa_reject at 18:57:36Z unassigned this row, but it left QA's attempt-7cf32d14 (generation 2) open in the running phase, because none of qa_reject, report_blocked or set_task_status closes attempts. My daemon restart at 18:58:52Z then ran reconcileRunningAttempts, which parks every running attempt in reconciling whether or not its task is still assigned. The attempt records no processStartedAt or host, so moe.reattach_attempt can never match it. Every seat-close path (deregister, worker deletion, startup purge, release_task) selects tasks by assignedWorkerId, so none of them reaches this orphan.\n- WHAT IS REFUSED. Only an explicit-taskId moe.claim_next_task, with ATTEMPT_RECONCILING, until the reconcile-window sweep closes the attempt. The default window is 2h, so that happens at about 20:58:52Z plus the sweep interval.\n- WHAT WORKS NOW. A ranked moe.claim_next_task {statuses:[\"WORKING\"]} with no taskId. isTaskClaimable offers an unassigned row, and the claim's attempt helper then hits ATTEMPT_ALREADY_OPEN, closes the orphan and opens a fresh generation. That is normal claim flow, not a bypass. The ranked pool orders by priority, so HIGH task-49ec8755 is offered ahead of this MEDIUM row while both are WORKING and unassigned.\n- STEP STATE. step-1 shows IN_PROGRESS from worker-c8e523ea's read-only session at 18:59:41Z. The row is unassigned, so assertNoLiveLease will not refuse a new claimer.\n- THE REPAIR SPEC is qa-64519ef1's rejection (rejectionDetails) plus worker-c8e523ea's confirmation in #general msg-5fdd35ae: reuse the candidate store's 7-40 hex SHA validator for Candidate.treeSha and baseRevision, keep landedRevision 40-hex to match receiptStore, add a short-SHA projection regression, then rerun the daemon suite, tsc and ./gradlew test.",
+      "timestamp": "2026-09-13T19:08:14.110Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:26.996Z",
-  "updatedAt": "2026-09-13T18:14:56.039Z",
+  "updatedAt": "2026-09-13T19:08:17.228Z",
   "metrics": {
     "firstClaimAt": "2026-09-13T13:36:47.503Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 5
+    "executedStepCount": 6,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-8b93cc67",
-    "worker-9f2c3ad4"
+    "worker-c8e523ea",
+    "qa-64519ef1"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "Task detail renders a Delivery block showing candidate sha and base, check command and exit code, receipt target and landed revision, and attempt phase",
+      "rejectedAt": "2026-09-13T18:57:35.960Z",
+      "rejectedBy": "qa-64519ef1"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-09-13T13:39:03.139Z",
   "planningNotes": {
     "approachesConsidered": "Adding the four collections to the snapshot as sibling arrays and joining them client-side - rejected: it matches how workers and channels are served, but it pushes the current-candidate selection rule into Kotlin where it would drift from the daemon's own, and the card explicitly wants the Task model to carry the fields. Persisting the derived fields onto the Task record - rejected outright: they are derived from four other records, persisting them would create a second source of truth that can go stale, and an epic rail keeps the store additive and migration-free. Adding a per-task detail request to the plugin protocol - rejected as heavier than the card warrants and a new round trip for data the snapshot can carry. Rendering inside TaskDetailDialog without a pure helper - rejected by the fourth Definition-of-Done item and by testability: the board dialog cannot be asserted without an IDE fixture. Blocking the card until someone else adds the projection - considered, and rejected because no sibling owns it: the remaining Wave 1 rows are the wrapper receipt work and the integration pass, so blocking would strand this surface indefinitely. The honest move is to expand scope by one file and say so in the completion summary.",
@@ -196,10 +175,10 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
   ],
-  "blockedReason": "Implementation and required mutations are finished, but step6 explicitly requires green full daemon suite and tsc; cannot safely mark complete. Pre-existing unmerged packages/moe-daemon/src/tools/qaApprove.ts remains UU with conflict markers at lines29,31,33,138,147,172. Fresh root npm.cmd --prefix packages/moe-daemon test exits1:1416 tests pass,29 files cannot load that conflict (baseline1399 pass/same29 failed files). Fresh npx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json exits1 with TS1185 on those markers. Shared foreign merge is outside this task and was not edited. Resolve it through its owner, then resume step6 and rerun gates. Plugin full Gradle gate is green197/197, own daemon17/17, all6 scratch mutants killed; scratch-only HEAD substitution of conflicted file gives tsc0 and WebSocket+projection43/43, but cannot replace required repo gate. All10 owned paths declared for wrapper checkpoint; step6 evidence is in task comment and Serena handoff. Gradle lease released and no builds left running.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-13T14:12:12.436Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "e33c9d1",
@@ -224,25 +203,114 @@
       "status": "BLOCKED",
       "pushed": true,
       "message": "Operator landed the declared bytes on a clean main checkout after clearing the stale qaApprove.ts merge conflict; daemon tsc+vitest and plugin gradle test green."
+    },
+    {
+      "sha": "2fb9593744470286896ce0cc2b03ecd3446d9e69",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c8e523ea@2026-09-13T18:37:36Z",
+      "paths": [
+        ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json"
+      ],
+      "recordedBy": "worker-c8e523ea",
+      "recordedAt": "2026-09-13T18:37:39.291Z",
+      "treeId": "a13489d4a840094685795ec81fecb1254bc791fa",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "868e8649a49ecfbf8a947d0ff15d95a7fdc8bcf3",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-64519ef1@2026-09-13T18:43:10Z",
+      "paths": [
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json"
+      ],
+      "recordedBy": "qa-64519ef1",
+      "recordedAt": "2026-09-13T18:59:26.974Z",
+      "treeId": "248f11142fb8d10afd3e331292d2e4fe66574d93",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/state/deliveryProjection.ts",
     "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
     "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
-    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
     "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "operator@2026-09-13T18:14:56.027Z",
-    "at": "2026-09-13T18:14:56.039Z"
+    "sessionId": "qa-64519ef1@2026-09-13T18:43:10Z",
+    "at": "2026-09-13T18:59:26.974Z"
   },
-  "planRevision": 0
+  "planRevision": 3,
+  "priorBlockedReason": "Cannot safely apply verified QA SHA-validation repair because task ownership is fenced. Two specific-task moe.claim_next_task calls refused ATTEMPT_RECONCILING: task held for qa-64519ef1 by attempt-7cf32d1417084d37814a31cf0610f9e4 generation2; daemon restart requires its owning runner to reattach/reconcile, not a forced worker takeover. Task was unassigned in get_context. start_step1 succeeded earlier but that is not claim authority; only read-only review performed. No source edits/tests/staging/commits. QA mismatch confirmed independently: candidate/check stores accept7-40 hex while projection uses40-only for candidate fields; receipt must stay40-only. After runner reconciliation and restored worker ownership, export/reuse candidate SHA validator, add short tree/base/check plus full-receipt regression, rerun daemon/tsc/leased Gradle gates. Existing landed1 baseline/live marker does not override runtime generation fence. Do not close or reattach QA attempt using this worker's identity.",
+  "blockedOnTaskIds": null,
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-09-13T18:42:29.711Z",
+  "verification": {
+    "command": "cd moe-jetbrains; ./gradlew.bat test --rerun-tasks",
+    "exitCode": 0,
+    "outputTail": "> Task :test\nBUILD SUCCESSFUL in 26s\n11 actionable tasks: 11 executed\nFresh JUnit XML aggregate: 15 files, 197 tests, 0 failures, 0 errors, 0 skipped. GRADLE_OPTS=-Xmx1g; shared jetbrains-gradle lease released.\nAdditional fresh daemon gate: 121 files passed, 2003 tests passed, 2 skipped, 0 failed; npm.cmd exit 0. npx.cmd tsc --noEmit exit 0. Full evidence D:/moe-9e851-final-20260913.",
+    "reportedAt": "2026-09-13T18:42:29.711Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Read-only Delivery block delivered in landed PR #187/91e14c2; resumed verification on 2fb9593, no source edits. Card assumed plugin already saw evidence; it did not. Added scope: serving-only daemon projection, including direct replies and delivery denylist. Both codecs, pure helper, legacy absence, malformed evidence, candidate binding and disposal reviewed. No dashboard/actions/VSCode changes.\nFresh: cd moe-jetbrains; ./gradlew.bat test --rerun-tasks: exit0 BUILD SUCCESSFUL,197 tests,11 tasks executed. Gradle lease released.\nRoot npm.cmd --prefix packages/moe-daemon test -- --reporter=json --outputFile=D:/moe-9e851-final-20260913/daemon-full.json: exit0,2003 passed/2 skipped,121 files.\nnpx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json: exit0.\nPrior scratch mutants inspected: empty-object4 red, older-candidate4, parseTask-dropped3, nonzero-pass3, raw-direct-reply1, writable-delivery1; restored17 daemon/29 plugin green. Targets/tests match current code. Fresh logs/XML/JSON: D:/moe-9e851-final-20260913; prior mutants: D:/moe-9e851-probe.\nPaths:\npackages/moe-daemon/src/state/deliveryProjection.ts\npackages/moe-daemon/src/state/deliveryProjection.test.ts\npackages/moe-daemon/src/server/WebSocketServer.ts\nmoe-jetbrains/src/main/kotlin/com/moe/model/Models.kt\nmoe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt\nmoe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt\nmoe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt\nmoe-jetbrains/src/main/resources/messages/MoeBundle.properties\nmoe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt\nmoe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+  "reviewCompletedAt": "2026-09-13T18:57:35.960Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Task detail renders a Delivery block showing candidate sha and base, check command and exit code, receipt target and landed revision, and attempt phase"
+    ],
+    "issues": [
+      {
+        "type": "missing_feature",
+        "file": "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "line": 17,
+        "description": "isSha requires exactly 40 hex, but candidateFor (line 41) applies it to Candidate.treeSha and baseRevision, which the store accepts at 7-40 hex (candidateStore.ts:41 SHA_RE, checkRunStore.ts:43). A store-valid 7-39 char candidate is dropped as malformed along with its check and receipt, which hides the block. Repro: lengths 7, 12 and 39 give undefined; 40 gives the full projection. Fix: reuse the store's SHA_RE for those two fields. landedRevision stays 40 hex (receiptStore agrees)."
+      },
+      {
+        "type": "other",
+        "file": "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+        "line": 12,
+        "description": "Every projection fixture uses 40-hex shas ('Ab'.repeat(20)), so the store's 7-40 boundary is untested. Add a case that fails on the current code: a store-valid short candidate (e.g. 7 or 12 hex) with a same-tree check, a 40-hex receipt and an owning attempt. Assert the full projection: exact treeSha and baseRevision, shortSha = first 8 chars or fewer, latestCheckRun, deliveryReceipt, attemptPhase. Epic rail: a test must fail on the old behaviour."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 2 fails silently for store-valid evidence. isSha at deliveryProjection.ts:17 accepts only 40 hex, and line 41 applies it to Candidate.treeSha and baseRevision. The store and the documented moe.record_candidate contract accept 7-40 hex (candidateStore.ts:41 SHA_RE via requireSha, checkRunStore.ts:43, docs/MCP_SERVER.md:656-657). A candidate with a 7-39 character sha is thrown as malformed, logged at debug only, and dropped together with its check and receipt. With no open attempt, the Delivery block disappears entirely. get_context.currentCandidate, the qa_approve candidate gate and policy.ts all act on that same candidate, so the panel contradicts the rules it exists to explain.\n\nRepro on HEAD 2fb9593, in a scratch git-archive tree: validateCandidateParams accepted treeSha = baseRevision at lengths 7, 12, 39 and 40, and listCandidatesForTask picked it each time. With a check on the same tree (exit 0), a 40-hex receipt and a closed owning attempt, deliveryProjection returned undefined for 7, 12 and 39. Only length 40 got the full object.\n\nTo pass:\n(1) Align the candidate predicate with the store contract: reuse or export its SHA_RE, and keep landedRevision at 40 hex to match receiptStore.\n(2) Add a projection test that fails on the current code. It should seed a short store-valid candidate with a check and receipt, and assert the full projection. Every fixture today is 40 hex.\n(3) Re-run the daemon suite, tsc and ./gradlew test.\n\nEverything else checks out (evidence in a task comment):\n- daemon: 121 files, 2003 passed, 2 skipped, exit 0\n- tsc: exit 0\n- gradlew test --rerun-tasks: exit 0, 197 tests, 0 failures\n- e33c9d1 is on origin/main and matches the worktree\n- both parsers, the denylist, the direct replies, the hidden-wrapper layout and the rails are all correct",
+      "rejectedAt": "2026-09-13T18:57:35.960Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Task detail renders a Delivery block showing candidate sha and base, check command and exit code, receipt target and landed revision, and attempt phase"
+      ],
+      "issues": [
+        {
+          "type": "missing_feature",
+          "file": "packages/moe-daemon/src/state/deliveryProjection.ts",
+          "line": 17,
+          "description": "isSha requires exactly 40 hex, but candidateFor (line 41) applies it to Candidate.treeSha and baseRevision, which the store accepts at 7-40 hex (candidateStore.ts:41 SHA_RE, checkRunStore.ts:43). A store-valid 7-39 char candidate is dropped as malformed along with its check and receipt, which hides the block. Repro: lengths 7, 12 and 39 give undefined; 40 gives the full projection. Fix: reuse the store's SHA_RE for those two fields. landedRevision stays 40 hex (receiptStore agrees)."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+          "line": 12,
+          "description": "Every projection fixture uses 40-hex shas ('Ab'.repeat(20)), so the store's 7-40 boundary is untested. Add a case that fails on the current code: a store-valid short candidate (e.g. 7 or 12 hex) with a same-tree check, a 40-hex receipt and an owning attempt. Assert the full projection: exact treeSha and baseRevision, shortSha = first 8 chars or fewer, latestCheckRun, deliveryReceipt, attemptPhase. Epic rail: a test must fail on the old behaviour."
+        }
+      ]
+    }
+  ]
 }
