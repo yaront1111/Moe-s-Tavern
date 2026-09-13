@@ -84,12 +84,12 @@
       "affectedFiles": []
     }
   ],
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-f9946b0d",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Promoted BACKLOG → PLANNING on the human's explicit instruction (governor-6c1e1bf2, 2026-09-12). Planning is not dependency-gated: plan now while the WORKING claim stays gated on task-867f69a6 (record_check_run, in progress). task-d72d8cc6 (finalize_attempt) and task-4d7074c0 (record_candidate) are DONE. Downstream: task-bfe2f04e (wrapper receipts + crash replay) and, through it, the epic-final integration pass task-808869c5 wait on this card.",
+  "reopenReason": "Runtime-activation blocker resolved. The moes daemon restarted at 18:58:52Z with the human's approval (pid 4972, port 9877). Live tools/list returns 66 tools, including moe.record_candidate, moe.record_check_run, moe.finalize_attempt and moe.reattach_attempt. Resume from step 1 with a fresh task-bound claim; the verified facts are in the governor comment.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -110,18 +110,25 @@
       "author": "worker-9f2c3ad4",
       "content": "Step-1 read-only ownership/contract audit (2026-09-13): loaded explore-before-assume and test-driven-development, CLAUDE.md and docs/roles/worker.md, prior handoff. HEAD 624b354eb2f2d6eb3c0e27afdb2ca3bcd575d421, branch moe/work-2026-09-10; task-specific baseline header at 14:21:04Z matches task and HEAD, landed=0. Producer Moe-Task history reachable: Candidate, CheckRun (11d569c), finalize (a899c92); no dependency-status inference. Seven planned edit paths are clean. Foreign staged docs/MCP_SERVER.md, docs/roles/{architect,qa,worker}.reference.md; daemon generated/initFiles.ts, server/{WebSocketServer.ts,WebSocketServer.test.ts}, state/{StateManager.ts,StateManager.test.ts,chatStore.ts,dependencyUnblock.ts,workerStore.ts}, tools/{chatChannelRef.test.ts,chatRead.ts,chatSend.ts,chatWait.ts,claimNextTask.test.ts,enterGovernance.ts,enterGovernance.test.ts,getCommitScope.ts,getCommitScope.test.ts,getContext.ts,qaApprove.test.ts,releaseTask.test.ts,setTaskStatus.ts,setTaskStatus.test.ts}, util/{mentionRouter.ts,mentionRouterSystemHops.test.ts}; qaApprove.ts is UU. Additional foreign JetBrains delivery model/dialog/parser/messages/tests and untracked DeliveryPresentation twins + daemon deliveryProjection twins preserved, as are runtime board records. Nothing created/edited/staged by this worker.\nBLOCKING LIVE CONTRACT: read-only proxy tools/list exits0, returns61 tools, includes claim_next_task but excludes record_candidate, record_check_run, finalize_attempt. .moe/attempts is absent (0 records); no attempt for this claim. .moe/daemon.json identifies PID55520, port9878, started2026-09-12T22:03:33.261Z. Process image is PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js _run; installed bundle lacks all3 RPC names and ATTEMPT_FINALIZING. Source-landed does not mean runtime-activated. Cannot pin real claim generation or satisfy fail-closed candidate/finalize contract here. No daemon deploy/restart, source edits or verification suite attempted. Step1 remains incomplete pending operator/owner deployment of the already-landed producer contract and a fresh task-bound claim; no fabricated attempt/baseline or legacy-success bypass.",
       "timestamp": "2026-09-13T14:24:00.740Z"
+    },
+    {
+      "id": "comment-34e695abe939498bb94e6f3e889d3e57",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-13 19:00Z. The runtime-activation blocker is resolved and verified. These are facts, not a plan.\n- The moes daemon restarted at 18:58:52Z, with the human's approval. It now runs as pid 4972 on port 9877, version 0.8.0. The JetBrains plugin respawned it from D:/projexts/moes/packages/moe-daemon/dist, because ~/.moe/config.json sets installPath. That dist was built at 18:41Z from main 91e14c2, and its tools/index.js hash matches the installed plugin bundle.\n- A raw MCP tools/list over ws://127.0.0.1:9877/mcp returns 66 tools. moe.record_candidate, moe.record_check_run, moe.finalize_attempt and moe.reattach_attempt are all registered. .moe/attempts/ is populated.\n- The record_check_run wire contract in governor-6c1e1bf2's comment was a pre-landing summary. Treat the registered inputSchema as authoritative.\n- Step 1 still shows IN_PROGRESS from worker-9f2c3ad4's session before the block. The row is unassigned, so assertNoLiveLease will not refuse a new claimer.\n- The checkout has moved since the step-1 audit. That audit ran on moe/work-2026-09-10 at 624b354. The branch is now moe/work-2026-09-13 at 2fb9593, one wip commit on top of main 91e14c2.\n- settings.deliveryPolicy is unset, so the default is legacy. list_tasks reports dependsOnUnmet 0.\n- Another worker is in the same checkout: worker-c8e523ea is reworking task-9e851 (deliveryProjection.ts plus the JetBrains model). That work does not touch this card's seven paths. Run the postflight harnesses one at a time with MOE_POSTFLIGHT_TIMEOUT_SEC=180.",
+      "timestamp": "2026-09-13T19:01:20.751Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:34.280Z",
-  "updatedAt": "2026-09-13T18:44:49.395Z",
+  "updatedAt": "2026-09-13T19:10:28.458Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "governor-6c1e1bf2",
     "architect-260bbdcd",
     "architect-643e6210",
     "worker-9f2c3ad4",
-    "governor-9844430a"
+    "governor-9844430a",
+    "worker-f9946b0d"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T22:30:16.145Z",
@@ -208,9 +215,11 @@
   },
   "planApprovedAt": "2026-09-13T14:11:13.012Z",
   "workStartedAt": "2026-09-13T14:22:00.339Z",
-  "blockedReason": "Live prerequisite contract is absent despite producer commits being on HEAD624b354. Read-only proxy tools/list exits0:61 tools, claim_next_task present, record_candidate/record_check_run/finalize_attempt all absent. .moe/attempts is absent, so this fresh claim has no durable attemptId/generation to pin. Runtime .moe/daemon.json identifies PID55520 port9878 started2026-09-12T22:03:33.261Z; process runs the installed PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js, whose bytes lack those3 tools and ATTEMPT_FINALIZING. Source-landed is not runtime-activated. Task baseline is valid (14:21:04Z, correct task/HEAD); seven planned paths are clean. Fail-closed candidate completion cannot safely use fabricated tokens or a legacy-success bypass, and deployment/restarting the shared daemon is outside this wrapper-only scope. Activate producer runtime through owner/operator, then fresh task-bound relaunch. No source/test/doc edits or tests run; all foreign WIP/conflict preserved, NOT the blocker. Step1 audit and exact evidence in comment-b2753a22880d4dbda5c1a6f7cd988587; Serena handoff saved.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-09-13T14:24:51.985Z",
-  "planRevision": 0
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "planRevision": 0,
+  "priorBlockedReason": "Live prerequisite contract is absent despite producer commits being on HEAD624b354. Read-only proxy tools/list exits0:61 tools, claim_next_task present, record_candidate/record_check_run/finalize_attempt all absent. .moe/attempts is absent, so this fresh claim has no durable attemptId/generation to pin. Runtime .moe/daemon.json identifies PID55520 port9878 started2026-09-12T22:03:33.261Z; process runs the installed PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js, whose bytes lack those3 tools and ATTEMPT_FINALIZING. Source-landed is not runtime-activated. Task baseline is valid (14:21:04Z, correct task/HEAD); seven planned paths are clean. Fail-closed candidate completion cannot safely use fabricated tokens or a legacy-success bypass, and deployment/restarting the shared daemon is outside this wrapper-only scope. Activate producer runtime through owner/operator, then fresh task-bound relaunch. No source/test/doc edits or tests run; all foreign WIP/conflict preserved, NOT the blocker. Step1 audit and exact evidence in comment-b2753a22880d4dbda5c1a6f7cd988587; Serena handoff saved.",
+  "blockedOnTaskIds": null
 }
