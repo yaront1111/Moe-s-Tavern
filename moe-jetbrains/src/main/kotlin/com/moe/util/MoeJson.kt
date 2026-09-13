@@ -24,6 +24,10 @@ import com.moe.model.TaskComment
 import com.moe.model.TaskMetrics
 import com.moe.model.TaskSizingThresholds
 import com.moe.model.TaskVerification
+import com.moe.model.TaskDelivery
+import com.moe.model.DeliveryCandidate
+import com.moe.model.DeliveryCheckRun
+import com.moe.model.DeliveryReceipt
 import com.moe.model.Team
 import com.moe.model.Worker
 import java.math.BigDecimal
@@ -393,9 +397,46 @@ object MoeJson {
                 blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
                 blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
                 blockedAt = obj.getStrictStringOrNull("blockedAt"),
-                planRevision = obj.getPlanRevisionOrNull("planRevision")
+                planRevision = obj.getPlanRevisionOrNull("planRevision"),
+                delivery = parseDelivery(obj)
             )
         }
+    }
+
+    private fun JsonObject.deliveryObject(key: String): JsonObject? =
+        get(key)?.takeIf { it.isJsonObject }?.asJsonObject
+
+    /** Do not coerce strings, truncate fractions or wrap overflow into a passing code. */
+    private fun JsonObject.deliveryExitCode(): Int? {
+        val primitive = get("exitCode")?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive ?: return null
+        if (!primitive.isNumber) return null
+        return try {
+            val value = BigDecimal(primitive.asString)
+            if (value < BigDecimal(Int.MIN_VALUE) || value > BigDecimal(Int.MAX_VALUE)) null else value.intValueExact()
+        } catch (_: NumberFormatException) {
+            null
+        } catch (_: ArithmeticException) {
+            null
+        }
+    }
+
+    private fun parseDelivery(obj: JsonObject): TaskDelivery? {
+        val delivery = obj.deliveryObject("delivery") ?: return null
+        return TaskDelivery(
+            currentCandidate = delivery.deliveryObject("currentCandidate")?.let {
+                DeliveryCandidate(
+                    id = it.getStrictStringOrNull("id"), treeSha = it.getStrictStringOrNull("treeSha"),
+                    shortSha = it.getStrictStringOrNull("shortSha"), baseRevision = it.getStrictStringOrNull("baseRevision")
+                )
+            },
+            latestCheckRun = delivery.deliveryObject("latestCheckRun")?.let {
+                DeliveryCheckRun(it.getStrictStringOrNull("command"), it.deliveryExitCode())
+            },
+            deliveryReceipt = delivery.deliveryObject("deliveryReceipt")?.let {
+                DeliveryReceipt(it.getStrictStringOrNull("target"), it.getStrictStringOrNull("landedRevision"))
+            },
+            attemptPhase = delivery.getStrictStringOrNull("attemptPhase")
+        )
     }
 
     private fun parseTaskMetrics(obj: JsonObject): TaskMetrics? {
@@ -549,7 +590,8 @@ object MoeJson {
             blockedResourceId = obj.getStrictStringOrNull("blockedResourceId"),
             blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
             blockedAt = obj.getStrictStringOrNull("blockedAt"),
-            planRevision = obj.getPlanRevisionOrNull("planRevision")
+            planRevision = obj.getPlanRevisionOrNull("planRevision"),
+            delivery = parseDelivery(obj)
         )
     }
 

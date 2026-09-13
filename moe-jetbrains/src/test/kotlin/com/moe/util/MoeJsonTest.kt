@@ -14,6 +14,71 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MoeJsonTest {
+    private val deliveryJson = """{
+        "currentCandidate":{"id":" Candidate-X ","treeSha":"AbCdEf0123456789AbCdEf0123456789AbCdEf01","shortSha":"AbCdEf01","baseRevision":" Base-X "},
+        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9},
+        "deliveryReceipt":{"target":" refs/heads/Pilot ","landedRevision":" LanDed-X "},
+        "attemptPhase":"finalizing"
+    }"""
+
+    private fun serializedDelivery(task: Task) =
+        nullSafeGson.toJsonTree(task).asJsonObject.get("delivery") ?: JsonNull.INSTANCE
+
+    @Test
+    fun `delivery fully populated payload round trips through snapshot and single task byte exactly`() {
+        val expected = JsonParser.parseString(deliveryJson)
+        for ((path, task) in bothPaths(blockerTaskJson("\"delivery\": $deliveryJson"))) {
+            assertCompanions(path, task)
+            assertEquals(path, expected, serializedDelivery(task))
+        }
+    }
+
+    @Test
+    fun `delivery absent null and wrong shaped holders keep otherwise valid tasks`() {
+        for (member in listOf("", "null", "42", "true", "[]", "\"delivery\"")) {
+            val fields = if (member.isEmpty()) "" else "\"delivery\": $member"
+            for ((path, task) in bothPaths(blockerTaskJson(fields))) {
+                assertCompanions("$path $member", task)
+                assertEquals("$path $member", JsonNull.INSTANCE, serializedDelivery(task))
+            }
+        }
+    }
+
+    @Test
+    fun `delivery rejects numeric ids string exit codes and wrong shaped nested records`() {
+        val fields = """"delivery":{
+            "currentCandidate":{"id":42,"treeSha":true,"shortSha":[],"baseRevision":{}},
+            "latestCheckRun":{"command":17,"exitCode":"0"},
+            "deliveryReceipt":[],"attemptPhase":1
+        }"""
+        val expected = JsonParser.parseString("""{
+            "currentCandidate":{"id":null,"treeSha":null,"shortSha":null,"baseRevision":null},
+            "latestCheckRun":{"command":null,"exitCode":null},"deliveryReceipt":null,"attemptPhase":null
+        }""")
+        for ((path, task) in bothPaths(blockerTaskJson(fields))) {
+            assertCompanions(path, task)
+            assertEquals(path, expected, serializedDelivery(task))
+        }
+    }
+
+    @Test
+    fun `delivery exit codes require exact signed integers without coercion or overflow`() {
+        val cases = mapOf(
+            "0" to 0, "-1" to -1, "1.0" to 1, "1e2" to 100,
+            "2147483647" to Int.MAX_VALUE, "-2147483648" to Int.MIN_VALUE,
+            "2147483648" to null, "-2147483649" to null, "1.1" to null,
+            "1e-400" to null, "1e400" to null, "\"0\"" to null,
+            "true" to null, "null" to null, "[]" to null, "{}" to null
+        )
+        for ((literal, expected) in cases) {
+            val members = "\"delivery\":{\"latestCheckRun\":{\"exitCode\":$literal}}"
+            for ((path, task) in bothPaths(blockerTaskJson(members))) {
+                val actual = serializedDelivery(task).asJsonObject.getAsJsonObject("latestCheckRun").get("exitCode")
+                assertEquals("$path $literal", expected?.let { JsonPrimitive(it) } ?: JsonNull.INSTANCE, actual)
+            }
+        }
+    }
+
     private fun parseState(json: String) =
         MoeJson.parseState(JsonParser.parseString(json).asJsonObject)
 

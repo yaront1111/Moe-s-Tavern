@@ -3,6 +3,8 @@
 // =============================================================================
 
 import { carriedBlockQuestion } from '../state/dependencyUnblock.js';
+import { deliveryProjection, type TaskDelivery } from '../state/deliveryProjection.js';
+import type { Task } from '../types/schema.js';
 import { WebSocketServer as WSS, WebSocket } from 'ws';
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { StateManager, StateChangeEvent } from '../state/StateManager.js';
@@ -52,6 +54,7 @@ function allowlistedErrorContext(context: Record<string, unknown> | undefined): 
 // these closes the "unauthenticated client overwrites completedAt / metrics /
 // reopenCount / step state" hole.
 const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
+  'delivery', // Derived serving evidence, never a plugin-writable task field.
   'id',
   'createdAt',
   'updatedAt',
@@ -277,7 +280,9 @@ export class MoeWebSocketServer {
     if (this.isClosed) {
       return;
     }
-    const message = JSON.stringify(event);
+    const served = event.type === 'TASK_UPDATED'
+      ? { ...event, payload: this.servedTask(event.payload) } : event;
+    const message = JSON.stringify(served);
     // Iterate over a copy to avoid issues if Set is modified during iteration
     const clients = Array.from(this.pluginClients);
     for (const client of clients) {
@@ -289,10 +294,16 @@ export class MoeWebSocketServer {
     const snapshot = this.state.getSnapshot();
     const filtered = {
       ...snapshot,
-      tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED'),
+      tasks: snapshot.tasks.filter(t => t.status !== 'ARCHIVED').map(task => this.servedTask(task)),
       epics: snapshot.epics.filter(e => e.status !== 'ARCHIVED'),
     };
     this.safeSend(ws, JSON.stringify({ type: 'STATE_SNAPSHOT', payload: filtered }));
+  }
+
+  /** Direct mutation replies must match broadcasts or the sender briefly loses its evidence. */
+  private servedTask(task: Task): Task & { delivery?: TaskDelivery } {
+    const delivery = deliveryProjection(this.state, task);
+    return delivery ? { ...task, delivery } : task;
   }
 
   private async handlePluginMessage(ws: WebSocket, raw: string): Promise<void> {
@@ -518,7 +529,7 @@ export class MoeWebSocketServer {
               unblockedFromBoard ? 'TASK_UNBLOCKED' : undefined
             );
           });
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'DELETE_TASK': {
@@ -583,7 +594,7 @@ export class MoeWebSocketServer {
             return;
           }
           const task = await this.withMutex(() => this.state.reorderTask(taskId, beforeId, afterId));
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'APPROVE_TASK': {
@@ -599,7 +610,7 @@ export class MoeWebSocketServer {
           const task = await this.withMutex(() =>
             this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision)
           );
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'RELEASE_TASK': {
@@ -628,7 +639,7 @@ export class MoeWebSocketServer {
             this.state
           );
           const releasedTask = this.state.getTask(message.payload.taskId);
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: releasedTask }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: releasedTask ? this.servedTask(releasedTask) : releasedTask }));
           return;
         }
         case 'REJECT_TASK': {
@@ -642,7 +653,7 @@ export class MoeWebSocketServer {
             return;
           }
           const task = await this.withMutex(() => this.state.rejectTask(message.payload.taskId, reason));
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'REOPEN_TASK': {
@@ -656,7 +667,7 @@ export class MoeWebSocketServer {
             return;
           }
           const task = await this.withMutex(() => this.state.reopenTask(message.payload.taskId, reopenReason));
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'APPROVE_PROPOSAL': {
@@ -826,7 +837,7 @@ export class MoeWebSocketServer {
             }
             return this.state.updateTask(taskId, updates, 'TASK_COMMENT_ADDED');
           });
-          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: task }));
+          this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
         case 'GET_CHANNELS': {

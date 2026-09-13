@@ -142,6 +142,25 @@ data class PlanCritiqueResult(
     val reviewedAt: String? = null
 )
 
+/** Serving-only, runner-reported delivery evidence; absent on legacy tasks. */
+data class TaskDelivery(
+    val currentCandidate: DeliveryCandidate? = null,
+    val latestCheckRun: DeliveryCheckRun? = null,
+    val deliveryReceipt: DeliveryReceipt? = null,
+    val attemptPhase: String? = null
+)
+
+data class DeliveryCandidate(
+    val id: String? = null,
+    val treeSha: String? = null,
+    val shortSha: String? = null,
+    val baseRevision: String? = null
+)
+
+data class DeliveryCheckRun(val command: String? = null, val exitCode: Int? = null)
+
+data class DeliveryReceipt(val target: String? = null, val landedRevision: String? = null)
+
 data class Task(
     val id: String,
     val epicId: String,
@@ -188,7 +207,8 @@ data class Task(
     // a daemon payload with no field at all is a legacy task, effective 0; a
     // present but malformed field parses to null — unusable, and a reviewing UI
     // must refuse it rather than approve against an assumed 0.
-    val planRevision: Long? = 0L
+    val planRevision: Long? = 0L,
+    val delivery: TaskDelivery? = null
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.
