@@ -19,53 +19,74 @@
     {
       "stepId": "step-1",
       "description": "READ THE PINNED RECORD SHAPE AND THE IDIOM TO COPY (read-only, no edits). This card is now the daemon half only; read the scope-split comment on it first so you do not build wrapper behaviour. The record shape is already fixed by a held-out test rather than by this card's prose: in src/delivery/acceptance.test.ts, acceptance criterion 2 writes a receipt fixture with exactly the fields id, candidateId, target, targetBefore, targetAfter, landedRevision and pushResult, with pushResult explicitly null when no push was required. Read that fixture and treat those names as the contract, because the policy evaluation in task-c484696d and the wrapper in the sibling card both read records written to that shape. Then read the two stores that define the house idiom: src/state/attemptStore.ts and src/state/resourceStore.ts. Both are stateless exported functions taking the state handle first, both assume the CALLER holds the state mutex and say so in a header comment, and both write in one order per mutation, persist through writeEntity and only then publish into the in-memory map, so a crash can never expose a record that is not on disk. Note attemptStore's caller-suppliable id: re-opening with the same id returns the persisted record instead of writing a second one, which is exactly the idempotency primitive this card owes the wrapper's crash replay. Read StateManager.ts around lines 386 and 1097, where the candidates and reviews maps are declared and loaded through loadEntities, and confirm that no receipts map exists yet while checks belongs to task-867f69a6 rather than to you. Read getTools() in src/tools/index.ts for the registration shape, and the section formats in docs/SCHEMA.md and docs/MCP_SERVER.md. Produce no diff in this step.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/acceptance.test.ts",
         "packages/moe-daemon/src/state/attemptStore.ts",
         "packages/moe-daemon/src/state/StateManager.ts",
         "packages/moe-daemon/src/tools/index.ts"
-      ]
+      ],
+      "note": "READ-ONLY, no repo bytes changed. The MODIFIED-FILES-OMITTED fallback to this step's 4 planned affectedFiles is expected noise: acceptance.test.ts, attemptStore.ts, StateManager.ts and tools/index.ts are all untouched. Dependency task-c484696d landed (111e532). Read comment-25467e45 (split: daemon half only), comment-4c980164 (8 write paths) and comment-12deecdf (governor).\n\nCONTRACT (acceptance.test.ts, held-out, not edited):\n- :33-35 tool args {candidateId,target,targetBefore,targetAfter,landedRevision,pushResult}. No id, unlike record_candidate/record_check_run.\n- :1245-1253 persisted fixture {id,candidateId,target,targetBefore,targetAfter,landedRevision,pushResult:null}. No createdAt.\n- :49/:2032 dir .moe/receipts.\n- :2154-2163 (criterion 6, sibling's) replays held.args through McpAdapter and requires ONE file with identical bytes. So idempotency must key on candidateId, not on a caller id.\n\nIDIOM (attemptStore/candidateStore/checkRunStore): stateless functions; the caller holds the mutex. Order is validate, replayOrRefuse, writeEntity, then map.set. Stores return copies and {record, duplicate}. Refusals are named STATE_CONFLICT -32002; CANDIDATE_NOT_FOUND is -32001. finalizeAttempt.ts:39 pins landedRevision to /^[0-9a-f]{40}$/i (\"a receipt built on one later would name bytes nobody can find again\").\n\nSTATE: StateManager.ts:384-391 has the attempts/candidates/reviews/checkRuns maps, loaded at :1096-1105. There is no receipts map. StateManager is 1482 lines against the stateModules.test.ts:11 budget of <1500, so +5 lines fit.\n\nWIRING:\n- getTools is at index.ts:96-164. registry.test.ts requires every exported *Tool factory to be registered. The taskTimeBudgetDocs guard requires documented tools to be a subset of registered ones.\n- McpAdapter.ts:307-321 sends {code,message,data:{tool,codeName}} and drops context. It never validates inputSchema.\n- policy.ts does not read receipts; only the criterion-2 fixture pins the shape.\n- EOL: schema.ts and SCHEMA.md are CRLF; the rest are LF.\n\nDESIGN FOR STEPS 2-5:\n- Generated id receipt-<32hex>. At most one receipt per candidate.\n- More than one loaded record for a candidate: DELIVERY_RECEIPT_AMBIGUOUS, nothing written.\n- Identical normalized report: duplicate:true and zero writes. A differing one: DELIVERY_RECEIPT_CONFLICT with differingFields.\n- A new receipt needs its candidate to exist (CANDIDATE_NOT_FOUND). It is not refused when target differs from candidate.deliveryTarget, because refusing would leave a real ref move unrecorded.\n- Revisions are 40-hex. pushResult is string|null (absent means null). Exactly 7 fields.\n\nHYGIENE: the step-2 test draft is red-run in scratch D:/moe-b1c9-scratch. It is copied into the repo only once the store and tool exist, so peers' npm test never sees a missing-module failure.",
+      "startedAt": "2026-09-13T00:22:11.801Z",
+      "completedAt": "2026-09-13T00:30:33.986Z"
     },
     {
       "stepId": "step-2",
       "description": "WRITE THE FAILING TESTS FIRST AND CAPTURE RED PROOF. Create packages/moe-daemon/src/state/receiptStore.test.ts, which this card's narrowed verification command names, using the existing ToolTestHarness convention. Cover, with exact assertions rather than truthiness: recording a receipt persists exactly the seven contract fields under .moe/receipts/ and publishes it into the in-memory map, with pushResult preserved as null when no push was required and preserved verbatim when one was; the record is readable back by id and findable by its candidate; a second call for the same candidate returns the EXISTING receipt, writes no second file and leaves the stored bytes byte-identical, which is the primitive the wrapper's crash replay depends on, so compare raw file bytes before and after rather than comparing objects; a second call that contradicts the stored receipt, naming the same candidate but a different landed revision or a different target, is refused with a named error rather than silently overwriting the record of what actually happened; a missing or blank candidate id, target or landed revision is refused as invalid input; and a failed persist leaves nothing in the map, which the harness can force by making the write reject, proving the persist-before-publish ordering rather than assuming it. Add one case proving a receipt survives a reload, by writing through the store and then loading a fresh StateManager over the same folder. Run `npx vitest run src/state/receiptStore.test.ts` from packages/moe-daemon and SAVE the failing output as the epic rail's fails-on-old-behaviour evidence; this is a new store, so record which import or symbol is missing, and establish the behavioural red by mutation in step 6 instead.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/receiptStore.test.ts"
-      ]
+      ],
+      "note": "Tests written FIRST, but NOT yet in the repo, on purpose. The draft is D:/moe-b1c9-scratch/packages/moe-daemon/src/state/receiptStore.test.ts: a scratch copy of src, docs and scripts with a node_modules junction. It moves to packages/moe-daemon/src/state/receiptStore.test.ts once the store and tool exist (step 5 lists it in modifiedFiles). A missing-module test file in the shared checkout would turn every peer's npm test red in the meantime.\n\nRED (fails because the feature is missing): node vitest.mjs run --root D:/moe-b1c9-scratch/packages/moe-daemon src/state/receiptStore.test.ts gave exit 1: \"Error: Cannot find module './receiptStore.js' imported from .../src/state/receiptStore.test.ts\", Test Files 1 failed (1), Tests: no tests. Log: %TEMP%/moe-b1c9-evidence/step2-red.log. This proves only a missing module; the behavioural red is owed by the step-6 mutation series.\n\nCOVERAGE (about 76 cases, exact assertions):\n\ndescribe receiptStore:\n- Persists exactly the 7 contract fields in fixture key order under .moe/receipts. pushResult is an explicit null, and an omitted pushResult becomes null. The record is published to the map and readable by id and by candidate.\n- A reported push result is kept verbatim, including multi-line and exactly 2000 chars.\n- Recorded verbatim, not refused: upper-case revisions, a zero targetBefore, targetAfter different from landedRevision, and a target different from the candidate's deliveryTarget.\n- A caller id, createdAt or workerId is ignored.\n- Each candidate gets its own receipt. Reads hand out copies.\n- The exports are exactly 5, with no update or delete path. There is no child_process.\n- An identical replay returns duplicate:true: writeEntity spy not called, same single file, raw bytes equal. Omitted and null pushResult count as the same report.\n- DELIVERY_RECEIPT_CONFLICT fires for each differing field and combinations, with case-folded revisions counting as different. It is asserted by exact {code, codeName, message, context{candidateId, receiptId, differingFields}}, and the snapshot (hex file bytes + map) is unchanged. A pushResult going from set to null is also a conflict.\n- Two receipt files on disk for one candidate: DELIVERY_RECEIPT_AMBIGUOUS from both the lookup and the recorder, context.receiptIds sorted, nothing written.\n- CANDIDATE_NOT_FOUND fabricates nothing. Refusal order: input, then existing receipt, then candidate.\n- The held-out criterion-2 fixture (receipt-P-current, with no candidate record) loads verbatim. A replay of it returns the fixture with duplicate:true, a contradicting report returns CONFLICT, and there are zero writes.\n- An injected writeEntity rejection leaves an empty map, no file and the same error. A retry then records.\n- Reload into a fresh StateManager keeps replay and refusal, with zero writes. Empty project: no receipts dir.\n- 31 malformed rows (MISSING_REQUIRED or INVALID_INPUT with exact message prefixes) and 3 non-object reports.\n\ndescribe moe.record_delivery_receipt:\n- Registered once and not blocking.\n- Exact schema: 7 string properties, 5 required, additionalProperties false.\n- The handler returns {success, receipt, duplicate} and stores no workerId.\n- Real McpAdapter: list; call; replay of the same payload with bytes unchanged and one file; CONFLICT and CANDIDATE_NOT_FOUND carried in data.codeName.\n- Two concurrent direct handler calls (no outer runExclusive) give 1 write and duplicates [false, true].\n- A failed write reaches the handler caller and the wire as -32000, with no receipt.\n- 3 handler refusals. No child_process in the tool.",
+      "startedAt": "2026-09-13T00:36:43.928Z",
+      "completedAt": "2026-09-13T00:40:47.239Z"
     },
     {
       "stepId": "step-3",
       "description": "DECLARE THE TYPE AND GIVE THE STORE A HOME. In packages/moe-daemon/src/types/schema.ts add an exported DeliveryReceipt interface carrying exactly the contract fields read in step 1: the receipt id, the candidate it belongs to, the target name, the target revision before and after, the landed revision, and the push result, which is nullable because a policy that requires no push legitimately records none. Do not invent extra fields; anything a later card needs it can add. Comment the record honestly, in the same spirit as the attempt store's note on its process hints: a receipt is the daemon's record of what a wrapper REPORTED about a landing it performed, and the daemon neither performs nor verifies that landing, so nothing may treat a receipt as independent proof that the code is where it says. Then declare the receipts map in StateManager.ts beside the candidates and reviews maps, with the same comment style noting it is mutated only through the store module, and load it in the same place through loadEntities, so an additive record type survives a restart with no migration and no schemaVersion change. Document the type in docs/SCHEMA.md in the existing section format, with the field list, the nullable push result and one example record.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts",
         "packages/moe-daemon/src/state/StateManager.ts",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/SCHEMA.md"
+      ],
+      "note": "TYPE, HOME AND DOCS, all purely additive.\n\n- schema.ts (+43/-0, CRLF kept: 1346 CRLF, 0 lone LF): exported `DeliveryReceipt` with exactly the 7 contract fields `{id, candidateId, target, targetBefore, targetAfter, landedRevision, pushResult: string | null}`, all readonly and in fixture key order. No createdAt and no invented fields. It has its own section banner. The honest comment reads: REPORTED, NEVER VERIFIED (what a wrapper SAID; the daemon neither performs the landing nor inspects the target, so it is not independent proof), plus AT MOST ONE PER CANDIDATE, NEVER REWRITTEN.\n- StateManager.ts (+5/-0, LF kept):\n  - `DeliveryReceipt` added to the type import list.\n  - `receipts = new Map<string, DeliveryReceipt>()` sits beside checkRuns, with a comment that it is written only via state/receiptStore.ts.\n  - `this.receipts = loadEntities<DeliveryReceipt>(path.join(this.moePath, 'receipts'))` loads beside checks.\n  - No migration and no schemaVersion change. The file is now 1488 lines against the stateModules budget of <1500.\n- docs/SCHEMA.md (+68/-0, CRLF kept: 1824 CRLF, 0 lone LF):\n  - A `## DeliveryReceipt` section before Chat Channel: file path, a typed field list with the nullable pushResult, and no createdAt.\n  - Reported-never-verified, including why target is not compared with deliveryTarget.\n  - One-receipt-per-candidate replay and conflict.\n  - The ordered refusals: input, AMBIGUOUS, CONFLICT, CANDIDATE_NOT_FOUND; the existing receipt is consulted before the candidate.\n  - Queries, copies and one example record.\n  - A `### DeliveryReceipt` validation-rules block after CheckRun's.\n\nVERIFIED:\n- `node typescript/bin/tsc --noEmit -p packages/moe-daemon/tsconfig.json`: exit 0.\n- `vitest run src/state/stateModules.test.ts src/util/taskTimeBudgetDocs.test.ts src/state/checkRunStore.test.ts src/state/candidateStore.test.ts`: exit 0, 4 files, 145 passed. This covers the size budget, the acyclic state graph, the docs guard, and the sibling stores' reload tests still loading.\n- Log: %TEMP%/moe-b1c9-evidence/step3-guards.log.",
+      "startedAt": "2026-09-13T00:41:03.360Z",
+      "completedAt": "2026-09-13T00:43:53.230Z"
     },
     {
       "stepId": "step-4",
       "description": "WRITE THE STORE AS AN IDEMPOTENT RECORDER. Create packages/moe-daemon/src/state/receiptStore.ts as stateless exported functions taking the StateManager first, mirroring attemptStore and resourceStore, with a header comment stating what the record is for, that the caller must hold the state mutex and why the store cannot enforce that alone, and the ordering rule. Export a recorder plus a read by id and a lookup by candidate. The recorder's order is the whole point and must be commented as such: first validate the inputs and refuse a blank candidate id, target or landed revision as invalid input; then look for an existing receipt for that candidate and, when one is found, compare it against what the caller is reporting — an identical report returns the stored record and writes absolutely nothing, while a contradicting one throws a named error rather than overwriting the record of what actually happened, because a second landing is the failure this epic exists to prevent and silently rewriting the receipt would hide it; only when nothing exists for that candidate does it persist through writeEntity and then publish into the map, in that order, so a failed write leaves no receipt anywhere. Error handling is fail-closed: a write that rejects propagates with the map untouched, and the caller retries rather than assuming success. Enforce at most one receipt per candidate, since the wrapper's crash replay asks this store whether the landing already happened and two records for one candidate would make that question unanswerable. Add no git action, no process action and no target inspection: the daemon records what it is told and the wrapper remains the only actor that touches a ref.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/receiptStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/receiptStore.ts"
+      ],
+      "note": "NEW packages/moe-daemon/src/state/receiptStore.ts (LF): stateless functions that take StateManager first, following candidateStore/checkRunStore.\n\nHEADER COMMENT covers:\n- What a receipt is for (crash recovery).\n- REPORTED, NEVER VERIFIED, and why target is not compared with deliveryTarget.\n- AT MOST ONE PER CANDIDATE, NEVER REWRITTEN.\n- The caller holds state.mutex, and why the store cannot enforce it (the lookup reads the map, then awaits the write).\n- The writeEntity then map.set order.\n\nEXPORTS (5 runtime):\n- MAX_PUSH_RESULT_CHARS=2000\n- validateDeliveryReceiptParams(raw)\n- getDeliveryReceipt(state,id): copy|null\n- getDeliveryReceiptForCandidate(state,candidateId): copy|null. Throws -32002 DELIVERY_RECEIPT_AMBIGUOUS {candidateId, receiptIds sorted} when more than one receipt names the candidate.\n- recordDeliveryReceipt(state,params): {receipt, duplicate}\n\nThere is no update or delete path.\n\nRECORDER ORDER (commented):\n1. Validate; nothing is coerced.\n2. Look up the candidate's existing receipt FIRST. Identical report: return a copy with duplicate:true and write nothing. Otherwise refuse -32002 DELIVERY_RECEIPT_CONFLICT {candidateId, receiptId, differingFields in contract order}.\n3. Only then require the candidate: -32001 CANDIDATE_NOT_FOUND.\n4. generateId('receipt'), then await writeEntity('receipts'), then map.set, then return a copy. A rejected write propagates and nothing is published.\n\nVALIDATION:\n- candidateId: entity id.\n- target: the deliveryTarget rules (non-blank, not padded, no control chars, at most 255).\n- targetBefore, targetAfter, landedRevision: /^[0-9a-f]{40}$/i, same as finalize_attempt, stored verbatim and compared exactly.\n- pushResult: undefined or null becomes null; otherwise a non-blank string of at most 2000 chars, kept verbatim.\n- Absent fields are MISSING_REQUIRED; wrong type or shape is INVALID_INPUT.\n\nThere is no git, process or ref inspection.\n\nVERIFIED (fresh):\n- Scratch synced by cmp (schema.ts, StateManager.ts, receiptStore.ts): `vitest run --root D:/moe-b1c9-scratch/packages/moe-daemon src/state/receiptStore.test.ts -t receiptStore` exit 0: 65 passed, with the 10 tool cases filtered out until step 5.\n- Repo: `tsc --noEmit -p packages/moe-daemon/tsconfig.json` exit 0; `vitest run src/state/stateModules.test.ts` exit 0, 3 passed. The runtime import receiptStore -> candidateStore adds no cycle.\n- Logs: %TEMP%/moe-b1c9-evidence/step4-*.log.\n\nBehavioural red is by mutation in step 6.",
+      "startedAt": "2026-09-13T00:44:44.152Z",
+      "completedAt": "2026-09-13T00:46:47.339Z"
     },
     {
       "stepId": "step-5",
       "description": "ADD THE TOOL AND REGISTER IT. Create packages/moe-daemon/src/tools/recordDeliveryReceipt.ts following the shape of the neighbouring tool modules: an exported factory returning a ToolDefinition named `moe.record_delivery_receipt`, an input schema declaring the contract fields with additionalProperties false and the push result optional, and a handler whose whole body runs inside state.runExclusive and delegates to the store rather than reimplementing any rule. Do NOT mark it blocking. Return the recorded receipt along with whether this call created it or matched an existing one, because the sibling wrapper card needs to tell a fresh landing from a reconciled replay and inferring that from an absent error is exactly the ambiguity that makes crash recovery land twice. Describe it in the tool description as wrapper-called and not for agents, the way the other landing-side tools are described. Then register it in getTools() in src/tools/index.ts, which a definition-of-done item requires and without which the tool is silently invisible to MCP. Document it in docs/MCP_SERVER.md in the existing per-tool format: purpose, parameters, returns, and notes covering that it is idempotent per candidate, that a contradicting report is refused by name rather than overwriting, that the created-or-matched flag is how a replay is recognised, and the boundary that the daemon records a reported landing and verifies nothing about the target itself.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/index.ts",
         "docs/MCP_SERVER.md"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts"
-      ]
+      ],
+      "startedAt": "2026-09-13T00:48:17.450Z"
     },
     {
       "stepId": "step-6",
@@ -88,7 +109,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-62409c0c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -122,20 +143,27 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:52.486Z",
-  "updatedAt": "2026-09-12T22:11:27.838Z",
+  "updatedAt": "2026-09-13T00:48:17.450Z",
   "contextFetchedBy": [
     "architect-2d25447a",
-    "governor-6c1e1bf2"
+    "governor-6c1e1bf2",
+    "worker-62409c0c"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T18:46:32.548Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 10
+    "plannedDistinctFileCount": 10,
+    "executedStepCount": 4
   },
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-12T18:49:18.259Z",
   "planningNotes": {
@@ -153,5 +181,6 @@
       "docs/MCP_SERVER.md"
     ]
   },
-  "planApprovedAt": "2026-09-12T18:49:18.324Z"
+  "planApprovedAt": "2026-09-12T18:49:18.324Z",
+  "workStartedAt": "2026-09-13T00:22:11.801Z"
 }

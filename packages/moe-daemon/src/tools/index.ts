@@ -66,6 +66,7 @@ import { getCommitScopeTool } from './getCommitScope.js';
 import { recordCommitTool } from './recordCommit.js';
 import { recordCandidateTool } from './recordCandidate.js';
 import { recordCheckRunTool } from './recordCheckRun.js';
+import { recordDeliveryReceiptTool } from './recordDeliveryReceipt.js';
 import { declareFilesTool } from './declareFiles.js';
 import { setTaskDependenciesTool } from './setTaskDependencies.js';
 
@@ -158,6 +159,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     recordCommitTool(state),
     recordCandidateTool(state),
     recordCheckRunTool(state),
+    recordDeliveryReceiptTool(state),
     declareFilesTool(state),
     setTaskDependenciesTool(state),
   ];
