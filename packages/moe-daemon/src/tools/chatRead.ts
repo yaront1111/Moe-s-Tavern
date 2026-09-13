@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
-import { invalidInput } from '../util/errors.js';
+import { invalidInput, notFound } from '../util/errors.js';
 import {
   countTruncatedMessages,
   DEFAULT_CHAT_CONTENT_CHARS,
@@ -19,7 +19,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID (omit to read from all channels)' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form (omit to read from all channels)' },
         workerId: { type: 'string', description: 'Worker ID for auto-cursor tracking' },
         sinceId: { type: 'string', description: 'Return messages after this message ID' },
         limit: { type: 'number', description: 'Max messages to return (default 10, max 200)' },
@@ -56,21 +56,35 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         ? Math.min(Math.floor(params.maxContentChars), MAX_CHAT_CONTENT_CHARS)
         : DEFAULT_CHAT_CONTENT_CHARS;
 
+      // Callers name a channel the way the role docs and the seat pre-flight
+      // prompts do ("#general") at least as often as by id. Resolve the
+      // reference ONCE, up front, so the saved cursor, the fetch and the unread
+      // clear all key on the same canonical id. A reference that resolves to
+      // nothing is refused here: reading an absent channel used to return an
+      // empty page, which reads as "this channel is quiet" and is how a seat
+      // comes to make a confident false claim about a channel.
+      let channelId: string | undefined;
+      if (params.channel !== undefined) {
+        const channel = state.resolveChannelRef(params.channel);
+        if (!channel) throw notFound('Channel', params.channel);
+        channelId = channel.id;
+      }
+
       let messages: ChatMessage[];
       let sinceId = params.sinceId;
       let allChannelFetchedMessages: ChatMessage[] = [];
 
       // If workerId provided and no explicit sinceId, use worker's saved cursor
-      if (params.workerId && !sinceId && params.channel) {
+      if (params.workerId && !sinceId && channelId) {
         const worker = state.getWorker(params.workerId);
         if (worker?.chatCursors) {
-          sinceId = worker.chatCursors[params.channel];
+          sinceId = worker.chatCursors[channelId];
         }
       }
 
-      if (params.channel) {
+      if (channelId) {
         // Read from a specific channel
-        messages = await state.getMessages(params.channel, { sinceId, limit });
+        messages = await state.getMessages(channelId, { sinceId, limit });
       } else {
         // Read from all channels, merge and sort by timestamp
         const channels = state.getChannels();
@@ -125,8 +139,8 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       // Update worker's chat cursor atomically if workerId provided
       if (params.workerId && messages.length > 0) {
         const cursorUpdates: Record<string, string> = {};
-        if (params.channel) {
-          cursorUpdates[params.channel] = cursor!;
+        if (channelId) {
+          cursorUpdates[channelId] = cursor!;
         } else {
           for (const msg of messages) {
             if (!allChannelChannelsWithOmittedFetchedMessages.has(msg.channel)) {
@@ -141,8 +155,8 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
 
       // Clear unread notification counts only when messages were actually read
       if (params.workerId && messages.length > 0) {
-        if (params.channel) {
-          state.clearUnread(params.workerId, params.channel);
+        if (channelId) {
+          state.clearUnread(params.workerId, channelId);
         } else {
           for (const channelId of new Set(messages.map((msg) => msg.channel))) {
             if (!allChannelChannelsWithOmittedFetchedMessages.has(channelId)) {

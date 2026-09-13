@@ -84,6 +84,33 @@ export function getChannel(state: StateManager, channelId: string): ChatChannel 
   return state.channels.get(channelId) || null;
 }
 
+/**
+ * Resolve a caller-supplied channel REFERENCE to its channel.
+ *
+ * Accepts the canonical id ("chan-<uuid>"), the bare name ("governors"), or the
+ * display form the role docs and the seat pre-flight prompts actually use
+ * ("#governors"). Every chat tool that takes a channel from a caller goes
+ * through this, so the form a governor is TOLD to pass is the form that works.
+ *
+ * The exact id always wins. A name resolves only when it identifies exactly one
+ * channel: two channels sharing a name make the reference ambiguous, and
+ * silently picking one would point a long-poll at the wrong log, so the
+ * reference resolves to null and the caller refuses as it did before.
+ */
+export function resolveChannelRef(state: StateManager, ref: string): ChatChannel | null {
+  const exact = state.channels.get(ref);
+  if (exact) return exact;
+  const name = ref.startsWith('#') ? ref.slice(1) : ref;
+  if (!name) return null;
+  let match: ChatChannel | null = null;
+  for (const channel of state.channels.values()) {
+    if (channel.name !== name) continue;
+    if (match) return null;
+    match = channel;
+  }
+  return match;
+}
+
 export function getChannels(state: StateManager): ChatChannel[] {
   return Array.from(state.channels.values()).sort(
     (a, b) => a.createdAt.localeCompare(b.createdAt)

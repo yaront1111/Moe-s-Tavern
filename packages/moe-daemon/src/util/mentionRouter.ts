@@ -190,8 +190,19 @@ export class MentionRouter {
    */
   route(message: ChatMessage, allWorkers: Worker[], teams?: Team[]): RoutingResult {
     const knownWorkerIds = allWorkers.map((w) => w.id);
-    const isHuman = message.sender === 'human' || message.sender === 'system' ||
-      !knownWorkerIds.includes(message.sender);
+
+    // The daemon's own bookkeeping is NEITHER a human resuming the channel nor
+    // an agent taking a hop, so it routes neutrally. It used to take the human
+    // path, which resets hopCounts to 0 and clears the pause — and on a working
+    // channel a checkpoint banner, a "Step N completed", a claim notice or a
+    // resource grant lands every minute or so, so the loop guard was being
+    // reset faster than agents could reach maxHops and could effectively never
+    // fire on exactly the busy channel it exists to protect.
+    if (message.sender === 'system') {
+      return this.routeSystemMessage(message, allWorkers, knownWorkerIds, teams);
+    }
+
+    const isHuman = message.sender === 'human' || !knownWorkerIds.includes(message.sender);
 
     if (isHuman) {
       return this.routeHumanMessage(message, allWorkers, knownWorkerIds, teams);
@@ -229,6 +240,37 @@ export class MentionRouter {
     }
 
     return { targets: mentions, paused: false, hopCount: 0 };
+  }
+
+  /**
+   * System messages: delivered, but with no effect on the loop guard.
+   *
+   * Targets are chosen exactly as before — explicit mentions if the banner has
+   * any, otherwise every non-IDLE, non-DEAD worker — so a stale-worker alert
+   * still reaches its seats even while the channel is paused. A pause exists to
+   * stop agents answering each other, not to hide the daemon's own warnings.
+   * What it must NOT do is touch hopCounts or pausedChannels: only a human, or
+   * an explicit @continue, resumes a channel.
+   */
+  private routeSystemMessage(
+    message: ChatMessage,
+    allWorkers: Worker[],
+    knownWorkerIds: string[],
+    teams?: Team[]
+  ): RoutingResult {
+    const channel = message.channel;
+    const mentions = this.parseMentions(message.content, knownWorkerIds, allWorkers, teams);
+    const targets = mentions.length > 0
+      ? mentions
+      : allWorkers
+          .filter((w) => w.status !== 'IDLE' && w.status !== 'DEAD')
+          .map((w) => w.id);
+
+    return {
+      targets,
+      paused: this.pausedChannels.has(channel),
+      hopCount: this.hopCounts.get(channel) ?? 0,
+    };
   }
 
   private routeAgentMessage(

@@ -9,7 +9,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        channel: { type: 'string', description: 'Channel ID to send to' },
+        channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form' },
         content: { type: 'string', description: 'Message text (max 10KB)' },
         workerId: { type: 'string', description: 'Sender worker ID (defaults to "human")' },
         replyTo: { type: 'string', description: 'Message ID to reply to (threading)' }
@@ -52,7 +52,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         }
       }
 
-      const channel = state.getChannel(params.channel);
+      const channel = state.resolveChannelRef(params.channel);
       if (!channel) throw notFound('Channel', params.channel);
 
       // Validate replyTo points to a real message in the same channel.
@@ -60,13 +60,15 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         if (typeof params.replyTo !== 'string') {
           throw invalidInput('replyTo', 'must be a string');
         }
-        if (!state.messageExistsInChannel(params.channel, params.replyTo)) {
+        if (!state.messageExistsInChannel(channel.id, params.replyTo)) {
           throw invalidInput('replyTo', `message ${params.replyTo} not found in channel ${params.channel}`);
         }
       }
 
+      // channel.id, never the caller's reference: a message stored under
+      // "#general" would belong to no channel any reader can fetch.
       const { message, routingTargets } = await state.sendMessage({
-        channel: params.channel,
+        channel: channel.id,
         sender,
         content: params.content,
         replyTo: params.replyTo

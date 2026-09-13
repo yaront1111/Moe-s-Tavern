@@ -5,6 +5,7 @@ import { invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { collectPeerPaths, collectTaskPathTiers, PathSet } from '../util/attributionTiers.js';
 import { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
+import { findDependencyPath } from '../state/dependencyUnblock.js';
 
 const PHASES = ['preflight', 'postflight'] as const;
 type ScopePhase = typeof PHASES[number];
@@ -33,7 +34,7 @@ function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
 export function getCommitScopeTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_commit_scope',
-    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds.',
+    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -88,7 +89,16 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
       for (const other of sortedById<Task>(state.tasks.values())) {
         if (other.id === task.id) continue;
         if (TERMINAL_STATUSES.has(other.status)) continue;
-        for (const p of collectPeerPaths(other)) {
+        // A peer that waits on THIS task (dependsOn or blockedOnTaskIds, followed
+        // transitively) cannot have run yet: dependsOn gates its WORKING claims
+        // until this task is DONE. Its plan-declared paths are forward intent,
+        // not concurrent edits. Counting them made every link of a serialized
+        // chain contest the link before it, and held that task's own diff out of
+        // its completion commit. Its ASSERTED paths are evidence of a real edit
+        // and still count.
+        const waitsOnThis = findDependencyPath(state, other.id, task.id) !== null;
+        const peerPaths = waitsOnThis ? collectTaskPathTiers(other).asserted : collectPeerPaths(other);
+        for (const p of peerPaths) {
           if (peerSet.has(p)) continue;
           const stored = peerSet.add(p);
           if (stored === null) continue;

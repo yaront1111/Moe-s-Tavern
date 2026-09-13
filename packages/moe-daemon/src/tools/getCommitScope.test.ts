@@ -143,6 +143,64 @@ describe('moe.get_commit_scope', () => {
     expect(byPath.has(pathKey('src/mine.ts'))).toBe(false);
   });
 
+  it('ignores the plan-declared paths of a peer that waits on this task, but keeps its asserted ones', async () => {
+    // The regression (task-435683c2, 2026-09-11): every link of a serialized
+    // chain declares the same shared files in its plan. A downstream link that
+    // waits on the landing task cannot have run yet - dependsOn gates its
+    // WORKING claims until the landing task is DONE - yet its plan intent was
+    // counted as a peer claim, contested the landing task's own edits, and held
+    // that task's entire diff out of its completion commit.
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'REVIEW', implementationPlan: [
+      { stepId: 's1', description: 'a', status: 'COMPLETED', affectedFiles: ['src/shared.ts'] },
+    ] });
+    // Direct dependent: plan declares the same file, and has done no work.
+    h.createTask({ id: 'task-d1', status: 'WORKING', dependsOn: ['task-1'], implementationPlan: [
+      { stepId: 's1', description: 'd1', status: 'PENDING', affectedFiles: ['src/shared.ts', 'src/d1-plan.ts'] },
+    ] });
+    // Transitive dependent, through task-d1.
+    h.createTask({ id: 'task-d2', status: 'WORKING', dependsOn: ['task-d1'], implementationPlan: [
+      { stepId: 's1', description: 'd2', status: 'PENDING', affectedFiles: ['src/d2-plan.ts'] },
+    ] });
+    // Waits through a runtime block instead of dependsOn, and carries real
+    // evidence of an edit (declare_files) alongside plan intent.
+    h.createTask({
+      id: 'task-d3', status: 'BLOCKED', blockedOnTaskIds: ['task-1'], declaredFiles: ['src/d3-asserted.ts'],
+      implementationPlan: [{ stepId: 's1', description: 'd3', status: 'PENDING', affectedFiles: ['src/d3-plan.ts'] }],
+    });
+    await h.state.load();
+
+    const byPath = new Map((await scope()).peerDeclared.map((e) => [pathKey(e.path), e.taskId]));
+    expect(byPath.has(pathKey('src/shared.ts'))).toBe(false);
+    expect(byPath.has(pathKey('src/d1-plan.ts'))).toBe(false);
+    expect(byPath.has(pathKey('src/d2-plan.ts'))).toBe(false);
+    expect(byPath.has(pathKey('src/d3-plan.ts'))).toBe(false);
+    // Asserted evidence of a real edit still contests, even from a dependent.
+    expect(byPath.get(pathKey('src/d3-asserted.ts'))).toBe('task-d3');
+  });
+
+  it('still counts the plan-declared paths of a prerequisite and of an unrelated peer', async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-pre', status: 'WORKING', implementationPlan: [
+      { stepId: 's1', description: 'pre', status: 'PENDING', affectedFiles: ['src/pre.ts'] },
+    ] });
+    h.createTask({ id: 'task-1', status: 'WORKING', dependsOn: ['task-pre'], implementationPlan: [
+      { stepId: 's1', description: 'a', status: 'PENDING', affectedFiles: ['src/mine.ts'] },
+    ] });
+    h.createTask({ id: 'task-free', status: 'WORKING', implementationPlan: [
+      { stepId: 's1', description: 'f', status: 'PENDING', affectedFiles: ['src/free.ts'] },
+    ] });
+    await h.state.load();
+
+    const byPath = new Map((await scope()).peerDeclared.map((e) => [pathKey(e.path), e.taskId]));
+    // task-1 waits on task-pre, not the other way round, so task-pre's plan is
+    // live intent from a task that may be editing right now.
+    expect(byPath.get(pathKey('src/pre.ts'))).toBe('task-pre');
+    expect(byPath.get(pathKey('src/free.ts'))).toBe('task-free');
+  });
+
   it('tolerates un-storable paths in a peer record instead of failing the scope', async () => {
     h.setupMoeFolder();
     h.createEpic();

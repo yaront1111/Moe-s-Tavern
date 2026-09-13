@@ -26,7 +26,7 @@ import path from 'path';
 import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
-import { nextStatusForRelease, isWorkerAlive } from './workerLifecycle.js';
+import { nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
 import { closeOpenAttempts, listAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
@@ -345,12 +345,45 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     const workersDir = path.join(state.moePath, 'workers');
     const spared = workersHoldingOpenAttempts(state);
     let deletedCount = 0;
+    let keptCount = 0;
 
-    // Delete stale worker files from disk, sparing the held seats.
+    // A DAEMON RESTART IS NOT EVIDENCE THAT ITS AGENTS DIED. The daemon can
+    // restart under a live fleet (upgrade, crash-restart, manual bounce), and a
+    // registration still heartbeating inside the presence window belongs to a
+    // process that is very much running. Deleting one is indistinguishable from
+    // a crash to the seat itself: its next tool call is refused with "Unknown
+    // sender", and its in-flight task is unassigned out from under it.
+    //
+    // So purge on the SAME evidence the rest of the fleet already uses -
+    // isWorkerAlive, which listWorkers and the stale watcher key on - instead of
+    // assuming startup implies a previous run. Fail toward KEEPING a
+    // registration: a wrongly-kept one is reclaimed moments later by the
+    // ordinary stale sweep, while a wrongly-deleted one silently decapitates a
+    // live seat mid-task.
+    const now = Date.now();
+    const liveWorkerIds = new Set<string>();
+    for (const worker of state.workers.values()) {
+      if (isWorkerAlive(worker, now, LIVENESS_TIMEOUT_MS)) liveWorkerIds.add(worker.id);
+    }
+
+    // Delete only registrations with no live process behind them.
+
+    // MERGE NOTE: two independent reasons to spare a seat, and the union wins.
+    // main keeps a registration that is still heartbeating; this branch keeps
+    // one that holds an open execution attempt. Both sides argue the same
+    // direction - fail toward KEEPING - and a seat matching either test has a
+    // live process behind it, so deleting it would decapitate real work.
+    const keptIds = new Set<string>([...liveWorkerIds, ...spared]);
+
     try {
       if (fs.existsSync(workersDir)) {
         const files = fs.readdirSync(workersDir).filter((f) => f.endsWith('.json'));
         for (const file of files) {
+          const workerId = file.slice(0, -'.json'.length);
+          if (liveWorkerIds.has(workerId)) {
+            keptCount++;
+            continue;
+          }
           try {
             if (spared.has(path.basename(file, '.json'))) continue;
             const workerFile = path.join(workersDir, file);
@@ -367,12 +400,12 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
       logger.error({ error }, 'Failed to read workers directory during purge');
     }
 
-    // Clear the map, then restore the spared seats unchanged. Rebuilding from
-    // the surviving map entries (rather than re-reading the files) keeps the
-    // record byte-identical: the hold must not rewrite what it protects.
-    const heldWorkers = Array.from(state.workers.values()).filter((w) => spared.has(w.id));
-    state.workers.clear();
-    for (const worker of heldWorkers) state.workers.set(worker.id, worker);
+    // Drop only the purged records from the map; kept ones stay registered
+    // UNCHANGED - deleting the others in place never rewrites a survivor, so a
+    // held record stays byte-identical: the hold must not rewrite what it protects.
+    for (const workerId of [...state.workers.keys()]) {
+      if (!keptIds.has(workerId)) state.workers.delete(workerId);
+    }
 
     // Clear assignedWorkerId references that are now orphaned.
     let clearedAssignments = 0;
@@ -426,11 +459,14 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     // nothing to write at all, which keeps the record byte-identical.
     for (const team of state.teams.values()) {
       if (team.memberIds.length === 0) continue;
-      const evicted = team.memberIds.filter((id) => !spared.has(id));
+      // Evict only members whose registration was actually purged. A kept
+      // worker must keep its membership too, or it comes back as a solo and
+      // loses its team's role.
+      const evicted = team.memberIds.filter((id) => !keptIds.has(id));
       if (evicted.length === 0) continue;
       const updated = {
         ...team,
-        memberIds: team.memberIds.filter((id) => spared.has(id)),
+        memberIds: team.memberIds.filter((id) => keptIds.has(id)),
         formerMemberIds: withEvictionTombstones(team, evicted),
         updatedAt: new Date().toISOString()
       };
@@ -444,7 +480,7 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
     }
 
     if (deletedCount > 0) {
-      logger.info({ count: deletedCount, clearedAssignments }, 'Purged stale workers from previous run');
+      logger.info({ count: deletedCount, kept: keptCount, clearedAssignments }, 'Purged stale workers from previous run');
     } else if (clearedAssignments > 0) {
       logger.info({ clearedAssignments }, 'Cleared orphan task assignments during worker purge');
     }

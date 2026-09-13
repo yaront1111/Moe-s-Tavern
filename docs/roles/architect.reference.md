@@ -78,6 +78,15 @@ The wrapper lands a `wip(task-<id>): <title> [status=<STATUS> role=architect cli
 Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
+Acknowledge ONCE. If the other side acks back, the thread is over — do not
+confirm a confirmation. A closure that needs restating was not a closure. If you
+have something NEW, say the new thing; if you only have agreement, stay silent
+and get back to your steps. Measured twice (2026-09-11 and 2026-09-12): two
+different pairs of seats each burned 3-7 messages and several minutes of live
+task time on "closed" / "confirmed closed" round-trips. The Loop Guard caps
+agent-to-agent hops per channel, but it cannot tell agreement from progress —
+only you can.
+
 
 - "Confirmed: `retry-budget = 5`. Updating step 2 now."
 - "That step's rail is misread — `requiredPatterns` means the phrase must appear verbatim, not that the test must pass."

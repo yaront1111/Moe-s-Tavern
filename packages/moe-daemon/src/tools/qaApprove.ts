@@ -26,7 +26,7 @@ function commitEvidenceEntry(c: TaskCommit) {
 export function qaApproveTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.qa_approve',
-    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits after reviewStartedAt, the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false.',
+    description: 'QA approves a task in REVIEW status, moving it to DONE. Requires a summary of what was verified. HARD candidate gate: pass candidateId (from get_context.currentCandidate) — if it is not the task\'s current candidate the approval is refused with CANDIDATE_MISMATCH so an approval can never bless bytes nobody read. Soft commit gate: when settings.autoCommit is on and no completion commit is recorded in task.commits for the current work round (anchored on the latest rejection, else the first step start, else reviewStartedAt), the approval still lands but the response carries a NO-COMPLETION-COMMIT warning (also posted to #governors) — audit task.commits with `git show <sha>` before approving. Under the default settings.deliveryPolicy (legacy) that warning is the whole commit gate. Under a strict deliveryPolicy (local-branch, remote-push, merged-pull-request, manual-artifact) approval is HARD-refused with DELIVERY_EVIDENCE_MISSING (-32003) naming each missing evidence token (completion-commit, pushed-completion-commit, merged-pull-request, manual-artifact, required-check:<qualityGate>); manual-artifact and merged-pull-request are satisfied only by the matching manualArtifact / mergedPullRequest attestation, recorded on the task as task.deliveryEvidence with verifiedDelivery false.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -131,12 +131,28 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       }
 
       // Soft commit gate. A completion commit counts only when recorded at or
-      // after reviewStartedAt (stamped by complete_task, cleared by reopen), so
-      // a stale attempt-#1 commit can never satisfy attempt #2. Warn-only: the
-      // wrapper lands the commit seconds AFTER complete_task, so a fast QA in
-      // SPEED/TURBO can legitimately arrive first; blocking here would wedge
-      // every approval on a race. The filter is delivery/policy.ts's, so the
-      // strict policies count exactly the same commits.
+      // after the start of the CURRENT work round, so a stale attempt-#1 commit
+      // can never satisfy attempt #2. Warn-only: the wrapper lands the commit
+      // seconds AFTER complete_task, so a fast QA in SPEED/TURBO can legitimately
+      // arrive first; blocking here would wedge every approval on a race. Both
+      // ISO strings come from toISOString(), so the lexicographic compare is exact.
+      //
+      // The anchor is NOT reviewStartedAt. complete_task stamps that on the
+      // WORKING→REVIEW transition, but a worker that commits by hand calls
+      // record_commit BEFORE complete_task, so its completion commit is recorded
+      // ahead of reviewStartedAt and a reviewStartedAt-anchored window misses it —
+      // firing NO-COMPLETION-COMMIT on a task whose commit is sitting right there
+      // in task.commits. Anchor on the round start instead: the most recent
+      // rejection for a reopened task (rejectionHistory is newest-first and
+      // survives buildReopenClearingUpdates, which deliberately clears
+      // reviewStartedAt), else the first step start. That keeps the attempt-#1
+      // exclusion intact while accepting a hand-recorded commit from this round.
+      // reviewStartedAt remains the last-resort anchor for a legacy row that has
+      // neither marker, so such a task never silently accepts an ancient commit.
+      //
+      // The filter itself is delivery/policy.ts's completionCommitsForReview, so
+      // the strict delivery policies count exactly the same commits as this soft
+      // gate; the round anchor described above lives there for that reason.
       const commits: TaskCommit[] = Array.isArray(task.commits) ? task.commits : [];
       const completionCommits = completionCommitsForReview(task);
       const checkpointCommits = commits.filter((c) => c.kind === 'checkpoint');

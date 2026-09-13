@@ -106,15 +106,26 @@ export function resolveDeliveryPolicy(settings: { deliveryPolicy?: unknown } | n
 }
 
 /**
- * Completion commits recorded for the task's current review round: at or after
- * reviewStartedAt (stamped by complete_task, cleared by reopen), so a stale
- * earlier-attempt commit never satisfies a later review. Both ISO strings come
- * from toISOString(), so the lexicographic compare is exact. A malformed ledger
- * entry counts for nothing.
+ * Completion commits recorded for the task's CURRENT work round: at or after the
+ * round's start (the most recent rejection, else the first step start, else
+ * reviewStartedAt - see the comment in the body), so a stale earlier-attempt
+ * commit never satisfies a later review. Both ISO strings come from
+ * toISOString(), so the lexicographic compare is exact. A malformed ledger entry
+ * counts for nothing. qa_approve's soft commit gate and the strict delivery
+ * policies both count through this one function, so they can never disagree.
  */
-export function completionCommitsForReview(task: Pick<Task, 'commits' | 'reviewStartedAt'>): TaskCommit[] {
+export function completionCommitsForReview(
+  task: Pick<Task, 'commits' | 'reviewStartedAt' | 'workStartedAt' | 'rejectionHistory'>,
+): TaskCommit[] {
   const commits: unknown[] = Array.isArray(task.commits) ? task.commits : [];
-  const since = task.reviewStartedAt;
+  // Anchor on the start of the CURRENT work round, not reviewStartedAt. A worker
+  // that commits by hand calls record_commit BEFORE complete_task stamps
+  // reviewStartedAt, so a reviewStartedAt anchor misses a commit sitting right
+  // there in task.commits. The most recent rejection opens a reopened round
+  // (rejectionHistory is newest-first and survives the reopen), else the first
+  // step start; reviewStartedAt stays the last resort for a legacy row with
+  // neither marker, so it never silently accepts an ancient commit.
+  const since = task.rejectionHistory?.[0]?.rejectedAt || task.workStartedAt || task.reviewStartedAt;
   return commits.filter((entry): entry is TaskCommit => {
     if (entry === null || typeof entry !== 'object') return false;
     const commit = entry as Partial<TaskCommit>;
