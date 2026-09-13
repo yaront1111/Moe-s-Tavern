@@ -153,6 +153,17 @@ interface ProjectSettings {
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
 
+  // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
+  // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
+  // always lands. Strict values refuse approval with DELIVERY_EVIDENCE_MISSING
+  // unless: 'local-branch' a completion commit is recorded for the review round;
+  // 'remote-push' one recorded as pushed; 'merged-pull-request' / 'manual-artifact'
+  // the approval attests a merged pull request / manual artifact. Under any
+  // strict value, a qualityGate the wrapper runs for the task also needs a
+  // runner-observed exit-0 CheckRun on the current candidate. Any other value is
+  // refused as invalid input, never read as the default.
+  deliveryPolicy?: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
+
   // Branch a worker is expected to be on when it calls moe.complete_task:
   // a literal branch name or a `*` glob (e.g. "moe/work-*", what the agent
   // wrappers peel onto). Case-sensitive, anchored at both ends. Empty/unset
@@ -419,6 +430,14 @@ interface Task {
   completionSummary?: string;    // Worker's complete_task summary (≤2000 chars) — persisted and surfaced to QA
                                  // and to dependents via get_context (epicSiblings), no longer discarded
   reviewSummary?: string;        // What QA verified at approval — set by qa_approve (required there)
+  deliveryEvidence?: {           // Set by qa_approve when DONE rested on an ATTESTATION (deliveryPolicy manual-artifact
+                                 // or merged-pull-request); cleared by a later approval that needed none
+    kind: 'manual-artifact' | 'merged-pull-request';
+    reference: string;           // The artifact or pull request the reviewer named (trimmed, ≤500 chars)
+    verifiedDelivery: false;     // Always false: an attestation, never code delivery the daemon or a runner verified
+    recordedBy: string;          // Approving worker, or 'human' on the IDE/human path
+    recordedAt: string;          // ISO timestamp
+  };
 
   // Commit ledger — written only by moe.record_commit (wrapper post-flight)
   // and moe.declare_files; the daemon never runs git. Additive, no

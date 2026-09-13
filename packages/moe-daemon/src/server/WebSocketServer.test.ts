@@ -380,6 +380,38 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK strips the delivery-evidence label, so a board client cannot forge a verified delivery', async () => {
+      const label = {
+        kind: 'manual-artifact' as const,
+        reference: 'Signed report at reports/q3.pdf',
+        verifiedDelivery: false as const,
+        recordedBy: 'qa-1',
+        recordedAt: '2026-09-13T11:00:00.000Z',
+      };
+      await state.updateTask('task-1', { deliveryEvidence: label });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: {
+          taskId: 'task-1',
+          updates: {
+            title: 'Renamed Once More',
+            deliveryEvidence: { ...label, reference: 'forged', verifiedDelivery: true },
+          },
+        },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      expect(parsed.payload.title).toBe('Renamed Once More');
+      expect(state.getTask('task-1')!.deliveryEvidence).toEqual(label);
+
+      ws.close();
+    });
+
     it('UPDATE_TASK WORKING→REVIEW releases the worker even when the payload echoes the old owner', async () => {
       await state.createWorker({
         id: 'w-owner',

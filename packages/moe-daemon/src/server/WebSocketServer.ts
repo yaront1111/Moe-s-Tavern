@@ -101,6 +101,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'verification',
   'reviewSummary',
   'completionSummary',
+  // The delivery-evidence label is owned by qa_approve: a board client must not
+  // forge `verifiedDelivery: true` or wipe the label an attested DONE rests on.
+  'deliveryEvidence',
   // Plan-revision bookkeeping. `planRevision` is DERIVED by the daemon inside
   // taskStore.updateTask from what a write actually changes, and
   // `expectedPlanRevision` is COMMAND METADATA (the revision the approver

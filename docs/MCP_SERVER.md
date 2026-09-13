@@ -1631,7 +1631,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 
 ### moe.qa_approve
 
-QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of what was verified — symmetric with `qa_reject`'s required `reason`, so DONE tasks carry an audit trail instead of a rubber stamp. It is also a **soft commit gate**: it warns (never rejects) when no completion commit has been recorded for this review round, and returns the task's commit evidence so QA can cite the sha it actually reviewed.
+QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of what was verified — symmetric with `qa_reject`'s required `reason`, so DONE tasks carry an audit trail instead of a rubber stamp. Under the default `settings.deliveryPolicy` (`legacy`) it is also a **soft commit gate**: it warns (never rejects) when no completion commit has been recorded for this review round. Under a strict delivery policy it is a **hard evidence gate** instead: an approval whose recorded evidence does not satisfy the policy is refused with `-32003` / `DELIVERY_EVIDENCE_MISSING` (see the delivery evidence gate below). Either way it returns the task's commit evidence so QA can cite the sha it actually reviewed.
 
 **Parameters:**
 ```typescript
@@ -1639,16 +1639,20 @@ QA approves a task in REVIEW status, moving it to DONE. Requires a `summary` of 
   taskId: string,
   summary: string,       // REQUIRED — what was verified: commands re-run, DoD items checked (max 2000 chars)
   candidateId?: string,  // The candidate you actually reviewed — get_context.currentCandidate.id
+  manualArtifact?: string,     // deliveryPolicy manual-artifact ONLY: the deliverable you checked by hand (max 500 chars)
+  mergedPullRequest?: string,  // deliveryPolicy merged-pull-request ONLY: the pull request you confirmed merged (max 500 chars)
   workerId?: string
 }
 ```
 
-The summary is persisted on the task as `reviewSummary`.
+The summary is persisted on the task as `reviewSummary`. Under `manual-artifact` / `merged-pull-request` the attestation is persisted as `task.deliveryEvidence`: `{ kind, reference, verifiedDelivery: false, recordedBy, recordedAt }`. A later approval that needed no attestation clears it.
 
 **Returns:**
 ```typescript
 {
   success: true, taskId, status: "DONE", summary, message,
+  deliveryPolicy?: string,   // present only under a strict settings.deliveryPolicy; absent under the default 'legacy'
+  deliveryEvidence?: { kind, reference, verifiedDelivery: false, recordedBy, recordedAt },  // the attestation DONE rested on (manual-artifact / merged-pull-request); message then ends "(evidence: <kind> attested by <recordedBy> — NOT verified delivery)"
   warning?: string,      // the NO-COMPLETION-COMMIT line, when it fired
   warnings: string[],    // ALWAYS present ([] when clean): the NO-COMPLETION-COMMIT line "NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the wrapper lands it seconds after REVIEW) — verify task.commits / git log before merging" and/or the NO-REVIEWED-CANDIDATE line (see the candidate gate below)
   commitEvidence: {      // task.commits split by kind — a 4-FIELD PROJECTION per entry: { sha, ref, pushed: boolean|null, recordedAt }. Full TaskCommit entries (paths, recordedBy, status…) live in task.commits / get_context.
@@ -1664,9 +1668,18 @@ The summary is persisted on the task as `reviewSummary`.
 - **A `Review` record is persisted for every bound decision**, approve and reject alike: `{ taskId, candidateId, reviewerId, decision, summary }` at `.moe/reviews/<id>.json` (see docs/SCHEMA.md). `reviewerId` is the caller's `workerId`, or `human` on the IDE/human path. It is written *before* the status flip, so a DONE task always carries the record of which bytes were signed off. Reviews are append-only — reviewing a reopened task again appends a second record.
 - **Incremental adoption.** A task with **no candidate recorded** behaves exactly as it did before this gate existed, **whether or not `candidateId` is supplied**: the approval lands, no `Review` is written, and `warnings`/`commitEvidence`/`message` are unchanged — a well-formed `candidateId` binds nothing there and adds no warning. When a candidate *does* exist but `candidateId` is omitted, the approval still lands and is still bound to the current candidate, but `warnings` gains `NO-REVIEWED-CANDIDATE: task <id> has current candidate <cand> but qa_approve named none — pass candidateId so the decision is bound to the bytes you actually read`. `candidateId: null` counts as omitted. Any other `candidateId` that is not a valid entity id — blank, not a string, a character outside `[A-Za-z0-9_-]`, or longer than 128 — is refused `-32602` / `INVALID_INPUT` on every path, a task with no candidate included, and is never treated as omitted.
 - **Finalizing hold (a hard refusal, unlike the commit gate).** While the task has an execution attempt in the `finalizing` phase, approval is refused with `-32002` / `ATTEMPT_FINALIZING` before any mutation — no DONE write, no worker touch, no chat line, a byte-identical task file. The bytes are not landed yet, so DONE would be premature. The hold is scoped **by task, not by worker**, because the IDE/human approval path carries no `workerId` at all and the REVIEW handoff has already cleared `assignedWorkerId`. It is lifted by `moe.finalize_attempt`, and its `context.retryable` is `true` — retry after the runner finalizes rather than escalating. See `moe.finalize_attempt`.
+- **Delivery evidence gate (a hard refusal under a strict `settings.deliveryPolicy`).** Under the default `legacy` policy none of this applies and the commit gate stays advisory. Under `local-branch`, `remote-push`, `merged-pull-request` or `manual-artifact` (see docs/CONFIGURATION.md), an approval whose recorded evidence does not satisfy the policy is refused with `-32003` / `DELIVERY_EVIDENCE_MISSING` **before any write**: no `Review`, no DONE write, no worker touch, no chat line, and a byte-identical task file.
+  - **Precedence.** The finalizing, ownership, context, summary and reviewed-candidate guards all run first.
+  - **Refusal shape.** `context` is `{ taskId, deliveryPolicy, missingEvidence }`. `missingEvidence` is an array of tokens: `completion-commit` (no completion commit recorded at or after `reviewStartedAt`); `pushed-completion-commit` (none recorded as pushed); `merged-pull-request` or `manual-artifact` (no attestation passed); and `required-check:<qualityGate>` (a gate the wrapper runs for this task has no runner-observed exit-0 `CheckRun` on the task's current candidate and its tree).
+  - **On the wire.** `MoeError.context` is not forwarded over MCP, so the message names every token with its reason. It adds a hint when `autoCommit` is `false`.
+  - **Retry.** A missing commit is usually the post-flight race described below: retry once `task.commits` shows it.
+  - **Attestations.** Each one is accepted only under the policy it satisfies, and must be non-blank and at most 500 chars; anything else is `INVALID_INPUT`. It is recorded as `task.deliveryEvidence` with `verifiedDelivery: false`, and it never stands in for another kind of evidence.
+  - **Invalid policy.** An unrecognised `deliveryPolicy` value refuses every approval with `INVALID_INPUT`. It never falls back to the default.
+  - **Honest boundary.** The gate reads **recorded** evidence and re-runs nothing, so a commit, check or attestation record that misreports what happened still satisfies it.
+  - **Shared rule.** The predicate is `evaluateDeliveryEvidence` in `packages/moe-daemon/src/delivery/policy.ts`, exported so a dependency gate judges a DONE prerequisite by the same rule instead of re-deriving it. The two gates cannot disagree. On a DONE task only the required check is re-judged, because landing evidence was already judged at the DONE transition. At the time of writing, `dependsOn` still gates WORKING claims on status alone.
 - **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
-- **Approval always lands** — the gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
+- **Under `legacy`, approval always lands**: the commit gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.
 - QA policy: treat the warning as a reject unless you verified HEAD yourself (`docs/roles/qa.md`).
 
 **Errors:**
@@ -1675,6 +1688,9 @@ The summary is persisted on the task as `reviewSummary`.
 - `Task not found: <taskId>`
 - `Task must be in REVIEW status to approve`
 - `candidateId` is not the task's current candidate → `-32002` / `CANDIDATE_MISMATCH`, with `context.expectedCandidateId` + `context.currentCandidateId`
+- a strict `settings.deliveryPolicy` is not satisfied → `-32003` / `DELIVERY_EVIDENCE_MISSING`, with `context.taskId` + `context.deliveryPolicy` + `context.missingEvidence` (a token array; the message names each token)
+- `settings.deliveryPolicy` is not a recognised value → `-32602` / `INVALID_INPUT` (`Invalid deliveryPolicy: must be one of legacy, local-branch, remote-push, merged-pull-request, manual-artifact (got …)`)
+- `manualArtifact` / `mergedPullRequest` is blank, not a string, over 500 chars, or passed under a policy it cannot satisfy → `-32602` / `INVALID_INPUT`
 
 ---
 
