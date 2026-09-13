@@ -116,6 +116,8 @@ Three tools are deliberately **guard-exempt** even though the proxy injects `wor
 
 `moe.record_check_run` has no ownership, status or attempt gate at all: a runner reports checks after the attempt that offered the bytes has closed, when QA may already own the task. Binding guards it instead: the named candidate must exist and the reported tree must be exactly that candidate's (see its section).
 
+`moe.record_delivery_receipt` has no ownership, status or attempt gate either: the wrapper reports a landing after `complete_task`, when QA may already own the task. The candidate is the binding, with at most one receipt per candidate: an identical report replays and writes nothing, and a contradicting one is refused (see its section).
+
 ---
 
 ## Tools (Implemented)
@@ -759,6 +761,81 @@ Sending the identical report again, for example after a runner crash, returns th
 
 ---
 
+### moe.record_delivery_receipt
+
+**Wrapper-called; not for agents.** Records where the agent wrapper *reports* one frozen `Candidate`'s bytes landed, as a `DeliveryReceipt` (docs/SCHEMA.md `## DeliveryReceipt`): the target ref, where it pointed before and after the landing, the revision that landed, and the push result when a push was required. Each receipt is one file at `.moe/receipts/<id>.json`, and a candidate has at most one. The receipt exists for crash recovery. A wrapper that dies between moving the target ref and recording the landing re-sends the same report on its next pass, and the answer tells it the landing is already recorded, so it does not land a second time.
+
+**Parameters:**
+```typescript
+{
+  candidateId: string,        // [A-Za-z0-9_-]{1,128}: the Candidate whose bytes landed, and the receipt's key.
+                              // A NEW receipt needs the candidate to exist
+  target: string,             // the ref landed on, e.g. "refs/heads/wave1-pilot"; non-blank, no surrounding whitespace
+                              // or control chars, ≤255 chars. Recorded as reported, even when it is not the candidate's deliveryTarget
+  targetBefore: string,       // /^[0-9a-f]{40}$/i: where the target pointed before the landing (git's all-zero id for a new ref)
+  targetAfter: string,        // /^[0-9a-f]{40}$/i: where the target pointed after the landing
+  landedRevision: string,     // /^[0-9a-f]{40}$/i: the revision that landed; never an abbreviation or a ref name
+  pushResult?: string | null, // the push result, verbatim: non-blank, ≤2000 chars. Omit it or send null when no push
+                              // was required; both are stored as null
+  workerId?: string           // caller (auto-injected by proxy); not evidence, and not stored on the receipt
+}
+```
+There is no `id` parameter. The daemon generates `receipt-<32 hex>`, because the candidate, not an id, identifies the landing.
+
+**Returns:**
+```typescript
+{ success: true, receipt: DeliveryReceipt, duplicate: boolean }
+// receipt: the stored record { id, candidateId, target, targetBefore, targetAfter, landedRevision, pushResult }
+// duplicate: false when this call recorded the landing; true when the candidate's receipt already said exactly this,
+//            in which case it is returned unchanged and nothing is written
+```
+
+**Example.** A wrapper reports a local-branch landing that needed no push:
+```json
+{
+  "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+  "target": "refs/heads/wave1-pilot",
+  "targetBefore": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+  "targetAfter": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "landedRevision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+  "pushResult": null
+}
+```
+The first call records it:
+```json
+{
+  "success": true,
+  "receipt": {
+    "id": "receipt-9b8a7c6d5e4f30211f0e9d8c7b6a5948",
+    "candidateId": "cand-3f9d2c1b7a6e4d5c8b9a0f1e2d3c4b5a",
+    "target": "refs/heads/wave1-pilot",
+    "targetBefore": "0fc21ecd70e45e029c544a19e792d05129adccbb",
+    "targetAfter": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    "landedRevision": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    "pushResult": null
+  },
+  "duplicate": false
+}
+```
+Sending the identical report again, for example from a wrapper that crashed before it saw that answer, returns the same `receipt` with `"duplicate": true`, and the file keeps its bytes.
+
+**Notes:**
+- **`duplicate` is how a replay is recognised.** `false` means this call recorded the landing. `true` means the landing was already recorded and nothing was written. A wrapper must read `duplicate: true` as "already recorded", never as a reason to land again, and must not infer either answer from the mere absence of an error.
+- **Idempotent per candidate, never overwritten.** A report for a candidate that already has a receipt is compared with it field by field, where an absent `pushResult` and `null` count as the same. An identical report is the no-op above. Any difference is refused by name (`DELIVERY_RECEIPT_CONFLICT`), and the stored receipt stays exactly as it was: a second landing is what the receipt exists to expose, so a contradicting report never rewrites it. For the same reason a push result cannot be added later to a receipt recorded without one.
+- **Reported, not verified.** The daemon never runs git and reads no ref. It checks each field's shape and that the candidate exists, and verifies nothing about the target itself. A receipt records what the wrapper said about a landing it performed; on its own it is not proof that the bytes are where it says. It does not refuse a `target` other than the candidate's `deliveryTarget`, or a `targetAfter` other than `landedRevision`, because refusing a landing that already happened would leave a real ref move unrecorded.
+- **The existing receipt is consulted first.** It is looked up before the candidate itself, so a replay reconciles to a recorded landing even when the candidate record is gone.
+- A receipt has no `createdAt`, so a repeated report can leave its file byte-identical. The tool emits no activity event, no chat line and no board broadcast.
+- **No ownership, status or attempt gate.** The wrapper lands after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. The tool is not `blocking`, and its handler also holds the state mutex itself, so two concurrent identical reports make one write and one `duplicate: true`.
+
+**Errors.** Checked in this order, and every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName` (sent as `error.data.codeName`):
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a revision that is not exactly 40 hex (`HEAD`, an abbreviation, a padded value), a blank or padded `target`, an invalid `candidateId`, a blank, non-string or over-2000-character `pushResult`, or non-object arguments. Nothing is coerced.
+- `-32002 DELIVERY_RECEIPT_AMBIGUOUS`: more than one receipt on disk already names the candidate, which only files placed by hand can cause. The message names them, because which one records the landing cannot be decided.
+- `-32002 DELIVERY_RECEIPT_CONFLICT`: the candidate's receipt differs from this report. The message names the receipt and the differing fields.
+- `-32001 CANDIDATE_NOT_FOUND`: no receipt exists yet and `candidateId` names no candidate
+- A failed write (a full disk, a permission error) reaches the caller as a `-32000` error carrying the write's message. No receipt is recorded or published and no success is returned, so the wrapper retries the same report.
+
+---
+
 ### moe.declare_files
 
 Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, which the wrapper treats as the **ASSERTED** attribution tier — the next post-flight of that task commits them regardless of the baseline. This is the governor/worker lever for "these edits are mine, land them" (a path listed in `get_context.unattributedPaths`, a helper file the plan never named, debris a DONE task left dirty) and replaces hand-landed `chore(...)` commits.
@@ -1015,7 +1092,7 @@ Claim a task: by id (`taskId`) or the next prioritized task matching `statuses`.
 
 When `taskId` is provided the priority/order ranking is bypassed — you get the named task or an error. The task must be in one of the requested `statuses`; if it's already assigned to someone else, pass `replaceExisting: true` to take over. Re-claiming a task already assigned to YOU is always allowed (resume path) and needs no `replaceExisting`.
 
-**Dependency gating (WORKING claims only):** a task whose `dependsOn` targets are not all `DONE`/`ARCHIVED` is excluded from `WORKING`-status claims — it is not offered for execution until its prerequisites land, and an explicit-`taskId` claim of such a task is refused too (re-claiming a task you already hold stays allowed — the resume path). `PLANNING` (and `REVIEW`) claims are unaffected: a task may be planned before its prerequisites finish. A missing/deleted id counts as satisfied, so a removed prerequisite can never wedge its dependents. `moe.list_tasks` rows carry `dependsOnUnmet` so a withheld row is explainable, and `moe.set_task_dependencies` (architect/governor) edits a mis-declared list. This gate *prevents* build-order blocks; a dependency discovered mid-flight goes through `moe.report_blocked { blockedOnTaskIds }` instead, which the same auto-unblock machinery clears.
+**Dependency gating (WORKING claims only):** a task whose `dependsOn` targets are not all `DONE`/`ARCHIVED` is excluded from `WORKING`-status claims — it is not offered for execution until its prerequisites land, and an explicit-`taskId` claim of such a task is refused too (re-claiming a task you already hold stays allowed — the resume path). `PLANNING` (and `REVIEW`) claims are unaffected: a task may be planned before its prerequisites finish. A missing/deleted id counts as satisfied, so a removed prerequisite can never wedge its dependents. **Delivery evidence:** under a strict `settings.deliveryPolicy` a `DONE` prerequisite counts only with the evidence that policy requires of it, judged by the same rule as `moe.qa_approve` (for a DONE task: a runner-observed exit-0 `CheckRun` of the required `qualityGate` on its current candidate's own tree). Until that is recorded its dependents stay withheld, and an explicit-`taskId` claim is refused with a thrown `-32003` / `DEPENDENCY_EVIDENCE_MISSING` before any write: `context` is `{ taskId, prerequisiteTaskId, missingEvidence }`, where `missingEvidence` is a token array such as `["required-check:node gate.cjs"]`, and because `context` does not cross the MCP wire the message names the prerequisite and each token with its reason. A prerequisite that has not reached `DONE` keeps the plain `NOT_ALLOWED` unmet-dependencies refusal, which comes first and lists only such ids; an unrecognised `deliveryPolicy` withholds the dependents of every DONE prerequisite and refuses such an explicit claim with `INVALID_INPUT`. `ARCHIVED` still counts as satisfied, and under the default `legacy` policy nothing changes. `moe.list_tasks` rows carry `dependsOnUnmet` so a withheld row is explainable, and `moe.set_task_dependencies` (architect/governor) edits a mis-declared list. This gate *prevents* build-order blocks; a dependency discovered mid-flight goes through `moe.report_blocked { blockedOnTaskIds }` instead, which the same auto-unblock machinery clears.
 
 **One task per worker:** a worker already holding an active task (PLANNING/WORKING/REVIEW/BLOCKED) cannot claim another — the call returns `{ hasNext: false, alreadyAssigned: { taskId, title, status } }` with a `nextAction` pointing back at the held task (`get_context`). Finish it (`submit_plan` / `complete_task` / `qa_approve` / `qa_reject`) or `release_task` it first. This also applies to explicit `taskId` claims of a different task.
 
@@ -1676,7 +1753,7 @@ The summary is persisted on the task as `reviewSummary`. Under `manual-artifact`
   - **Attestations.** Each one is accepted only under the policy it satisfies, and must be non-blank and at most 500 chars; anything else is `INVALID_INPUT`. It is recorded as `task.deliveryEvidence` with `verifiedDelivery: false`, and it never stands in for another kind of evidence.
   - **Invalid policy.** An unrecognised `deliveryPolicy` value refuses every approval with `INVALID_INPUT`. It never falls back to the default.
   - **Honest boundary.** The gate reads **recorded** evidence and re-runs nothing, so a commit, check or attestation record that misreports what happened still satisfies it.
-  - **Shared rule.** The predicate is `evaluateDeliveryEvidence` in `packages/moe-daemon/src/delivery/policy.ts`, exported so a dependency gate judges a DONE prerequisite by the same rule instead of re-deriving it. The two gates cannot disagree. On a DONE task only the required check is re-judged, because landing evidence was already judged at the DONE transition. At the time of writing, `dependsOn` still gates WORKING claims on status alone.
+  - **Shared rule.** The predicate is `evaluateDeliveryEvidence` in `packages/moe-daemon/src/delivery/policy.ts`, exported so a dependency gate judges a DONE prerequisite by the same rule instead of re-deriving it. The two gates cannot disagree. On a DONE task only the required check is re-judged, because landing evidence was already judged at the DONE transition. The dependency gate reads the same predicate: a DONE prerequisite without its required check keeps withholding its dependents from `claim_next_task`, `wait_for_task` and the `blockedOnTaskIds` auto-unblock (`DEPENDENCY_EVIDENCE_MISSING` on an explicit claim; see `moe.claim_next_task`).
 - **When the warning fires**: `settings.autoCommit !== false` and no `task.commits` entry has `kind: "completion"` recorded at or after `task.reviewStartedAt` (a completion commit from an earlier review round does not count). The same line is posted to `#governors` (best-effort, after the DONE write). With `autoCommit: false` there is no warning — the project opted out of wrapper commits.
 - **Race**: the wrapper lands the completion commit and calls `moe.record_commit` *after* the worker's CLI exits, while QA's `wait_for_task` wakes on the REVIEW write itself, so an approval within seconds of REVIEW can legitimately see no commit yet. Wait for the `[OK] Committed completion …` banner / the task-channel record line, then `git show <sha>` — do not review the dirty shared tree.
 - **Under `legacy`, approval always lands**: the commit gate is advisory. Reopening (`qa_reject`, `set_task_status`) never clears `task.commits`.

@@ -1184,7 +1184,7 @@ describe('Wave 1 acceptance: a failed required gate cannot release dependents', 
   // on today's code P being DONE is the whole test. D claims cleanly and
   // runDependencyUnblock flips E straight back to WORKING even though P's only
   // authoritative gate run for its current candidate exited 1.
-  it.skip('keeps D unclaimable and E blocked until an authoritative gate pass exists', async () => {
+  it('keeps D unclaimable and E blocked until an authoritative gate pass exists', async () => {
     const h = new ToolTestHarness();
     h.init();
     try {

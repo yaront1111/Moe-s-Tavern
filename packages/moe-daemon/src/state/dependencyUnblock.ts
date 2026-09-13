@@ -1,9 +1,11 @@
 // =============================================================================
 // Dependency auto-unblock — the task-dependency analogue of the resource grant
 // path (resourceStore.grantNextLeases). A task BLOCKED with blockedOnTaskIds is
-// waiting on other tasks; when every listed prerequisite is DONE/ARCHIVED the
-// daemon restores it to blockedFromStatus. That single status write is what
-// wakes the fleet: TASK_UPDATED wakes wait_for_task waiters, and (for a legacy
+// waiting on other tasks; when every listed prerequisite is satisfied (DONE with
+// the delivery evidence its policy requires, ARCHIVED, or gone — see
+// isDependencySatisfied) the daemon restores it to blockedFromStatus. That
+// single status write is what wakes the fleet: TASK_UPDATED wakes
+// wait_for_task waiters, and (for a legacy
 // still-assigned row) the wrapper's next claim poll resumes the held task.
 //
 // Two entry points, one scan:
@@ -26,12 +28,58 @@
 
 import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
+import { evaluateDeliveryEvidence } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
-/** A dependency is satisfied when its task is DONE/ARCHIVED — or gone (deleted ids must not wedge a row forever). */
-export function isDependencySatisfied(state: StateManager, taskId: string): boolean {
+/** Whether one prerequisite releases its dependents, and what it still lacks when it does not. */
+export interface DependencyShortfall {
+  satisfied: boolean;
+  /**
+   * Evidence tokens exactly as delivery/policy.ts builds them. Non-empty only
+   * for a DONE prerequisite whose evidence falls short; a prerequisite unmet on
+   * status alone reports [].
+   */
+  missingEvidence: string[];
+}
+
+/**
+ * A dependency is satisfied when its task is gone (deleted ids must not wedge a
+ * row forever), ARCHIVED, or DONE with the delivery evidence the project's
+ * policy requires of it. Checked in that order, so only a DONE prerequisite is
+ * ever asked for evidence: any other status is unmet exactly as before, and
+ * under the default policy DONE alone still satisfies. ARCHIVED is not judged,
+ * because archiving is allowed from unfinished statuses and never claimed a
+ * delivery.
+ *
+ * The evidence is judged by evaluateDeliveryEvidence, the rule qa_approve
+ * applies, never by a copy of it. For a DONE task that rule asks only for the
+ * required check (a runner-observed exit-0 run of the gate on the current
+ * candidate's own tree), and a record lookup that fails reports it missing.
+ * Throws when the evidence cannot be judged at all: an unrecognised
+ * deliveryPolicy, which that rule refuses as invalid input.
+ */
+export function dependencyShortfall(state: StateManager, taskId: string): DependencyShortfall {
   const dep = state.getTask(taskId);
-  return !dep || dep.status === 'DONE' || dep.status === 'ARCHIVED';
+  if (!dep || dep.status === 'ARCHIVED') return { satisfied: true, missingEvidence: [] };
+  if (dep.status !== 'DONE') return { satisfied: false, missingEvidence: [] };
+  const { satisfied, missingEvidence } = evaluateDeliveryEvidence(state, dep);
+  return { satisfied, missingEvidence };
+}
+
+/**
+ * The yes/no every dependency gate reads: claim_next_task, wait_for_task, the
+ * auto-unblock below, the stale-block alert and the unmet counts. Fails closed:
+ * a DONE prerequisite whose evidence cannot be judged keeps its dependents
+ * withheld, because releasing them would build on exactly the promise the
+ * evidence exists to check.
+ */
+export function isDependencySatisfied(state: StateManager, taskId: string): boolean {
+  try {
+    return dependencyShortfall(state, taskId).satisfied;
+  } catch (error) {
+    logger.warn({ taskId, error }, 'dependencyUnblock: delivery evidence of a DONE prerequisite could not be judged; withholding its dependents');
+    return false;
+  }
 }
 
 /** The subset of `task.dependsOn` not yet satisfied. Empty for tasks with no declared deps. */

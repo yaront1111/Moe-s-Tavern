@@ -6,8 +6,15 @@ import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '..
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
-import { unmetDependsOn } from '../state/dependencyUnblock.js';
-import { assertNoLiveLease, claimLostRace, attemptFinalizingRefusal, attemptReconcilingRefusal } from '../util/claimGuards.js';
+import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
+import { describeMissingEvidence } from '../delivery/policy.js';
+import {
+  assertNoLiveLease,
+  claimLostRace,
+  attemptFinalizingRefusal,
+  attemptReconcilingRefusal,
+  dependencyEvidenceRefusal
+} from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
@@ -79,6 +86,34 @@ async function handBackUnrecordedClaim(state: StateManager, taskId: string, work
       'claim_next_task: could not hand back the assignment after its attempt failed to open'
     );
   }
+}
+
+/**
+ * The refusal an explicit-taskId claim gets when the dependsOn gate withholds
+ * the task. A prerequisite that has not reached DONE keeps the refusal this gate
+ * has always given, word for word; it comes first and lists only such ids. Only
+ * when every unmet prerequisite is DONE does the refusal name the first one and
+ * the delivery evidence it lacks (DEPENDENCY_EVIDENCE_MISSING). Evidence that
+ * cannot be judged at all, an unrecognised deliveryPolicy, throws out of
+ * dependencyShortfall as that INVALID_INPUT, ahead of both. The caller throws
+ * the result before any write, like every other claim refusal.
+ */
+function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
+  const unmet = unmetDependsOn(state, task).map((id) => ({ id, ...dependencyShortfall(state, id) }));
+  const onEvidence = unmet.find((dep) => dep.missingEvidence.length > 0);
+  const onStatus = unmet.filter((dep) => dep.missingEvidence.length === 0).map((dep) => dep.id);
+  if (onStatus.length > 0 || !onEvidence) {
+    return notAllowed(
+      'claim',
+      `Task ${task.id} has unmet dependencies: ${onStatus.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
+      `An architect/governor can edit them with moe.set_task_dependencies.`
+    );
+  }
+  return dependencyEvidenceRefusal({
+    taskId: task.id,
+    prerequisiteTaskId: onEvidence.id,
+    missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
+  });
 }
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
@@ -268,13 +303,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // cannot be trivially bypassed by naming the row. Resuming your own
           // held task stays allowed (deps may have been declared mid-flight;
           // stranding the incumbent would be worse than letting it finish).
+          // A DONE prerequisite still lacking the delivery evidence its policy
+          // requires is unmet too, and the refusal names what it lacks. Thrown
+          // here, before any assignment write, so a refused claim writes nothing.
           if (!ownedBySelf && isClaimGatedByDependsOn(state, requested)) {
-            const unmet = unmetDependsOn(state, requested);
-            throw notAllowed(
-              'claim',
-              `Task ${requested.id} has unmet dependencies: ${unmet.join(', ')} (dependsOn gates WORKING claims until they are DONE/ARCHIVED). ` +
-              `An architect/governor can edit them with moe.set_task_dependencies.`
-            );
+            throw dependsOnClaimRefusal(state, requested);
           }
           if (!state.isTaskClaimable(requested) && !ownedBySelf && !params.replaceExisting) {
             throw notAllowed(
@@ -303,7 +336,10 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             .filter((t) => !(t.status === 'REVIEW' && t.needsHumanReview === true))
             // dependsOn gate (WORKING candidates only) — MUST mirror
             // wait_for_task's matcher (util/claimEligibility.ts) or the
-            // wake→claim→refuse spin returns.
+            // wake→claim→refuse spin returns. The same predicate withholds a
+            // task whose DONE prerequisite lacks delivery evidence: the ranked
+            // pool skips it silently, and only an explicit-taskId claim is
+            // refused with the detail (dependsOnClaimRefusal).
             .filter((t) => !isClaimGatedByDependsOn(state, t))
             .sort((a, b) => {
               // When preferAdjacentInEpic is on and a hint epic is set,
